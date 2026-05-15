@@ -1,0 +1,28 @@
+# Dependencies
+node_modules/
+Cargo.lock
+
+# Build output
+dist/
+build/
+
+# Tauri generated & bundled resources
+src-tauri/gen/
+src-tauri/icons/
+src-tauri/target/
+
+# Rust build
+target/
+
+# Environment
+.env
+.env.*
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# LLM
+pattern1.md

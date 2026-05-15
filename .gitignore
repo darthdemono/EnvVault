@@ -1,0 +1,29 @@
+# Dependencies
+node_modules/
+
+# Build output (Vite/Web)
+dist/
+build/
+
+# Tauri generated & bundled resources
+src-tauri/gen/
+src-tauri/icons/
+src-tauri/target/
+
+# Rust build (same as src-tauri/target/ but kept for any Cargo workspace root)
+target/
+
+# Environment
+.env
+.env.*
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# LLM 
+Handoff.md
+repomix-output.md
+pattern1.md

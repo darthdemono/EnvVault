@@ -1,0 +1,44 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "API Vault",
+  "description": "Schema for api-vault. The UI reads this file to populate form tooltips and validate entries. Add new fields here and they will appear in the editor automatically.",
+  "type": "object",
+  "required": ["api_keys"],
+  "properties": {
+    "api_keys": {
+      "type": "array",
+      "description": "All stored API credential entries.",
+      "items": {
+        "type": "object",
+        "required": ["provider", "api_key"],
+        "additionalProperties": false,
+        "properties": {
+          "provider":        { "type": "string",          "description": "Name of the service or platform (e.g. GitHub, Stripe, Jackett)." },
+          "account_name":    { "type": "string",          "description": "Username, handle, or email for the account." },
+          "api_key":         { "type": "string",          "description": "Primary API key, access token, or personal access token." },
+          "api_secret":      { "type": ["string","null"], "description": "Secret that pairs with the key (client secret, shared secret, etc.).", "default": null },
+          "key_id":          { "type": ["string","null"], "description": "Disambiguator when one provider has multiple keys (e.g. stripe_test, stripe_live). Used in generated .env variable names.", "default": null },
+          "api_description": { "type": ["string","null"], "description": "Technical description of what this key does. Shown on the card by default.", "default": null },
+          "description":     { "type": ["string","null"], "description": "Personal context — which project uses this, caveats, notes. Hidden behind a toggle.", "default": null },
+          "price_type":      { "type": "string",          "description": "Pricing model: free = free tier; local = self-hosted; paid = active subscription; conditional = invite/membership/ratio-based.", "enum": ["free","local","paid","conditional"], "default": "free" },
+          "environment":     { "type": ["string","null"], "description": "Target environment for this key.", "enum": ["production","staging","development","testing",null], "default": null },
+          "categories":      { "type": "array",           "description": "User-defined category tags. Must match entries in user_categories.", "items": { "type": "string" }, "default": [] },
+          "api_url":         { "type": ["string","null"], "description": "The base API endpoint URL where requests are sent (e.g. https://api.github.com).", "default": null },
+          "callback_url":    { "type": ["string","null"], "description": "OAuth redirect URI or webhook callback URL registered with the provider.", "default": null },
+          "expires_at":      { "type": ["string","null"], "description": "ISO 8601 expiry date (YYYY-MM-DD). UI will warn when this key is close to or past expiry.", "default": null },
+          "scopes":          { "type": "array",           "description": "Permission scopes granted to this key (e.g. [\"repo\", \"read:user\"]).", "items": { "type": "string" }, "default": [] },
+          "rate_limit":      { "type": ["string","null"], "description": "Rate limit description (e.g. \"1000 req/hr\", \"60 req/min\").", "default": null },
+          "version":         { "type": ["string","null"], "description": "API version this key targets (e.g. \"v3\", \"2024-01-01\").", "default": null },
+          "custom_icon":     { "type": ["string","null"], "description": "Simple Icons slug to use as provider icon (e.g. \"github\"). Overrides auto-detection.", "default": null },
+          "details":         { "type": ["string","null"], "description": "Extra notes or metadata.", "default": null }
+        }
+      }
+    },
+    "user_categories": {
+      "type": "array",
+      "description": "Master list of user-defined category names. All category values in api_keys must come from this list.",
+      "items": { "type": "string" },
+      "default": []
+    }
+  }
+}
