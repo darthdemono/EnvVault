@@ -1,5 +1,4 @@
 {
-  "_comment": "API Vault settings. Copy to the same directory as index.html to seed defaults. User overrides are stored in localStorage.",
   "theme": "dark",
   "accentColor": "#7364c9",
   "cardSize": "medium",
@@ -10,7 +9,12 @@
   "maskKeysByDefault": true,
   "showExpiryWarning": true,
   "expiryWarningDays": 30,
-  "dateFormat": "relative",
-  "showApiDescription": true,
-  "compactSidebar": false
+  "customCss": "",
+  "sidebarSections": ["all", "price", "category", "project"],
+  "groupByType": false,
+  "activityBarPosition": "left",
+  "activityBarStyle": "icon",
+  "collapsedSections": [],
+  "activePanel": "secrets",
+  "activeTool": "secret-gen"
 }

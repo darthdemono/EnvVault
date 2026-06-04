@@ -1,0 +1,1185 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>API Vault</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link
+    href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=JetBrains+Mono:wght@300;400;500;600&display=swap"
+    rel="stylesheet">
+  <link rel="stylesheet" href="/src/vault.css">
+  <style id="custom-style"></style>
+</head>
+
+<body>
+
+  <header id="header">
+    <div class="header-left">
+      <button id="sidebar-toggle" class="icon-btn" title="Toggle sidebar (B)">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <line x1="3" y1="6" x2="21" y2="6" />
+          <line x1="3" y1="12" x2="21" y2="12" />
+          <line x1="3" y1="18" x2="21" y2="18" />
+        </svg>
+      </button>
+      <div class="logo">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+          class="logo-icon">
+          <rect x="3" y="11" width="18" height="11" rx="2" />
+          <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+        </svg>
+        API Vault
+      </div>
+      <!-- Vault switcher stub — future: multi-vault + remote support -->
+      <button id="vault-switcher" class="vault-pill" title="Vault switching coming in v2">
+        <span class="vault-dot local"></span>
+        <span id="vault-name">Local Vault</span>
+        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+          <polyline points="6 9 12 15 18 9" />
+        </svg>
+      </button>
+    </div>
+
+    <div class="header-center">
+      <div class="search-wrap">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <circle cx="11" cy="11" r="8" />
+          <line x1="21" y1="21" x2="16.65" y2="16.65" />
+        </svg>
+        <input id="search" class="search-input" type="text"
+          placeholder="Search… Ctrl+K  |  price:free  cat:media  env:prod">
+        <button id="search-clear" class="search-clear-btn" title="Clear search">
+          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+            <line x1="18" y1="6" x2="6" y2="18" />
+            <line x1="6" y1="6" x2="18" y2="18" />
+          </svg>
+        </button>
+      </div>
+    </div>
+
+    <div class="header-right">
+      <button id="shortcuts-btn" class="icon-btn" title="Keyboard shortcuts (?)">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <circle cx="12" cy="12" r="10" />
+          <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3" />
+          <line x1="12" y1="17" x2="12.01" y2="17" />
+        </svg>
+      </button>
+      <button id="lock-btn" class="icon-btn" title="Lock vault">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <rect x="3" y="11" width="18" height="11" rx="2" />
+          <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+        </svg>
+      </button>
+      <button id="settings-btn" class="icon-btn" title="Settings (S)">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <circle cx="12" cy="12" r="3" />
+          <path
+            d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+        </svg>
+      </button>
+      <button id="add-btn" class="btn btn-accent btn-sm">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <line x1="12" y1="5" x2="12" y2="19" />
+          <line x1="5" y1="12" x2="19" y2="12" />
+        </svg>
+        Add Secret
+      </button>
+    </div>
+  </header>
+
+  <div id="layout">
+    <!-- Activity Bar — VSCode-style primary navigation -->
+    <div id="activity-bar">
+      <div class="activity-bar-top">
+        <button class="activity-btn active" data-panel="secrets" title="Secrets (A)">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+            <rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+          </svg>
+          <span class="activity-label">Secrets</span>
+        </button>
+        <button class="activity-btn" data-panel="tools" title="Tools">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+            <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>
+          </svg>
+          <span class="activity-label">Tools</span>
+        </button>
+      </div>
+    </div>
+
+    <aside id="sidebar">
+      <div id="secrets-panel" class="sidebar-panel">
+        <div class="sidebar-section" id="sidebar-section-all">
+          <div class="sidebar-heading">All Secrets <button class="section-collapse-btn" data-section="all" title="Collapse">▾</button></div>
+          <div class="section-body">
+          <button class="sidebar-item active" data-filter-type="all" data-filter-value="">
+            <span class="sidebar-icon">◈</span>
+            <span class="sidebar-label">All Secrets</span>
+            <span class="sidebar-count" id="count-all">0</span>
+          </button>
+          <div id="secret-type-list" class="sidebar-subtree">
+            <button class="sidebar-item sidebar-subitem" data-filter-type="secret_type" data-filter-value="api_key">
+              <span class="sidebar-icon sidebar-subicon">⬥</span>
+              <span class="sidebar-label">API Keys</span>
+              <span class="sidebar-count" id="count-st-api_key">0</span>
+            </button>
+            <button class="sidebar-item sidebar-subitem" data-filter-type="secret_type" data-filter-value="password">
+              <span class="sidebar-icon sidebar-subicon">⬥</span>
+              <span class="sidebar-label">Passwords</span>
+              <span class="sidebar-count" id="count-st-password">0</span>
+            </button>
+            <button class="sidebar-item sidebar-subitem" data-filter-type="secret_type" data-filter-value="env_var">
+              <span class="sidebar-icon sidebar-subicon">⬥</span>
+              <span class="sidebar-label">Env Variables</span>
+              <span class="sidebar-count" id="count-st-env_var">0</span>
+            </button>
+            <button class="sidebar-item sidebar-subitem" data-filter-type="secret_type"
+              data-filter-value="connection_string">
+              <span class="sidebar-icon sidebar-subicon">⬥</span>
+              <span class="sidebar-label">Connections</span>
+              <span class="sidebar-count" id="count-st-connection_string">0</span>
+            </button>
+            <button class="sidebar-item sidebar-subitem" data-filter-type="secret_type" data-filter-value="ssh_key">
+              <span class="sidebar-icon sidebar-subicon">⬥</span>
+              <span class="sidebar-label">SSH Keys</span>
+              <span class="sidebar-count" id="count-st-ssh_key">0</span>
+            </button>
+            <button class="sidebar-item sidebar-subitem" data-filter-type="secret_type" data-filter-value="certificate">
+              <span class="sidebar-icon sidebar-subicon">⬥</span>
+              <span class="sidebar-label">Certificates</span>
+              <span class="sidebar-count" id="count-st-certificate">0</span>
+            </button>
+            <button class="sidebar-item sidebar-subitem" data-filter-type="secret_type" data-filter-value="file_blob">
+              <span class="sidebar-icon sidebar-subicon">⬥</span>
+              <span class="sidebar-label">File Blobs</span>
+              <span class="sidebar-count" id="count-st-file_blob">0</span>
+            </button>
+          </div>
+          </div>
+        </div>
+        <div class="sidebar-section" id="sidebar-section-price">
+          <div class="sidebar-heading">Price Type <button class="section-collapse-btn" data-section="price" title="Collapse">▾</button></div>
+          <div class="section-body">
+          <button class="sidebar-item" data-filter-type="price" data-filter-value="free"><span class="price-dot"
+              data-price="free"></span><span class="sidebar-label">Free</span><span class="sidebar-count"
+              id="count-free">0</span></button>
+          <button class="sidebar-item" data-filter-type="price" data-filter-value="local"><span class="price-dot"
+              data-price="local"></span><span class="sidebar-label">Local</span><span class="sidebar-count"
+              id="count-local">0</span></button>
+          <button class="sidebar-item" data-filter-type="price" data-filter-value="paid"><span class="price-dot"
+              data-price="paid"></span><span class="sidebar-label">Paid</span><span class="sidebar-count"
+              id="count-paid">0</span></button>
+          <button class="sidebar-item" data-filter-type="price" data-filter-value="conditional"><span class="price-dot"
+              data-price="conditional"></span><span class="sidebar-label">Conditional</span><span class="sidebar-count"
+              id="count-conditional">0</span></button>
+          </div>
+        </div>
+        <div class="sidebar-section" id="sidebar-section-category">
+          <div class="sidebar-heading">Categories <button id="new-category-root-btn" class="sidebar-add-btn"
+              title="Add category">+</button><button class="section-collapse-btn" data-section="category" title="Collapse">▾</button></div>
+          <div class="section-body">
+          <div id="project-tree"></div>
+          </div>
+        </div>
+        <div class="sidebar-section" id="sidebar-section-project">
+          <div class="sidebar-heading">Projects <button id="new-category-btn" class="sidebar-add-btn" title="Add project">+</button><button class="section-collapse-btn" data-section="project" title="Collapse">▾</button></div>
+          <div class="section-body">
+          <div id="category-list"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Tools Panel — shows in sidebar when Tools activity is active -->
+      <div id="tools-panel" class="sidebar-panel">
+        <div class="tools-nav">
+          <button class="tool-nav-btn active" data-tool="secret-gen">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+            Secret Gen
+          </button>
+          <button class="tool-nav-btn" data-tool="password-gen">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><circle cx="12" cy="16" r="1"/></svg>
+            Password Gen
+          </button>
+          <button class="tool-nav-btn" data-tool="uuid-ulid">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
+            UUID / ULID
+          </button>
+          <button class="tool-nav-btn" data-tool="api-key-patterns">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/></svg>
+            API Key Patterns
+          </button>
+          <button class="tool-nav-btn" data-tool="hash-gen">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="4" y1="9" x2="20" y2="9"/><line x1="4" y1="15" x2="20" y2="15"/><line x1="10" y1="3" x2="8" y2="21"/><line x1="16" y1="3" x2="14" y2="21"/></svg>
+            Hash / Derive
+          </button>
+          <button class="tool-nav-btn" data-tool="token-validator">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0 1 12 2.944a11.955 11.955 0 0 1-8.618 3.04A12.02 12.02 0 0 0 3 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"/></svg>
+            Token Validator
+          </button>
+          <button class="tool-nav-btn" data-tool="pem-cert-gen">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+            PEM Cert Gen
+          </button>
+          <button class="tool-nav-btn" data-tool="ssh-keygen">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+            SSH Keygen
+          </button>
+          <button class="tool-nav-btn" data-tool="string-tools">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 7 4 4 20 4 20 7"/><line x1="9" y1="20" x2="15" y2="20"/><line x1="12" y1="4" x2="12" y2="20"/></svg>
+            String Tools
+          </button>
+          <button class="tool-nav-btn" data-tool="base64">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg>
+            Base64
+          </button>
+        </div>
+      </div>
+
+      <div class="sidebar-footer">
+        <div id="lock-status" class="lock-status"></div>
+      </div>
+    </aside>
+
+    <main id="content">
+      <div id="vault-workspace">
+      <div class="toolbar">
+        <div class="toolbar-left">
+          <span id="result-count" class="result-count">0 secrets</span>
+          <button id="expand-all-btn" class="btn btn-ghost btn-xs">Expand All</button>
+        </div>
+        <div class="toolbar-right">
+          <div id="copy-all-wrap" style="display:none" class="btn-group">
+            <button id="copy-all-btn" class="btn btn-ghost btn-sm">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <rect x="9" y="9" width="13" height="13" rx="2" />
+                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+              </svg>
+              Copy All
+            </button>
+            <button id="copy-all-arrow" class="btn btn-ghost btn-sm btn-icon-only">
+              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                <polyline points="6 9 12 15 18 9" />
+              </svg>
+            </button>
+          </div>
+          <div class="sort-wrap">
+            <button id="sort-btn" class="btn btn-ghost btn-sm sort-btn-custom" title="Sort order">
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <line x1="3" y1="6" x2="21" y2="6"/><line x1="6" y1="12" x2="18" y2="12"/><line x1="9" y1="18" x2="15" y2="18"/>
+              </svg>
+              <span id="sort-label-text">A – Z</span>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div id="load-banner" class="load-banner" style="display:none">
+        <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"
+          opacity="0.3">
+          <rect x="3" y="11" width="18" height="11" rx="2" />
+          <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+        </svg>
+        <p>No secrets loaded.</p>
+        <button class="btn btn-ghost btn-sm" id="load-banner-browse-btn">Browse file</button>
+      </div>
+
+      <div id="card-grid"></div>
+      </div><!-- /#vault-workspace -->
+
+      <!-- Tools Workspace — active when Tools panel is selected -->
+      <div id="tools-workspace" style="display:none">
+
+        <!-- Tool: Secret Generator -->
+        <div id="tool-secret-gen" class="tool-pane">
+          <div class="tool-header"><h3>Secret Generator</h3><p>Cryptographically secure random bytes via OS CSPRNG.</p></div>
+          <div class="tool-body">
+            <div class="tool-row"><label class="tool-label">Byte length</label>
+              <div class="btn-group-pill">
+                <button class="tool-byte-btn active" data-bytes="16">16</button>
+                <button class="tool-byte-btn" data-bytes="32">32</button>
+                <button class="tool-byte-btn" data-bytes="64">64</button>
+                <button class="tool-byte-btn" data-bytes="128">128</button>
+              </div>
+            </div>
+            <div class="tool-row"><label class="tool-label">Format</label>
+              <select id="sg-format" class="tool-select">
+                <option value="hex">Hex</option>
+                <option value="base64">Base64</option>
+                <option value="base64url">Base64 URL-safe</option>
+              </select>
+            </div>
+            <textarea id="sg-output" class="tool-output mono" readonly rows="3" placeholder="Output…"></textarea>
+            <div class="tool-actions">
+              <button id="sg-generate" class="btn btn-accent btn-sm">Generate</button>
+              <button id="sg-copy" class="btn btn-ghost btn-sm">Copy</button>
+              <button id="sg-inject" class="btn btn-ghost btn-sm" title="Inject into open Add/Edit form">→ Inject</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Tool: Password Generator -->
+        <div id="tool-password-gen" class="tool-pane" style="display:none">
+          <div class="tool-header"><h3>Password Generator</h3><p>Configurable length and character sets.</p></div>
+          <div class="tool-body">
+            <div class="tool-row"><label class="tool-label">Length: <span id="pg-len-display">24</span></label>
+              <input type="range" id="pg-length" min="8" max="128" value="24" class="tool-range">
+            </div>
+            <div class="tool-row"><label class="tool-label">Characters</label>
+              <div class="tool-checks">
+                <label><input type="checkbox" id="pg-upper" checked> A–Z</label>
+                <label><input type="checkbox" id="pg-lower" checked> a–z</label>
+                <label><input type="checkbox" id="pg-digits" checked> 0–9</label>
+                <label><input type="checkbox" id="pg-symbols" checked> !@#…</label>
+                <label><input type="checkbox" id="pg-noambig"> No ambiguous</label>
+              </div>
+            </div>
+            <input id="pg-output" class="tool-output mono" readonly placeholder="Output…">
+            <div id="pg-strength" class="strength-bar"><div id="pg-strength-fill"></div></div>
+            <div class="tool-actions">
+              <button id="pg-generate" class="btn btn-accent btn-sm">Generate</button>
+              <button id="pg-copy" class="btn btn-ghost btn-sm">Copy</button>
+              <button id="pg-inject" class="btn btn-ghost btn-sm">→ Inject</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Tool: UUID / ULID -->
+        <div id="tool-uuid-ulid" class="tool-pane" style="display:none">
+          <div class="tool-header"><h3>UUID / ULID Generator</h3><p>Universally unique identifiers.</p></div>
+          <div class="tool-body">
+            <div class="tool-row"><label class="tool-label">Type</label>
+              <div class="btn-group-pill">
+                <button class="tool-id-type-btn active" data-type="uuid">UUID v4</button>
+                <button class="tool-id-type-btn" data-type="ulid">ULID</button>
+              </div>
+            </div>
+            <div class="tool-row"><label class="tool-label">Count</label>
+              <input type="number" id="uu-count" min="1" max="20" value="1" class="tool-number">
+            </div>
+            <textarea id="uu-output" class="tool-output mono" readonly rows="5" placeholder="Output…"></textarea>
+            <div class="tool-actions">
+              <button id="uu-generate" class="btn btn-accent btn-sm">Generate</button>
+              <button id="uu-copy" class="btn btn-ghost btn-sm">Copy</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Tool: API Key Patterns -->
+        <div id="tool-api-key-patterns" class="tool-pane" style="display:none">
+          <div class="tool-header"><h3>API Key Patterns</h3><p>Common API key formats based on provider patterns.</p></div>
+          <div class="tool-body">
+            <div class="tool-row"><label class="tool-label">Pattern</label>
+              <select id="ak-pattern" class="tool-select">
+                <option value="jwt-secret">JWT Secret (256-bit hex)</option>
+                <option value="base64-32">Base64 32 bytes</option>
+                <option value="hex-32">Hex 32 bytes</option>
+                <option value="hex-16">Hex 16 bytes</option>
+                <option value="bearer">Bearer token (base64url)</option>
+                <option value="sk-prefix">sk- prefixed (OpenAI style)</option>
+              </select>
+            </div>
+            <input id="ak-output" class="tool-output mono" readonly placeholder="Output…">
+            <div class="tool-actions">
+              <button id="ak-generate" class="btn btn-accent btn-sm">Generate</button>
+              <button id="ak-copy" class="btn btn-ghost btn-sm">Copy</button>
+              <button id="ak-inject" class="btn btn-ghost btn-sm">→ Inject</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Tool: Hash Generator -->
+        <div id="tool-hash-gen" class="tool-pane" style="display:none">
+          <div class="tool-header"><h3>Hash / Key Derivation</h3><p>SHA hash of any input string via Web Crypto API.</p></div>
+          <div class="tool-body">
+            <div class="tool-row"><label class="tool-label">Algorithm</label>
+              <div class="btn-group-pill">
+                <button class="tool-hash-algo-btn active" data-algo="SHA-256">SHA-256</button>
+                <button class="tool-hash-algo-btn" data-algo="SHA-384">SHA-384</button>
+                <button class="tool-hash-algo-btn" data-algo="SHA-512">SHA-512</button>
+              </div>
+            </div>
+            <div class="tool-row"><label class="tool-label">Format</label>
+              <div class="btn-group-pill">
+                <button class="tool-hash-fmt-btn active" data-fmt="hex">Hex</button>
+                <button class="tool-hash-fmt-btn" data-fmt="base64">Base64</button>
+              </div>
+            </div>
+            <textarea id="hg-input" class="tool-textarea mono" rows="3" placeholder="Input text to hash…"></textarea>
+            <input id="hg-output" class="tool-output mono" readonly placeholder="Hash output…">
+            <div class="tool-actions">
+              <button id="hg-hash" class="btn btn-accent btn-sm">Hash</button>
+              <button id="hg-copy" class="btn btn-ghost btn-sm">Copy</button>
+              <button id="hg-inject" class="btn btn-ghost btn-sm">→ Inject</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Tool: Token Validator -->
+        <div id="tool-token-validator" class="tool-pane" style="display:none">
+          <div class="tool-header"><h3>Token Validator</h3><p>Decode and inspect JWT structure and expiry.</p></div>
+          <div class="tool-body">
+            <textarea id="tv-input" class="tool-textarea mono" rows="4" placeholder="Paste JWT token here…"></textarea>
+            <div class="tool-actions" style="margin-bottom:10px">
+              <button id="tv-decode" class="btn btn-accent btn-sm">Decode</button>
+            </div>
+            <div id="tv-status" class="tool-status" style="display:none"></div>
+            <div class="tool-row-2">
+              <div>
+                <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px">
+                  <div class="tool-label">Header</div>
+                  <button id="tv-copy-header" class="btn btn-ghost btn-sm" style="padding:2px 8px;font-size:10px">Copy</button>
+                </div>
+                <pre id="tv-header" class="tool-pre"></pre>
+              </div>
+              <div>
+                <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px">
+                  <div class="tool-label">Payload</div>
+                  <button id="tv-copy-payload" class="btn btn-ghost btn-sm" style="padding:2px 8px;font-size:10px">Copy</button>
+                </div>
+                <pre id="tv-payload" class="tool-pre"></pre>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Tool: PEM Certificate Generator -->
+        <div id="tool-pem-cert-gen" class="tool-pane" style="display:none">
+          <div class="tool-header"><h3>PEM Certificate Generator</h3><p>Self-signed X.509 certificate via Rust <code>rcgen</code>.</p></div>
+          <div class="tool-body">
+            <div class="tool-row"><label class="tool-label">Common Name</label>
+              <input id="pc-cn" class="tool-input" type="text" value="localhost" placeholder="e.g. localhost">
+            </div>
+            <div class="tool-row"><label class="tool-label">Validity (days): <span id="pc-days-display">365</span></label>
+              <input type="range" id="pc-days" min="1" max="3650" value="365" class="tool-range">
+            </div>
+            <div class="tool-actions" style="margin-bottom:10px">
+              <button id="pc-generate" class="btn btn-accent btn-sm">Generate</button>
+              <span id="pc-loading" style="display:none;font-size:11px;color:var(--text3)">Generating…</span>
+            </div>
+            <label class="tool-label">Certificate PEM</label>
+            <textarea id="pc-cert-output" class="tool-output mono" readonly rows="5" placeholder="Certificate PEM…"></textarea>
+            <div style="margin-bottom:8px"><button id="pc-copy-cert" class="btn btn-ghost btn-sm">Copy Cert</button></div>
+            <label class="tool-label">Private Key PEM</label>
+            <textarea id="pc-key-output" class="tool-output mono" readonly rows="5" placeholder="Private Key PEM…"></textarea>
+            <div><button id="pc-copy-key" class="btn btn-ghost btn-sm">Copy Key</button></div>
+          </div>
+        </div>
+
+        <!-- Tool: SSH Key Generator -->
+        <div id="tool-ssh-keygen" class="tool-pane" style="display:none">
+          <div class="tool-header"><h3>SSH Key Generator</h3><p>Ed25519 key pair via Rust <code>ssh-key</code> crate.</p></div>
+          <div class="tool-body">
+            <div class="tool-row"><label class="tool-label">Comment</label>
+              <input id="sk-comment" class="tool-input" type="text" placeholder="user@host">
+            </div>
+            <div class="tool-actions" style="margin-bottom:10px">
+              <button id="sk-generate" class="btn btn-accent btn-sm">Generate</button>
+              <span id="sk-loading" style="display:none;font-size:11px;color:var(--text3)">Generating…</span>
+            </div>
+            <label class="tool-label">Public Key</label>
+            <textarea id="sk-pub-output" class="tool-output mono" readonly rows="2" placeholder="ssh-ed25519 …"></textarea>
+            <div style="margin-bottom:8px"><button id="sk-copy-pub" class="btn btn-ghost btn-sm">Copy Public Key</button></div>
+            <label class="tool-label">Private Key (OpenSSH)</label>
+            <textarea id="sk-priv-output" class="tool-output mono" readonly rows="7" placeholder="-----BEGIN OPENSSH PRIVATE KEY-----…"></textarea>
+            <div><button id="sk-copy-priv" class="btn btn-ghost btn-sm">Copy Private Key</button></div>
+          </div>
+        </div>
+
+        <!-- Tool: String Tools -->
+        <div id="tool-string-tools" class="tool-pane" style="display:none">
+          <div class="tool-header"><h3>String Tools</h3><p>.env escaping, URL encoding, shell quoting.</p></div>
+          <div class="tool-body">
+            <div class="tool-row"><label class="tool-label">Operation</label>
+              <select id="st-op" class="tool-select">
+                <option value="dotenv-escape">.env escape</option>
+                <option value="url-encode">URL encode</option>
+                <option value="url-decode">URL decode</option>
+                <option value="shell-quote">Shell quote</option>
+                <option value="json-escape">JSON string escape</option>
+                <option value="json-unescape">JSON string unescape</option>
+              </select>
+            </div>
+            <textarea id="st-input" class="tool-textarea mono" rows="4" placeholder="Input…"></textarea>
+            <div class="tool-actions" style="margin-bottom:8px">
+              <button id="st-convert" class="btn btn-accent btn-sm">Convert</button>
+            </div>
+            <textarea id="st-output" class="tool-output mono" readonly rows="4" placeholder="Output…"></textarea>
+            <div class="tool-actions">
+              <button id="st-copy" class="btn btn-ghost btn-sm">Copy</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Tool: Base64 -->
+        <div id="tool-base64" class="tool-pane" style="display:none">
+          <div class="tool-header"><h3>Base64</h3><p>Encode or decode text / binary data.</p></div>
+          <div class="tool-body">
+            <div class="tool-row"><label class="tool-label">Operation</label>
+              <div class="btn-group-pill">
+                <button class="tool-b64-op-btn active" data-op="encode">Encode</button>
+                <button class="tool-b64-op-btn" data-op="decode">Decode</button>
+              </div>
+            </div>
+            <div class="tool-row"><label class="tool-label">Variant</label>
+              <div class="btn-group-pill">
+                <button class="tool-b64-var-btn active" data-var="std">Standard</button>
+                <button class="tool-b64-var-btn" data-var="url">URL-safe</button>
+              </div>
+            </div>
+            <textarea id="b64-input" class="tool-textarea mono" rows="4" placeholder="Input…"></textarea>
+            <div class="tool-actions" style="margin-bottom:8px">
+              <button id="b64-convert" class="btn btn-accent btn-sm">Convert</button>
+            </div>
+            <textarea id="b64-output" class="tool-output mono" readonly rows="4" placeholder="Output…"></textarea>
+            <div class="tool-actions">
+              <button id="b64-copy" class="btn btn-ghost btn-sm">Copy</button>
+            </div>
+          </div>
+        </div>
+
+      </div><!-- /#tools-workspace -->
+    </main>
+  </div>
+
+  <!-- Dropdowns -->
+  <div id="dropdown" class="dropdown" style="display:none"></div>
+
+  <!-- Toast -->
+  <div id="toast"></div>
+
+  <!-- Undo bar -->
+  <div id="undo-bar" class="undo-bar" style="display:none">
+    <span id="undo-msg"></span>
+    <button id="undo-btn" class="btn-xs accent">Undo</button>
+  </div>
+
+  <!-- ── Master Password Modal (Phase 2) ─────────────────────────────────────── -->
+  <!-- Shown on every launch in Tauri. Blocks all other UI until unlocked.        -->
+  <div id="unlock-overlay" class="modal-overlay"
+    style="z-index:999;backdrop-filter:none;background:var(--bg)">
+    <div class="modal" id="unlock-modal" style="max-width:440px;width:100%">
+      <div class="modal-header" style="border-bottom:1px solid var(--border)">
+        <div style="display:flex;align-items:center;gap:10px">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+            style="color:var(--accent)">
+            <rect x="3" y="11" width="18" height="11" rx="2" />
+            <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+          </svg>
+          <div id="unlock-title" class="modal-title">Unlock Vault</div>
+        </div>
+      </div>
+
+      <div class="modal-body">
+        <p id="unlock-subtitle" style="font-size:12px;color:var(--text3);margin:0 0 18px;line-height:1.5">
+          Enter your master password to decrypt the vault.
+        </p>
+
+        <div class="form-group">
+          <label class="form-label">Master Password</label>
+          <input class="form-input mono" id="unlock-password" type="password" placeholder="Master password"
+            autocomplete="current-password">
+        </div>
+
+        <div class="form-group" id="unlock-confirm-group" style="display:none">
+          <label class="form-label">Confirm Password</label>
+          <input class="form-input mono" id="unlock-confirm" type="password" placeholder="Confirm master password"
+            autocomplete="new-password">
+        </div>
+
+        <div id="unlock-error" style="display:none;margin-top:10px;font-size:12px;
+                  color:var(--danger,#e05);padding:8px 10px;
+                  background:rgba(224,0,80,.08);border-radius:6px">
+        </div>
+      </div>
+
+      <div class="modal-footer">
+        <div class="modal-footer-left">
+          <!-- Shown only in unlock mode (not first-run) -->
+          <button id="unlock-reset-btn" class="btn btn-ghost btn-sm" style="color:var(--text3);font-size:11px"
+            title="Permanently delete vault data">
+            Reset vault
+          </button>
+        </div>
+        <button id="unlock-submit-btn" class="btn btn-accent">Unlock</button>
+      </div>
+    </div>
+  </div>
+  <!-- ── end master password modal ─────────────────────────────────────────────── -->
+
+  <!-- Add/Edit Modal -->
+  <!-- Add/Edit Modal -->
+  <div id="modal-overlay" class="modal-overlay">
+    <div class="modal" id="key-modal">
+      <div class="modal-header">
+        <div id="modal-title" class="modal-title">Add API Key</div>
+        <button id="modal-close" class="icon-btn">✕</button>
+      </div>
+      <div class="modal-body">
+        <input type="hidden" id="edit-index" value="-1">
+        <input type="hidden" id="f-keyid">
+        <div class="form-group" style="margin-bottom:14px">
+          <label class="form-label" data-field="secret_type">Secret Type</label>
+          <select id="f-secret-type" class="form-input">
+            <option value="api_key">API Key</option>
+            <option value="password">Password</option>
+            <option value="certificate">Certificate (PEM)</option>
+            <option value="env_var">Environment Variable</option>
+            <option value="connection_string">Connection String</option>
+            <option value="ssh_key">SSH Key</option>
+            <option value="file_blob">File / Config Blob</option>
+          </select>
+        </div>
+        <div class="form-row-2">
+          <div class="form-group">
+            <label class="form-label" id="f-provider-label" data-field="provider">Provider <span
+                class="req">*</span></label>
+            <input class="form-input" id="f-provider" type="text" placeholder="e.g. GitHub">
+          </div>
+          <div class="form-group" id="f-account-group">
+            <label class="form-label" data-field="account_name">Account</label>
+            <input class="form-input" id="f-account" type="text" placeholder="username or email">
+          </div>
+        </div>
+        <div class="form-group" id="f-key-group">
+          <label class="form-label" id="f-key-label" data-field="api_key">API Key <span class="req">*</span></label>
+          <div class="key-field-wrap">
+            <input class="form-input mono" id="f-key" type="text" placeholder="Your API key or access token">
+            <button type="button" id="f-key-generate" class="btn btn-ghost btn-sm key-gen-btn" title="Generate value">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/>
+              </svg>
+              Generate
+            </button>
+          </div>
+        </div>
+        <div class="form-group" id="f-envvar-subtype-group" style="display:none">
+          <label class="form-label">Variable Sub-type <span class="opt">optional</span></label>
+          <select id="f-envvar-subtype" class="form-input">
+            <option value="string">String</option>
+            <option value="secret">Secret (mask by default)</option>
+            <option value="multiline">Multi-line</option>
+            <option value="boolean">Boolean</option>
+            <option value="number">Number</option>
+            <option value="ip">IP Address</option>
+            <option value="cidr">CIDR / Subnet</option>
+            <option value="port">Port</option>
+            <option value="url">URL</option>
+            <option value="date">Date</option>
+            <option value="json">JSON</option>
+          </select>
+        </div>
+        <div class="form-group" id="f-secret-group">
+          <label class="form-label" data-field="api_secret">API Secret <span class="opt">optional</span></label>
+          <input class="form-input mono" id="f-secret" type="text" placeholder="Client secret or shared secret">
+        </div>
+        <div class="form-row-2">
+          <div class="form-group">
+            <label class="form-label" data-field="price_type">Price Type</label>
+            <select class="form-input" id="f-price">
+              <option value="free">Free</option>
+              <option value="local">Local</option>
+              <option value="paid">Paid</option>
+              <option value="conditional">Conditional</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label class="form-label" data-field="environment">Environment</label>
+            <select class="form-input" id="f-env">
+              <option value="">— none —</option>
+              <option value="production">Production</option>
+              <option value="staging">Staging</option>
+              <option value="development">Development</option>
+              <option value="testing">Testing</option>
+            </select>
+          </div>
+        </div>
+        <div class="form-row-2" id="f-username-row">
+          <div class="form-group">
+            <label class="form-label" data-field="username">Username</label>
+            <input class="form-input" id="f-username" type="text" placeholder="Optional username">
+          </div>
+          <div class="form-group">
+            <label class="form-label" data-field="email">Email</label>
+            <input class="form-input" id="f-email" type="email" placeholder="Optional email">
+          </div>
+        </div>
+
+        <!-- Secret-type-dependent groups (only relevant ones shown/hidden by JS) -->
+        <div class="form-group" id="f-username-group" style="display:none"></div>
+        <div class="form-group" id="f-email-group" style="display:none"></div>
+        <div class="form-group" id="f-cert-group" style="display:none">
+          <label class="form-label" data-field="certificate_data">Certificate Data (PEM)</label>
+          <textarea class="form-input mono" id="f-cert" rows="3"
+            placeholder="-----BEGIN CERTIFICATE-----\n..."></textarea>
+        </div>
+        <div class="form-group" id="f-cert-key-group" style="display:none">
+          <label class="form-label" data-field="cert_key_data">Private Key (PEM)</label>
+          <textarea class="form-input mono" id="f-cert-key" rows="3"
+            placeholder="-----BEGIN PRIVATE KEY-----&#10;..."></textarea>
+        </div>
+        <div class="form-group" id="f-blob-group" style="display:none">
+          <label class="form-label" data-field="blob_ref">File Path / Reference</label>
+          <input class="form-input mono" id="f-blob" placeholder="/path/to/file">
+        </div>
+
+        <div class="form-group">
+          <label class="form-label" data-field="project">Projects</label>
+          <div id="f-project" class="project-pick-list"></div>
+          <small style="color:var(--text3); font-size:10px;">Click to toggle project assignment</small>
+        </div>
+        <div class="form-row-2">
+          <div class="form-group">
+            <label class="form-label" data-field="api_url">API URL <span class="opt">optional</span></label>
+            <input class="form-input mono" id="f-apiurl" type="text" placeholder="https://api.example.com">
+          </div>
+          <div class="form-group">
+            <label class="form-label" data-field="callback_url">Callback URL <span class="opt">optional</span></label>
+            <input class="form-input mono" id="f-cburl" type="text" placeholder="https://yourapp.com/oauth/cb">
+          </div>
+        </div>
+        <div class="form-row-3">
+          <div class="form-group">
+            <label class="form-label" data-field="version">Version <span class="opt">optional</span></label>
+            <input class="form-input mono" id="f-version" placeholder="v3">
+          </div>
+          <div class="form-group">
+            <label class="form-label" data-field="rate_limit">Rate Limit <span class="opt">optional</span></label>
+            <input class="form-input mono" id="f-ratelimit" placeholder="1000 req/hr">
+          </div>
+          <div class="form-group">
+            <label class="form-label" data-field="expires_at">Expires <span class="opt">optional</span></label>
+            <input class="form-input mono" id="f-expires" type="text" placeholder="YYYY-MM-DD"
+              pattern="\d{4}-\d{2}-\d{2}">
+          </div>
+        </div>
+        <div class="form-group">
+          <label class="form-label" data-field="scopes">Scopes <span class="opt">optional — comma
+              separated</span></label>
+          <input class="form-input mono" id="f-scopes" placeholder="repo, read:user, write:packages">
+        </div>
+        <div class="form-group">
+          <label class="form-label" data-field="api_description">API Description <span
+              class="opt">optional</span></label>
+          <input class="form-input" id="f-apidesc" placeholder="What does this key do technically?">
+        </div>
+        <div class="form-group">
+          <label class="form-label" data-field="description">General Description <span
+              class="opt">optional</span></label>
+          <input class="form-input" id="f-desc" placeholder="Which project / stack uses this? Any caveats?">
+        </div>
+        <div class="form-group">
+          <label class="form-label" data-field="details">Details <span class="opt">optional</span></label>
+          <input class="form-input" id="f-details" placeholder="Extra notes or metadata">
+        </div>
+        <div class="form-group">
+          <label class="form-label" data-field="custom_icon">Icon <span class="opt">optional</span></label>
+          <div class="icon-field">
+            <div id="f-icon-preview" class="icon-preview-sm"></div>
+            <input class="form-input mono" id="f-icon" placeholder="Simple Icons slug, e.g. github">
+            <button type="button" id="f-icon-pick" class="btn btn-ghost btn-sm">Browse</button>
+          </div>
+        </div>
+        <div class="form-group">
+          <label class="form-label" data-field="categories">Projects <span class="opt">optional</span></label>
+          <div id="f-categories" class="cat-chips-wrap"></div>
+        </div>
+      </div><!-- /.modal-body -->
+      <div class="modal-footer">
+        <div class="modal-footer-left">
+          <button id="modal-duplicate" class="btn btn-ghost btn-sm" style="display:none">Duplicate</button>
+        </div>
+        <button id="modal-cancel" class="btn btn-ghost">Cancel</button>
+        <button id="modal-save" class="btn btn-accent">Save</button>
+      </div>
+    </div><!-- /#key-modal -->
+  </div><!-- /#modal-overlay -->
+
+  <!-- Icon Picker Modal -->
+  <div id="icon-picker-overlay" class="modal-overlay">
+    <div class="modal modal-wide" id="icon-picker-modal">
+      <div class="modal-header">
+        <div class="modal-title">Choose Icon</div>
+        <button id="icon-picker-close" class="icon-btn">✕</button>
+      </div>
+      <div class="modal-body" style="gap:12px">
+        <input id="icon-search" class="form-input" type="text" placeholder="Search icons…">
+        <div id="icon-grid" class="icon-grid"></div>
+        <div class="icon-picker-footer">
+          <span style="font-size:11px;color:var(--text3)">Can't find it?</span>
+          <input id="icon-manual" class="form-input mono" style="width:160px" placeholder="Enter slug manually">
+          <button id="icon-manual-apply" class="btn btn-ghost btn-sm">Apply</button>
+          <button id="icon-clear" class="btn btn-ghost btn-sm">No Icon</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Settings Drawer -->
+  <div id="settings-overlay" class="modal-overlay">
+    <div class="settings-drawer" id="settings-drawer">
+      <div class="settings-header">
+        <div class="modal-title">Settings</div>
+        <button id="settings-close" class="icon-btn">✕</button>
+      </div>
+      <div class="settings-body">
+        <div class="settings-section">
+          <div class="settings-section-title">Appearance</div>
+          <div class="settings-row">
+            <div class="settings-label">Theme</div>
+            <div id="theme-swatches" class="theme-swatches"></div>
+          </div>
+          <div class="settings-row">
+            <div class="settings-label">Accent Color</div>
+            <div style="display:flex;align-items:center;gap:8px">
+              <input type="color" id="s-accent" class="color-input">
+              <span id="s-accent-val" class="mono-sm"></span>
+              <button id="s-accent-reset" class="btn-xs">Reset</button>
+            </div>
+          </div>
+          <div class="settings-row">
+            <div class="settings-label">Card Size</div>
+            <div class="seg-control" id="s-card-size">
+              <button data-val="compact">Compact</button>
+              <button data-val="medium">Medium</button>
+              <button data-val="large">Large</button>
+            </div>
+          </div>
+          <div class="settings-row">
+            <div class="settings-label">Grid Columns</div>
+            <div class="seg-control" id="s-grid-cols">
+              <button data-val="auto">Auto</button>
+              <button data-val="2">2</button>
+              <button data-val="3">3</button>
+              <button data-val="4">4</button>
+            </div>
+          </div>
+          <div class="settings-row">
+            <div class="settings-label">Group secrets by type</div>
+            <label class="toggle"><input type="checkbox" id="s-group-by-type"><span class="toggle-track"></span></label>
+          </div>
+          <div class="settings-row">
+            <div class="settings-label">Activity bar position</div>
+            <div class="seg-control" id="s-activity-bar-position">
+              <button data-val="left">Left</button>
+              <button data-val="right">Right</button>
+            </div>
+          </div>
+          <div class="settings-row">
+            <div class="settings-label">Activity bar style</div>
+            <div class="seg-control" id="s-activity-bar-style">
+              <button data-val="icon">Icon only</button>
+              <button data-val="icon-label">Icon + Label</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="settings-section">
+          <div class="settings-section-title">Security</div>
+          <div class="settings-row">
+            <div class="settings-label">Auto-lock after</div>
+            <div style="display:flex;align-items:center;gap:8px">
+              <input type="number" id="s-autolock" class="form-input" style="width:70px" min="1" max="480">
+              <span class="settings-unit">minutes</span>
+            </div>
+          </div>
+          <div class="settings-row">
+            <div class="settings-label">Mask keys by default</div>
+            <label class="toggle"><input type="checkbox" id="s-mask"><span class="toggle-track"></span></label>
+          </div>
+          <div class="settings-row">
+            <div class="settings-label">Show expiry warnings</div>
+            <label class="toggle"><input type="checkbox" id="s-expiry-warn"><span class="toggle-track"></span></label>
+          </div>
+          <div class="settings-row">
+            <div class="settings-label">Warn N days before expiry</div>
+            <input type="number" id="s-expiry-days" class="form-input" style="width:70px" min="1" max="365">
+          </div>
+        </div>
+
+        <div class="settings-section">
+          <div class="settings-section-title">Defaults</div>
+          <div class="settings-row">
+            <div class="settings-label">Default account name</div>
+            <input type="text" id="s-default-account" class="form-input" style="width:160px"
+              placeholder="e.g. username">
+          </div>
+          <div class="settings-row">
+            <div class="settings-label">Default export format</div>
+            <select id="s-export-format" class="sort-select">
+              <option value="dotenv">.env</option>
+              <option value="yaml">YAML</option>
+              <option value="json">JSON</option>
+            </select>
+          </div>
+        </div>
+
+        <!-- Vault section — stub for future remote/multi-vault support -->
+        <div class="settings-section">
+          <div class="settings-section-title" style="display:flex;align-items:center;gap:8px">
+            Vault
+            <span class="badge-coming">v2</span>
+          </div>
+          <div class="settings-row" style="opacity:.45;pointer-events:none">
+            <div class="settings-label">Remote vault URL</div>
+            <input type="text" class="form-input" style="width:200px" placeholder="https://vault.yourserver.com"
+              disabled>
+          </div>
+          <div class="settings-row" style="opacity:.45;pointer-events:none">
+            <div class="settings-label">Authentication</div>
+            <select class="sort-select" disabled>
+              <option>Token</option>
+              <option>OAuth</option>
+            </select>
+          </div>
+          <p class="settings-note">Multi-vault, remote access, and user roles are planned for v2. The current data model
+            and store interface are designed to support this upgrade without breaking changes.</p>
+        </div>
+
+        <div class="settings-section">
+          <div class="settings-section-title">Sidebar</div>
+          <div style="font-size:11px;color:var(--text3);margin-bottom:8px">Drag to reorder. Toggle to show/hide
+            sections.</div>
+          <div id="s-sidebar-sections" class="sidebar-order-editor"></div>
+        </div>
+
+        <div class="settings-section">
+          <div class="settings-section-title">Custom CSS</div>
+          <div style="font-size:11px;color:var(--text3);margin-bottom:8px">Injected after all styles. Reload to apply
+            fully.</div>
+          <textarea id="s-custom-css" class="form-input mono" rows="7" style="resize:vertical;font-size:11px"
+            placeholder="/* Example */
+.card { border-radius: 0; }
+.card-head { background: var(--surface2); }"></textarea>
+        </div>
+        <div class="settings-section">
+          <div class="settings-section-title">Data</div>
+          <div class="settings-row">
+            <div class="settings-label">Import vault backup</div>
+            <button id="settings-import-btn" class="btn btn-ghost btn-sm">Import</button>
+          </div>
+          <div class="settings-row">
+            <div class="settings-label">Export vault</div>
+            <div style="display:flex;gap:6px">
+              <button id="settings-export-dotenv" class="btn btn-ghost btn-sm">.env</button>
+              <button id="settings-export-yaml" class="btn btn-ghost btn-sm">YAML</button>
+              <button id="settings-export-json" class="btn btn-ghost btn-sm">JSON</button>
+            </div>
+          </div>
+        </div>
+        <div class="settings-section"
+          style="border-top:1px solid var(--border);padding-top:16px;display:flex;justify-content:flex-end">
+          <button id="settings-export-btn" class="btn btn-ghost btn-sm">Export Settings JSON</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- .env Import Modal -->
+  <div id="env-import-overlay" class="modal-overlay">
+    <div class="modal-box" style="max-width:540px">
+      <div class="modal-header">
+        <div class="modal-title">.env Import</div>
+        <button id="env-import-close" class="icon-btn">✕</button>
+      </div>
+      <div class="modal-body">
+        <div id="env-import-subtitle" style="font-size:11px;color:var(--text3);margin-bottom:12px"></div>
+        <div class="form-row-2" style="margin-bottom:12px">
+          <div class="form-group">
+            <label class="form-label">Project tag</label>
+            <select id="env-import-category" class="form-input">
+              <option value="">— none —</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Category</label>
+            <select id="env-import-project" class="form-input">
+              <option value="Universal">Universal</option>
+            </select>
+          </div>
+        </div>
+        <div class="form-row-2" style="margin-bottom:12px">
+          <div class="form-group">
+            <label class="form-label">Price Type</label>
+            <select id="env-import-price" class="form-input">
+              <option value="free">Free</option>
+              <option value="local">Local</option>
+              <option value="paid">Paid</option>
+              <option value="conditional">Conditional</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Environment</label>
+            <select id="env-import-env" class="form-input">
+              <option value="">— none —</option>
+              <option value="production">Production</option>
+              <option value="staging">Staging</option>
+              <option value="development">Development</option>
+              <option value="testing">Testing</option>
+            </select>
+          </div>
+        </div>
+        <div style="font-size:10px;color:var(--text3);margin-bottom:6px">Select variables to import:</div>
+        <div id="env-import-list" class="env-import-list"></div>
+      </div>
+      <div class="modal-footer">
+        <button id="env-import-select-all" class="btn btn-ghost btn-sm">Select All</button>
+        <button id="env-import-select-none" class="btn btn-ghost btn-sm">Select None</button>
+        <button id="env-import-cancel" class="btn btn-ghost btn-sm">Cancel</button>
+        <button id="env-import-confirm" class="btn btn-primary btn-sm">Import Selected</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Keyboard Shortcuts Overlay -->
+  <div id="shortcuts-overlay" class="shortcuts-overlay">
+    <div class="shortcuts-box">
+      <div class="shortcuts-header">Keyboard Shortcuts<button id="shortcuts-close" class="icon-btn">✕</button></div>
+      <div class="shortcuts-grid">
+        <kbd>Ctrl+K</kbd><span>Focus search</span>
+        <kbd>Ctrl+N</kbd><span>Add new key</span>
+        <kbd>Esc</kbd><span>Clear search / close</span>
+        <kbd>S</kbd><span>Open settings</span>
+        <kbd>B</kbd><span>Toggle sidebar</span>
+        <kbd>?</kbd><span>Show shortcuts</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Project Create Modal (Task 8) -->
+  <div id="project-create-overlay" class="modal-overlay">
+    <div class="modal" style="max-width:420px;width:100%">
+      <div class="modal-header">
+        <div class="modal-title">New Project</div>
+        <button id="project-create-close" class="icon-btn">✕</button>
+      </div>
+      <div class="modal-body">
+        <div class="form-group">
+          <label class="form-label">Name <span class="req">*</span></label>
+          <input class="form-input" id="project-create-name" type="text" placeholder="e.g. wg0-home or my-app">
+          <small style="color:var(--text3);font-size:10px">Use / for hierarchy — ancestor projects auto-created</small>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Project Type</label>
+          <div class="project-type-picker">
+            <button class="project-type-btn active" data-ptype="generic">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/></svg>
+              Generic
+            </button>
+            <button class="project-type-btn" data-ptype="wireguard">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M8.56 2.75c4.37 6.03 6.02 9.42 8.03 17.72m2.54-15.38c-3.72 4.35-8.94 5.66-16.88 5.85m19.5 1.9c-3.5-.93-6.63-.82-8.94 0-2.58.92-5.01 2.86-7.44 6.32"/></svg>
+              WireGuard
+            </button>
+            <button class="project-type-btn" data-ptype="docker">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
+              Docker
+            </button>
+            <button class="project-type-btn" data-ptype="nginx">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M8 8l8 8M8 16V8h8"/></svg>
+              Nginx
+            </button>
+            <button class="project-type-btn" data-ptype="kubernetes">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
+              Kubernetes
+            </button>
+            <button class="project-type-btn" data-ptype="ssh_config">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/><path d="M7 8l3 3-3 3"/><path d="M13 14h4"/></svg>
+              SSH Config
+            </button>
+            <button class="project-type-btn" data-ptype="traefik">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2l3 7h7l-5.5 4 2 7L12 16l-6.5 4 2-7L2 9h7z"/></svg>
+              Traefik
+            </button>
+          </div>
+        </div>
+        <div class="form-group" id="project-create-desc-group">
+          <label class="form-label">Description <span class="opt">optional</span></label>
+          <input class="form-input" id="project-create-desc" type="text" placeholder="Optional description">
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button id="project-create-cancel" class="btn btn-ghost">Cancel</button>
+        <button id="project-create-save" class="btn btn-accent">Create</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Category Create Modal -->
+  <div id="category-create-overlay" class="modal-overlay">
+    <div class="modal" style="max-width:380px;width:100%">
+      <div class="modal-header">
+        <div class="modal-title">New Category</div>
+        <button id="category-create-close" class="icon-btn">✕</button>
+      </div>
+      <div class="modal-body">
+        <div class="form-group">
+          <label class="form-label">Name <span class="req">*</span></label>
+          <input class="form-input" id="category-create-name" type="text" placeholder="e.g. cloud or cloud/aws" maxlength="64">
+          <small style="color:var(--text3);font-size:10px">Use / for visual grouping — e.g. cloud/aws</small>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button id="category-create-cancel" class="btn btn-ghost">Cancel</button>
+        <button id="category-create-save" class="btn btn-accent">Create</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Chunk Edit Modal (Task 6d) -->
+  <div id="chunk-edit-overlay" class="modal-overlay">
+    <div class="modal" style="max-width:580px;width:100%">
+      <div class="modal-header">
+        <div class="modal-title">Edit Chunk</div>
+        <button id="chunk-edit-close" class="icon-btn">✕</button>
+      </div>
+      <div class="modal-body">
+        <div class="form-group">
+          <label class="form-label">Chunk Name <span class="req">*</span></label>
+          <input class="form-input" id="chunk-edit-name" type="text" placeholder="e.g. Interface, Peer — office">
+        </div>
+        <input type="hidden" id="chunk-edit-project-id">
+        <input type="hidden" id="chunk-edit-chunk-id">
+        <div style="margin-bottom:8px;font-size:11px;font-weight:600;color:var(--text2)">Fields</div>
+        <div id="chunk-edit-fields" class="chunk-edit-fields"></div>
+        <button id="chunk-edit-add-field" class="btn btn-ghost btn-sm" style="margin-top:8px">+ Add Field</button>
+      </div>
+      <div class="modal-footer">
+        <button id="chunk-edit-cancel" class="btn btn-ghost">Cancel</button>
+        <button id="chunk-edit-save" class="btn btn-accent">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Confirm dialog -->
+  <div id="confirm-overlay" class="modal-overlay">
+    <div class="modal" style="max-width:340px;width:100%">
+      <div class="modal-body" style="padding-top:24px">
+        <p id="confirm-message" style="margin:0;font-size:13px;line-height:1.5;color:var(--text)"></p>
+      </div>
+      <div class="modal-footer">
+        <button id="confirm-cancel" class="btn btn-ghost">Cancel</button>
+        <button id="confirm-ok" class="btn btn-accent">Confirm</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Prompt dialog -->
+  <div id="prompt-overlay" class="modal-overlay">
+    <div class="modal" style="max-width:340px;width:100%">
+      <div class="modal-body" style="padding-top:24px">
+        <p id="prompt-message" style="margin:0 0 12px;font-size:13px;line-height:1.5;color:var(--text)"></p>
+        <input id="prompt-input" class="form-input" type="text" style="width:100%">
+      </div>
+      <div class="modal-footer">
+        <button id="prompt-cancel" class="btn btn-ghost">Cancel</button>
+        <button id="prompt-ok" class="btn btn-accent">OK</button>
+      </div>
+    </div>
+  </div>
+
+  <script type="module" src="/src/icons.ts"></script>
+  <script type="module" src="/src/vault.ts"></script>
+</body>
+
+</html>

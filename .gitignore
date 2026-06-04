@@ -4,6 +4,7 @@ node_modules/
 # Build output (Vite/Web)
 dist/
 build/
+*.d
 
 # Tauri generated & bundled resources
 src-tauri/gen/
@@ -24,6 +25,10 @@ target/
 Thumbs.db
 
 # LLM 
-Handoff.md
+.claude/
+handoff.md
+newHandoff.md
 repomix-output.md
 pattern1.md
+CLAUDE.md
+*.original.md
