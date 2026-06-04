@@ -3,7 +3,9 @@
  */
 
 import type { AppSettings } from './types';
-import { Settings, triggerRender, applyGridSettings, applySidebarOrder, applyActivityBar } from './state';
+import { Settings, triggerRender, applyGridSettings, applySidebarOrder, applyActivityBar,
+         RemoteVaultStore, TauriVaultStore, LocalVaultStore, inTauri, st } from './state';
+import { showToast } from './utils';
 
 // ── Theme definitions ──────────────────────────────────────────────────────
 
@@ -82,10 +84,62 @@ export function buildSidebarOrderEditor() {
 
 // ── Open / save / close settings ─────────────────────────────────────────
 
+// ── Remote vault section ──────────────────────────────────────────────────────
+
+export function buildRemoteVaultSection() {
+  const enableEl  = document.getElementById('s-remote-enable')  as HTMLInputElement | null;
+  const urlEl     = document.getElementById('s-remote-url')     as HTMLInputElement | null;
+  const statusEl  = document.getElementById('s-remote-status');
+  if (!enableEl || !urlEl) return;
+
+  const cfg = Settings.get('remote') ?? { enabled: false, serverUrl: '' };
+  enableEl.checked = cfg.enabled ?? false;
+  urlEl.value      = cfg.serverUrl ?? '';
+  urlEl.disabled   = !enableEl.checked;
+
+  enableEl.onchange = () => { urlEl.disabled = !enableEl.checked; };
+
+  const testBtn = document.getElementById('s-remote-test');
+  if (testBtn) {
+    testBtn.onclick = async () => {
+      const url = urlEl.value.trim().replace(/\/$/, '');
+      if (!url) { showToast('Enter a server URL first', 'err'); return; }
+      try {
+        const r = await fetch(`${url}/api/status`);
+        const body = await r.json();
+        if (statusEl) statusEl.textContent = body.vault_exists
+          ? `Connected — vault ${body.unlocked ? 'unlocked' : 'locked'}`
+          : 'Connected — no vault yet';
+        showToast('Server reachable', 'ok');
+      } catch {
+        if (statusEl) statusEl.textContent = 'Unreachable';
+        showToast('Cannot reach server', 'err');
+      }
+    };
+  }
+}
+
+function applyRemoteConfig() {
+  const enableEl = document.getElementById('s-remote-enable') as HTMLInputElement | null;
+  const urlEl    = document.getElementById('s-remote-url')    as HTMLInputElement | null;
+  if (!enableEl || !urlEl) return;
+  const enabled   = enableEl.checked;
+  const serverUrl = urlEl.value.trim().replace(/\/$/, '');
+  Settings.set('remote', { enabled, serverUrl });
+  if (enabled && serverUrl) {
+    st.store = new RemoteVaultStore(serverUrl);
+    showToast('Switched to remote vault — unlock to connect', 'ok');
+  } else {
+    st.store = inTauri ? new TauriVaultStore() : new LocalVaultStore();
+    if (enabled && !serverUrl) showToast('Enter server URL to enable remote mode', 'err');
+  }
+}
+
 export function openSettings() {
   const s = Settings.getAll();
   buildThemeSwatches();
   buildSidebarOrderEditor();
+  buildRemoteVaultSection();
   (document.getElementById('s-accent') as HTMLInputElement).value = s.accentColor;
   document.getElementById('s-accent-val')!.textContent = s.accentColor;
   (document.getElementById('s-autolock') as HTMLInputElement).value = String(s.autoLockMinutes);
@@ -94,6 +148,7 @@ export function openSettings() {
   (document.getElementById('s-expiry-days') as HTMLInputElement).value = String(s.expiryWarningDays);
   (document.getElementById('s-default-account') as HTMLInputElement).value = s.defaultAccount || '';
   (document.getElementById('s-export-format') as HTMLSelectElement).value = s.defaultExportFormat;
+  (document.getElementById('s-env-copy-field') as HTMLSelectElement).value = s.envCopyField || 'api_key';
   (document.getElementById('s-custom-css') as HTMLTextAreaElement).value = s.customCss || '';
   (document.getElementById('s-group-by-type') as HTMLInputElement).checked = s.groupByType;
   ['s-card-size', 's-grid-cols', 's-activity-bar-position', 's-activity-bar-style'].forEach(id => {
@@ -116,6 +171,7 @@ export function saveSettings() {
     expiryWarningDays: parseInt((document.getElementById('s-expiry-days') as HTMLInputElement).value) || 30,
     defaultAccount: (document.getElementById('s-default-account') as HTMLInputElement).value.trim(),
     defaultExportFormat: (document.getElementById('s-export-format') as HTMLSelectElement).value as AppSettings['defaultExportFormat'],
+    envCopyField: (document.getElementById('s-env-copy-field') as HTMLSelectElement).value as AppSettings['envCopyField'],
     customCss: (document.getElementById('s-custom-css') as HTMLTextAreaElement).value,
     groupByType: (document.getElementById('s-group-by-type') as HTMLInputElement).checked,
     activityBarPosition: (getSegVal('s-activity-bar-position') || 'left') as 'left' | 'right',
@@ -123,6 +179,7 @@ export function saveSettings() {
   });
   Settings._apply();
   applyActivityBar();
+  applyRemoteConfig();
   triggerRender();
 }
 

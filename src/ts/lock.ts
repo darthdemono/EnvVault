@@ -43,6 +43,7 @@ export async function showUnlockModal(isFirstRun: boolean) {
   const errEl = document.getElementById('unlock-error')!;
 
   function configure(firstRun: boolean) {
+    submitBtn.disabled = false;
     if (firstRun) {
       titleEl.textContent = 'Create Master Password';
       subtitleEl.textContent = 'This password encrypts your vault with AES-256 + Argon2id. There is no recovery — keep it safe.';

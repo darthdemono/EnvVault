@@ -3,8 +3,8 @@
  *       config exporters/parsers, chunk edit modal.
  */
 
-import type { Project, SecretChunk, ChunkField, ChunkFieldType, ProjectType } from './types';
-import { st, triggerRender } from './state';
+import type { Project, SecretChunk, ChunkField, ChunkFieldType, ProjectType, VaultEntry } from './types';
+import { st, Settings, triggerRender } from './state';
 import { esc, escAttr, copySVG, delSVG, showToast } from './utils';
 
 // ── Starter chunk factories ────────────────────────────────────────────────
@@ -53,6 +53,12 @@ export function makeDockerStarterChunks(): SecretChunk[] {
       id: crypto.randomUUID(),
       name: 'networks',
       chunk_type: 'docker_network',
+      fields: [],
+    },
+    {
+      id: crypto.randomUUID(),
+      name: 'volumes',
+      chunk_type: 'docker_volume',
       fields: [],
     },
   ];
@@ -165,12 +171,39 @@ export function makeTraefikStarterChunks(): SecretChunk[] {
 
 // ── Field resolution ───────────────────────────────────────────────────────
 
-export function resolveFieldRef(value: string): { resolved: string | null; refName: string | null; unresolved: boolean } {
+export function resolveFieldRef(value: string, useEnvCopyField = false): { resolved: string | null; refName: string | null; unresolved: boolean } {
   const match = value.match(/^\$\{(.+)}$/);
   if (!match) return { resolved: value, refName: null, unresolved: false };
   const refName = match[1];
-  const entry = st.vault.api_keys.find(e => e.provider === refName);
-  if (entry) return { resolved: entry.api_key, refName, unresolved: false };
+
+  // Exact provider match, then compound PROVIDER_KEYID match
+  let entry = st.vault.api_keys.find(e => e.provider === refName);
+  if (!entry && refName.includes('_')) {
+    const lastUs = refName.lastIndexOf('_');
+    const provPart = refName.slice(0, lastUs);
+    const labelPart = refName.slice(lastUs + 1);
+    entry = st.vault.api_keys.find(e => e.provider === provPart && e.key_id === labelPart);
+  }
+
+  if (entry) {
+    let resolved: string | null;
+    if (useEnvCopyField) {
+      const fieldName = (Settings.get('envCopyField') || 'api_key') as keyof VaultEntry;
+      const rawVal = entry[fieldName];
+      resolved = (rawVal != null && rawVal !== '') ? String(rawVal) : (entry.api_key || null);
+    } else {
+      resolved = entry.api_key || null;
+    }
+    return { resolved, refName, unresolved: false };
+  }
+
+  for (const project of st.vault.projects) {
+    for (const chunk of project.chunks || []) {
+      if (chunk.chunk_type !== 'env_file') continue;
+      const field = chunk.fields.find(f => f.key === refName);
+      if (field) return { resolved: field.value, refName, unresolved: false };
+    }
+  }
   return { resolved: null, refName, unresolved: true };
 }
 
@@ -181,10 +214,34 @@ export function renderChunkCard(chunk: SecretChunk, project: Project): HTMLEleme
   card.className = 'chunk-card';
   const typeLabel = chunk.chunk_type.replace(/_/g, ' ');
 
+  const isWg = chunk.chunk_type === 'wg_interface' || chunk.chunk_type === 'wg_peer';
+  const isDockerSvc = chunk.chunk_type === 'docker_service';
+
+  const chunkEnvFields = isDockerSvc ? chunk.fields.filter(f => f.description === 'env') : [];
+  const hasChunkEnvFields = chunkEnvFields.length > 0;
+  const hasChunkEnvRefs = chunkEnvFields.some(f => /^\$\{.+\}$/.test(f.value));
+
   let fieldsHtml = '';
   for (const field of chunk.fields) {
     const { resolved, refName, unresolved } = resolveFieldRef(field.value);
     const isSecret = field.secret || field.field_type === 'secret';
+
+    // Context-aware effective type — lets old imported data display smartly
+    // without needing a data migration.
+    let effType: ChunkFieldType = field.field_type;
+    if (!isSecret && !refName) {
+      if (isWg) {
+        if (/^(Address|AllowedIPs)$/i.test(field.key)) effType = 'subnet';
+        else if (/^DNS$/i.test(field.key)) effType = 'ip';
+        else if (/^Endpoint$/i.test(field.key)) effType = 'endpoint';
+        else if (/^ListenPort$/i.test(field.key)) effType = 'port';
+        else if (/^(PostUp|PostDown|PreUp|PreDown)$/i.test(field.key)) effType = 'multiline';
+      }
+      if (isDockerSvc && field.field_type === 'list') {
+        if (field.key === 'volumes') effType = 'volume_mount';
+      }
+    }
+
     let displayVal = '';
     let badgeHtml = '';
 
@@ -202,16 +259,171 @@ export function renderChunkCard(chunk: SecretChunk, project: Project): HTMLEleme
       displayVal = field.value || '';
     }
 
+    const isEnvField = isDockerSvc && field.description === 'env';
+    const envCopyResolved = (isEnvField && refName) ? resolveFieldRef(field.value, true).resolved : null;
     const valClass = `chunk-field-val${isSecret && field.value ? ' masked' : ''}`;
-    const copyData = isSecret ? (resolved ?? field.value) : field.value;
-    fieldsHtml += `
-      <div class="chunk-field-row">
-        <span class="chunk-field-key">${esc(field.key)}</span>
-        <span class="${valClass}">${esc(displayVal)} ${badgeHtml}</span>
-        <div class="chunk-field-actions">
-          ${copyData ? `<button class="icon-btn sm" data-action="chunk-copy" data-value="${escAttr(copyData)}" title="Copy">${copySVG}</button>` : ''}
-        </div>
-      </div>`;
+    const copyData = isEnvField
+      ? `${field.key}=${field.value}`
+      : (isSecret || refName) ? (resolved ?? field.value)
+      : field.value;
+    const isMultiline = (effType === 'multiline' || effType === 'list') && !isSecret && !refName;
+    const copyBtn = copyData ? `<button class="icon-btn sm" data-action="chunk-copy" data-value="${escAttr(copyData)}" title="Copy">${copySVG}</button>` : '';
+    const envCopyBtn = envCopyResolved !== null
+      ? `<button class="btn btn-ghost btn-xs" data-action="chunk-copy" data-value="${escAttr(`${field.key}=${envCopyResolved}`)}" title="Copy resolved (.env)">.env</button>`
+      : '';
+
+    // JSON object/array detection for pretty display
+    let parsedJson: object | null = null;
+    if (!isSecret && !refName && field.value) {
+      const trimmed = field.value.trim();
+      if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+        try { parsedJson = JSON.parse(trimmed) as object; } catch {}
+      }
+    }
+    const isJsonVal = parsedJson !== null;
+
+    const renderPortBadge = (portStr: string) => {
+      const protoMatch = portStr.match(/\/(tcp|udp|sctp)$/i);
+      const proto = protoMatch ? protoMatch[1].toLowerCase() : '';
+      const base = portStr.replace(/\/(tcp|udp|sctp)$/i, '');
+      const parts = base.split(':');
+      if (parts.length === 1) {
+        return `<span class="port-badge"><span class="port-container">${esc(parts[0])}</span>${proto ? `<span class="port-proto">${esc(proto)}</span>` : ''}</span>`;
+      }
+      const host = parts[0];
+      const container = parts.slice(1).join(':');
+      return `<span class="port-badge"><span class="port-host">${esc(host)}</span><span class="port-arrow">→</span><span class="port-container">${esc(container)}</span>${proto ? `<span class="port-proto">${esc(proto)}</span>` : ''}</span>`;
+    };
+
+    const renderVolBadge = (str: string) => {
+      const colon1 = str.indexOf(':');
+      if (colon1 < 0) return `<span class="volume-badge"><span class="vol-name">${esc(str)}</span></span>`;
+      const host = str.slice(0, colon1);
+      const rest = str.slice(colon1 + 1);
+      const modeMatch = rest.match(/:?(ro|rw)$/);
+      const mode = modeMatch ? modeMatch[1] : '';
+      const container = mode ? rest.slice(0, rest.lastIndexOf(':')) : rest;
+      const hostShort = host.length > 30 ? '…' + host.slice(host.lastIndexOf('/')) : host;
+      return `<span class="volume-badge" title="${escAttr(str)}"><span class="vol-host">${esc(hostShort)}</span><span class="port-arrow">→</span><span class="vol-container">${esc(container)}</span>${mode ? `<span class="port-proto">${esc(mode)}</span>` : ''}</span>`;
+    };
+
+    if (effType === 'port') {
+      const portLines = (displayVal || '').split(/\n/).filter(Boolean).map(renderPortBadge).join('');
+      fieldsHtml += `
+        <div class="chunk-field-row multiline-row">
+          <span class="chunk-field-key">${esc(field.key)}</span>
+          <div class="chunk-field-actions">${copyBtn}</div>
+          <div class="chunk-field-val port-list">${portLines || '<span style="color:var(--text3);font-size:10px">empty</span>'}</div>
+        </div>`;
+    } else if (effType === 'volume_mount') {
+      const volLines = (displayVal || '').split(/\n/).filter(Boolean).map(renderVolBadge).join('');
+      fieldsHtml += `
+        <div class="chunk-field-row multiline-row">
+          <span class="chunk-field-key">${esc(field.key)}</span>
+          <div class="chunk-field-actions">${copyBtn}</div>
+          <div class="chunk-field-val port-list">${volLines || '<span style="color:var(--text3);font-size:10px">empty</span>'}</div>
+        </div>`;
+    } else if (effType === 'subnet') {
+      const cidrs = (displayVal || '').split(/[\n,;]+/).map(s => s.trim()).filter(Boolean);
+      const badges = cidrs.map(c => `<span class="subnet-badge">${esc(c)}</span>`).join('');
+      fieldsHtml += `
+        <div class="chunk-field-row">
+          <span class="chunk-field-key">${esc(field.key)}</span>
+          <div class="chunk-field-val badge-list">${badges || '<span style="color:var(--text3);font-size:10px">empty</span>'}</div>
+          <div class="chunk-field-actions">${copyBtn}</div>
+        </div>`;
+    } else if (effType === 'ip') {
+      const ips = (displayVal || '').split(/[\n,;]+/).map(s => s.trim()).filter(Boolean);
+      const badges = ips.map(ip => `<span class="ip-badge">${esc(ip)}</span>`).join('');
+      fieldsHtml += `
+        <div class="chunk-field-row">
+          <span class="chunk-field-key">${esc(field.key)}</span>
+          <div class="chunk-field-val badge-list">${badges || '<span style="color:var(--text3);font-size:10px">empty</span>'}</div>
+          <div class="chunk-field-actions">${copyBtn}</div>
+        </div>`;
+    } else if (effType === 'endpoint') {
+      const lastColon = displayVal.lastIndexOf(':');
+      const epHost = lastColon > 0 ? displayVal.slice(0, lastColon) : displayVal;
+      const epPort = lastColon > 0 ? displayVal.slice(lastColon + 1) : '';
+      const endpointBadge = `<span class="endpoint-badge"><span class="endpoint-host">${esc(epHost)}</span>${epPort ? `<span class="port-arrow">:</span><span class="endpoint-port">${esc(epPort)}</span>` : ''}</span>`;
+      fieldsHtml += `
+        <div class="chunk-field-row">
+          <span class="chunk-field-key">${esc(field.key)}</span>
+          <div class="chunk-field-val">${endpointBadge}</div>
+          <div class="chunk-field-actions">${copyBtn}</div>
+        </div>`;
+    } else if (effType === 'list' && isDockerSvc && field.key === 'networks') {
+      const nets = (displayVal || '').split(/[\n,]+/).map(s => s.trim()).filter(Boolean);
+      const badges = nets.map(n => `<span class="net-badge">${esc(n)}</span>`).join('');
+      fieldsHtml += `
+        <div class="chunk-field-row">
+          <span class="chunk-field-key">${esc(field.key)}</span>
+          <div class="chunk-field-val badge-list">${badges || '<span style="color:var(--text3);font-size:10px">empty</span>'}</div>
+          <div class="chunk-field-actions">${copyBtn}</div>
+        </div>`;
+    } else if (effType === 'list' && isDockerSvc && field.key === 'devices') {
+      const devLines = (displayVal || '').split(/\n/).filter(Boolean).map(renderVolBadge).join('');
+      fieldsHtml += `
+        <div class="chunk-field-row multiline-row">
+          <span class="chunk-field-key">${esc(field.key)}</span>
+          <div class="chunk-field-actions">${copyBtn}</div>
+          <div class="chunk-field-val port-list">${devLines || '<span style="color:var(--text3);font-size:10px">empty</span>'}</div>
+        </div>`;
+    } else if (effType === 'list' && isDockerSvc && field.key === 'cap_add') {
+      const caps = (displayVal || '').split(/[\n,]+/).map(s => s.trim()).filter(Boolean);
+      const badges = caps.map(c => `<span class="cap-badge">${esc(c)}</span>`).join('');
+      fieldsHtml += `
+        <div class="chunk-field-row">
+          <span class="chunk-field-key">${esc(field.key)}</span>
+          <div class="chunk-field-val badge-list">${badges || '<span style="color:var(--text3);font-size:10px">empty</span>'}</div>
+          <div class="chunk-field-actions">${copyBtn}</div>
+        </div>`;
+    } else if (isJsonVal) {
+      const formatted = JSON.stringify(parsedJson, null, 2);
+      fieldsHtml += `
+        <div class="chunk-field-row multiline-row">
+          <span class="chunk-field-key">${esc(field.key)}</span>
+          <div class="chunk-field-actions">${copyBtn}${envCopyBtn}</div>
+          <pre class="${valClass} code-block">${esc(formatted)}</pre>
+        </div>`;
+    } else if (isMultiline) {
+      fieldsHtml += `
+        <div class="chunk-field-row multiline-row">
+          <span class="chunk-field-key">${esc(field.key)}</span>
+          <div class="chunk-field-actions">${copyBtn}</div>
+          <pre class="${valClass} code-block">${esc(displayVal)}</pre>
+        </div>`;
+    } else if (isDockerSvc && field.key === 'image' && field.value && !isSecret && !refName) {
+      const colonIdx = field.value.lastIndexOf(':');
+      const hasTag = colonIdx > field.value.lastIndexOf('/');
+      const tag = hasTag ? field.value.slice(colonIdx + 1) : '';
+      const nameWithReg = hasTag ? field.value.slice(0, colonIdx) : field.value;
+      const lastSlash = nameWithReg.lastIndexOf('/');
+      const imgName = lastSlash >= 0 ? nameWithReg.slice(lastSlash + 1) : nameWithReg;
+      const registry = lastSlash >= 0 ? nameWithReg.slice(0, lastSlash) : '';
+      fieldsHtml += `
+        <div class="chunk-field-row">
+          <span class="chunk-field-key">${esc(field.key)}</span>
+          <div class="chunk-field-val">
+            <span class="image-badge">
+              ${registry ? `<span class="img-registry">${esc(registry)}/</span>` : ''}<span class="img-name">${esc(imgName)}</span>${tag ? `<span class="img-tag">:${esc(tag)}</span>` : ''}
+            </span>
+          </div>
+          <div class="chunk-field-actions">${copyBtn}</div>
+        </div>`;
+    } else {
+      let extraBadge = '';
+      if (field.field_type === 'user_id' && field.value && !refName) {
+        const [uid, gid] = field.value.split(':');
+        extraBadge = `<span class="user-id-badge">uid:${esc(uid)}${gid ? `·gid:${esc(gid)}` : ''}</span>`;
+      }
+      fieldsHtml += `
+        <div class="chunk-field-row">
+          <span class="chunk-field-key">${esc(field.key)}</span>
+          <span class="${valClass}">${esc(displayVal)} ${badgeHtml}${extraBadge}</span>
+          <div class="chunk-field-actions">${copyBtn}${envCopyBtn}</div>
+        </div>`;
+    }
   }
 
   card.innerHTML = `
@@ -220,14 +432,16 @@ export function renderChunkCard(chunk: SecretChunk, project: Project): HTMLEleme
       <span class="chunk-type-badge">${esc(typeLabel)}</span>
       <div style="display:flex;gap:4px;margin-left:auto">
         ${chunk.chunk_type === 'env_file' ? `<button class="btn btn-ghost btn-sm" data-action="export-env-chunk" data-project-id="${escAttr(project.id)}" data-chunk-id="${escAttr(chunk.id)}">Export .env</button>` : ''}
-        <button class="icon-btn sm" data-action="chunk-up" data-project-id="${escAttr(project.id)}" data-chunk-id="${escAttr(chunk.id)}" title="Move up">↑</button>
-        <button class="icon-btn sm" data-action="chunk-down" data-project-id="${escAttr(project.id)}" data-chunk-id="${escAttr(chunk.id)}" title="Move down">↓</button>
+        ${hasChunkEnvFields ? `<button class="btn btn-ghost btn-sm" data-action="copy-chunk-raw" data-project-id="${escAttr(project.id)}" data-chunk-id="${escAttr(chunk.id)}" title="Copy all env fields as KEY=value">Copy</button>` : ''}
+        ${hasChunkEnvRefs ? `<button class="btn btn-ghost btn-sm" data-action="copy-chunk-env" data-project-id="${escAttr(project.id)}" data-chunk-id="${escAttr(chunk.id)}" title="Copy env fields with resolved values">Copy .env</button>` : ''}
+        <button class="btn btn-ghost btn-sm" data-action="chunk-up" data-project-id="${escAttr(project.id)}" data-chunk-id="${escAttr(chunk.id)}" title="Move up">↑</button>
+        <button class="btn btn-ghost btn-sm" data-action="chunk-down" data-project-id="${escAttr(project.id)}" data-chunk-id="${escAttr(chunk.id)}" title="Move down">↓</button>
         <button class="btn btn-ghost btn-sm" data-action="dup-chunk" data-project-id="${escAttr(project.id)}" data-chunk-id="${escAttr(chunk.id)}">Dup</button>
         <button class="btn btn-ghost btn-sm" data-action="edit-chunk" data-project-id="${escAttr(project.id)}" data-chunk-id="${escAttr(chunk.id)}">Edit</button>
         <button class="btn btn-ghost btn-sm" data-action="delete-chunk" data-project-id="${escAttr(project.id)}" data-chunk-id="${escAttr(chunk.id)}" style="color:var(--price-paid)">Delete</button>
       </div>
     </div>
-    <div class="chunk-fields">${fieldsHtml || '<div style="padding:10px 14px;font-size:11px;color:var(--text3)">No fields</div>'}</div>
+    <div class="chunk-fields">${fieldsHtml || '<div class="chunk-no-fields">No fields</div>'}</div>
   `;
   return card;
 }
@@ -269,7 +483,15 @@ export function exportDockerCompose(project: Project): { yaml: string; envFile: 
   if (networkChunks.length) {
     lines.push('networks:');
     for (const nc of networkChunks) {
-      lines.push(`  ${nc.name}:`);
+      if (nc.fields.length > 0) {
+        for (const f of nc.fields) {
+          if (!f.key) continue;
+          lines.push(`  ${f.key}:`);
+          if (f.value) lines.push(`    driver: ${f.value}`);
+        }
+      } else {
+        lines.push(`  ${nc.name}:`);
+      }
     }
     lines.push('');
   }
@@ -277,7 +499,14 @@ export function exportDockerCompose(project: Project): { yaml: string; envFile: 
   if (volumeChunks.length) {
     lines.push('volumes:');
     for (const vc of volumeChunks) {
-      lines.push(`  ${vc.name}:`);
+      if (vc.fields.length > 0) {
+        for (const f of vc.fields) {
+          if (!f.key) continue;
+          lines.push(`  ${f.key}:`);
+        }
+      } else {
+        lines.push(`  ${vc.name}:`);
+      }
     }
     lines.push('');
   }
@@ -287,13 +516,29 @@ export function exportDockerCompose(project: Project): { yaml: string; envFile: 
     for (const sc of serviceChunks) {
       const svcName = sc.name.replace(/\s+/g, '_').toLowerCase();
       lines.push(`  ${svcName}:`);
-      const envFields = sc.fields.filter(f => f.field_type === 'env_var' || f.field_type === 'secret');
-      const varFields = sc.fields.filter(f => f.field_type !== 'env_var' && f.field_type !== 'secret' && f.field_type !== 'list');
-      const listFields = sc.fields.filter(f => f.field_type === 'list');
+      const envFields  = sc.fields.filter(f => f.description === 'env' || f.field_type === 'env_var');
+      const portFields = sc.fields.filter(f => f.field_type === 'port' && f.description !== 'env');
+      const listFields = sc.fields.filter(f => (f.field_type === 'list' || f.field_type === 'volume_mount') && f.description !== 'env');
+      const varFields  = sc.fields.filter(f =>
+        f.description !== 'env' && f.field_type !== 'env_var' &&
+        f.field_type !== 'port' && f.field_type !== 'list' && f.field_type !== 'volume_mount' &&
+        f.field_type !== 'subnet' && f.field_type !== 'ip' && f.field_type !== 'endpoint' &&
+        f.key !== 'restart'
+      );
 
-      for (const f of varFields) {
-        if (!f.value) continue;
+      const scalarFields = [...varFields, ...sc.fields.filter(f =>
+        (f.field_type === 'subnet' || f.field_type === 'ip' || f.field_type === 'endpoint') && f.description !== 'env'
+      )];
+      for (const f of scalarFields) {
+        if (f.value == null || f.value === '') continue;
         lines.push(`    ${f.key}: ${JSON.stringify(f.value)}`);
+      }
+
+      for (const f of portFields) {
+        if (!f.value) continue;
+        const items = f.value.split(/\n/).map(s => s.trim()).filter(Boolean);
+        lines.push(`    ports:`);
+        for (const item of items) lines.push(`      - ${JSON.stringify(item)}`);
       }
 
       for (const f of listFields) {
@@ -316,8 +561,9 @@ export function exportDockerCompose(project: Project): { yaml: string; envFile: 
           }
         }
       }
-      const _restartF = sc.fields.find(f => f.key === 'restart');
-      lines.push(`    restart: ${_restartF?.value || 'unless-stopped'}`);
+
+      const restartF = sc.fields.find(f => f.key === 'restart');
+      lines.push(`    restart: ${restartF?.value || 'unless-stopped'}`);
       lines.push('');
     }
   }
@@ -515,9 +761,16 @@ export function parseWgConf(text: string): SecretChunk[] {
       const eq = line.indexOf('=');
       if (eq < 0) continue;
       const key = line.slice(0, eq).trim();
-      const val = line.slice(eq + 1).trim();
+      const val = line.slice(eq + 1).trim().replace(/\s+#.*$/, '');
       const isSecret = key === 'PrivateKey' || key === 'PresharedKey';
-      cur.fields.push({ key, value: val, field_type: isSecret ? 'secret' : 'var', secret: isSecret });
+      const ft: ChunkFieldType = isSecret ? 'secret'
+        : /^(Address|AllowedIPs)$/i.test(key) ? 'subnet'
+        : /^DNS$/i.test(key) ? 'ip'
+        : /^Endpoint$/i.test(key) ? 'endpoint'
+        : /^ListenPort$/i.test(key) ? 'port'
+        : /^(PostUp|PostDown|PreUp|PreDown)$/i.test(key) ? 'multiline'
+        : 'var';
+      cur.fields.push({ key, value: val, field_type: ft, secret: isSecret || undefined });
     }
   }
   return chunks;
@@ -525,55 +778,103 @@ export function parseWgConf(text: string): SecretChunk[] {
 
 export function parseDockerCompose(text: string): SecretChunk[] {
   const chunks: SecretChunk[] = [];
-  const indentOf = (s: string) => s.length - s.trimStart().length;
+  const lines = text.split(/\r?\n/);
+
+  let baseIndent = 0;
+  for (const line of lines) {
+    if (!line.trim() || line.trim().startsWith('#')) continue;
+    const ind = line.length - line.trimStart().length;
+    if (ind > 0) { baseIndent = ind; break; }
+  }
+  if (baseIndent === 0) baseIndent = 2;
+
   type Top = 'none' | 'services' | 'networks' | 'volumes';
   type Ctx = 'none' | 'service' | 'env' | 'list';
   let top: Top = 'none', ctx: Ctx = 'none';
   let svc: SecretChunk | null = null;
   let listKey = '', listVals: string[] = [];
+  let netChunk: SecretChunk | null = null;
+  let volChunk: SecretChunk | null = null;
+
+  const stripVal = (raw: string) =>
+    raw.replace(/\s+#.*$/, '').trim().replace(/^["']+|["']+$/g, '');
 
   const flushList = () => {
-    if (svc && listKey && listVals.length) svc.fields.push({ key: listKey, value: listVals.join('\n'), field_type: 'list' });
+    if (svc && listKey && listVals.length) {
+      const ft: ChunkFieldType = listKey === 'ports' ? 'port' : listKey === 'volumes' ? 'volume_mount' : 'list';
+      svc.fields.push({ key: listKey, value: listVals.join('\n'), field_type: ft });
+    }
     listKey = ''; listVals = [];
   };
 
-  for (const raw of text.split(/\r?\n/)) {
+  const detectSvcFieldType = (key: string): ChunkFieldType => {
+    if (/^user(_?id)?$/i.test(key)) return 'user_id';
+    return 'var';
+  };
+
+  for (const raw of lines) {
     const trimmed = raw.trim();
     if (!trimmed || trimmed.startsWith('#')) continue;
-    const ind = indentOf(raw);
+    const ind   = raw.length - raw.trimStart().length;
+    const level = Math.round(ind / baseIndent);
 
-    if (ind === 0) {
+    if (level === 0) {
       flushList(); svc = null; ctx = 'none';
-      const _stripped = trimmed.split(/\s+#/)[0].trimEnd();
-      top = _stripped === 'services:' ? 'services' : _stripped === 'networks:' ? 'networks' : _stripped === 'volumes:' ? 'volumes' : 'none';
-    } else if (ind === 2) {
+      const stripped = trimmed.split(/\s+#/)[0].trimEnd();
+      top = stripped === 'services:' ? 'services'
+          : stripped === 'networks:' ? 'networks'
+          : stripped === 'volumes:'  ? 'volumes'
+          : 'none';
+    } else if (level === 1) {
       flushList(); ctx = 'none';
-      const name = trimmed.endsWith(':') ? trimmed.slice(0, -1) : trimmed;
-      if (top === 'services') { svc = { id: crypto.randomUUID(), name, chunk_type: 'docker_service', fields: [] }; chunks.push(svc); ctx = 'service'; }
-      else if (top === 'networks') chunks.push({ id: crypto.randomUUID(), name, chunk_type: 'docker_network', fields: [] });
-      else if (top === 'volumes')  chunks.push({ id: crypto.randomUUID(), name, chunk_type: 'docker_volume',  fields: [] });
-    } else if (ind === 4 && svc) {
+      const name = trimmed.split(':')[0].trim();
+      if (!name) continue;
+      if (top === 'services') {
+        svc = { id: crypto.randomUUID(), name, chunk_type: 'docker_service', fields: [] };
+        chunks.push(svc); ctx = 'service';
+      } else if (top === 'networks') {
+        if (!netChunk) {
+          netChunk = { id: crypto.randomUUID(), name: 'networks', chunk_type: 'docker_network', fields: [] };
+          chunks.push(netChunk);
+        }
+        netChunk.fields.push({ key: name, value: '', field_type: 'var' });
+      } else if (top === 'volumes') {
+        if (!volChunk) {
+          volChunk = { id: crypto.randomUUID(), name: 'volumes', chunk_type: 'docker_volume', fields: [] };
+          chunks.push(volChunk);
+        }
+        volChunk.fields.push({ key: name, value: '', field_type: 'var' });
+      }
+    } else if (level === 2 && svc) {
       flushList();
       if (trimmed === 'environment:') { ctx = 'env'; }
-      else if (trimmed.endsWith(':') && !trimmed.includes(': ')) { listKey = trimmed.slice(0, -1); listVals = []; ctx = 'list'; }
-      else {
+      else if (trimmed.endsWith(':') && !trimmed.includes(': ')) {
+        listKey = trimmed.slice(0, -1); listVals = []; ctx = 'list';
+      } else {
         ctx = 'service';
         const ci = trimmed.indexOf(': ');
-        if (ci > 0) svc.fields.push({ key: trimmed.slice(0, ci).trim(), value: trimmed.slice(ci + 2).trim().replace(/^["']|["']$/g, ''), field_type: 'var' });
+        if (ci > 0) {
+          const key = trimmed.slice(0, ci).trim();
+          const val = stripVal(trimmed.slice(ci + 2));
+          svc.fields.push({ key, value: val, field_type: detectSvcFieldType(key) });
+        }
       }
-    } else if (ind >= 6 && svc) {
+    } else if (level >= 3 && svc) {
       if (ctx === 'env') {
         const envLine = trimmed.startsWith('- ') ? trimmed.slice(2) : trimmed;
-        const ei = envLine.indexOf('='), ci2 = envLine.indexOf(': ');
+        const ei  = envLine.indexOf('=');
+        const ci2 = envLine.indexOf(': ');
         let key = '', val = '';
-        if (ei > 0) { key = envLine.slice(0, ei).trim(); val = envLine.slice(ei + 1).trim().replace(/^["']|["']$/g, ''); }
-        else if (ci2 > 0) { key = envLine.slice(0, ci2).trim(); val = envLine.slice(ci2 + 2).trim().replace(/^["']|["']$/g, ''); }
+        if (ei > 0)       { key = envLine.slice(0, ei).trim();  val = stripVal(envLine.slice(ei + 1)); }
+        else if (ci2 > 0) { key = envLine.slice(0, ci2).trim(); val = stripVal(envLine.slice(ci2 + 2)); }
         if (key) {
-          const isSecret = /pass(word)?|secret|key|token|cred/i.test(key);
-          svc.fields.push({ key, value: val, field_type: isSecret ? 'secret' : 'env_var', secret: isSecret });
+          const isRef = /^\$\{.+\}$/.test(val);
+          const isSecret = !isRef && /pass(word)?|secret|key|token|cred/i.test(key) && val !== '';
+          const ft: ChunkFieldType = isRef ? 'env_var' : (isSecret ? 'secret' : 'var');
+          svc.fields.push({ key, value: val, field_type: ft, secret: isSecret || undefined, description: 'env' });
         }
       } else if (ctx === 'list' && trimmed.startsWith('- ')) {
-        listVals.push(trimmed.slice(2).trim().replace(/^["']|["']$/g, ''));
+        listVals.push(stripVal(trimmed.slice(2)));
       }
     }
   }
@@ -651,6 +952,12 @@ export function renderChunkEditFields(fields: ChunkField[]) {
         <option value="secret"${field.field_type === 'secret' ? ' selected' : ''}>secret</option>
         <option value="list"${field.field_type === 'list' ? ' selected' : ''}>list</option>
         <option value="multiline"${field.field_type === 'multiline' ? ' selected' : ''}>multiline</option>
+        <option value="port"${field.field_type === 'port' ? ' selected' : ''}>port</option>
+        <option value="user_id"${field.field_type === 'user_id' ? ' selected' : ''}>user_id</option>
+        <option value="subnet"${field.field_type === 'subnet' ? ' selected' : ''}>subnet</option>
+        <option value="ip"${field.field_type === 'ip' ? ' selected' : ''}>ip</option>
+        <option value="endpoint"${field.field_type === 'endpoint' ? ' selected' : ''}>endpoint</option>
+        <option value="volume_mount"${field.field_type === 'volume_mount' ? ' selected' : ''}>volume_mount</option>
       </select>
       <button class="icon-btn sm danger chunk-field-delete" data-idx="${i}" title="Remove field">${delSVG}</button>
     `;

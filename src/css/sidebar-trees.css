@@ -1,0 +1,183 @@
+/* ── PROJECT TREE IN SIDEBAR ─────────────────────────────────────────── */
+.project-tree {
+  margin-left: 8px;
+  list-style: none;
+}
+
+.project-tree li {
+  margin: 2px 0;
+}
+
+.project-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-radius: 7px;
+  padding: 4px 8px;
+  cursor: pointer;
+  transition: background 0.1s;
+}
+
+.project-item:hover {
+  background: var(--surface2);
+}
+
+.project-item.active {
+  background: var(--accent-dim);
+  color: var(--accent);
+}
+
+.project-name {
+  flex: 1;
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.project-actions {
+  display: none;
+  gap: 4px;
+}
+
+.project-item:hover .project-actions {
+  display: flex;
+}
+
+.project-actions button {
+  background: transparent;
+  border: none;
+  color: var(--text3);
+  cursor: pointer;
+  font-size: 11px;
+  border-radius: 4px;
+  padding: 2px 4px;
+}
+
+.project-actions button:hover {
+  color: var(--accent);
+  background: var(--surface3);
+}
+
+.project-count {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 9px;
+  background: var(--surface3);
+  border-radius: 4px;
+  padding: 1px 5px;
+  margin-left: 6px;
+}
+
+/* ── TYPE GROUP HEADER (grid grouped view) ──────────────────────────── */
+.type-group-header {
+  grid-column: 1 / -1;
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  color: var(--text3);
+  padding: 10px 4px 4px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 2px;
+}
+
+/* ── SIDEBAR SUB-ITEMS (secret type list) ───────────────────────────── */
+.sidebar-subtree {
+  padding-left: 4px;
+}
+
+.sidebar-subitem {
+  padding: 4px 9px 4px 22px;
+  font-size: 11px;
+}
+
+.sidebar-subicon {
+  font-size: 7px !important;
+  color: var(--text3) !important;
+}
+
+/* ── SIDEBAR ORDER EDITOR (settings) ────────────────────────────────── */
+.sidebar-order-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.sidebar-order-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 5px 8px;
+  background: var(--surface2);
+  border-radius: 6px;
+  border: 1px solid var(--border);
+}
+
+.sidebar-order-row.sidebar-order-hidden {
+  opacity: .5;
+  border-style: dashed;
+}
+
+.sidebar-order-label {
+  font-size: 12px;
+  color: var(--text2);
+}
+
+.sidebar-order-dim {
+  color: var(--text3) !important;
+}
+
+.sidebar-order-btns {
+  display: flex;
+  gap: 4px;
+}
+
+/* ── ENV IMPORT MODAL ───────────────────────────────────────────────── */
+.env-import-list {
+  max-height: 260px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px;
+  background: var(--surface);
+}
+
+.env-import-row {
+  display: grid;
+  grid-template-columns: 20px 1fr 1fr;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 6px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.env-import-row:hover {
+  background: var(--surface2);
+}
+
+.env-import-name {
+  font-size: 11px;
+  color: var(--text);
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.env-import-val {
+  font-size: 10px;
+  color: var(--text3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.modal-footer .btn:first-child {
+  margin-right: auto;
+}
+

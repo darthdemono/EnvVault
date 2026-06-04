@@ -2,7 +2,7 @@
  * @file Render: sidebar, project tree, card grid, config view, copy-all button.
  */
 
-import type { VaultEntry, SecretType, Project, ProjectType } from './types';
+import type { VaultEntry, SecretType, Project, ProjectType, SecretChunk, ChunkFieldType } from './types';
 import { st, Settings, setRenderFn, applyGridSettings, dotenvKey } from './state';
 import { getFiltered, sorted, buildProjectTree, getDescendantProjectIds } from './filters';
 import { iconHTML } from './icons';
@@ -23,6 +23,7 @@ import {
   parseSshConfig,
   pickFileText,
   openChunkEditModal,
+  resolveFieldRef,
 } from './chunk-ops';
 import { parseEnvFile } from './import-export';
 
@@ -282,6 +283,7 @@ function renderConfigView(project: Project) {
   const grid = document.getElementById('card-grid')!;
   document.getElementById('result-count')!.textContent = `${project.project_type} config`;
   applyGridSettings();
+  grid.style.gridTemplateColumns = '1fr';
 
   const typeLabel = getProjectTypeLabel(project.project_type!);
 
@@ -291,10 +293,12 @@ function renderConfigView(project: Project) {
   const header = document.createElement('div');
   header.className = 'config-view-header';
   header.innerHTML = `
-    <span class="config-view-title">${esc(project.name)}</span>
-    <span class="config-type-badge">${esc(typeLabel)}</span>
-    ${project.description ? `<span style="font-size:11px;color:var(--text3);align-self:center;margin-left:2px">${esc(project.description)}</span>` : ''}
-    <div style="margin-left:auto;display:flex;gap:6px;flex-wrap:wrap">
+    <div class="config-view-header-meta">
+      <span class="config-view-title">${esc(project.name)}</span>
+      <span class="config-type-badge">${esc(typeLabel)}</span>
+      ${project.description ? `<span style="font-size:11px;color:var(--text3)">${esc(project.description)}</span>` : ''}
+    </div>
+    <div class="config-view-header-btns">
       <button class="btn btn-ghost btn-sm" data-action="import-env-chunk" data-project-id="${escAttr(project.id)}">Import .env</button>
       ${makeConfigViewHeaderBtns(project)}
     </div>
@@ -302,8 +306,33 @@ function renderConfigView(project: Project) {
   wrapper.appendChild(header);
 
   const chunks = project.chunks || [];
-  for (const chunk of chunks) {
-    wrapper.appendChild(renderChunkCard(chunk, project));
+  const typeChunks = chunks.filter(c => c.chunk_type !== 'env_file');
+  const envChunks  = chunks.filter(c => c.chunk_type === 'env_file');
+
+  if (typeChunks.length > 0 && envChunks.length > 0) {
+    // Two-column layout: project-type chunks left, env_file chunks right.
+    const twoCol = document.createElement('div');
+    twoCol.className = 'chunks-two-col';
+
+    const makeCol = (label: string, items: SecretChunk[]) => {
+      const col = document.createElement('div');
+      col.className = 'chunks-col';
+      const hdr = document.createElement('div');
+      hdr.className = 'chunks-col-label';
+      hdr.textContent = label;
+      col.appendChild(hdr);
+      for (const chunk of items) col.appendChild(renderChunkCard(chunk, project));
+      return col;
+    };
+
+    twoCol.appendChild(makeCol(getProjectTypeLabel(project.project_type!), typeChunks));
+    twoCol.appendChild(makeCol('Environment Files', envChunks));
+    wrapper.appendChild(twoCol);
+  } else {
+    const chunksGrid = document.createElement('div');
+    chunksGrid.className = 'chunks-grid';
+    for (const chunk of chunks) chunksGrid.appendChild(renderChunkCard(chunk, project));
+    wrapper.appendChild(chunksGrid);
   }
 
   if (!chunks.length) {
@@ -342,6 +371,25 @@ function renderConfigView(project: Project) {
     if (action === 'edit-chunk') {
       const chunk = proj.chunks?.find(c => c.id === chunkId);
       if (chunk) openChunkEditModal(proj, chunk);
+      return;
+    }
+
+    if (action === 'copy-chunk-raw') {
+      const chunk = proj.chunks?.find(c => c.id === chunkId);
+      if (chunk) {
+        const envF = chunk.fields.filter(f => f.description === 'env');
+        clipboardWrite(envF.map(f => `${f.key}=${f.value}`).join('\n')).then(() => showToast('Copied ✓', 'ok', 1500));
+      }
+      return;
+    }
+
+    if (action === 'copy-chunk-env') {
+      const chunk = proj.chunks?.find(c => c.id === chunkId);
+      if (chunk) {
+        const envF = chunk.fields.filter(f => f.description === 'env');
+        const text = envF.map(f => `${f.key}=${resolveFieldRef(f.value, true).resolved ?? f.value}`).join('\n');
+        clipboardWrite(text).then(() => showToast('Copied .env ✓', 'ok', 1500));
+      }
       return;
     }
 
@@ -394,20 +442,37 @@ function renderConfigView(project: Project) {
       return;
     }
 
-    if (action === 'add-docker-service' || action === 'add-docker-network' || action === 'add-docker-volume') {
-      const typeMap: Record<string, string> = {
-        'add-docker-service': 'docker_service',
-        'add-docker-network': 'docker_network',
-        'add-docker-volume':  'docker_volume',
-      };
-      const ct = typeMap[action] as any;
-      const prefix = action === 'add-docker-service' ? 'service' : action === 'add-docker-network' ? 'network' : 'volume';
-      const n = ((proj.chunks || []).filter(c => c.chunk_type === ct).length + 1);
+    if (action === 'add-docker-service') {
+      const n = ((proj.chunks || []).filter(c => c.chunk_type === 'docker_service').length + 1);
       if (!proj.chunks) proj.chunks = [];
-      proj.chunks.push({ id: crypto.randomUUID(), name: `${prefix}-${n}`, chunk_type: ct, fields: [] });
-      st.store.save(st.vault);
-      render();
-      return;
+      proj.chunks.push({ id: crypto.randomUUID(), name: `service-${n}`, chunk_type: 'docker_service', fields: [] });
+      st.store.save(st.vault); render(); return;
+    }
+
+    if (action === 'add-docker-network') {
+      const name = await showPrompt('Network name:', 'my-network');
+      if (!name) return;
+      if (!proj.chunks) proj.chunks = [];
+      const nc = proj.chunks.find(c => c.chunk_type === 'docker_network');
+      if (nc) {
+        nc.fields.push({ key: name, value: '', field_type: 'var' });
+      } else {
+        proj.chunks.push({ id: crypto.randomUUID(), name: 'networks', chunk_type: 'docker_network', fields: [{ key: name, value: '', field_type: 'var' }] });
+      }
+      st.store.save(st.vault); render(); return;
+    }
+
+    if (action === 'add-docker-volume') {
+      const name = await showPrompt('Volume name:', 'my-volume');
+      if (!name) return;
+      if (!proj.chunks) proj.chunks = [];
+      const vc = proj.chunks.find(c => c.chunk_type === 'docker_volume');
+      if (vc) {
+        vc.fields.push({ key: name, value: '', field_type: 'var' });
+      } else {
+        proj.chunks.push({ id: crypto.randomUUID(), name: 'volumes', chunk_type: 'docker_volume', fields: [{ key: name, value: '', field_type: 'var' }] });
+      }
+      st.store.save(st.vault); render(); return;
     }
 
     if (action === 'export-wg') {
@@ -469,14 +534,21 @@ function renderConfigView(project: Project) {
     }
 
     if (action === 'import-docker') {
-      pickFileText('text/plain,text/yaml,.yaml,.yml', async (text) => {
+      const doImportDocker = async (text: string) => {
         const parsed = parseDockerCompose(text);
-        if (!parsed.length) { showToast('No services/networks/volumes found in file', 'err'); return; }
+        if (!parsed.length) { showToast('No services/networks/volumes found', 'err'); return; }
         if (proj.chunks?.length && !await showConfirm(`Replace ${proj.chunks.length} existing chunk(s) with ${parsed.length} imported chunks?`)) return;
         proj.chunks = parsed;
         st.store.save(st.vault); render();
         showToast(`Imported ${parsed.length} chunks ✓`, 'ok');
-      });
+      };
+      showDropdown(el, [
+        { label: 'Import from file', fn: () => pickFileText('text/plain,text/yaml,.yaml,.yml', (text) => doImportDocker(text)) },
+        { label: 'Paste YAML…', fn: async () => {
+          const text = await showPrompt('Paste docker-compose.yml contents:', '');
+          if (text) doImportDocker(text);
+        }},
+      ]);
       return;
     }
 
@@ -512,35 +584,34 @@ function renderConfigView(project: Project) {
     }
 
     if (action === 'import-env-chunk') {
-      pickFileText('text/plain,.env', (text, filename) => {
+      const doImportEnv = (text: string, filename: string) => {
         const vars = parseEnvFile(text);
-        if (!vars.length) { showToast('No variables found in .env file', 'err'); return; }
+        if (!vars.length) { showToast('No variables found in .env', 'err'); return; }
+        const isSecretKey = (name: string) => /pass(word)?|secret|key|token|cred/i.test(name);
+        const toFields = (v: { name: string; value: string }) => {
+          const isRef = /^\$\{.+\}$/.test(v.value);
+          const isSec = !isRef && isSecretKey(v.name) && v.value !== '';
+          const ft: ChunkFieldType = isRef ? 'env_var' : isSec ? 'secret' : 'var';
+          return { key: v.name, value: v.value, field_type: ft, secret: isSec };
+        };
         const chunkName = filename.replace(/\.env$/, '').replace(/\.$/, '') || 'env-file';
         if (!proj.chunks) proj.chunks = [];
         const existing = proj.chunks.find(c => c.chunk_type === 'env_file' && c.name === chunkName);
         if (existing) {
-          existing.fields = vars.map(v => ({
-            key: v.name,
-            value: v.value,
-            field_type: /pass(word)?|secret|key|token|cred/i.test(v.name) ? 'secret' as const : 'env_var' as const,
-            secret: /pass(word)?|secret|key|token|cred/i.test(v.name),
-          }));
+          existing.fields = vars.map(toFields);
         } else {
-          proj.chunks.push({
-            id: crypto.randomUUID(),
-            name: chunkName,
-            chunk_type: 'env_file',
-            fields: vars.map(v => ({
-              key: v.name,
-              value: v.value,
-              field_type: /pass(word)?|secret|key|token|cred/i.test(v.name) ? 'secret' as const : 'env_var' as const,
-              secret: /pass(word)?|secret|key|token|cred/i.test(v.name),
-            })),
-          });
+          proj.chunks.push({ id: crypto.randomUUID(), name: chunkName, chunk_type: 'env_file', fields: vars.map(toFields) });
         }
         st.store.save(st.vault); render();
-        showToast(`Imported ${vars.length} vars into "${chunkName}" chunk ✓`, 'ok');
-      });
+        showToast(`Imported ${vars.length} vars into "${chunkName}" ✓`, 'ok');
+      };
+      showDropdown(el, [
+        { label: 'Import from file', fn: () => pickFileText('text/plain,.env', (text, filename) => doImportEnv(text, filename)) },
+        { label: 'Paste .env text…', fn: async () => {
+          const text = await showPrompt('Paste .env contents:', '');
+          if (text) doImportEnv(text, 'env-file');
+        }},
+      ]);
       return;
     }
 

@@ -1,51 +1,20 @@
 [package]
-name = "api-vault"
+name    = "api-vault"
 version = "0.3.0"
 edition = "2021"
 
 [lib]
-name = "api_vault_lib"
+name       = "api_vault_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = [] }         # rustls-tls removed (was invalid)
+tauri             = { version = "2", features = [] }
 tauri-plugin-shell = "2"
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-
-# Phase 2 — encrypted storage
-# rusqlite = { version = "0.31", features = ["bundled-sqlcipher"] }
-rusqlite = { version = "=0.31.0", features = ["sqlcipher"] }
-argon2 = "=0.5.3"
-rand = "=0.8.5"
-hex = "=0.4.3"
-zeroize = { version = "=1.8.1", features = ["zeroize_derive"] }
-rcgen = "=0.13.2"
-ssh-key = { version = "=0.6.7", features = ["ed25519", "crypto"] }
-time = "=0.3.37"
-
-[profile.release]
-panic = "abort"
-codegen-units = 1
-lto = true
-strip = true
-opt-level = "s"
-
-# Cargo.toml
-[profile.dev-fast]
-inherits = "dev"
-opt-level = 1      # speeds up runtime a bit, still fast to compile
-codegen-units = 32
-lto = false
-incremental = true
-
-[profile.release-fast]
-inherits = "release"
-opt-level = 2
-codegen-units = 16
-lto = false
-incremental = true   # can be used in release if you don't mind slight perf loss
-strip = false        # skip stripping, saves a few seconds
+serde             = { version = "1", features = ["derive"] }
+serde_json        = "1"
+vault-core        = { path = "../vault-core" }
+# zeroize used directly for lock_vault
+zeroize           = { version = "=1.8.1", features = ["zeroize_derive"] }

@@ -1,0 +1,25 @@
+[workspace]
+members  = ["src-tauri", "vault-core", "apiv-server", "apiv-cli"]
+resolver = "2"
+
+[profile.release]
+panic         = "abort"
+codegen-units = 1
+lto           = true
+strip         = true
+opt-level     = "s"
+
+[profile.dev-fast]
+inherits      = "dev"
+opt-level     = 1
+codegen-units = 32
+lto           = false
+incremental   = true
+
+[profile.release-fast]
+inherits      = "release"
+opt-level     = 2
+codegen-units = 16
+lto           = false
+incremental   = true
+strip         = false

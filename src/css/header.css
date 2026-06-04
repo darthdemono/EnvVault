@@ -1,0 +1,77 @@
+/* ── HEADER ────────────────────────────────────────── */
+#header {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 100;
+  height: 52px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 14px
+}
+
+.header-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0
+}
+
+.header-center {
+  flex: 1;
+  max-width: 480px;
+  margin: 0 auto
+}
+
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-left: auto;
+  flex-shrink: 0
+}
+
+html:has(#unlock-overlay.open) #header { display: none !important; }
+
+.logo {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 800;
+  letter-spacing: .07em;
+  text-transform: uppercase;
+  white-space: nowrap
+}
+
+.logo-icon {
+  color: var(--accent)
+}
+
+.vault-pill {
+  background: transparent;
+  border: 1px solid var(--border2);
+  border-radius: 6px;
+  color: var(--text2);
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-family: 'Syne', sans-serif;
+  font-size: 11px;
+  padding: 3px 8px;
+  cursor: default;
+  white-space: nowrap;
+  opacity: .7
+}
+
+.vault-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--price-free)
+}
+

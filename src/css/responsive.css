@@ -1,0 +1,81 @@
+/* ── RESPONSIVE ────────────────────────────────────── */
+@media(max-width:700px) {
+  #sidebar {
+    display: none
+  }
+
+  #sidebar.mobile-open {
+    display: flex;
+    position: fixed;
+    left: 0;
+    top: 52px;
+    bottom: 0;
+    z-index: 50;
+    width: 220px
+  }
+
+  #content {
+    padding: 12px
+  }
+
+  .form-row-2,
+  .form-row-3 {
+    grid-template-columns: 1fr
+  }
+
+  .header-center {
+    display: none
+  }
+
+  .vault-pill {
+    display: none
+  }
+}
+
+/* Force WebKitGTK to use our colours — this is the nuclear option */
+select,
+.sort-select,
+select.form-input {
+  -webkit-appearance: none !important;
+  -moz-appearance: none !important;
+  appearance: none !important;
+  color: var(--text) !important;
+  background-color: var(--surface2) !important;
+  border: 1px solid var(--border) !important;
+  border-radius: 6px;
+  padding: 4px 28px 4px 8px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23888' stroke-width='2.5'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E") !important;
+  background-repeat: no-repeat !important;
+  background-position: right 8px center !important;
+  background-size: 12px !important;
+}
+
+select option {
+  background: var(--surface2) !important;
+  color: var(--text) !important;
+}
+
+/* Custom Select */
+.custom-select-wrap {
+  position: relative;
+  display: inline-block;
+}
+
+.custom-select-btn {
+  cursor: pointer;
+  text-align: left;
+  width: 100%;
+  background: var(--surface2);
+  color: var(--text);
+  border: 1px solid var(--border2);
+  border-radius: 6px;
+  padding: 4px 28px 4px 8px;
+  background-image: url("data:image/svg+xml,...");
+  /* same chevron as before */
+  background-repeat: no-repeat;
+  background-position: right 8px center;
+  background-size: 12px;
+}
+
+
+

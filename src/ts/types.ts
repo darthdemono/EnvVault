@@ -116,7 +116,7 @@ export interface Project {
 }
 
 /** Sub-type of a field in a structured config chunk. */
-export type ChunkFieldType = 'var' | 'env_var' | 'secret' | 'list' | 'multiline';
+export type ChunkFieldType = 'var' | 'env_var' | 'secret' | 'list' | 'multiline' | 'port' | 'user_id' | 'subnet' | 'ip' | 'endpoint' | 'volume_mount';
 
 /** A single field within a structured config chunk (WireGuard section, Docker service, etc.). */
 export interface ChunkField {
@@ -188,6 +188,23 @@ export interface VaultData {
   projects: Project[];
 }
 
+/** A single row from the append-only vault audit log. */
+export interface AuditRow {
+  id:             number;
+  action:         'add' | 'update' | 'delete' | string;
+  entry_provider: string | null;
+  timestamp:      string;
+  details:        string | null;
+  entry_hash:     string | null;
+  prev_hash:      string | null;
+}
+
+/** Remote vault server configuration stored in AppSettings. */
+export interface RemoteConfig {
+  enabled:    boolean;
+  serverUrl:  string;
+}
+
 /**
  * User-configurable application settings.
  *
@@ -234,4 +251,8 @@ export interface AppSettings {
   activePanel: 'secrets' | 'tools';
   /** ID of the currently active tool pane (e.g. `'secret-gen'`). */
   activeTool: string;
+  /** Remote vault server configuration. */
+  remote?: RemoteConfig;
+  /** VaultEntry field used as the resolved value when doing ".env copy". */
+  envCopyField: 'api_key' | 'api_secret' | 'key_id';
 }

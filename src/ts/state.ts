@@ -39,6 +39,91 @@ export class TauriVaultStore implements VaultStore {
 
 export const inTauri = !!(window as any).__TAURI__;
 
+export class RemoteVaultStore implements VaultStore {
+  private token = '';
+  constructor(public readonly baseUrl: string) {}
+
+  async unlock(password: string): Promise<boolean> {
+    try {
+      const r = await fetch(`${this.baseUrl}/api/unlock`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password }),
+      });
+      if (!r.ok) return false;
+      const { token } = await r.json();
+      this.token = token ?? '';
+      return !!this.token;
+    } catch { return false; }
+  }
+
+  async lock(): Promise<void> {
+    if (!this.token) return;
+    try {
+      await fetch(`${this.baseUrl}/api/unlock`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${this.token}` },
+      });
+    } catch { /* ignore */ }
+    this.token = '';
+  }
+
+  async isUnlocked(): Promise<boolean> {
+    if (!this.token) return false;
+    try {
+      const r = await fetch(`${this.baseUrl}/api/status`);
+      return r.ok && (await r.json()).unlocked === true;
+    } catch { return false; }
+  }
+
+  async load(): Promise<VaultData | null> {
+    if (!this.token) return null;
+    try {
+      const r = await fetch(`${this.baseUrl}/api/vault`, {
+        headers: { Authorization: `Bearer ${this.token}` },
+      });
+      return r.ok ? await r.json() : null;
+    } catch { return null; }
+  }
+
+  async save(data: VaultData): Promise<void> {
+    if (!this.token) return;
+    try {
+      await fetch(`${this.baseUrl}/api/vault`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${this.token}`,
+        },
+        body: JSON.stringify(data),
+      });
+    } catch { /* ignore */ }
+  }
+
+  async getExpiring(days: number): Promise<any[]> {
+    if (!this.token) return [];
+    try {
+      const r = await fetch(`${this.baseUrl}/api/vault/expiring?days=${days}`, {
+        headers: { Authorization: `Bearer ${this.token}` },
+      });
+      return r.ok ? await r.json() : [];
+    } catch { return []; }
+  }
+
+  async getAuditLog(): Promise<any[]> {
+    if (!this.token) return [];
+    try {
+      const r = await fetch(`${this.baseUrl}/api/audit`, {
+        headers: { Authorization: `Bearer ${this.token}` },
+      });
+      return r.ok ? await r.json() : [];
+    } catch { return []; }
+  }
+
+  get isRemote() { return true; }
+  get vaultId()  { return this.baseUrl; }
+}
+
 // ── Global mutable state bag ───────────────────────────────────────────────
 // All modules import `st` and read/write st.xxx directly.
 // Using a single object avoids ESM live-binding reassignment restrictions.
@@ -79,6 +164,7 @@ const DEFAULT_SETTINGS: AppSettings = {
   groupByType: false, activityBarPosition: 'left' as const, activityBarStyle: 'icon' as const,
   collapsedSections: [] as ('all' | 'price' | 'category' | 'project')[],
   activePanel: 'secrets' as const, activeTool: 'secret-gen',
+  envCopyField: 'api_key' as const,
 };
 
 export const Settings = {

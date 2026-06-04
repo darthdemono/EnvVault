@@ -16,5 +16,6 @@
   "activityBarStyle": "icon",
   "collapsedSections": [],
   "activePanel": "secrets",
-  "activeTool": "secret-gen"
+  "activeTool": "secret-gen",
+  "envCopyField": "api_key"
 }
