@@ -1,0 +1,18 @@
+services:
+  apiv-server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: apiv-server:0.5.0
+    container_name: apiv-server
+    ports:
+      - "8743:8743"
+    volumes:
+      - apiv_data:/data
+    restart: unless-stopped
+    # Pass --port here to override default 8743
+    # command: ["--port", "9000"]
+
+volumes:
+  apiv_data:
+    driver: local

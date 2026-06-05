@@ -1,0 +1,27 @@
+target/
+node_modules/
+dist/
+.git/
+.gitignore
+
+# Frontend source — not needed for server build
+src/
+public/
+index.html
+vite.config.ts
+tsconfig.json
+package.json
+package-lock.json
+
+# Docs and misc
+*.md
+architecture.dot
+pattern1.md
+CLAUDE.md
+CLAUDE.original.md
+
+# Tauri source — Cargo.toml is needed for workspace resolution; src/ is not
+src-tauri/src/
+src-tauri/capabilities/
+src-tauri/icons/
+src-tauri/tauri.conf.json

@@ -116,6 +116,14 @@ struct ExpiringQuery {
 }
 fn default_days() -> u32 { 30 }
 
+#[derive(Serialize, ToSchema)]
+struct StatsResponse {
+    secrets_stored:  usize,
+    users_total:     usize,
+    users_connected: usize,
+    vault_unlocked:  bool,
+}
+
 // ── Auth helpers ──────────────────────────────────────────────────────────────
 
 fn extract_session<'a>(headers: &HeaderMap, state: &'a AppState) -> Result<(String, Session), (StatusCode, Json<serde_json::Value>)> {
@@ -571,6 +579,39 @@ async fn ping(headers: HeaderMap, State(state): State<AppState>) -> impl IntoRes
     }
 }
 
+// ── Public stats (Homepage / Homarr widget) ───────────────────────────────────
+
+/// Public statistics — no auth required.
+/// Returns 0 for vault-backed counts when locked.
+#[utoipa::path(
+    get, path = "/api/stats",
+    responses((status = 200, description = "Instance statistics", body = StatsResponse)),
+    tag = "meta"
+)]
+async fn stats(State(state): State<AppState>) -> Json<StatsResponse> {
+    let (vault_unlocked, users_connected, owner_key) = {
+        let sessions = state.sessions.lock().unwrap();
+        let unlocked  = sessions.values().any(|s| s.is_owner);
+        let connected = sessions.values().filter(|s| !s.is_owner).count();
+        let key       = sessions.values().find(|s| s.is_owner).map(|s| s.vault_key);
+        (unlocked, connected, key)
+    };
+
+    let (secrets_stored, users_total) = match owner_key.and_then(|k| open_db(&state.db_path, &k).ok()) {
+        Some(conn) => {
+            let secrets = load_vault(&conn)
+                .ok().flatten()
+                .and_then(|v| v["api_keys"].as_array().map(|a| a.len()))
+                .unwrap_or(0);
+            let users = vault_core::list_users(&conn).map(|u| u.len()).unwrap_or(0);
+            (secrets, users)
+        }
+        None => (0, 0),
+    };
+
+    Json(StatsResponse { secrets_stored, users_total, users_connected, vault_unlocked })
+}
+
 // ── TOTP management (item 4) ──────────────────────────────────────────────────
 
 async fn totp_enable_handler(headers: HeaderMap, State(state): State<AppState>, axum::extract::Path(user_id): axum::extract::Path<String>) -> impl IntoResponse {
@@ -596,8 +637,8 @@ async fn totp_disable_handler(headers: HeaderMap, State(state): State<AppState>,
 
 #[derive(OpenApi)]
 #[openapi(
-    paths(unlock, lock, status, auth_user, get_vault, put_vault, expiring, audit),
-    components(schemas(UnlockRequest, UnlockResponse, StatusResponse, ErrorResponse, AuthRequest)),
+    paths(unlock, lock, status, auth_user, get_vault, put_vault, expiring, audit, stats),
+    components(schemas(UnlockRequest, UnlockResponse, StatusResponse, ErrorResponse, AuthRequest, StatsResponse)),
     info(
         title   = "API Vault Server",
         version = "0.5.0",
@@ -607,6 +648,7 @@ async fn totp_disable_handler(headers: HeaderMap, State(state): State<AppState>,
         (name = "auth",  description = "Session management"),
         (name = "vault", description = "Vault read/write"),
         (name = "audit", description = "Append-only audit log"),
+        (name = "meta",  description = "Public instance metadata"),
     ),
     security(("bearer_auth" = [])),
     modifiers(&SecurityAddon)
@@ -637,6 +679,27 @@ struct Args {
     #[arg(long)] salt_path: Option<PathBuf>,
 }
 
+// ── Auto-unlock ───────────────────────────────────────────────────────────────
+
+/// Unlock the vault from a password string (used by APIV_PASSWORD env var on startup).
+fn auto_unlock(state: &AppState, password: &str) -> Result<(), String> {
+    let salt = read_or_create_salt(&state.salt_path)?;
+    let key  = derive_key(password, &salt)?;
+    let conn = open_db(&state.db_path, &key)
+        .map_err(|_| "Wrong master password — check APIV_PASSWORD".to_string())?;
+    let _ = init_schema(&conn);
+    match verify_vault_integrity(&conn) {
+        Ok(false) => return Err("Vault integrity check failed — possible tampering".to_string()),
+        Err(e)    => return Err(e),
+        Ok(true)  => {}
+    }
+    state.sessions.lock().unwrap().insert(
+        uuid::Uuid::new_v4().to_string(),
+        Session { vault_key: key, user_id: "owner".to_string(), is_owner: true },
+    );
+    Ok(())
+}
+
 // ── Main ──────────────────────────────────────────────────────────────────────
 
 #[tokio::main]
@@ -657,6 +720,16 @@ async fn main() {
         salt_path,
     };
 
+    // Auto-unlock if APIV_PASSWORD is set in the environment
+    if let Ok(pw) = std::env::var("APIV_PASSWORD") {
+        if !pw.is_empty() {
+            match auto_unlock(&state, &pw) {
+                Ok(())  => println!("Vault auto-unlocked (APIV_PASSWORD)"),
+                Err(e)  => eprintln!("Auto-unlock failed: {e}"),
+            }
+        }
+    }
+
     let cors = tower_http::cors::CorsLayer::permissive();
 
     use axum::routing::{delete, post};
@@ -675,6 +748,7 @@ async fn main() {
         .route("/api/users/{user_id}/permissions", get(get_permissions_handler).put(set_permissions_handler))
         .route("/api/users/{user_id}/totp",        axum::routing::post(totp_enable_handler).delete(totp_disable_handler))
         .route("/api/ping",                        get(ping))
+        .route("/api/stats",                       get(stats))
         .with_state(state);
 
     let app: Router = Router::new()
@@ -685,6 +759,7 @@ async fn main() {
     let addr = format!("{}:{}", args.host, args.port);
     println!("apiv-server  →  http://{addr}");
     println!("OpenAPI JSON →  http://{addr}/api/openapi.json");
+    println!("Stats        →  http://{addr}/api/stats  (public)");
     println!("Users API    →  http://{addr}/api/users  (owner-only)");
 
     let listener = tokio::net::TcpListener::bind(&addr).await

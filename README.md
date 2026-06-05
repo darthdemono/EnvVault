@@ -165,7 +165,81 @@ APIV_PASSWORD=mypassword ./target/release/apiv --server http://localhost:8743 ex
 | GET | `/api/audit` | token | Audit log |
 | GET/POST/DELETE | `/api/users/…` | owner | User management |
 | POST/DELETE | `/api/users/{id}/totp` | owner | TOTP enable/disable |
+| GET | `/api/stats` | — | Public instance stats (secrets, users, sessions) |
 | GET | `/api/openapi.json` | — | OpenAPI spec |
+
+---
+
+## Docker
+
+```bash
+# Build and start
+docker compose up -d
+
+# With a pre-built image
+docker run -d \
+  --name apiv-server \
+  -p 8743:8743 \
+  -v apiv_data:/data \
+  apiv-server:0.5.0
+```
+
+Data persists in the `apiv_data` volume at `/data/vault.db` and `/data/vault.salt`. After starting, unlock the vault via the API:
+
+```bash
+curl -X POST http://localhost:8743/api/unlock \
+  -H 'Content-Type: application/json' \
+  -d '{"password":"your-master-password"}'
+```
+
+To change the port, pass `--port <N>` via `command:` in `docker-compose.yml` or as extra args to `docker run`.
+
+---
+
+## Dashboard Widgets
+
+`GET /api/stats` returns live counts with no authentication:
+
+```json
+{
+  "secrets_stored": 42,
+  "users_total": 5,
+  "users_connected": 2,
+  "vault_unlocked": true
+}
+```
+
+Counts are 0 when the vault is locked.
+
+### Homepage (gethomepage.dev)
+
+Add to your `services.yaml`:
+
+```yaml
+- API Vault:
+    icon: mdi-lock-outline
+    href: http://your-server:8743
+    widget:
+      type: customapi
+      url: http://your-server:8743/api/stats
+      mappings:
+        - field: secrets_stored
+          label: Secrets
+          format: number
+        - field: users_total
+          label: Users
+          format: number
+        - field: users_connected
+          label: Connected
+          format: number
+```
+
+### Homarr
+
+Add a "Custom API" tile:
+
+- **API URL**: `http://your-server:8743/api/stats`
+- Add three fields mapped to `secrets_stored`, `users_total`, `users_connected`
 
 ---
 
