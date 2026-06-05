@@ -94,6 +94,10 @@ export interface VaultEntry {
   blob_ref?: string | null;
   /** Sub-type hint for env_var entries (used for display and filtering). */
   env_var_subtype?: 'string' | 'multiline' | 'secret' | 'boolean' | 'number' | 'ip' | 'cidr' | 'port' | 'url' | 'date' | 'json';
+  /** ISO-8601 timestamp of the last manual rotation (set via "Mark as rotated"). */
+  last_rotated_at?: string | null;
+  /** Free-form tags for quick cross-cutting labelling (separate from categories/projects). */
+  tags?: string[];
 }
 
 /**
@@ -188,6 +192,61 @@ export interface VaultData {
   projects: Project[];
 }
 
+// ── Multi-user RBAC types (Phase 5) ──────────────────────────────────────────
+
+/** A vault user record returned by the user management API. */
+export interface UserInfo {
+  id:           string;
+  username:     string;
+  has_password: boolean;
+  is_owner:     boolean;
+  created_at:   string;
+  last_seen_at: string | null;
+  class_id:     string | null;
+}
+
+/** A stored API token descriptor (actual token shown only on creation). */
+export interface TokenInfo {
+  id:          string;
+  user_id:     string;
+  description: string | null;
+  created_at:  string;
+  expires_at:  string | null;
+}
+
+/**
+ * A single RBAC permission row.
+ *
+ * - `scope_type`:  `"vault"` | `"project"` | `"category"`
+ * - `scope_value`: `"*"`, `"wg0-*"`, `"Cloud/AWS"`, etc. (glob)
+ * - `permission`:  `"read"` | `"write"` (write implies read)
+ */
+export interface PermissionEntry {
+  user_id:     string;
+  scope_type:  'vault' | 'project' | 'category';
+  scope_value: string;
+  permission:  'read' | 'write';
+}
+
+/** A named user class (role template) with capabilities and permissions. */
+export interface UserClass {
+  id:                  string;
+  name:                string;
+  description:         string;
+  cap_manage_users:    boolean;
+  cap_manage_classes:  boolean;
+  cap_delete_projects: boolean;
+  created_at:          string;
+}
+
+/** A permission row scoped to a user class (applies to all members of the class). */
+export interface ClassPermission {
+  class_id:    string;
+  scope_type:  'vault' | 'project' | 'category';
+  scope_value: string;
+  permission:  'read' | 'write';
+}
+
 /** A single row from the append-only vault audit log. */
 export interface AuditRow {
   id:             number;
@@ -205,6 +264,14 @@ export interface RemoteConfig {
   serverUrl:  string;
 }
 
+/** A saved remote vault connection (persisted in AppSettings). */
+export interface RemoteVaultConfig {
+  id:       string;
+  name:     string;
+  url:      string;
+  username: string;
+}
+
 /**
  * User-configurable application settings.
  *
@@ -212,8 +279,8 @@ export interface RemoteConfig {
  * so that they survive a vault reset without needing the master password.
  */
 export interface AppSettings {
-  /** Active colour theme identifier (e.g. `"dark"`, `"dracula"`). */
-  theme: string;
+  /** Active colour theme identifier. 'system' follows the OS preference. */
+  theme: 'dark' | 'midnight' | 'dracula' | 'nord' | 'catppuccin' | 'light' | 'system' | string;
   /** Hex accent colour used for highlights and active states (e.g. `"#7364c9"`). */
   accentColor: string;
   /** Visual density of secret cards in the grid. */
@@ -248,11 +315,15 @@ export interface AppSettings {
   /** Section keys that are currently collapsed in the secrets sidebar. */
   collapsedSections: ('all' | 'price' | 'category' | 'project')[];
   /** Currently active top-level panel. */
-  activePanel: 'secrets' | 'tools';
+  activePanel: 'secrets' | 'tools' | 'users' | 'remote';
   /** ID of the currently active tool pane (e.g. `'secret-gen'`). */
   activeTool: string;
-  /** Remote vault server configuration. */
+  /** Remote vault server configuration (legacy single-remote). */
   remote?: RemoteConfig;
+  /** Saved remote vault connections. */
+  remoteSaved: RemoteVaultConfig[];
+  /** Ordered list of activity-bar panel IDs (controls display order and visibility). */
+  panelOrder: string[];
   /** VaultEntry field used as the resolved value when doing ".env copy". */
   envCopyField: 'api_key' | 'api_secret' | 'key_id';
 }

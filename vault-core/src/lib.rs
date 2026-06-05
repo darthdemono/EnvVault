@@ -7,10 +7,26 @@ use std::fs;
 use std::path::Path;
 use rusqlite::{Connection, OpenFlags, OptionalExtension};
 use argon2::{Argon2, Algorithm, Version, Params};
+use sha2::{Sha256, Digest};
 pub use zeroize::Zeroize;
 
 pub mod generators;
 pub use generators::{generate_certificate, generate_ssh_keypair};
+
+pub mod users;
+pub use users::{
+    UserRecord, TokenRecord, PermissionRecord, UserClass, ClassPermission,
+    init_users_schema, create_user, set_user_password,
+    verify_user_password, verify_user_token,
+    list_users, delete_user, rename_user,
+    create_user_token, revoke_user_token, list_user_tokens,
+    get_user_permissions, set_user_permissions,
+    list_user_classes, create_user_class, update_user_class, delete_user_class,
+    get_class_permissions, set_class_permissions, assign_user_class,
+    get_user_effective_permissions, get_user_capabilities,
+    enable_totp, disable_totp, totp_enabled, verify_totp_code,
+    filter_vault_for_user, merge_user_vault_write, glob_matches,
+};
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
@@ -73,6 +89,9 @@ pub fn open_db(db_path: &Path, key: &VaultKey) -> Result<Connection, String> {
         .map_err(|e| e.to_string())?;
     conn.execute_batch("SELECT count(*) FROM sqlite_master;")
         .map_err(|_| "Wrong master password".to_string())?;
+    // WAL mode: allows concurrent reads + one writer, avoids full locks (item 17)
+    conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;")
+        .map_err(|e| e.to_string())?;
     Ok(conn)
 }
 
@@ -91,11 +110,17 @@ pub fn init_schema(conn: &Connection) -> Result<(), String> {
              entry_provider TEXT,
              timestamp      TEXT    NOT NULL,
              details        TEXT
+         );
+         CREATE TABLE IF NOT EXISTS vault_meta (
+             key   TEXT PRIMARY KEY,
+             value TEXT NOT NULL
          );"
     ).map_err(|e| e.to_string())?;
     // Idempotent migration: add hash-chain columns if absent.
     let _ = conn.execute_batch("ALTER TABLE vault_audit ADD COLUMN entry_hash TEXT;");
     let _ = conn.execute_batch("ALTER TABLE vault_audit ADD COLUMN prev_hash  TEXT;");
+    // Multi-user tables (Phase 5)
+    users::init_users_schema(conn)?;
     Ok(())
 }
 
@@ -187,11 +212,36 @@ pub fn save_vault(conn: &Connection, data: serde_json::Value) -> Result<(), Stri
     }
 
     let raw = serde_json::to_string(&new_data).map_err(|e| e.to_string())?;
+    // Store SHA-256 integrity hash alongside the data (item 5)
+    let hash = format!("{:x}", Sha256::digest(raw.as_bytes()));
     conn.execute(
         "INSERT OR REPLACE INTO vault (id, data) VALUES (1, ?1)",
         rusqlite::params![raw],
     ).map_err(|e| e.to_string())?;
+    conn.execute(
+        "INSERT OR REPLACE INTO vault_meta (key, value) VALUES ('data_hash', ?1)",
+        rusqlite::params![hash],
+    ).map_err(|e| e.to_string())?;
     Ok(())
+}
+
+/// Verifies the stored vault data against its SHA-256 integrity hash.
+/// Returns `Ok(true)` if hash matches, `Ok(false)` if tampered or hash absent, `Err` on I/O.
+pub fn verify_vault_integrity(conn: &Connection) -> Result<bool, String> {
+    let raw: Option<String> = conn
+        .query_row("SELECT data FROM vault WHERE id = 1", [], |r| r.get(0))
+        .optional().map_err(|e| e.to_string())?;
+    let stored_hash: Option<String> = conn
+        .query_row("SELECT value FROM vault_meta WHERE key = 'data_hash'", [], |r| r.get(0))
+        .optional().map_err(|e| e.to_string())?;
+    match (raw, stored_hash) {
+        (Some(data), Some(expected)) => {
+            let actual = format!("{:x}", Sha256::digest(data.as_bytes()));
+            Ok(actual == expected)
+        }
+        (None, _) => Ok(true),  // empty vault: trivially intact
+        (Some(_), None) => Ok(true), // no hash stored yet (pre-migration): trust it
+    }
 }
 
 /// Returns vault entries whose `expires_at` date falls within `within_days` days

@@ -48,6 +48,27 @@
   filter: brightness(1.1)
 }
 
+.btn-xs.danger {
+  background: rgba(201, 100, 100, .12);
+  color: var(--price-paid);
+  border-color: rgba(201, 100, 100, .35)
+}
+
+.btn-xs.danger:hover {
+  background: rgba(201, 100, 100, .25);
+  border-color: var(--price-paid)
+}
+
+.btn-sm.danger {
+  background: rgba(201, 100, 100, .12);
+  color: var(--price-paid);
+  border: 1px solid rgba(201, 100, 100, .35)
+}
+
+.btn-sm.danger:hover {
+  background: rgba(201, 100, 100, .25)
+}
+
 .btn-ghost {
   background: transparent;
   color: var(--text2);

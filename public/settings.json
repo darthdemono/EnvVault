@@ -5,7 +5,7 @@
   "gridColumns": "auto",
   "defaultAccount": "",
   "defaultExportFormat": "dotenv",
-  "autoLockMinutes": 20,
+  "autoLockMinutes": 60,
   "maskKeysByDefault": true,
   "showExpiryWarning": true,
   "expiryWarningDays": 30,
@@ -17,5 +17,7 @@
   "collapsedSections": [],
   "activePanel": "secrets",
   "activeTool": "secret-gen",
-  "envCopyField": "api_key"
+  "envCopyField": "api_key",
+  "remoteSaved": [],
+  "panelOrder": ["secrets", "tools", "remote", "users"]
 }

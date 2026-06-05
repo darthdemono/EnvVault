@@ -1,5 +1,5 @@
 /**
- * @file Settings panel: themes, sidebar order editor, open/save/close.
+ * @file Settings panel: themes, sidebar order, panel order, remote config, open/save/close.
  */
 
 import type { AppSettings } from './types';
@@ -10,25 +10,29 @@ import { showToast } from './utils';
 // ── Theme definitions ──────────────────────────────────────────────────────
 
 const THEMES = [
-  { id: 'dark', label: 'Dark', bg: '#0e0e0e', accent: '#7364c9' },
-  { id: 'midnight', label: 'Midnight', bg: '#09090f', accent: '#5b8dd9' },
-  { id: 'dracula', label: 'Dracula', bg: '#282a36', accent: '#bd93f9' },
-  { id: 'nord', label: 'Nord', bg: '#2e3440', accent: '#88c0d0' },
+  { id: 'dark',       label: 'Dark',       bg: '#0e0e0e', accent: '#7364c9' },
+  { id: 'midnight',   label: 'Midnight',   bg: '#09090f', accent: '#5b8dd9' },
+  { id: 'dracula',    label: 'Dracula',    bg: '#282a36', accent: '#bd93f9' },
+  { id: 'nord',       label: 'Nord',       bg: '#2e3440', accent: '#88c0d0' },
   { id: 'catppuccin', label: 'Catppuccin', bg: '#1e1e2e', accent: '#cba6f7' },
-  { id: 'light', label: 'Light', bg: '#f0f0f6', accent: '#6355b5' },
+  { id: 'light',      label: 'Light',      bg: '#f0f0f6', accent: '#6355b5' },
+  { id: 'system',     label: 'System',     bg: 'linear-gradient(135deg, #0e0e0e 50%, #f0f0f6 50%)', accent: '#7364c9' },
 ];
-
-// ── Theme swatches ────────────────────────────────────────────────────────
 
 export function buildThemeSwatches() {
   const wrap = document.getElementById('theme-swatches')!;
+  if (!wrap) return;
   wrap.innerHTML = '';
   THEMES.forEach(t => {
     const sw = document.createElement('div');
     sw.className = `theme-swatch${Settings.get('theme') === t.id ? ' active' : ''}`;
     sw.title = t.label;
-    sw.style.cssText = `background:${t.bg};box-shadow:inset 0 0 0 4px ${t.accent}55`;
-    sw.addEventListener('click', () => { Settings.set('theme', t.id); Settings._apply(); buildThemeSwatches(); });
+    sw.style.cssText = `background:${t.bg};box-shadow:inset 0 0 0 4px ${t.accent}55;font-size:9px;display:flex;align-items:center;justify-content:center;color:${t.accent}`;
+    sw.addEventListener('click', () => {
+      Settings.set('theme', t.id);
+      Settings._apply();
+      buildThemeSwatches();
+    });
     wrap.appendChild(sw);
   });
 }
@@ -40,10 +44,10 @@ export function buildSidebarOrderEditor() {
   if (!container) return;
   const sections = [...(Settings.get('sidebarSections') || ['all', 'price', 'category', 'project'])];
   const allDefs = [
-    { key: 'all', label: 'All Secrets' },
-    { key: 'price', label: 'Price Types' },
+    { key: 'all',      label: 'All Secrets' },
+    { key: 'price',    label: 'Price Types' },
     { key: 'category', label: 'Categories' },
-    { key: 'project', label: 'Projects' },
+    { key: 'project',  label: 'Projects' },
   ];
   container.innerHTML = '';
   sections.forEach((sKey, i) => {
@@ -52,9 +56,14 @@ export function buildSidebarOrderEditor() {
     const row = document.createElement('div');
     row.className = 'sidebar-order-row';
     row.dataset.key = sKey;
-    const isFirst = i === 0;
-    const isLast = i === sections.length - 1;
-    row.innerHTML = `<span class="sidebar-order-label">${def.label}</span><div class="sidebar-order-btns"><button class="btn-xs" data-action="up" ${isFirst ? 'disabled' : ''}>▲</button><button class="btn-xs" data-action="down" ${isLast ? 'disabled' : ''}>▼</button><button class="btn-xs" data-action="${sKey === 'all' ? 'locked' : 'remove'}" ${sKey === 'all' ? 'disabled' : ''} title="${sKey === 'all' ? 'Always visible' : 'Hide'}">✕</button></div>`;
+    const isFirst = i === 0, isLast = i === sections.length - 1;
+    row.innerHTML = `
+      <span class="sidebar-order-label">${def.label}</span>
+      <div class="sidebar-order-btns">
+        <button class="btn-xs" data-action="up" ${isFirst ? 'disabled' : ''}>▲</button>
+        <button class="btn-xs" data-action="down" ${isLast ? 'disabled' : ''}>▼</button>
+        <button class="btn-xs" data-action="${sKey === 'all' ? 'locked' : 'remove'}" ${sKey === 'all' ? 'disabled' : ''} title="${sKey === 'all' ? 'Always visible' : 'Hide'}">✕</button>
+      </div>`;
     container.appendChild(row);
   });
   allDefs.filter(d => !sections.includes(d.key as any)).forEach(def => {
@@ -68,35 +77,121 @@ export function buildSidebarOrderEditor() {
     const btn = (e.target as HTMLElement).closest<HTMLElement>('[data-action]');
     if (!btn) return;
     const action = btn.dataset.action!;
-    const rowEl = btn.closest<HTMLElement>('[data-key]')!;
-    const key = rowEl.dataset.key!;
-    const secs = [...(Settings.get('sidebarSections') || ['all', 'price', 'category', 'project'])];
-    const idx = secs.indexOf(key as any);
-    if (action === 'up' && idx > 0) { [secs[idx - 1], secs[idx]] = [secs[idx], secs[idx - 1]]; }
-    else if (action === 'down' && idx < secs.length - 1) { [secs[idx], secs[idx + 1]] = [secs[idx + 1], secs[idx]]; }
-    else if (action === 'remove' && key !== 'all') { secs.splice(idx, 1); }
-    else if (action === 'add') { secs.push(key as any); }
+    const rowEl  = btn.closest<HTMLElement>('[data-key]')!;
+    const key    = rowEl.dataset.key!;
+    const secs   = [...(Settings.get('sidebarSections') || ['all', 'price', 'category', 'project'])];
+    const idx    = secs.indexOf(key as any);
+    if (action === 'up'     && idx > 0)               { [secs[idx-1], secs[idx]] = [secs[idx], secs[idx-1]]; }
+    else if (action === 'down' && idx < secs.length-1) { [secs[idx], secs[idx+1]] = [secs[idx+1], secs[idx]]; }
+    else if (action === 'remove' && key !== 'all')     { secs.splice(idx, 1); }
+    else if (action === 'add')                         { secs.push(key as any); }
     Settings.set('sidebarSections', secs as any);
     applySidebarOrder();
     buildSidebarOrderEditor();
   };
 }
 
-// ── Open / save / close settings ─────────────────────────────────────────
+// ── Panel order editor ────────────────────────────────────────────────────
 
-// ── Remote vault section ──────────────────────────────────────────────────────
+export function buildPanelOrderEditor() {
+  const container = document.getElementById('s-panel-order');
+  if (!container) return;
+
+  const ALL_PANELS = [
+    { key: 'secrets', label: 'Secrets',      removable: false },
+    { key: 'tools',   label: 'Tools',         removable: true  },
+    { key: 'remote',  label: 'Remote Vaults', removable: true  },
+    { key: 'users',   label: 'Users (RBAC)',  removable: true  },
+  ];
+
+  const order = [...(Settings.get('panelOrder') || ALL_PANELS.map(p => p.key))];
+  container.innerHTML = '';
+
+  order.forEach((pKey, i) => {
+    const def = ALL_PANELS.find(p => p.key === pKey);
+    if (!def) return;
+    const row = document.createElement('div');
+    row.className = 'sidebar-order-row';
+    row.dataset.key = pKey;
+    const isFirst = i === 0, isLast = i === order.length - 1;
+    row.innerHTML = `
+      <span class="sidebar-order-label">${def.label}</span>
+      <div class="sidebar-order-btns">
+        <button class="btn-xs" data-action="up" ${isFirst ? 'disabled' : ''}>▲</button>
+        <button class="btn-xs" data-action="down" ${isLast ? 'disabled' : ''}>▼</button>
+        <button class="btn-xs" data-action="${def.removable ? 'remove' : 'locked'}" ${def.removable ? '' : 'disabled'} title="${def.removable ? 'Hide' : 'Cannot hide'}">✕</button>
+      </div>`;
+    container.appendChild(row);
+  });
+
+  ALL_PANELS.filter(p => !order.includes(p.key)).forEach(def => {
+    const row = document.createElement('div');
+    row.className = 'sidebar-order-row sidebar-order-hidden';
+    row.dataset.key = def.key;
+    row.innerHTML = `<span class="sidebar-order-label sidebar-order-dim">${def.label}</span><button class="btn-xs" data-action="add">+ Show</button>`;
+    container.appendChild(row);
+  });
+
+  container.onclick = (e) => {
+    const btn = (e.target as HTMLElement).closest<HTMLElement>('[data-action]');
+    if (!btn) return;
+    const action = btn.dataset.action!;
+    const rowEl  = btn.closest<HTMLElement>('[data-key]')!;
+    const key    = rowEl.dataset.key!;
+    const ord    = [...(Settings.get('panelOrder') || ALL_PANELS.map(p => p.key))];
+    const idx    = ord.indexOf(key);
+    if (action === 'up'     && idx > 0)              { [ord[idx-1], ord[idx]] = [ord[idx], ord[idx-1]]; }
+    else if (action === 'down' && idx < ord.length-1) { [ord[idx], ord[idx+1]] = [ord[idx+1], ord[idx]]; }
+    else if (action === 'remove')                     { ord.splice(idx, 1); }
+    else if (action === 'add')                        { ord.push(key); }
+    Settings.set('panelOrder', ord);
+    applyPanelOrder();
+    buildPanelOrderEditor();
+  };
+}
+
+export function applyPanelOrder() {
+  const order = Settings.get('panelOrder') || ['secrets', 'tools', 'remote', 'users'];
+  document.querySelectorAll<HTMLButtonElement>('.activity-btn[data-panel]').forEach(btn => {
+    const panel = btn.dataset.panel!;
+    const idx   = order.indexOf(panel);
+    if (idx >= 0) {
+      btn.style.display = '';
+      btn.style.order   = String(idx);
+    } else {
+      btn.style.display = 'none';
+    }
+  });
+}
+
+// ── Settings tabs ─────────────────────────────────────────────────────────
+
+function initSettingsTabs() {
+  const tabs  = document.querySelectorAll<HTMLButtonElement>('.settings-tab');
+  const panes = document.querySelectorAll<HTMLElement>('.settings-tab-pane');
+  tabs.forEach(tab => {
+    tab.addEventListener('click', () => {
+      tabs.forEach(t => t.classList.remove('active'));
+      panes.forEach(p => p.classList.remove('active'));
+      tab.classList.add('active');
+      const pane = document.querySelector<HTMLElement>(`.settings-tab-pane[data-spane="${tab.dataset.stab}"]`);
+      if (pane) pane.classList.add('active');
+    });
+  });
+}
+
+// ── Remote vault section ──────────────────────────────────────────────────
 
 export function buildRemoteVaultSection() {
-  const enableEl  = document.getElementById('s-remote-enable')  as HTMLInputElement | null;
-  const urlEl     = document.getElementById('s-remote-url')     as HTMLInputElement | null;
-  const statusEl  = document.getElementById('s-remote-status');
+  const enableEl = document.getElementById('s-remote-enable') as HTMLInputElement | null;
+  const urlEl    = document.getElementById('s-remote-url')    as HTMLInputElement | null;
+  const statusEl = document.getElementById('s-remote-status');
   if (!enableEl || !urlEl) return;
 
   const cfg = Settings.get('remote') ?? { enabled: false, serverUrl: '' };
-  enableEl.checked = cfg.enabled ?? false;
-  urlEl.value      = cfg.serverUrl ?? '';
-  urlEl.disabled   = !enableEl.checked;
-
+  enableEl.checked  = cfg.enabled ?? false;
+  urlEl.value       = cfg.serverUrl ?? '';
+  urlEl.disabled    = !enableEl.checked;
   enableEl.onchange = () => { urlEl.disabled = !enableEl.checked; };
 
   const testBtn = document.getElementById('s-remote-test');
@@ -104,15 +199,16 @@ export function buildRemoteVaultSection() {
     testBtn.onclick = async () => {
       const url = urlEl.value.trim().replace(/\/$/, '');
       if (!url) { showToast('Enter a server URL first', 'err'); return; }
+      if (statusEl) statusEl.textContent = 'Testing…';
       try {
         const r = await fetch(`${url}/api/status`);
         const body = await r.json();
         if (statusEl) statusEl.textContent = body.vault_exists
-          ? `Connected — vault ${body.unlocked ? 'unlocked' : 'locked'}`
-          : 'Connected — no vault yet';
+          ? `✓ Connected — vault ${body.unlocked ? 'unlocked' : 'locked'}`
+          : '✓ Connected — no vault yet';
         showToast('Server reachable', 'ok');
       } catch {
-        if (statusEl) statusEl.textContent = 'Unreachable';
+        if (statusEl) statusEl.textContent = '✗ Unreachable';
         showToast('Cannot reach server', 'err');
       }
     };
@@ -135,52 +231,96 @@ function applyRemoteConfig() {
   }
 }
 
+// ── Open / save / close ───────────────────────────────────────────────────
+
+let _tabsInited = false;
+
 export function openSettings() {
   const s = Settings.getAll();
+
+  if (!_tabsInited) { initSettingsTabs(); _tabsInited = true; }
+
   buildThemeSwatches();
   buildSidebarOrderEditor();
+  buildPanelOrderEditor();
   buildRemoteVaultSection();
-  (document.getElementById('s-accent') as HTMLInputElement).value = s.accentColor;
-  document.getElementById('s-accent-val')!.textContent = s.accentColor;
-  (document.getElementById('s-autolock') as HTMLInputElement).value = String(s.autoLockMinutes);
-  (document.getElementById('s-mask') as HTMLInputElement).checked = s.maskKeysByDefault;
-  (document.getElementById('s-expiry-warn') as HTMLInputElement).checked = s.showExpiryWarning;
-  (document.getElementById('s-expiry-days') as HTMLInputElement).value = String(s.expiryWarningDays);
-  (document.getElementById('s-default-account') as HTMLInputElement).value = s.defaultAccount || '';
-  (document.getElementById('s-export-format') as HTMLSelectElement).value = s.defaultExportFormat;
-  (document.getElementById('s-env-copy-field') as HTMLSelectElement).value = s.envCopyField || 'api_key';
-  (document.getElementById('s-custom-css') as HTMLTextAreaElement).value = s.customCss || '';
-  (document.getElementById('s-group-by-type') as HTMLInputElement).checked = s.groupByType;
+
+  (document.getElementById('s-accent')          as HTMLInputElement).value   = s.accentColor;
+  document.getElementById('s-accent-val')!.textContent                       = s.accentColor;
+  (document.getElementById('s-autolock')         as HTMLInputElement).value   = String(s.autoLockMinutes);
+  (document.getElementById('s-mask')             as HTMLInputElement).checked = s.maskKeysByDefault;
+  (document.getElementById('s-expiry-warn')      as HTMLInputElement).checked = s.showExpiryWarning;
+  (document.getElementById('s-expiry-days')      as HTMLInputElement).value   = String(s.expiryWarningDays);
+  (document.getElementById('s-default-account')  as HTMLInputElement).value   = s.defaultAccount || '';
+  (document.getElementById('s-export-format')    as HTMLSelectElement).value  = s.defaultExportFormat;
+  (document.getElementById('s-env-copy-field')   as HTMLSelectElement).value  = s.envCopyField || 'api_key';
+  (document.getElementById('s-custom-css')       as HTMLTextAreaElement).value = s.customCss || '';
+  (document.getElementById('s-group-by-type')    as HTMLInputElement).checked = s.groupByType;
+
   ['s-card-size', 's-grid-cols', 's-activity-bar-position', 's-activity-bar-style'].forEach(id => {
     const key = id === 's-card-size' ? 'cardSize'
       : id === 's-grid-cols' ? 'gridColumns'
       : id === 's-activity-bar-position' ? 'activityBarPosition'
       : 'activityBarStyle';
-    document.querySelectorAll<HTMLButtonElement>(`#${id} button`).forEach(btn => btn.classList.toggle('active', btn.dataset.val === String(Settings.get(key as keyof AppSettings))));
+    document.querySelectorAll<HTMLButtonElement>(`#${id} button`).forEach(
+      btn => btn.classList.toggle('active', btn.dataset.val === String(Settings.get(key as keyof AppSettings))));
   });
+
+  // accent reset
+  const resetBtn = document.getElementById('s-accent-reset');
+  if (resetBtn) resetBtn.onclick = () => {
+    (document.getElementById('s-accent') as HTMLInputElement).value = '#7364c9';
+    document.getElementById('s-accent-val')!.textContent = '#7364c9';
+  };
+  // accent live preview
+  const accentInput = document.getElementById('s-accent') as HTMLInputElement | null;
+  if (accentInput) accentInput.oninput = () => {
+    document.getElementById('s-accent-val')!.textContent = accentInput.value;
+  };
+
+  // seg-control buttons
+  document.querySelectorAll<HTMLElement>('.seg-control').forEach(ctrl => {
+    ctrl.querySelectorAll<HTMLButtonElement>('button').forEach(btn => {
+      btn.onclick = () => {
+        ctrl.querySelectorAll('button').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+      };
+    });
+  });
+
   document.getElementById('settings-overlay')!.classList.add('open');
+
+  // footer buttons
+  const saveBtn   = document.getElementById('settings-save');
+  const cancelBtn = document.getElementById('settings-cancel');
+  if (saveBtn)   saveBtn.onclick   = () => { saveSettings(); closeSettings(); };
+  if (cancelBtn) cancelBtn.onclick = closeSettings;
 }
 
 export function saveSettings() {
   const getSegVal = (id: string) => document.querySelector<HTMLButtonElement>(`#${id} button.active`)?.dataset.val;
   Settings.setAll({
-    accentColor: (document.getElementById('s-accent') as HTMLInputElement).value,
-    autoLockMinutes: parseInt((document.getElementById('s-autolock') as HTMLInputElement).value) || 20,
-    maskKeysByDefault: (document.getElementById('s-mask') as HTMLInputElement).checked,
-    showExpiryWarning: (document.getElementById('s-expiry-warn') as HTMLInputElement).checked,
-    expiryWarningDays: parseInt((document.getElementById('s-expiry-days') as HTMLInputElement).value) || 30,
-    defaultAccount: (document.getElementById('s-default-account') as HTMLInputElement).value.trim(),
-    defaultExportFormat: (document.getElementById('s-export-format') as HTMLSelectElement).value as AppSettings['defaultExportFormat'],
-    envCopyField: (document.getElementById('s-env-copy-field') as HTMLSelectElement).value as AppSettings['envCopyField'],
-    customCss: (document.getElementById('s-custom-css') as HTMLTextAreaElement).value,
-    groupByType: (document.getElementById('s-group-by-type') as HTMLInputElement).checked,
+    accentColor:         (document.getElementById('s-accent')         as HTMLInputElement).value,
+    autoLockMinutes:     parseInt((document.getElementById('s-autolock') as HTMLInputElement).value) || 20,
+    maskKeysByDefault:   (document.getElementById('s-mask')           as HTMLInputElement).checked,
+    showExpiryWarning:   (document.getElementById('s-expiry-warn')    as HTMLInputElement).checked,
+    expiryWarningDays:   parseInt((document.getElementById('s-expiry-days') as HTMLInputElement).value) || 30,
+    defaultAccount:      (document.getElementById('s-default-account') as HTMLInputElement).value.trim(),
+    defaultExportFormat: (document.getElementById('s-export-format')  as HTMLSelectElement).value as AppSettings['defaultExportFormat'],
+    envCopyField:        (document.getElementById('s-env-copy-field') as HTMLSelectElement).value as AppSettings['envCopyField'],
+    customCss:           (document.getElementById('s-custom-css')     as HTMLTextAreaElement).value,
+    groupByType:         (document.getElementById('s-group-by-type')  as HTMLInputElement).checked,
     activityBarPosition: (getSegVal('s-activity-bar-position') || 'left') as 'left' | 'right',
-    activityBarStyle: (getSegVal('s-activity-bar-style') || 'icon') as 'icon' | 'icon-label',
+    activityBarStyle:    (getSegVal('s-activity-bar-style')    || 'icon') as 'icon' | 'icon-label',
   });
   Settings._apply();
   applyActivityBar();
+  applyPanelOrder();
   applyRemoteConfig();
   triggerRender();
+  showToast('Settings saved', 'ok', 1500);
 }
 
-export function closeSettings() { document.getElementById('settings-overlay')!.classList.remove('open'); }
+export function closeSettings() {
+  document.getElementById('settings-overlay')!.classList.remove('open');
+}

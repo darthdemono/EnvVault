@@ -106,6 +106,21 @@
           </svg>
           <span class="activity-label">Tools</span>
         </button>
+        <button class="activity-btn" data-panel="remote" title="Remote Vaults">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+            <path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z"/>
+          </svg>
+          <span class="activity-label">Remote</span>
+        </button>
+        <button class="activity-btn" data-panel="users" title="Users">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+            <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
+            <circle cx="9" cy="7" r="4"/>
+            <path d="M23 21v-2a4 4 0 0 0-3-3.87"/>
+            <path d="M16 3.13a4 4 0 0 1 0 7.75"/>
+          </svg>
+          <span class="activity-label">Users</span>
+        </button>
       </div>
     </div>
 
@@ -176,6 +191,31 @@
               id="count-conditional">0</span></button>
           </div>
         </div>
+        <div class="sidebar-section" id="sidebar-section-env">
+          <div class="sidebar-heading">Environment</div>
+          <div class="section-body">
+          <button class="sidebar-item sidebar-subitem" data-filter-type="env" data-filter-value="production">
+            <span class="env-dot env-production"></span>
+            <span class="sidebar-label">Production</span>
+            <span class="sidebar-count" id="count-env-production">0</span>
+          </button>
+          <button class="sidebar-item sidebar-subitem" data-filter-type="env" data-filter-value="staging">
+            <span class="env-dot env-staging"></span>
+            <span class="sidebar-label">Staging</span>
+            <span class="sidebar-count" id="count-env-staging">0</span>
+          </button>
+          <button class="sidebar-item sidebar-subitem" data-filter-type="env" data-filter-value="development">
+            <span class="env-dot env-development"></span>
+            <span class="sidebar-label">Development</span>
+            <span class="sidebar-count" id="count-env-development">0</span>
+          </button>
+          <button class="sidebar-item sidebar-subitem" data-filter-type="env" data-filter-value="testing">
+            <span class="env-dot env-testing"></span>
+            <span class="sidebar-label">Testing</span>
+            <span class="sidebar-count" id="count-env-testing">0</span>
+          </button>
+          </div>
+        </div>
         <div class="sidebar-section" id="sidebar-section-category">
           <div class="sidebar-heading">Categories <button id="new-category-root-btn" class="sidebar-add-btn"
               title="Add category">+</button><button class="section-collapse-btn" data-section="category" title="Collapse">▾</button></div>
@@ -234,7 +274,54 @@
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg>
             Base64
           </button>
+          <button class="tool-nav-btn" data-tool="health">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
+            Health
+          </button>
+          <button class="tool-nav-btn" data-tool="import-export">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="8 17 12 21 16 17"/><line x1="12" y1="12" x2="12" y2="21"/><path d="M20.88 18.09A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.29"/></svg>
+            Import
+          </button>
+          <button class="tool-nav-btn" data-tool="templates">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
+            Templates
+          </button>
         </div>
+      </div>
+
+      <!-- Remote Vaults Panel -->
+      <div id="remote-panel" class="sidebar-panel" style="display:none">
+        <div class="users-panel-header">
+          <span class="users-panel-title">Remote Vaults</span>
+          <button id="add-remote-btn" class="btn btn-xs accent">+ Add</button>
+        </div>
+        <div id="remote-panel-list" class="users-list"></div>
+      </div>
+
+      <!-- Users Panel — shown when Users activity is active -->
+      <div id="users-panel" class="sidebar-panel" style="display:none">
+        <div class="users-panel-header">
+          <span class="users-panel-title">Users &amp; Classes</span>
+          <div style="display:flex;gap:4px">
+            <button id="create-user-btn" class="btn btn-xs accent" style="display:none">+ User</button>
+            <button id="create-class-btn" class="btn btn-xs accent" style="display:none">+ Class</button>
+          </div>
+        </div>
+        <!-- Sub-nav -->
+        <div class="users-subnav">
+          <button class="users-subnav-btn active" data-sub="users">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/></svg>
+            Users
+          </button>
+          <button class="users-subnav-btn" data-sub="classes">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/></svg>
+            Classes
+          </button>
+        </div>
+        <div id="users-list" class="users-list">
+          <div class="users-empty">Vault locked or no users.</div>
+        </div>
+        <div id="classes-list" class="users-list" style="display:none"></div>
       </div>
 
       <div class="sidebar-footer">
@@ -248,6 +335,14 @@
         <div class="toolbar-left">
           <span id="result-count" class="result-count">0 secrets</span>
           <button id="expand-all-btn" class="btn btn-ghost btn-xs">Expand All</button>
+          <button id="bulk-select-btn" class="btn btn-ghost btn-xs" title="Select multiple for bulk actions">Select</button>
+        </div>
+        <!-- Bulk action bar (item 8) — shown in select mode -->
+        <div id="bulk-bar" class="bulk-bar" style="display:none">
+          <span id="bulk-count" class="bulk-count">0 selected</span>
+          <button id="bulk-delete-btn" class="btn btn-xs danger">Delete Selected</button>
+          <button id="bulk-export-btn" class="btn btn-xs btn-ghost">Export .env</button>
+          <button id="bulk-cancel-btn" class="btn btn-xs btn-ghost">Cancel</button>
         </div>
         <div class="toolbar-right">
           <div id="copy-all-wrap" style="display:none" class="btn-group">
@@ -539,7 +634,76 @@
           </div>
         </div>
 
+        <!-- Tool: Health Dashboard (item 7) -->
+        <div id="tool-health" class="tool-pane" style="display:none">
+          <div class="tool-header">
+            <h3>Secret Health</h3>
+            <p>Audit your vault for weak, stale, or risky credentials.</p>
+          </div>
+          <div class="tool-body" style="max-width:700px">
+            <div class="tool-actions" style="margin-bottom:12px">
+              <button id="health-scan-btn" class="btn btn-accent btn-sm">Run Scan</button>
+              <span id="health-scan-time" style="font-size:11px;color:var(--text3)"></span>
+            </div>
+            <div id="health-results"></div>
+          </div>
+        </div>
+
+        <!-- Tool: Import (item 9) -->
+        <div id="tool-import-export" class="tool-pane" style="display:none">
+          <div class="tool-header">
+            <h3>Import</h3>
+            <p>Import secrets from external formats. Existing entries are preserved.</p>
+          </div>
+          <div class="tool-body">
+            <div class="tool-row">
+              <label class="tool-label">Format</label>
+              <div class="btn-group-pill">
+                <button class="import-fmt-btn active" data-fmt="env">.env</button>
+                <button class="import-fmt-btn" data-fmt="bitwarden">Bitwarden</button>
+                <button class="import-fmt-btn" data-fmt="1password">1Password</button>
+                <button class="import-fmt-btn" data-fmt="json">JSON</button>
+              </div>
+            </div>
+            <div class="tool-row">
+              <label class="tool-label">File</label>
+              <div style="display:flex;gap:8px;align-items:center">
+                <button id="import-file-btn" class="btn btn-ghost btn-sm">Choose File</button>
+                <span id="import-file-name" style="font-size:11px;color:var(--text3)">No file chosen</span>
+              </div>
+            </div>
+            <div id="import-preview" style="display:none;margin-top:8px">
+              <div class="tool-pre" id="import-preview-text" style="max-height:200px;overflow-y:auto"></div>
+            </div>
+            <div class="tool-actions" style="margin-top:10px">
+              <button id="import-confirm-btn" class="btn btn-accent btn-sm" style="display:none">Import Entries</button>
+              <span id="import-status" style="font-size:12px;color:var(--text3)"></span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Tool: Templates (item 23) -->
+        <div id="tool-templates" class="tool-pane" style="display:none">
+          <div class="tool-header">
+            <h3>Secret Templates</h3>
+            <p>Start from a predefined template — fields are pre-filled with hints.</p>
+          </div>
+          <div class="tool-body" style="max-width:700px">
+            <div id="template-grid" class="template-grid"></div>
+          </div>
+        </div>
+
       </div><!-- /#tools-workspace -->
+
+      <!-- Remote Vaults workspace -->
+      <div id="remote-workspace" style="display:none">
+        <div class="users-detail-empty">Select a remote vault or add a new one.</div>
+      </div>
+
+      <!-- Users workspace -->
+      <div id="users-workspace" style="display:none">
+        <div class="users-detail-empty">Select a user to manage, or create one.</div>
+      </div><!-- /#users-workspace -->
     </main>
   </div>
 
@@ -575,7 +739,22 @@
         </p>
 
         <div class="form-group">
-          <label class="form-label">Master Password</label>
+          <label class="form-label" style="display:flex;align-items:center;justify-content:space-between">
+            Server URL
+            <span style="font-size:10px;color:var(--text3);font-weight:400">leave blank for local vault</span>
+          </label>
+          <input class="form-input mono" id="unlock-server" type="url" placeholder="http://localhost:8743"
+            autocomplete="url" spellcheck="false">
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Username</label>
+          <input class="form-input" id="unlock-username" type="text" placeholder="leave blank = vault owner"
+            autocomplete="username" spellcheck="false">
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Password</label>
           <input class="form-input mono" id="unlock-password" type="password" placeholder="Master password"
             autocomplete="current-password">
         </div>
@@ -824,185 +1003,215 @@
         <div class="modal-title">Settings</div>
         <button id="settings-close" class="icon-btn">✕</button>
       </div>
+
+      <!-- Settings nav tabs -->
+      <div class="settings-tabs">
+        <button class="settings-tab active" data-stab="appearance">Appearance</button>
+        <button class="settings-tab" data-stab="layout">Layout</button>
+        <button class="settings-tab" data-stab="security">Security</button>
+        <button class="settings-tab" data-stab="data">Data</button>
+        <button class="settings-tab" data-stab="remote">Remote</button>
+        <button class="settings-tab" data-stab="advanced">Advanced</button>
+      </div>
+
       <div class="settings-body">
-        <div class="settings-section">
-          <div class="settings-section-title">Appearance</div>
-          <div class="settings-row">
-            <div class="settings-label">Theme</div>
+
+        <!-- ── Appearance ── -->
+        <div class="settings-tab-pane active" data-spane="appearance">
+          <div class="settings-section">
+            <div class="settings-section-title">Theme</div>
             <div id="theme-swatches" class="theme-swatches"></div>
           </div>
-          <div class="settings-row">
-            <div class="settings-label">Accent Color</div>
-            <div style="display:flex;align-items:center;gap:8px">
-              <input type="color" id="s-accent" class="color-input">
-              <span id="s-accent-val" class="mono-sm"></span>
-              <button id="s-accent-reset" class="btn-xs">Reset</button>
+          <div class="settings-section">
+            <div class="settings-section-title">Accent Color</div>
+            <div class="settings-row">
+              <div class="settings-label">Color</div>
+              <div style="display:flex;align-items:center;gap:8px">
+                <input type="color" id="s-accent" class="color-input">
+                <span id="s-accent-val" class="mono-sm"></span>
+                <button id="s-accent-reset" class="btn-xs">Reset</button>
+              </div>
             </div>
           </div>
-          <div class="settings-row">
-            <div class="settings-label">Card Size</div>
-            <div class="seg-control" id="s-card-size">
-              <button data-val="compact">Compact</button>
-              <button data-val="medium">Medium</button>
-              <button data-val="large">Large</button>
+          <div class="settings-section">
+            <div class="settings-section-title">Cards</div>
+            <div class="settings-row">
+              <div class="settings-label">Card size</div>
+              <div class="seg-control" id="s-card-size">
+                <button data-val="compact">Compact</button>
+                <button data-val="medium">Medium</button>
+                <button data-val="large">Large</button>
+              </div>
             </div>
-          </div>
-          <div class="settings-row">
-            <div class="settings-label">Grid Columns</div>
-            <div class="seg-control" id="s-grid-cols">
-              <button data-val="auto">Auto</button>
-              <button data-val="2">2</button>
-              <button data-val="3">3</button>
-              <button data-val="4">4</button>
+            <div class="settings-row">
+              <div class="settings-label">Grid columns</div>
+              <div class="seg-control" id="s-grid-cols">
+                <button data-val="auto">Auto</button>
+                <button data-val="2">2</button>
+                <button data-val="3">3</button>
+                <button data-val="4">4</button>
+              </div>
             </div>
-          </div>
-          <div class="settings-row">
-            <div class="settings-label">Group secrets by type</div>
-            <label class="toggle"><input type="checkbox" id="s-group-by-type"><span class="toggle-track"></span></label>
-          </div>
-          <div class="settings-row">
-            <div class="settings-label">Activity bar position</div>
-            <div class="seg-control" id="s-activity-bar-position">
-              <button data-val="left">Left</button>
-              <button data-val="right">Right</button>
-            </div>
-          </div>
-          <div class="settings-row">
-            <div class="settings-label">Activity bar style</div>
-            <div class="seg-control" id="s-activity-bar-style">
-              <button data-val="icon">Icon only</button>
-              <button data-val="icon-label">Icon + Label</button>
+            <div class="settings-row">
+              <div class="settings-label">Group by secret type</div>
+              <label class="toggle"><input type="checkbox" id="s-group-by-type"><span class="toggle-track"></span></label>
             </div>
           </div>
         </div>
 
-        <div class="settings-section">
-          <div class="settings-section-title">Security</div>
-          <div class="settings-row">
-            <div class="settings-label">Auto-lock after</div>
-            <div style="display:flex;align-items:center;gap:8px">
-              <input type="number" id="s-autolock" class="form-input" style="width:70px" min="1" max="480">
-              <span class="settings-unit">minutes</span>
+        <!-- ── Layout ── -->
+        <div class="settings-tab-pane" data-spane="layout">
+          <div class="settings-section">
+            <div class="settings-section-title">Activity Bar</div>
+            <div class="settings-row">
+              <div class="settings-label">Position</div>
+              <div class="seg-control" id="s-activity-bar-position">
+                <button data-val="left">Left</button>
+                <button data-val="right">Right</button>
+              </div>
+            </div>
+            <div class="settings-row">
+              <div class="settings-label">Style</div>
+              <div class="seg-control" id="s-activity-bar-style">
+                <button data-val="icon">Icon only</button>
+                <button data-val="icon-label">Icon + Label</button>
+              </div>
             </div>
           </div>
-          <div class="settings-row">
-            <div class="settings-label">Mask keys by default</div>
-            <label class="toggle"><input type="checkbox" id="s-mask"><span class="toggle-track"></span></label>
+          <div class="settings-section">
+            <div class="settings-section-title">Panel Order</div>
+            <div class="settings-hint">Reorder or hide activity bar panels.</div>
+            <div id="s-panel-order" class="sidebar-order-editor"></div>
           </div>
-          <div class="settings-row">
-            <div class="settings-label">Show expiry warnings</div>
-            <label class="toggle"><input type="checkbox" id="s-expiry-warn"><span class="toggle-track"></span></label>
-          </div>
-          <div class="settings-row">
-            <div class="settings-label">Warn N days before expiry</div>
-            <input type="number" id="s-expiry-days" class="form-input" style="width:70px" min="1" max="365">
+          <div class="settings-section">
+            <div class="settings-section-title">Sidebar Sections</div>
+            <div class="settings-hint">Reorder or hide sections in the Secrets sidebar.</div>
+            <div id="s-sidebar-sections" class="sidebar-order-editor"></div>
           </div>
         </div>
 
-        <div class="settings-section">
-          <div class="settings-section-title">Defaults</div>
-          <div class="settings-row">
-            <div class="settings-label">Default account name</div>
-            <input type="text" id="s-default-account" class="form-input" style="width:160px"
-              placeholder="e.g. username">
-          </div>
-          <div class="settings-row">
-            <div class="settings-label">Default export format</div>
-            <select id="s-export-format" class="sort-select">
-              <option value="dotenv">.env</option>
-              <option value="yaml">YAML</option>
-              <option value="json">JSON</option>
-            </select>
-          </div>
-          <div class="settings-row">
-            <div class="settings-label">.env copy resolves from</div>
-            <select id="s-env-copy-field" class="sort-select">
-              <option value="api_key">API Key (primary secret)</option>
-              <option value="api_secret">API Secret (secondary)</option>
-              <option value="key_id">Label / Key ID</option>
-            </select>
-          </div>
-        </div>
-
-        <!-- Vault section — stub for future remote/multi-vault support -->
-        <div class="settings-section">
-          <div class="settings-section-title" style="display:flex;align-items:center;gap:8px">
-            Vault
-            <span class="badge-coming">v2</span>
-          </div>
-          <div class="settings-row" style="opacity:.45;pointer-events:none">
-            <div class="settings-label">Remote vault URL</div>
-            <input type="text" class="form-input" style="width:200px" placeholder="https://vault.yourserver.com"
-              disabled>
-          </div>
-          <div class="settings-row" style="opacity:.45;pointer-events:none">
-            <div class="settings-label">Authentication</div>
-            <select class="sort-select" disabled>
-              <option>Token</option>
-              <option>OAuth</option>
-            </select>
-          </div>
-          <p class="settings-note">Multi-vault, remote access, and user roles are planned for v2. The current data model
-            and store interface are designed to support this upgrade without breaking changes.</p>
-        </div>
-
-        <div class="settings-section">
-          <div class="settings-section-title">Sidebar</div>
-          <div style="font-size:11px;color:var(--text3);margin-bottom:8px">Drag to reorder. Toggle to show/hide
-            sections.</div>
-          <div id="s-sidebar-sections" class="sidebar-order-editor"></div>
-        </div>
-
-        <div class="settings-section">
-          <div class="settings-section-title">Custom CSS</div>
-          <div style="font-size:11px;color:var(--text3);margin-bottom:8px">Injected after all styles. Reload to apply
-            fully.</div>
-          <textarea id="s-custom-css" class="form-input mono" rows="7" style="resize:vertical;font-size:11px"
-            placeholder="/* Example */
-.card { border-radius: 0; }
-.card-head { background: var(--surface2); }"></textarea>
-        </div>
-        <div class="settings-section">
-          <div class="settings-section-title">Remote Vault Server</div>
-          <div class="settings-row">
-            <div class="settings-label">Enable remote mode</div>
-            <label class="toggle"><input type="checkbox" id="s-remote-enable"><span class="toggle-track"></span></label>
-          </div>
-          <div class="settings-row">
-            <div class="settings-label">Server URL</div>
-            <input id="s-remote-url" class="form-input" type="url" placeholder="http://localhost:8743" style="width:220px">
-          </div>
-          <div class="settings-row">
-            <div class="settings-label">Connection</div>
-            <div style="display:flex;gap:8px;align-items:center">
-              <button id="s-remote-test" class="btn btn-ghost btn-sm">Test</button>
-              <span id="s-remote-status" style="font-size:12px;color:var(--text3)">—</span>
+        <!-- ── Security ── -->
+        <div class="settings-tab-pane" data-spane="security">
+          <div class="settings-section">
+            <div class="settings-section-title">Auto-Lock</div>
+            <div class="settings-row">
+              <div class="settings-label">Lock after inactivity</div>
+              <div style="display:flex;align-items:center;gap:8px">
+                <input type="number" id="s-autolock" class="form-input" style="width:70px" min="0" max="480">
+                <span class="settings-unit">min (0 = never)</span>
+              </div>
             </div>
           </div>
-          <div style="font-size:11px;color:var(--text3);margin-top:4px">
-            Run <code style="font-size:10px">apiv-server</code> on any machine and enter its URL.
-            Save Settings to apply.
-          </div>
-        </div>
-        <div class="settings-section">
-          <div class="settings-section-title">Data</div>
-          <div class="settings-row">
-            <div class="settings-label">Import vault backup</div>
-            <button id="settings-import-btn" class="btn btn-ghost btn-sm">Import</button>
-          </div>
-          <div class="settings-row">
-            <div class="settings-label">Export vault</div>
-            <div style="display:flex;gap:6px">
-              <button id="settings-export-dotenv" class="btn btn-ghost btn-sm">.env</button>
-              <button id="settings-export-yaml" class="btn btn-ghost btn-sm">YAML</button>
-              <button id="settings-export-json" class="btn btn-ghost btn-sm">JSON</button>
+          <div class="settings-section">
+            <div class="settings-section-title">Secrets Display</div>
+            <div class="settings-row">
+              <div class="settings-label">Mask secrets by default</div>
+              <label class="toggle"><input type="checkbox" id="s-mask"><span class="toggle-track"></span></label>
+            </div>
+            <div class="settings-row">
+              <div class="settings-label">Show expiry warnings</div>
+              <label class="toggle"><input type="checkbox" id="s-expiry-warn"><span class="toggle-track"></span></label>
+            </div>
+            <div class="settings-row">
+              <div class="settings-label">Warn days before expiry</div>
+              <input type="number" id="s-expiry-days" class="form-input" style="width:70px" min="1" max="365">
             </div>
           </div>
         </div>
-        <div class="settings-section"
-          style="border-top:1px solid var(--border);padding-top:16px;display:flex;justify-content:flex-end">
-          <button id="settings-export-btn" class="btn btn-ghost btn-sm">Export Settings JSON</button>
+
+        <!-- ── Data ── -->
+        <div class="settings-tab-pane" data-spane="data">
+          <div class="settings-section">
+            <div class="settings-section-title">Defaults</div>
+            <div class="settings-row">
+              <div class="settings-label">Default account name</div>
+              <input type="text" id="s-default-account" class="form-input" style="width:160px" placeholder="e.g. username">
+            </div>
+            <div class="settings-row">
+              <div class="settings-label">Default export format</div>
+              <select id="s-export-format" class="sort-select">
+                <option value="dotenv">.env</option>
+                <option value="yaml">YAML</option>
+                <option value="json">JSON</option>
+              </select>
+            </div>
+            <div class="settings-row">
+              <div class="settings-label">.env copy resolves from</div>
+              <select id="s-env-copy-field" class="sort-select">
+                <option value="api_key">API Key (primary secret)</option>
+                <option value="api_secret">API Secret (secondary)</option>
+                <option value="key_id">Label / Key ID</option>
+              </select>
+            </div>
+          </div>
+          <div class="settings-section">
+            <div class="settings-section-title">Import / Export</div>
+            <div class="settings-row">
+              <div class="settings-label">Import vault backup</div>
+              <button id="settings-import-btn" class="btn btn-ghost btn-sm">Import JSON</button>
+            </div>
+            <div class="settings-row">
+              <div class="settings-label">Export vault</div>
+              <div style="display:flex;gap:6px">
+                <button id="settings-export-dotenv" class="btn btn-ghost btn-sm">.env</button>
+                <button id="settings-export-yaml" class="btn btn-ghost btn-sm">YAML</button>
+                <button id="settings-export-json" class="btn btn-ghost btn-sm">JSON</button>
+              </div>
+            </div>
+            <div class="settings-row">
+              <div class="settings-label">Export settings</div>
+              <button id="settings-export-btn" class="btn btn-ghost btn-sm">Export settings.json</button>
+            </div>
+          </div>
         </div>
+
+        <!-- ── Remote ── -->
+        <div class="settings-tab-pane" data-spane="remote">
+          <div class="settings-section">
+            <div class="settings-section-title">Quick Connect</div>
+            <div class="settings-hint">
+              For managing multiple remotes with named connections, use the <strong>Remote</strong> panel in the activity bar.
+              This section provides a quick single-server toggle.
+            </div>
+            <div class="settings-row">
+              <div class="settings-label">Enable remote mode</div>
+              <label class="toggle"><input type="checkbox" id="s-remote-enable"><span class="toggle-track"></span></label>
+            </div>
+            <div class="settings-row">
+              <div class="settings-label">Server URL</div>
+              <input id="s-remote-url" class="form-input" type="url" placeholder="http://localhost:8743" style="width:220px">
+            </div>
+            <div class="settings-row">
+              <div class="settings-label">Connection</div>
+              <div style="display:flex;gap:8px;align-items:center">
+                <button id="s-remote-test" class="btn btn-ghost btn-sm">Test</button>
+                <span id="s-remote-status" style="font-size:12px;color:var(--text3)">—</span>
+              </div>
+            </div>
+            <p class="settings-note">
+              Run <code>apiv-server</code> on any machine and enter its URL above. Save to switch vault source.
+              "Connected — no vault yet" means the server is reachable but needs an initial unlock
+              (run any <code>apiv --server URL list</code> command to trigger it).
+            </p>
+          </div>
+        </div>
+
+        <!-- ── Advanced ── -->
+        <div class="settings-tab-pane" data-spane="advanced">
+          <div class="settings-section">
+            <div class="settings-section-title">Custom CSS</div>
+            <div class="settings-hint">Injected after all built-in styles. Affects this session; reload to fully apply.</div>
+            <textarea id="s-custom-css" class="form-input mono" rows="10" style="resize:vertical;font-size:11px;margin-top:8px"
+              placeholder="/* Example: remove card border-radius */
+.card { border-radius: 0; }"></textarea>
+          </div>
+        </div>
+
+      </div><!-- /.settings-body -->
+
+      <div class="settings-footer">
+        <button id="settings-cancel" class="btn btn-ghost btn-sm">Cancel</button>
+        <button id="settings-save" class="btn btn-accent btn-sm">Save Settings</button>
       </div>
     </div>
   </div>

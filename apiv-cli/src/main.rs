@@ -8,7 +8,8 @@
 //! Set `APIV_SERVER_URL` or pass `--server` to switch to remote mode.
 //! Password is read from `APIV_PASSWORD` env var or prompted interactively.
 
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand};
+use clap_complete::{generate, Shell};
 use std::path::PathBuf;
 use vault_core::{
     derive_key, get_expiring_entries, load_audit, load_vault,
@@ -76,9 +77,21 @@ enum Commands {
     },
     /// Show the append-only audit log.
     Audit {
-        /// Limit output to the last N rows.
         #[arg(long, default_value_t = 50)]
         limit: usize,
+    },
+    /// Generate shell completion scripts.
+    Completions {
+        /// Target shell (bash, zsh, fish, elvish, powershell).
+        shell: Shell,
+    },
+    /// Watch a .env file for changes and sync into the vault.
+    Watch {
+        /// Path to the .env file to watch.
+        file: PathBuf,
+        /// Project ID to assign new env_var entries to.
+        #[arg(long)]
+        project: Option<String>,
     },
 }
 
@@ -474,10 +487,51 @@ fn main() {
             open_access(cli.server.as_deref(), cli.password.as_deref())
                 .and_then(|a| cmd_audit(&a, *limit))
         }
+        // Completions (item 13): generate shell completion scripts
+        Commands::Completions { shell } => {
+            generate(*shell, &mut Cli::command(), "apiv", &mut std::io::stdout());
+            Ok(())
+        }
+        // Watch (item 14): sync .env file changes into vault
+        Commands::Watch { file, project } => {
+            open_access(cli.server.as_deref(), cli.password.as_deref())
+                .and_then(|a| cmd_watch(&a, file, project.as_deref()))
+        }
     };
 
     if let Err(e) = result {
         eprintln!("Error: {e}");
         std::process::exit(1);
     }
+}
+
+fn cmd_watch(access: &Access, file: &PathBuf, project: Option<&str>) -> Result<(), String> {
+    use notify::{Event, RecursiveMode, Watcher, recommended_watcher};
+    use std::sync::mpsc::channel;
+
+    if !file.exists() {
+        return Err(format!("File not found: {}", file.display()));
+    }
+
+    println!("Watching {} for changes (Ctrl-C to stop)…", file.display());
+
+    let (tx, rx) = channel::<notify::Result<Event>>();
+    let mut watcher = recommended_watcher(tx).map_err(|e| e.to_string())?;
+    watcher.watch(file, RecursiveMode::NonRecursive).map_err(|e| e.to_string())?;
+
+    for event in rx {
+        match event {
+            Ok(ev) if ev.kind.is_modify() || ev.kind.is_create() => {
+                println!("[{}] Change detected — syncing…", vault_core::iso_now());
+                if let Err(e) = cmd_import(access, file) {
+                    eprintln!("Sync error: {e}");
+                } else {
+                    println!("Synced OK");
+                }
+            }
+            Ok(_) => {}
+            Err(e) => eprintln!("Watch error: {e}"),
+        }
+    }
+    Ok(())
 }

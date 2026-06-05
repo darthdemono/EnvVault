@@ -4,16 +4,79 @@
  *       string tools, base64.
  */
 
-import { Settings, switchPanel, switchTool } from './state';
-import { showToast, clipboardWrite, generateULID } from './utils';
-import { showDropdown, injectIntoForm, quickGenerate } from './modals';
+import { Settings, switchPanel, switchTool, st } from './state';
+import { showToast, clipboardWrite, generateULID, showConfirm } from './utils';
+import { showDropdown, injectIntoForm, quickGenerate, openAdd, fillForm, buildCatChips, openModal } from './modals';
+import { SECRET_TEMPLATES } from './templates';
+
+function parseImport(raw: string, fmt: string): any[] {
+  const base = (p: string, v: string) => ({
+    provider: p, api_key: v, price_type: 'local', secretType: 'env_var',
+    categories: [], projectIds: ['Universal'], scopes: [],
+  });
+
+  if (fmt === 'env') {
+    return raw.split('\n').flatMap(line => {
+      const t = line.trim();
+      if (!t || t.startsWith('#')) return [];
+      const eq = t.indexOf('=');
+      if (eq < 1) return [];
+      const key = t.slice(0, eq).trim();
+      const val = t.slice(eq + 1).trim().replace(/^["']|["']$/g, '');
+      return [base(key, val)];
+    });
+  }
+
+  if (fmt === 'bitwarden') {
+    try {
+      const data = JSON.parse(raw);
+      const items = data.items ?? data;
+      return (Array.isArray(items) ? items : []).map((item: any) => ({
+        provider: item.name || 'Unknown',
+        account_name: item.login?.username ?? null,
+        api_key: item.login?.password ?? item.notes ?? '',
+        api_url: item.login?.uris?.[0]?.uri ?? null,
+        price_type: 'paid', secretType: 'password',
+        categories: [], projectIds: ['Universal'], scopes: [],
+        description: item.notes ?? null,
+      }));
+    } catch { return []; }
+  }
+
+  if (fmt === '1password') {
+    try {
+      const items = JSON.parse(raw);
+      return (Array.isArray(items) ? items : []).map((item: any) => {
+        const pw = item.fields?.find((f: any) => f.designation === 'password' || f.id === 'password');
+        const user = item.fields?.find((f: any) => f.designation === 'username' || f.id === 'username');
+        return {
+          provider: item.title || 'Unknown',
+          account_name: user?.value ?? null,
+          api_key: pw?.value ?? '',
+          price_type: 'paid', secretType: 'password',
+          categories: item.tags ?? [], projectIds: ['Universal'], scopes: [],
+        };
+      });
+    } catch { return []; }
+  }
+
+  if (fmt === 'json') {
+    try {
+      const data = JSON.parse(raw);
+      const items = Array.isArray(data) ? data : data.api_keys ?? [];
+      return items;
+    } catch { return []; }
+  }
+
+  return [];
+}
 
 export function initTools() {
   const invoke = (window as any).__TAURI__?.core?.invoke?.bind((window as any).__TAURI__?.core);
 
   // ── Activity bar panel switching ──
   document.querySelectorAll<HTMLButtonElement>('.activity-btn').forEach(btn => {
-    btn.addEventListener('click', () => switchPanel(btn.dataset.panel as 'secrets' | 'tools'));
+    btn.addEventListener('click', () => switchPanel(btn.dataset.panel as 'secrets' | 'tools' | 'users'));
   });
 
   // ── Tool nav switching ──
@@ -38,9 +101,9 @@ export function initTools() {
   });
 
   // Restore active panel & tool from settings
-  const activePanel = (Settings.get('activePanel') || 'secrets') as 'secrets' | 'tools';
+  const activePanel = (Settings.get('activePanel') || 'secrets') as 'secrets' | 'tools' | 'users';
   const activeTool = Settings.get('activeTool') || 'secret-gen';
-  switchPanel(activePanel);
+  switchPanel(activePanel === 'users' ? 'secrets' : activePanel); // don't restore users panel on init
   switchTool(activeTool);
 
   // ── SECRET GENERATOR ──
@@ -339,4 +402,207 @@ export function initTools() {
     const v = (document.getElementById('b64-output') as HTMLTextAreaElement).value;
     if (v) clipboardWrite(v);
   });
+
+  // ── Health Dashboard (item 7) ──────────────────────────────────────────────
+
+  document.getElementById('health-scan-btn')?.addEventListener('click', () => {
+    const results = document.getElementById('health-results')!;
+    const timeEl  = document.getElementById('health-scan-time')!;
+    const keys    = st.vault.api_keys;
+
+    const now    = Date.now();
+    const today  = new Date().toISOString().slice(0, 10);
+    const warn30 = new Date(now + 30 * 86_400_000).toISOString().slice(0, 10);
+
+    const issues: Array<{ severity: 'high' | 'med' | 'low'; msg: string; provider: string }> = [];
+
+    keys.forEach(k => {
+      const prov = k.provider || '?';
+      // Weak password (entropy estimate): length < 12 and not a token pattern
+      if ((k.secretType === 'password' || k.secretType === 'api_key') && k.api_key.length < 12 && !/^[A-Za-z0-9_-]{20,}$/.test(k.api_key)) {
+        issues.push({ severity: 'high', provider: prov, msg: 'Short or weak secret value (< 12 chars)' });
+      }
+      // Expired
+      if (k.expires_at && k.expires_at.slice(0, 10) < today) {
+        issues.push({ severity: 'high', provider: prov, msg: `Expired on ${k.expires_at.slice(0, 10)}` });
+      }
+      // Expiring soon
+      else if (k.expires_at && k.expires_at.slice(0, 10) <= warn30) {
+        issues.push({ severity: 'med', provider: prov, msg: `Expiring ${k.expires_at.slice(0, 10)}` });
+      }
+      // Never rotated
+      if (!k.last_rotated_at && !k.version_history?.length) {
+        issues.push({ severity: 'low', provider: prov, msg: 'Never rotated' });
+      }
+      // No description
+      if (!k.api_description && !k.description) {
+        issues.push({ severity: 'low', provider: prov, msg: 'No description — hard to identify later' });
+      }
+    });
+
+    timeEl.textContent = `Scanned ${keys.length} secrets · ${new Date().toLocaleTimeString()}`;
+
+    if (!issues.length) {
+      results.innerHTML = `<div class="health-ok">✓ No issues found — vault looks healthy!</div>`;
+      return;
+    }
+
+    const grouped = { high: issues.filter(i => i.severity === 'high'), med: issues.filter(i => i.severity === 'med'), low: issues.filter(i => i.severity === 'low') };
+    const renderGroup = (label: string, cls: string, items: typeof issues) => items.length ? `
+      <div class="health-group">
+        <div class="health-group-title ${cls}">${label} (${items.length})</div>
+        ${items.map(i => `<div class="health-row"><span class="health-provider">${i.provider}</span><span class="health-msg">${i.msg}</span></div>`).join('')}
+      </div>` : '';
+
+    results.innerHTML = renderGroup('Critical', 'health-high', grouped.high) +
+                        renderGroup('Warning',  'health-med',  grouped.med)  +
+                        renderGroup('Info',     'health-low',  grouped.low);
+  });
+
+  // ── Import tool (item 9) ───────────────────────────────────────────────────
+
+  let _importFormat = 'env';
+  let _importData: any[] = [];
+
+  document.querySelectorAll<HTMLButtonElement>('.import-fmt-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.import-fmt-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      _importFormat = btn.dataset.fmt!;
+    });
+  });
+
+  document.getElementById('import-file-btn')?.addEventListener('click', () => {
+    const inp = document.createElement('input');
+    inp.type = 'file';
+    inp.accept = '.env,.json,.csv,.txt';
+    inp.onchange = () => {
+      const f = inp.files?.[0];
+      if (!f) return;
+      document.getElementById('import-file-name')!.textContent = f.name;
+      const reader = new FileReader();
+      reader.onload = e => {
+        const raw = String(e.target?.result ?? '');
+        _importData = parseImport(raw, _importFormat);
+        const preview = document.getElementById('import-preview')!;
+        const previewText = document.getElementById('import-preview-text')!;
+        preview.style.display = _importData.length ? 'block' : 'none';
+        previewText.textContent = `Found ${_importData.length} entries:\n` + _importData.slice(0, 5).map(e => `  ${e.provider}: ${e.api_key?.slice(0, 20)}…`).join('\n') + (_importData.length > 5 ? `\n  … +${_importData.length - 5} more` : '');
+        const confirmBtn = document.getElementById('import-confirm-btn')!;
+        confirmBtn.style.display = _importData.length ? '' : 'none';
+      };
+      reader.readAsText(f);
+    };
+    document.body.appendChild(inp);
+    inp.click();
+    inp.remove();
+  });
+
+  document.getElementById('import-confirm-btn')?.addEventListener('click', async () => {
+    if (!_importData.length) return;
+    st.vault.api_keys.push(..._importData);
+    await (st.store as any).save(st.vault).catch(() => {});
+    import('./render').then(m => m.render());
+    document.getElementById('import-status')!.textContent = `✓ Imported ${_importData.length} entries`;
+    _importData = [];
+    document.getElementById('import-confirm-btn')!.style.display = 'none';
+    document.getElementById('import-preview')!.style.display = 'none';
+    showToast(`Imported ${_importData.length || 'all'} entries`, 'ok');
+  });
+
+  // ── Templates (item 23) ────────────────────────────────────────────────────
+
+  const templateGrid = document.getElementById('template-grid');
+  if (templateGrid) {
+    templateGrid.innerHTML = SECRET_TEMPLATES.map(t => `
+      <button class="template-card" data-tpl-id="${t.id}">
+        <div class="template-icon">${t.icon.slice(0, 2).toUpperCase()}</div>
+        <div class="template-info">
+          <div class="template-name">${t.name}</div>
+          <div class="template-cat">${t.category}</div>
+        </div>
+      </button>
+    `).join('');
+    templateGrid.addEventListener('click', e => {
+      const btn = (e.target as HTMLElement).closest<HTMLButtonElement>('[data-tpl-id]');
+      if (!btn) return;
+      const tpl = SECRET_TEMPLATES.find(t => t.id === btn.dataset.tplId);
+      if (!tpl) return;
+      switchPanel('secrets');
+      setTimeout(() => {
+        fillForm({ ...tpl.defaults, secretType: tpl.secretType } as any);
+        buildCatChips([]);
+        openModal('Add Secret', -1);
+      }, 100);
+    });
+  }
+
+  // ── Bulk operations (item 8) ───────────────────────────────────────────────
+
+  let _bulkMode = false;
+  let _bulkSelected = new Set<number>();
+
+  const bulkSelectBtn = document.getElementById('bulk-select-btn')!;
+  const bulkBar       = document.getElementById('bulk-bar')!;
+  const bulkCount     = document.getElementById('bulk-count')!;
+
+  function updateBulkCount() {
+    bulkCount.textContent = `${_bulkSelected.size} selected`;
+  }
+
+  function enterBulkMode() {
+    _bulkMode = true;
+    _bulkSelected.clear();
+    bulkSelectBtn.textContent = 'Exit Select';
+    bulkBar.style.display = 'flex';
+    document.getElementById('card-grid')?.classList.add('bulk-mode');
+    updateBulkCount();
+  }
+
+  function exitBulkMode() {
+    _bulkMode = false;
+    _bulkSelected.clear();
+    bulkSelectBtn.textContent = 'Select';
+    bulkBar.style.display = 'none';
+    document.getElementById('card-grid')?.classList.remove('bulk-mode');
+    import('./render').then(m => m.render());
+  }
+
+  bulkSelectBtn.addEventListener('click', () => _bulkMode ? exitBulkMode() : enterBulkMode());
+  document.getElementById('bulk-cancel-btn')?.addEventListener('click', exitBulkMode);
+
+  document.getElementById('bulk-delete-btn')?.addEventListener('click', async () => {
+    if (!_bulkSelected.size) return;
+    if (!await showConfirm(`Delete ${_bulkSelected.size} selected secrets? This cannot be undone.`)) return;
+    const indices = Array.from(_bulkSelected).sort((a, b) => b - a);
+    indices.forEach(i => st.vault.api_keys.splice(i, 1));
+    await (st.store as any).save(st.vault).catch(() => {});
+    exitBulkMode();
+    import('./render').then(m => m.render());
+    showToast(`Deleted ${indices.length} secrets`, 'ok');
+  });
+
+  document.getElementById('bulk-export-btn')?.addEventListener('click', () => {
+    const selected = Array.from(_bulkSelected).map(i => st.vault.api_keys[i]).filter(Boolean);
+    const lines = selected.map(e => {
+      const key = e.provider.toUpperCase().replace(/[^A-Z0-9]/g, '_');
+      return `${key}=${e.api_key}`;
+    }).join('\n');
+    const blob = new Blob([lines], { type: 'text/plain' });
+    const url  = URL.createObjectURL(blob);
+    const a    = Object.assign(document.createElement('a'), { href: url, download: 'export.env' });
+    a.click();
+    URL.revokeObjectURL(url);
+  });
+
+  // Expose bulk toggle to card clicks
+  (window as any).__apivBulkToggle = (idx: number) => {
+    if (!_bulkMode) return false;
+    if (_bulkSelected.has(idx)) _bulkSelected.delete(idx);
+    else _bulkSelected.add(idx);
+    updateBulkCount();
+    document.querySelector<HTMLElement>(`[data-card-idx="${idx}"]`)?.classList.toggle('bulk-selected', _bulkSelected.has(idx));
+    return true;
+  };
+  (window as any).__apivIsBulkMode = () => _bulkMode;
 }

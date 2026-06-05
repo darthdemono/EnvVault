@@ -7,7 +7,7 @@ import { st, Settings, setRenderFn, applyGridSettings, dotenvKey } from './state
 import { getFiltered, sorted, buildProjectTree, getDescendantProjectIds } from './filters';
 import { iconHTML } from './icons';
 import { esc, escAttr, maskKey, showToast, showConfirm, showPrompt, clipboardWrite, eyeSVG, copySVG, editSVG, delSVG, dupSVG } from './utils';
-import { TYPE_CONFIG, showDropdown } from './modals';
+import { TYPE_CONFIG, showDropdown, markAsRotated } from './modals';
 import {
   renderChunkCard,
   getProjectTypeLabel,
@@ -89,10 +89,22 @@ function renderSidebar() {
     if (el) el.textContent = String(all.filter(k => (k.secretType || 'api_key') === stType).length);
   });
 
+  // Environment counts
+  const envValues = ['production', 'staging', 'development', 'testing'] as const;
+  envValues.forEach(env => {
+    const el = document.getElementById(`count-env-${env}`);
+    if (el) el.textContent = String(all.filter(k => k.environment === env).length);
+  });
+
+  // Update active state for both st.filter items and env filter items
   document.querySelectorAll<HTMLButtonElement>('.sidebar-item[data-filter-type]').forEach(btn => {
     const t = btn.dataset.filterType;
-    const v = btn.dataset.filterValue;
-    btn.classList.toggle('active', (t === 'all' && st.filter.type === 'all') || (t === st.filter.type && v === st.filter.value));
+    const v = btn.dataset.filterValue ?? '';
+    if (t === 'env') {
+      btn.classList.toggle('active', st.currentEnvFilter === v && v !== '');
+    } else {
+      btn.classList.toggle('active', (t === 'all' && st.filter.type === 'all' && !st.currentEnvFilter) || (t === st.filter.type && v === st.filter.value));
+    }
   });
 
   const catList = document.getElementById('category-list')!;
@@ -256,9 +268,11 @@ function buildCard(entry: VaultEntry, idx: number, animIdx: number): HTMLElement
       ${entry.description ? `<div class="desc-section"><button class="desc-toggle" data-action="toggle-desc"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 18 15 12 9 6"/></svg>General Description</button><div class="desc-content">${esc(entry.description)}</div></div>` : ''}
       ${metaRows.length ? `<div class="meta-section">${metaRows.map(([k, v]) => `<div class="meta-row"><span class="meta-key">${k}</span><span class="meta-val">${v}</span></div>`).join('')}</div>` : ''}
       ${entry.categories?.length ? `<div class="cat-pills">${entry.categories.map(c => `<span class="cat-pill">${esc(c)}</span>`).join('')}</div>` : ''}
+      ${entry.last_rotated_at ? `<div class="meta-section"><div class="meta-row"><span class="meta-key">Last Rotated</span><span class="meta-val" style="color:var(--text2)">${esc(entry.last_rotated_at)}</span></div></div>` : ''}
     </div>
     <div class="card-foot">
       <button class="env-copy-btn" id="env-btn-${idx}" data-action="copy-env" data-idx="${idx}">${copySVG}<span class="env-format-badge">${envLabel}</span><span id="env-label-${idx}">${dotenvKey(entry)}</span></button>
+      <button class="icon-btn sm" data-action="rotate" data-idx="${idx}" title="Mark as rotated" style="font-size:11px;gap:3px;">↺</button>
       <button class="icon-btn sm" data-action="duplicate" data-idx="${idx}" title="Duplicate">${dupSVG}</button>
       <button class="icon-btn sm" data-action="edit" data-idx="${idx}" title="Edit">${editSVG}</button>
       <button class="icon-btn sm danger" data-action="delete" data-idx="${idx}" title="Delete">${delSVG}</button>

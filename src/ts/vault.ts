@@ -4,7 +4,7 @@
  * This file wires everything together and registers event listeners.
  */
 
-import { st, Settings, TauriVaultStore, LocalVaultStore, inTauri, setRenderFn, triggerRender, switchPanel, switchTool } from './state';
+import { st, Settings, TauriVaultStore, LocalVaultStore, RemoteVaultStore, inTauri, setRenderFn, triggerRender, switchPanel, switchTool } from './state';
 import { initIconPicker, openIconPicker, iconHTML } from './icons';
 import {
   showToast, showConfirm, clipboardWrite,
@@ -17,6 +17,7 @@ import {
   openModal, openAdd, openEdit, closeModal, saveModal, duplicateKey, deleteKey, pushUndo,
   injectIntoForm, quickGenerate,
   toggleCard, toggleReveal, copyField, doCopyEnv, onIconWrapClick, openIconPickerFor,
+  markAsRotated,
 } from './modals';
 import {
   doSetFilter,
@@ -31,6 +32,8 @@ import {
 import { openSettings, saveSettings, closeSettings } from './settings-panel';
 import { lockVault, resetLock, showUnlockModal, setFinishInitFn } from './lock';
 import { initTools } from './tools';
+import { initUsersPanel, renderUsersPanel } from './users';
+import { initRemotePanel, setRemoteFinishInitFn } from './remote-panel';
 import {
   render, renderGrid, updateCopyAllBtn, renderProjectTree,
 } from './render';
@@ -88,6 +91,9 @@ async function finishInit() {
   render();
   resetLock();
   initTools();
+  initUsersPanel();
+  initRemotePanel();
+  setRemoteFinishInitFn(finishInit);
 }
 
 async function init() {
@@ -124,8 +130,14 @@ async function init() {
     const filterType  = btn.dataset.filterType;
     const filterValue = btn.dataset.filterValue;
     if (filterType && filterValue !== undefined) {
-      if (filterType === 'all') st.currentSelectedProjectIds = ['Universal'];
-      doSetFilter(filterType, filterValue);
+      if (filterType === 'env') {
+        // Environment filter is independent of st.filter (stacks with other filters)
+        st.currentEnvFilter = (st.currentEnvFilter === filterValue) ? '' : filterValue;
+        triggerRender();
+      } else {
+        if (filterType === 'all') { st.currentSelectedProjectIds = ['Universal']; st.currentEnvFilter = ''; }
+        doSetFilter(filterType, filterValue);
+      }
     }
   });
 
@@ -367,6 +379,7 @@ async function init() {
       case 'reveal':      toggleReveal(e, field, idx, value); break;
       case 'copy-field':  copyField(e, value, el); break;
       case 'copy-env':    doCopyEnv(e, idx); break;
+      case 'rotate':      markAsRotated(idx); break;
       case 'duplicate':   duplicateKey(e, idx); break;
       case 'edit':        openEdit(e, idx); break;
       case 'delete':      deleteKey(e, idx); break;
@@ -410,7 +423,45 @@ async function init() {
   });
 
   // Misc
-  document.getElementById('vault-switcher')!.addEventListener('click', () => showToast('Multi-vault support coming in v2', '', 3000));
+  document.getElementById('vault-switcher')!.addEventListener('click', (e) => {
+    const isRemote = st.store instanceof RemoteVaultStore;
+    const saved = Settings.get('remoteSaved') ?? [];
+    const items: any[] = [
+      {
+        label: isRemote ? '  Local Vault' : '⬤ Local Vault',
+        active: !isRemote,
+        fn: () => {
+          if (isRemote) {
+            if (st.store instanceof RemoteVaultStore) (st.store as RemoteVaultStore).lock().catch(() => {});
+            st.store = inTauri ? new TauriVaultStore() : new LocalVaultStore();
+            st.activeRemoteId = null;
+            Settings.set('remote', { enabled: false, serverUrl: '' });
+            document.getElementById('vault-name')!.textContent = 'Local Vault';
+            showToast('Switched to local vault', 'ok');
+          }
+        },
+      },
+      '---',
+    ];
+    saved.forEach(cfg => {
+      const connected = st.activeRemoteId === cfg.id;
+      items.push({
+        label: `${connected ? '⬤' : '  '} ${cfg.name}`,
+        active: connected,
+        fn: () => {
+          if (!connected) {
+            switchPanel('remote');
+            st.activeRemoteId = cfg.id;
+            import('./remote-panel').then(m => m.renderRemotePanel()).catch(() => {});
+          }
+        },
+      });
+    });
+    items.push('---');
+    items.push({ label: '+ Add Remote Vault', active: false, fn: () => switchPanel('remote') });
+    items.push({ label: 'Remote settings…', active: false, fn: () => openSettings() });
+    showDropdown(e.currentTarget as HTMLElement, items);
+  });
   document.getElementById('f-secret-type')?.addEventListener('change', dynamicSecretFields);
   document.getElementById('f-key-generate')?.addEventListener('click', () => quickGenerate());
 

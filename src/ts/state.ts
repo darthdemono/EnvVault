@@ -1,4 +1,4 @@
-import type { VaultData, AppSettings, VaultEntry } from './types';
+import type { VaultData, AppSettings, VaultEntry, RemoteVaultConfig } from './types';
 import { hexAlpha } from './utils';
 
 // ── VaultStore ─────────────────────────────────────────────────────────────
@@ -50,11 +50,31 @@ export class RemoteVaultStore implements VaultStore {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ password }),
       });
-      if (!r.ok) return false;
+      if (!r.ok) {
+        const body = await r.json().catch(() => ({}));
+        throw new Error(body?.error ?? `Server error ${r.status}`);
+      }
       const { token } = await r.json();
       this.token = token ?? '';
       return !!this.token;
-    } catch { return false; }
+    } catch (e) { throw e; }
+  }
+
+  async authUser(username: string, password: string): Promise<boolean> {
+    try {
+      const r = await fetch(`${this.baseUrl}/api/auth`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, password }),
+      });
+      if (!r.ok) {
+        const body = await r.json().catch(() => ({}));
+        throw new Error(body?.error ?? `Auth failed ${r.status}`);
+      }
+      const { token } = await r.json();
+      this.token = token ?? '';
+      return !!this.token;
+    } catch (e) { throw e; }
   }
 
   async lock(): Promise<void> {
@@ -146,6 +166,12 @@ export const st = {
   currentSelectedProjectIds: ['Universal'] as string[],
   currentSortBy: 'provider',
   formCustomSelects: new Map<string, any>(),
+  /** Active environment filter value; empty string = all environments. */
+  currentEnvFilter: '' as string,
+  /** ID of the user whose detail is shown in the users workspace. */
+  selectedUserId: null as string | null,
+  /** ID of the currently connected remote vault (matches RemoteVaultConfig.id). */
+  activeRemoteId: null as string | null,
 };
 
 // ── Render callback (breaks potential circular deps) ───────────────────────
@@ -158,12 +184,14 @@ export function triggerRender(): void { _renderFn(); }
 
 const DEFAULT_SETTINGS: AppSettings = {
   theme: 'dark', accentColor: '#7364c9', cardSize: 'medium', gridColumns: 'auto',
-  defaultAccount: '', defaultExportFormat: 'dotenv', autoLockMinutes: 20,
+  defaultAccount: '', defaultExportFormat: 'dotenv', autoLockMinutes: 60,
   maskKeysByDefault: true, showExpiryWarning: true, expiryWarningDays: 30,
   customCss: '', sidebarSections: ['all', 'price', 'category', 'project'],
   groupByType: false, activityBarPosition: 'left' as const, activityBarStyle: 'icon' as const,
   collapsedSections: [] as ('all' | 'price' | 'category' | 'project')[],
-  activePanel: 'secrets' as const, activeTool: 'secret-gen',
+  activePanel: 'secrets' as 'secrets' | 'tools' | 'users' | 'remote', activeTool: 'secret-gen',
+  remoteSaved: [] as RemoteVaultConfig[],
+  panelOrder: ['secrets', 'tools', 'remote', 'users'],
   envCopyField: 'api_key' as const,
 };
 
@@ -181,15 +209,34 @@ export const Settings = {
   },
   _apply() {
     const d = this._data;
-    document.documentElement.setAttribute('data-theme', d.theme);
+    // OS theme auto-sync (item 21)
+    const resolvedTheme = d.theme === 'system'
+      ? (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')
+      : d.theme;
+    document.documentElement.setAttribute('data-theme', resolvedTheme);
     document.documentElement.style.setProperty('--accent', d.accentColor);
     document.documentElement.style.setProperty('--accent-dim', hexAlpha(d.accentColor, 0.14));
     document.documentElement.style.setProperty('--accent-mid', hexAlpha(d.accentColor, 0.3));
     applyGridSettings(); applySidebarOrder(); applyActivityBar();
+    import('./settings-panel').then(m => m.applyPanelOrder()).catch(() => {});
     const styleEl = document.getElementById('custom-style') as HTMLStyleElement | null;
     if (styleEl) styleEl.textContent = d.customCss || '';
   },
 };
+
+// ── OS theme watcher (item 21) ─────────────────────────────────────────────
+window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
+  if (Settings.get('theme') === 'system') Settings._apply();
+});
+
+// ── Lock on window hide / minimize (item 20) ──────────────────────────────
+// The Tauri/browser hides the window — visibilitychange fires.
+// We call the imported lockVault lazily to avoid circular deps.
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden') {
+    import('./lock').then(m => m.lockVault()).catch(() => {});
+  }
+});
 
 // ── Layout helpers ─────────────────────────────────────────────────────────
 
@@ -232,14 +279,27 @@ export function applyActivityBar() {
   layout.classList.toggle('activity-bar-icon-label', style === 'icon-label');
 }
 
-export function switchPanel(panel: 'secrets' | 'tools') {
-  document.getElementById('secrets-panel')!.style.display   = panel === 'secrets' ? '' : 'none';
-  document.getElementById('tools-panel')!.style.display     = panel === 'tools'   ? '' : 'none';
-  document.getElementById('vault-workspace')!.style.display = panel === 'secrets' ? '' : 'none';
-  document.getElementById('tools-workspace')!.style.display = panel === 'tools'   ? '' : 'none';
+export function switchPanel(panel: string) {
+  const panelEls: Record<string, string[]> = {
+    secrets: ['secrets-panel', 'vault-workspace'],
+    tools:   ['tools-panel',   'tools-workspace'],
+    users:   ['users-panel',   'users-workspace'],
+    remote:  ['remote-panel',  'remote-workspace'],
+  };
+  const allSidebars   = ['secrets-panel', 'tools-panel', 'users-panel', 'remote-panel'];
+  const allWorkspaces = ['vault-workspace', 'tools-workspace', 'users-workspace', 'remote-workspace'];
+  allSidebars.forEach(id => { const el = document.getElementById(id); if (el) el.style.display = 'none'; });
+  allWorkspaces.forEach(id => { const el = document.getElementById(id); if (el) el.style.display = 'none'; });
+
+  const active = panelEls[panel] ?? panelEls.secrets;
+  active.forEach(id => { const el = document.getElementById(id); if (el) el.style.display = ''; });
+
   document.querySelectorAll<HTMLButtonElement>('.activity-btn')
     .forEach(btn => btn.classList.toggle('active', btn.dataset.panel === panel));
-  Settings.set('activePanel', panel);
+  Settings.set('activePanel', panel as any);
+
+  if (panel === 'users')  import('./users').then(m => m.renderUsersPanel()).catch(() => {});
+  if (panel === 'remote') import('./remote-panel').then(m => m.renderRemotePanel()).catch(() => {});
 }
 
 export function switchTool(toolId: string) {

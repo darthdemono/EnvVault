@@ -55,9 +55,21 @@ export function getFiltered(): VaultEntry[] {
     if (filters.price && k.price_type !== filters.price) return false;
     if (filters.cat && !(k.categories || []).some(c => c.includes(filters.cat))) return false;
     if (filters.env && k.environment !== filters.env) return false;
+    // Sidebar environment filter (separate from st.filter so it stacks with other filters)
+    if (st.currentEnvFilter && k.environment !== st.currentEnvFilter) return false;
     if (text) {
-      const hay = [k.provider, k.account_name, k.key_id, k.api_description, k.description, k.details, ...(k.categories || [])].join(' ').toLowerCase();
-      if (!hay.includes(text)) return false;
+      const hay = [k.provider, k.account_name, k.key_id, k.api_description, k.description, k.details,
+                   ...(k.categories || []), ...((k as any).tags || [])].join(' ').toLowerCase();
+      // Regex search (item 10): /pattern/flags syntax detected
+      const reMatch = text.match(/^\/(.+)\/([gimsuy]*)$/);
+      if (reMatch) {
+        try {
+          const re = new RegExp(reMatch[1], reMatch[2] || 'i');
+          if (!re.test(hay)) return false;
+        } catch { if (!hay.includes(text)) return false; }
+      } else {
+        if (!hay.includes(text)) return false;
+      }
     }
     if (st.filter.type === 'price') return k.price_type === st.filter.value;
     if (st.filter.type === 'category') {

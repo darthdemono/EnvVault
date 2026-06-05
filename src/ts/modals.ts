@@ -206,12 +206,38 @@ export function openModal(title: string, idx: number) {
   populateProjectSelect();
 }
 
+const DRAFT_KEY = 'apivault-form-draft';
+
 export function openAdd(e?: Event) {
   if (e) e.stopPropagation();
-  fillForm({});
-  buildCatChips([]);
+  // Restore draft if available (item 11)
+  const draft = sessionStorage.getItem(DRAFT_KEY);
+  try {
+    const parsed = draft ? JSON.parse(draft) : null;
+    if (parsed) {
+      fillForm(parsed);
+      buildCatChips(parsed.categories || []);
+    } else {
+      fillForm({});
+      buildCatChips([]);
+    }
+  } catch {
+    fillForm({});
+    buildCatChips([]);
+  }
   openModal('Add Secret', -1);
+  // Auto-save draft on any input change
+  const overlay = document.getElementById('modal-overlay')!;
+  const saveDraft = () => {
+    try { sessionStorage.setItem(DRAFT_KEY, JSON.stringify(formToEntry())); } catch {}
+  };
+  overlay.querySelectorAll('input, textarea, select').forEach(el => {
+    el.addEventListener('input', saveDraft);
+    el.addEventListener('change', saveDraft);
+  });
 }
+
+function clearDraft() { sessionStorage.removeItem(DRAFT_KEY); }
 
 export function openEdit(e: Event, idx: number) {
   e.stopPropagation();
@@ -220,7 +246,10 @@ export function openEdit(e: Event, idx: number) {
   openModal('Edit Secret', idx);
 }
 
-export function closeModal() { document.getElementById('modal-overlay')!.classList.remove('open'); }
+export function closeModal() {
+  document.getElementById('modal-overlay')!.classList.remove('open');
+  clearDraft();
+}
 
 export function saveModal() {
   try {
@@ -233,8 +262,17 @@ export function saveModal() {
       showToast(`${TYPE_CONFIG[t]?.keyLabel || 'Value'} is required`, 'err'); return;
     }
     const idx = parseInt((document.getElementById('edit-index') as HTMLInputElement).value);
-    if (idx >= 0) st.vault.api_keys[idx] = entry;
-    else st.vault.api_keys.push(entry);
+    if (idx >= 0) {
+      // Preserve fields not represented in the form
+      const old = st.vault.api_keys[idx];
+      st.vault.api_keys[idx] = {
+        ...entry,
+        last_rotated_at: old.last_rotated_at,
+        version_history: old.version_history,
+      };
+    } else {
+      st.vault.api_keys.push(entry);
+    }
     st.store.save(st.vault);
     closeModal();
     document.getElementById('load-banner')!.style.display = 'none';
@@ -242,6 +280,17 @@ export function saveModal() {
   } catch (err: any) {
     showToast('Save failed: ' + (err?.message || err), 'err', 4000);
   }
+}
+
+/** Sets last_rotated_at to today on the given entry and saves. */
+export function markAsRotated(idx: number) {
+  const entry = st.vault.api_keys[idx];
+  if (!entry) return;
+  const today = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+  st.vault.api_keys[idx] = { ...entry, last_rotated_at: today };
+  st.store.save(st.vault);
+  triggerRender();
+  showToast(`Marked as rotated on ${today}`, 'ok', 2500);
 }
 
 export function duplicateKey(e: Event, idx: number) {
