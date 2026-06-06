@@ -7,6 +7,7 @@ import { showToast, showConfirm } from './utils';
 
 let _finishInitFn: () => Promise<void> = async () => {};
 let _warnTimer: ReturnType<typeof setTimeout> | null = null;
+let _activityBound = false;
 
 export function setFinishInitFn(fn: () => Promise<void>): void {
   _finishInitFn = fn;
@@ -45,7 +46,6 @@ export function resetLock() {
   const lockStatus = document.getElementById('lock-status');
 
   if (!mins || mins <= 0) {
-    // Never lock
     st.lockTimer = null;
     if (lockStatus) lockStatus.textContent = 'Auto-lock: Off';
     return;
@@ -56,12 +56,22 @@ export function resetLock() {
 
   if (warnMs > 0) {
     _warnTimer = setTimeout(() => {
-      showToast(`Vault locks in 1 minute — move mouse to reset`, 'err', 55_000);
+      showToast(`Vault locks in 1 minute — interact to reset`, 'err', 55_000);
     }, warnMs);
   }
 
   st.lockTimer = setTimeout(lockVault, ms);
   if (lockStatus) lockStatus.textContent = `Auto-lock: ${mins}min`;
+
+  // Bind activity listeners once — any mouse or keyboard event resets the timer.
+  if (!_activityBound) {
+    _activityBound = true;
+    const onActivity = () => { if (st.lockTimer) resetLock(); };
+    document.addEventListener('mousemove',  onActivity, { passive: true });
+    document.addEventListener('keydown',    onActivity, { passive: true });
+    document.addEventListener('mousedown',  onActivity, { passive: true });
+    document.addEventListener('touchstart', onActivity, { passive: true });
+  }
 }
 
 // ── Unlock modal ──────────────────────────────────────────────────────────────
@@ -72,7 +82,7 @@ export async function showUnlockModal(isFirstRun: boolean) {
   const subtitleEl   = document.getElementById('unlock-subtitle')!;
   const confirmGroup = document.getElementById('unlock-confirm-group')!;
   const submitBtn    = document.getElementById('unlock-submit-btn') as HTMLButtonElement;
-  const resetBtn     = document.getElementById('unlock-reset-btn') as HTMLButtonElement;
+  const resetBtn     = document.getElementById('unlock-reset-btn') as HTMLButtonElement | null;
   const pwField      = document.getElementById('unlock-password') as HTMLInputElement;
   const confirmField = document.getElementById('unlock-confirm') as HTMLInputElement;
   const userField    = document.getElementById('unlock-username') as HTMLInputElement | null;
@@ -92,19 +102,16 @@ export async function showUnlockModal(isFirstRun: boolean) {
       subtitleEl.textContent = 'Enter the server URL, then your credentials. Leave username blank to authenticate as vault owner.';
       confirmGroup.style.display = 'none';
       submitBtn.textContent = 'Connect';
-      resetBtn.style.display = 'none';
     } else if (firstRun) {
       titleEl.textContent = 'Create Master Password';
       subtitleEl.textContent = 'This password encrypts your vault with AES-256 + Argon2id. There is no recovery — keep it safe.';
       confirmGroup.style.display = 'block';
       submitBtn.textContent = 'Create Vault';
-      resetBtn.style.display = 'none';
     } else {
       titleEl.textContent = 'Unlock Vault';
       subtitleEl.textContent = 'Enter your master password to decrypt the vault.';
       confirmGroup.style.display = 'none';
       submitBtn.textContent = 'Unlock';
-      resetBtn.style.display = '';
     }
   }
 
@@ -175,7 +182,7 @@ export async function showUnlockModal(isFirstRun: boolean) {
 
     // Local mode
     if (!pw) { showErr('Password cannot be empty.'); return; }
-    if (isFirstRun && pw.length < 8) { showErr('Use at least 8 characters.'); return; }
+    if (isFirstRun && pw.length < 12) { showErr('Use at least 12 characters for a secrets manager vault.'); return; }
     if (isFirstRun && pw !== confirmField.value) { showErr('Passwords do not match.'); return; }
 
     submitBtn.disabled = true;
@@ -197,12 +204,6 @@ export async function showUnlockModal(isFirstRun: boolean) {
   pwField.onkeydown     = (e) => { if (e.key === 'Enter') doUnlock(); };
   confirmField.onkeydown = (e) => { if (e.key === 'Enter') doUnlock(); };
 
-  resetBtn.onclick = async () => {
-    if (!await showConfirm('⚠️ This permanently deletes all vault data and cannot be undone. Continue?')) return;
-    try { await (st.store as TauriVaultStore).reset(); } catch { }
-    pwField.value = '';
-    confirmField.value = '';
-    configure(true);
-    showToast('Vault reset. Set a new master password.', '', 4000);
-  };
+  // reset_vault removed from UI — delete vault data via CLI or by removing
+  // the vault.db + vault.salt files from the data directory.
 }

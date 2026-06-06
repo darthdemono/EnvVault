@@ -9,6 +9,25 @@ import { esc, escAttr, showToast, showConfirm } from './utils';
 let _finishInitFn: () => Promise<void> = async () => {};
 export function setRemoteFinishInitFn(fn: () => Promise<void>) { _finishInitFn = fn; }
 
+// Keep-alive ping — sends GET /api/ping every 90s when connected
+let _pingInterval: ReturnType<typeof setInterval> | null = null;
+
+function startPing(url: string) {
+  stopPing();
+  _pingInterval = setInterval(async () => {
+    try {
+      if (!(st.store instanceof RemoteVaultStore)) { stopPing(); return; }
+      await fetch(`${url}/api/ping`, {
+        headers: { Authorization: `Bearer ${(st.store as any)._token ?? ''}` },
+      });
+    } catch {}
+  }, 90_000);
+}
+
+function stopPing() {
+  if (_pingInterval !== null) { clearInterval(_pingInterval); _pingInterval = null; }
+}
+
 function genId(): string {
   return Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
 }
@@ -133,7 +152,7 @@ async function connectRemote(cfg: RemoteVaultConfig) {
   const pw = prompt(`${cfg.username ? `Password for "${cfg.username}"` : 'Master password'} on ${cfg.name}:`);
   if (pw === null) return;
 
-  const remote = new RemoteVaultStore(cfg.url);
+  const remote = new RemoteVaultStore(cfg.url, cfg.certFingerprint);
   try {
     let ok: boolean;
     if (cfg.username) {
@@ -143,6 +162,23 @@ async function connectRemote(cfg: RemoteVaultConfig) {
     }
     if (!ok) { showToast('Authentication failed', 'err'); return; }
 
+    // Fetch and persist cert fingerprint (TOFU pinning — trust on first use).
+    // If the fingerprint changes on a subsequent connect, warn the user.
+    const serverStatus = await remote.getStatus();
+    if (serverStatus.cert_fingerprint) {
+      const saved = getSaved();
+      const idx = saved.findIndex(c => c.id === cfg.id);
+      if (idx >= 0) {
+        if (cfg.certFingerprint && cfg.certFingerprint !== serverStatus.cert_fingerprint) {
+          showToast('⚠ TLS cert fingerprint changed — server certificate may have rotated', 'err');
+        }
+        saved[idx] = { ...saved[idx], certFingerprint: serverStatus.cert_fingerprint };
+        saveSaved(saved);
+        remote.fingerprint = serverStatus.cert_fingerprint;
+        cfg = saved[idx];
+      }
+    }
+
     st.store = remote;
     st.activeRemoteId = cfg.id;
     Settings.set('remote', { enabled: true, serverUrl: cfg.url });
@@ -151,6 +187,7 @@ async function connectRemote(cfg: RemoteVaultConfig) {
     if (nameEl) nameEl.textContent = cfg.name;
 
     showToast(`Connected to ${cfg.name}`, 'ok');
+    startPing(cfg.url);
     renderRemotePanel();
     await _finishInitFn();
   } catch (e: any) {
@@ -159,6 +196,7 @@ async function connectRemote(cfg: RemoteVaultConfig) {
 }
 
 function disconnectRemote() {
+  stopPing();
   if (st.store instanceof RemoteVaultStore) {
     (st.store as RemoteVaultStore).lock().catch(() => {});
   }
@@ -305,9 +343,11 @@ function openAddRemoteForm() {
     if (!url) { showToast('Enter a URL first', 'err'); return; }
     if (statusEl) statusEl.textContent = 'Testing…';
     try {
-      const r = await fetch(`${url}/api/status`);
-      const body = await r.json();
-      if (statusEl) statusEl.textContent = body.vault_exists ? '✓ Reachable' : '✓ Reachable (no vault yet)';
+      const probe = new RemoteVaultStore(url);
+      const body = await probe.getStatus();
+      let msg = body.vault_exists ? '✓ Reachable' : '✓ Reachable (no vault yet)';
+      if (body.cert_fingerprint) msg += ` · TLS ✓`;
+      if (statusEl) statusEl.textContent = msg;
     } catch {
       if (statusEl) statusEl.textContent = '✗ Unreachable';
     }

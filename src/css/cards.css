@@ -233,9 +233,8 @@
   display: -webkit-box;
   -webkit-box-orient: vertical;
   overflow: hidden;
-  line-clamp: 2;
-  /* ← ADD */
-  -webkit-line-clamp: 2;
+  line-clamp: 3;
+  -webkit-line-clamp: 3;
 }
 
 .card.expanded .card-apidesc {

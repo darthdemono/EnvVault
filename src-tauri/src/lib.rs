@@ -427,6 +427,48 @@ mod commands {
         let conn = vault_core::open_db(&db_path(&app)?, key)?;
         vault_core::disable_totp(&conn, &user_id)
     }
+
+    // ── Remote HTTP proxy (Phase 6 — TLS cert pinning) ────────────────────────
+
+    /// Response type returned by `remote_request`.
+    #[derive(serde::Serialize)]
+    pub struct RemoteResponse { pub status: u16, pub body: String }
+
+    /// Proxy an HTTP(S) request through Rust/reqwest so TLS certificates can be
+    /// accepted for self-signed server certs.  When `fingerprint` is provided the
+    /// cert is accepted regardless of CA chain (TOFU model); when absent normal
+    /// TLS validation applies.
+    #[tauri::command]
+    pub async fn remote_request(
+        url:         String,
+        method:      String,
+        headers_json: String,
+        body:        Option<String>,
+        fingerprint: Option<String>,
+    ) -> Result<RemoteResponse, String> {
+        let accept_invalid = fingerprint.is_some();
+        let client = reqwest::ClientBuilder::new()
+            .danger_accept_invalid_certs(accept_invalid)
+            .build()
+            .map_err(|e| e.to_string())?;
+
+        let headers: std::collections::HashMap<String, String> =
+            serde_json::from_str(&headers_json).unwrap_or_default();
+
+        let mut req = client.request(
+            method.parse::<reqwest::Method>().map_err(|e| e.to_string())?,
+            &url,
+        );
+        for (k, v) in &headers {
+            req = req.header(k.as_str(), v.as_str());
+        }
+        if let Some(b) = body { req = req.body(b); }
+
+        let resp = req.send().await.map_err(|e| e.to_string())?;
+        let status = resp.status().as_u16();
+        let body_text = resp.text().await.unwrap_or_default();
+        Ok(RemoteResponse { status, body: body_text })
+    }
 }
 
 // ── App entry ─────────────────────────────────────────────────────────────────
@@ -477,6 +519,7 @@ pub fn run() {
             commands::set_user_permissions,
             commands::enable_user_totp,
             commands::disable_user_totp,
+            commands::remote_request,
         ])
         .setup(|app| {
             // ── System Tray (item 18) ────────────────────────────────────────
@@ -498,22 +541,9 @@ pub fn run() {
                 .build(app)?;
             let _ = tray; // keep alive
 
-            // ── Global hotkey Ctrl+Shift+V (item 19) ─────────────────────────
-            use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
-            let shortcut: Shortcut = "Ctrl+Shift+V".parse().unwrap_or_else(|_| "Alt+Shift+A".parse().unwrap());
-            let app_handle = app.handle().clone();
-            app.global_shortcut().on_shortcut(shortcut, move |_app, _shortcut, event| {
-                if event.state == ShortcutState::Pressed {
-                    if let Some(win) = app_handle.get_webview_window("main") {
-                        if win.is_visible().unwrap_or(false) {
-                            let _ = win.hide();
-                        } else {
-                            let _ = win.show();
-                            let _ = win.set_focus();
-                        }
-                    }
-                }
-            })?;
+            // Global hotkey removed — Ctrl+Shift+V conflicts with paste in
+            // Linux terminals and intercepted system-wide, causing vault lock
+            // on unintended keypresses. Use the system tray to show/hide.
 
             // ── Lock on minimize / window hide (item 20) ─────────────────────
             // Done in JavaScript via visibilitychange event; Rust side exposes

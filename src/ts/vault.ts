@@ -127,15 +127,25 @@ async function init() {
   document.getElementById('sidebar')!.addEventListener('click', (e) => {
     const btn = (e.target as HTMLElement).closest<HTMLButtonElement>('.sidebar-item');
     if (!btn) return;
+    // Tag filter button
+    if (btn.classList.contains('tag-filter-btn')) {
+      const tag = btn.dataset.tag ?? '';
+      st.activeTagFilter = (st.activeTagFilter === tag) ? null : tag;
+      triggerRender();
+      return;
+    }
     const filterType  = btn.dataset.filterType;
     const filterValue = btn.dataset.filterValue;
     if (filterType && filterValue !== undefined) {
       if (filterType === 'env') {
-        // Environment filter is independent of st.filter (stacks with other filters)
         st.currentEnvFilter = (st.currentEnvFilter === filterValue) ? '' : filterValue;
         triggerRender();
       } else {
-        if (filterType === 'all') { st.currentSelectedProjectIds = ['Universal']; st.currentEnvFilter = ''; }
+        if (filterType === 'all') {
+          st.currentSelectedProjectIds = ['Universal'];
+          st.currentEnvFilter = '';
+          st.activeTagFilter = null;
+        }
         doSetFilter(filterType, filterValue);
       }
     }
@@ -212,6 +222,32 @@ async function init() {
   // Sidebar toggle + add button
   document.getElementById('sidebar-toggle')!.addEventListener('click', () => document.getElementById('sidebar')?.classList.toggle('collapsed'));
   document.getElementById('add-btn')!.addEventListener('click', openAdd);
+
+  // Sidebar resize handle
+  {
+    const resizer = document.getElementById('sidebar-resizer');
+    const sidebar = document.getElementById('sidebar');
+    if (resizer && sidebar) {
+      let _startX = 0, _startW = 0;
+      resizer.addEventListener('mousedown', (e) => {
+        _startX = e.clientX;
+        _startW = sidebar.getBoundingClientRect().width;
+        resizer.classList.add('dragging');
+        const onMove = (ev: MouseEvent) => {
+          const w = Math.max(140, Math.min(420, _startW + ev.clientX - _startX));
+          sidebar.style.width = w + 'px';
+        };
+        const onUp = () => {
+          resizer.classList.remove('dragging');
+          document.removeEventListener('mousemove', onMove);
+          document.removeEventListener('mouseup', onUp);
+        };
+        document.addEventListener('mousemove', onMove);
+        document.addEventListener('mouseup', onUp);
+        e.preventDefault();
+      });
+    }
+  }
 
   // Entry modal buttons
   document.getElementById('modal-close')!.addEventListener('click', closeModal);
@@ -340,7 +376,11 @@ async function init() {
   // Undo bar
   document.getElementById('undo-btn')!.addEventListener('click', () => {
     const last = st.undoStack.pop();
-    if (last) { last.fn(); document.getElementById('undo-bar')!.classList.remove('visible'); }
+    if (last) {
+      clearTimeout(last.t);
+      last.fn();
+      if (!st.undoStack.length) document.getElementById('undo-bar')!.classList.remove('visible');
+    }
   });
 
   // Keyboard shortcuts overlay
@@ -373,6 +413,10 @@ async function init() {
     const value  = el.dataset.value ?? '';
     const field  = el.dataset.field ?? '';
     if (action === 'copy-env' && el.classList.contains('card-head') && (e.target as HTMLElement).closest('[data-action]') !== el) return;
+    if ((window as any).__apivIsBulkMode?.() && action !== 'bulk-toggle') {
+      const card = el.closest<HTMLElement>('[data-idx]');
+      if (card) { (window as any).__apivBulkToggle?.(parseInt(card.dataset.idx!)); return; }
+    }
     e.stopPropagation();
     switch (action) {
       case 'toggle':      toggleCard(e, idx); break;
@@ -380,6 +424,17 @@ async function init() {
       case 'copy-field':  copyField(e, value, el); break;
       case 'copy-env':    doCopyEnv(e, idx); break;
       case 'rotate':      markAsRotated(idx); break;
+      case 'pin': {
+        const entry = st.vault.api_keys[idx];
+        if (entry) {
+          entry.pinned = entry.pinned ? undefined : true;
+          st.store.save(st.vault);
+          triggerRender();
+          showToast(entry.pinned ? 'Pinned ✓' : 'Unpinned', 'ok', 1500);
+        }
+        break;
+      }
+      case 'bulk-toggle': (window as any).__apivBulkToggle?.(idx); break;
       case 'duplicate':   duplicateKey(e, idx); break;
       case 'edit':        openEdit(e, idx); break;
       case 'delete':      deleteKey(e, idx); break;
@@ -406,9 +461,11 @@ async function init() {
     const entry = st.vault.api_keys[idx];
     if (!entry) return;
     const _keyLabel = TYPE_CONFIG[entry.secretType || 'api_key']?.keyLabel || 'Key';
+    // Use a plain string label — showContextMenu renders via innerHTML so user data must be escaped.
+    const _safeProvider = entry.provider.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
     const _items: Array<DropdownItem | '---'> = [
-      { label: 'Copy Provider',         fn: () => clipboardWrite(entry.provider).then(() => showToast('Copied ✓', 'ok', 1500)) },
-      { label: `Copy ${_keyLabel}`,     fn: () => copyField(e as MouseEvent, entry.api_key, card) },
+      { label: `Copy Provider: ${_safeProvider}`, fn: () => clipboardWrite(entry.provider).then(() => showToast('Copied ✓', 'ok', 1500)) },
+      { label: `Copy ${_keyLabel}`,               fn: () => copyField(e as MouseEvent, entry.api_key, card) },
     ];
     if (entry.api_secret) _items.push({ label: 'Copy Secret', fn: () => copyField(e as MouseEvent, entry.api_secret!, card) });
     _items.push(

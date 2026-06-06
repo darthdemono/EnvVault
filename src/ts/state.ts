@@ -1,5 +1,5 @@
 import type { VaultData, AppSettings, VaultEntry, RemoteVaultConfig } from './types';
-import { hexAlpha } from './utils';
+import { hexAlpha, showToast } from './utils';
 
 // ── VaultStore ─────────────────────────────────────────────────────────────
 
@@ -17,7 +17,7 @@ export class LocalVaultStore implements VaultStore {
   }
   async save(data: VaultData): Promise<void> {
     try { sessionStorage.setItem('api-vault', JSON.stringify(data)); }
-    catch { (await import('./utils')).showToast('Session storage full — export to save changes', 'err'); }
+    catch { showToast('Session storage full — export to save changes', 'err'); }
   }
   get isRemote() { return false; }
   get vaultId()  { return 'local'; }
@@ -38,49 +38,79 @@ export class TauriVaultStore implements VaultStore {
 }
 
 export const inTauri = !!(window as any).__TAURI__;
+const _invoke = (window as any).__TAURI__?.core?.invoke?.bind((window as any).__TAURI__?.core);
 
 export class RemoteVaultStore implements VaultStore {
   private token = '';
-  constructor(public readonly baseUrl: string) {}
+  /** certFingerprint enables TOFU cert pinning when the server runs TLS with a self-signed cert. */
+  constructor(public readonly baseUrl: string, public fingerprint?: string) {}
+
+  /**
+   * Unified fetch that routes through the Tauri `remote_request` command when:
+   * - running inside Tauri AND
+   * - the URL is https:// (self-signed certs are rejected by WebKit; reqwest bypasses this)
+   *
+   * Falls back to native `fetch()` for http:// or non-Tauri contexts.
+   */
+  private async _apiFetch(
+    path: string,
+    opts: { method?: string; headers?: Record<string, string>; body?: string } = {},
+  ): Promise<{ ok: boolean; status: number; json: () => Promise<any> }> {
+    const url = `${this.baseUrl}${path}`;
+    const useNative = inTauri && url.startsWith('https://');
+
+    if (useNative && _invoke) {
+      const result = await _invoke('remote_request', {
+        url,
+        method: opts.method ?? 'GET',
+        headersJson: JSON.stringify(opts.headers ?? {}),
+        body: opts.body ?? null,
+        fingerprint: this.fingerprint ?? null,
+      }) as { status: number; body: string };
+      const ok = result.status >= 200 && result.status < 300;
+      return { ok, status: result.status, json: async () => JSON.parse(result.body) };
+    }
+
+    const headers: Record<string, string> = {};
+    if (opts.headers) Object.assign(headers, opts.headers);
+    const r = await fetch(url, { method: opts.method, headers, body: opts.body });
+    return { ok: r.ok, status: r.status, json: () => r.json() };
+  }
 
   async unlock(password: string): Promise<boolean> {
-    try {
-      const r = await fetch(`${this.baseUrl}/api/unlock`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ password }),
-      });
-      if (!r.ok) {
-        const body = await r.json().catch(() => ({}));
-        throw new Error(body?.error ?? `Server error ${r.status}`);
-      }
-      const { token } = await r.json();
-      this.token = token ?? '';
-      return !!this.token;
-    } catch (e) { throw e; }
+    const r = await this._apiFetch('/api/unlock', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ password }),
+    });
+    if (!r.ok) {
+      const body = await r.json().catch(() => ({}));
+      throw new Error(body?.error ?? `Server error ${r.status}`);
+    }
+    const { token } = await r.json();
+    this.token = token ?? '';
+    return !!this.token;
   }
 
   async authUser(username: string, password: string): Promise<boolean> {
-    try {
-      const r = await fetch(`${this.baseUrl}/api/auth`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username, password }),
-      });
-      if (!r.ok) {
-        const body = await r.json().catch(() => ({}));
-        throw new Error(body?.error ?? `Auth failed ${r.status}`);
-      }
-      const { token } = await r.json();
-      this.token = token ?? '';
-      return !!this.token;
-    } catch (e) { throw e; }
+    const r = await this._apiFetch('/api/auth', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, password }),
+    });
+    if (!r.ok) {
+      const body = await r.json().catch(() => ({}));
+      throw new Error(body?.error ?? `Auth failed ${r.status}`);
+    }
+    const { token } = await r.json();
+    this.token = token ?? '';
+    return !!this.token;
   }
 
   async lock(): Promise<void> {
     if (!this.token) return;
     try {
-      await fetch(`${this.baseUrl}/api/unlock`, {
+      await this._apiFetch('/api/unlock', {
         method: 'DELETE',
         headers: { Authorization: `Bearer ${this.token}` },
       });
@@ -91,7 +121,7 @@ export class RemoteVaultStore implements VaultStore {
   async isUnlocked(): Promise<boolean> {
     if (!this.token) return false;
     try {
-      const r = await fetch(`${this.baseUrl}/api/status`);
+      const r = await this._apiFetch('/api/status');
       return r.ok && (await r.json()).unlocked === true;
     } catch { return false; }
   }
@@ -99,7 +129,7 @@ export class RemoteVaultStore implements VaultStore {
   async load(): Promise<VaultData | null> {
     if (!this.token) return null;
     try {
-      const r = await fetch(`${this.baseUrl}/api/vault`, {
+      const r = await this._apiFetch('/api/vault', {
         headers: { Authorization: `Bearer ${this.token}` },
       });
       return r.ok ? await r.json() : null;
@@ -109,12 +139,9 @@ export class RemoteVaultStore implements VaultStore {
   async save(data: VaultData): Promise<void> {
     if (!this.token) return;
     try {
-      await fetch(`${this.baseUrl}/api/vault`, {
+      await this._apiFetch('/api/vault', {
         method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${this.token}`,
-        },
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${this.token}` },
         body: JSON.stringify(data),
       });
     } catch { /* ignore */ }
@@ -123,7 +150,7 @@ export class RemoteVaultStore implements VaultStore {
   async getExpiring(days: number): Promise<any[]> {
     if (!this.token) return [];
     try {
-      const r = await fetch(`${this.baseUrl}/api/vault/expiring?days=${days}`, {
+      const r = await this._apiFetch(`/api/vault/expiring?days=${days}`, {
         headers: { Authorization: `Bearer ${this.token}` },
       });
       return r.ok ? await r.json() : [];
@@ -133,11 +160,19 @@ export class RemoteVaultStore implements VaultStore {
   async getAuditLog(): Promise<any[]> {
     if (!this.token) return [];
     try {
-      const r = await fetch(`${this.baseUrl}/api/audit`, {
+      const r = await this._apiFetch('/api/audit', {
         headers: { Authorization: `Bearer ${this.token}` },
       });
       return r.ok ? await r.json() : [];
     } catch { return []; }
+  }
+
+  /** Fetch server status including TLS cert fingerprint (no auth needed). */
+  async getStatus(): Promise<{ unlocked: boolean; vault_exists: boolean; cert_fingerprint?: string }> {
+    try {
+      const r = await this._apiFetch('/api/status');
+      return r.ok ? await r.json() : { unlocked: false, vault_exists: false };
+    } catch { return { unlocked: false, vault_exists: false }; }
   }
 
   get isRemote() { return true; }
@@ -172,6 +207,8 @@ export const st = {
   selectedUserId: null as string | null,
   /** ID of the currently connected remote vault (matches RemoteVaultConfig.id). */
   activeRemoteId: null as string | null,
+  /** Active tag filter — null means no tag filter applied. */
+  activeTagFilter: null as string | null,
 };
 
 // ── Render callback (breaks potential circular deps) ───────────────────────
@@ -188,7 +225,7 @@ const DEFAULT_SETTINGS: AppSettings = {
   maskKeysByDefault: true, showExpiryWarning: true, expiryWarningDays: 30,
   customCss: '', sidebarSections: ['all', 'price', 'category', 'project'],
   groupByType: false, activityBarPosition: 'left' as const, activityBarStyle: 'icon' as const,
-  collapsedSections: [] as ('all' | 'price' | 'category' | 'project')[],
+  collapsedSections: [] as ('all' | 'price' | 'env' | 'category' | 'project')[],
   activePanel: 'secrets' as 'secrets' | 'tools' | 'users' | 'remote', activeTool: 'secret-gen',
   remoteSaved: [] as RemoteVaultConfig[],
   panelOrder: ['secrets', 'tools', 'remote', 'users'],
@@ -233,7 +270,9 @@ window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () 
 // The Tauri/browser hides the window — visibilitychange fires.
 // We call the imported lockVault lazily to avoid circular deps.
 document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'hidden') {
+  if (document.visibilityState === 'hidden' && !st.store.isRemote) {
+    // Remote vaults: don't auto-lock — it destroys the session token and
+    // makes the vault appear wiped until the user re-authenticates.
     import('./lock').then(m => m.lockVault()).catch(() => {});
   }
 });
@@ -267,7 +306,7 @@ export function applySidebarOrder() {
     }
   });
   const collapsed = Settings.get('collapsedSections') || [];
-  (['all', 'price', 'category', 'project'] as const).forEach(key =>
+  (['all', 'price', 'env', 'category', 'project'] as const).forEach(key =>
     document.getElementById(`sidebar-section-${key}`)?.classList.toggle('collapsed', collapsed.includes(key)));
 }
 

@@ -103,6 +103,49 @@ export function showPrompt(msg: string, defaultVal = ''): Promise<string | null>
   });
 }
 
+export function showPromptLarge(msg: string, defaultVal = ''): Promise<string | null> {
+  return new Promise(resolve => {
+    const overlay   = document.getElementById('prompt-overlay')!;
+    const modal     = document.getElementById('prompt-modal')!;
+    const input     = document.getElementById('prompt-input') as HTMLInputElement;
+    const textarea  = document.getElementById('prompt-textarea') as HTMLTextAreaElement;
+    const hint      = document.getElementById('prompt-hint')!;
+    document.getElementById('prompt-message')!.textContent = msg;
+    input.style.display    = 'none';
+    textarea.style.display = '';
+    hint.style.display     = '';
+    modal.style.maxWidth   = '640px';
+    textarea.value = defaultVal;
+    overlay.classList.add('open');
+    setTimeout(() => textarea.focus(), 50);
+    const cleanup = (result: string | null) => {
+      overlay.classList.remove('open');
+      input.style.display    = '';
+      textarea.style.display = 'none';
+      hint.style.display     = 'none';
+      modal.style.maxWidth   = '340px';
+      okBtn.removeEventListener('click', onOk);
+      cancelBtn.removeEventListener('click', onCancel);
+      overlay.removeEventListener('click', onBackdrop);
+      document.removeEventListener('keydown', onKey);
+      resolve(result);
+    };
+    const okBtn     = document.getElementById('prompt-ok')!;
+    const cancelBtn = document.getElementById('prompt-cancel')!;
+    const onOk = () => cleanup(textarea.value.trim() || null);
+    const onCancel = () => cleanup(null);
+    const onBackdrop = (e: Event) => { if (e.target === overlay) cleanup(null); };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') { e.stopPropagation(); cleanup(null); }
+      else if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.stopPropagation(); cleanup(textarea.value.trim() || null); }
+    };
+    okBtn.addEventListener('click', onOk);
+    cancelBtn.addEventListener('click', onCancel);
+    overlay.addEventListener('click', onBackdrop);
+    document.addEventListener('keydown', onKey);
+  });
+}
+
 // ── Clipboard ──────────────────────────────────────────────────────────────
 export async function clipboardWrite(text: string): Promise<void> {
   if (navigator.clipboard?.writeText) return navigator.clipboard.writeText(text).catch(() => execCopy(text));

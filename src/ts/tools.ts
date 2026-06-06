@@ -4,10 +4,12 @@
  *       string tools, base64.
  */
 
+import * as yaml from 'js-yaml';
 import { Settings, switchPanel, switchTool, st } from './state';
 import { showToast, clipboardWrite, generateULID, showConfirm } from './utils';
 import { showDropdown, injectIntoForm, quickGenerate, openAdd, fillForm, buildCatChips, openModal } from './modals';
 import { SECRET_TEMPLATES } from './templates';
+import { render } from './render';
 
 function parseImport(raw: string, fmt: string): any[] {
   const base = (p: string, v: string) => ({
@@ -71,7 +73,11 @@ function parseImport(raw: string, fmt: string): any[] {
   return [];
 }
 
+let _toolsInited = false;
+
 export function initTools() {
+  if (_toolsInited) return;
+  _toolsInited = true;
   const invoke = (window as any).__TAURI__?.core?.invoke?.bind((window as any).__TAURI__?.core);
 
   // ── Activity bar panel switching ──
@@ -81,17 +87,21 @@ export function initTools() {
 
   // ── Tool nav switching ──
   document.querySelectorAll<HTMLButtonElement>('.tool-nav-btn').forEach(btn => {
-    btn.addEventListener('click', () => switchTool(btn.dataset.tool!));
+    btn.addEventListener('click', () => {
+      switchTool(btn.dataset.tool!);
+      if (btn.dataset.tool === 'expiry-calendar') setTimeout(renderCalendar, 50);
+      if (btn.dataset.tool === 'diff') refreshDiffSelects();
+    });
   });
 
   // ── Section collapse toggles ──
   document.querySelectorAll<HTMLButtonElement>('.section-collapse-btn').forEach(btn => {
     btn.addEventListener('click', (e) => {
       e.stopPropagation();
-      const section = btn.dataset.section as 'all' | 'price' | 'category' | 'project';
+      const section = btn.dataset.section as 'all' | 'price' | 'env' | 'category' | 'project';
       const el = document.getElementById(`sidebar-section-${section}`)!;
       el.classList.toggle('collapsed');
-      const collapsed = (Settings.get('collapsedSections') || []) as ('all' | 'price' | 'category' | 'project')[];
+      const collapsed = (Settings.get('collapsedSections') || []) as ('all' | 'price' | 'env' | 'category' | 'project')[];
       const isNowCollapsed = el.classList.contains('collapsed');
       const updated = isNowCollapsed
         ? [...new Set([...collapsed, section])]
@@ -502,7 +512,7 @@ export function initTools() {
     if (!_importData.length) return;
     st.vault.api_keys.push(..._importData);
     await (st.store as any).save(st.vault).catch(() => {});
-    import('./render').then(m => m.render());
+    render();
     document.getElementById('import-status')!.textContent = `✓ Imported ${_importData.length} entries`;
     _importData = [];
     document.getElementById('import-confirm-btn')!.style.display = 'none';
@@ -554,7 +564,7 @@ export function initTools() {
     _bulkMode = true;
     _bulkSelected.clear();
     bulkSelectBtn.textContent = 'Exit Select';
-    bulkBar.style.display = 'flex';
+    bulkBar.classList.add('active');
     document.getElementById('card-grid')?.classList.add('bulk-mode');
     updateBulkCount();
   }
@@ -563,9 +573,9 @@ export function initTools() {
     _bulkMode = false;
     _bulkSelected.clear();
     bulkSelectBtn.textContent = 'Select';
-    bulkBar.style.display = 'none';
+    bulkBar.classList.remove('active');
     document.getElementById('card-grid')?.classList.remove('bulk-mode');
-    import('./render').then(m => m.render());
+    render();
   }
 
   bulkSelectBtn.addEventListener('click', () => _bulkMode ? exitBulkMode() : enterBulkMode());
@@ -578,7 +588,7 @@ export function initTools() {
     indices.forEach(i => st.vault.api_keys.splice(i, 1));
     await (st.store as any).save(st.vault).catch(() => {});
     exitBulkMode();
-    import('./render').then(m => m.render());
+    render();
     showToast(`Deleted ${indices.length} secrets`, 'ok');
   });
 
@@ -601,8 +611,343 @@ export function initTools() {
     if (_bulkSelected.has(idx)) _bulkSelected.delete(idx);
     else _bulkSelected.add(idx);
     updateBulkCount();
-    document.querySelector<HTMLElement>(`[data-card-idx="${idx}"]`)?.classList.toggle('bulk-selected', _bulkSelected.has(idx));
+    document.querySelector<HTMLElement>(`[data-idx="${idx}"]`)?.classList.toggle('bulk-selected', _bulkSelected.has(idx));
     return true;
   };
   (window as any).__apivIsBulkMode = () => _bulkMode;
+
+  // ── SECRET DIFF ────────────────────────────────────────────────────────────
+
+  const refreshDiffSelects = () => {
+    const opts = `<option value="">Select secret…</option>` +
+      st.vault.api_keys.map((e, i) =>
+        `<option value="${i}">${e.provider}${e.account_name ? ' / ' + e.account_name : ''}</option>`
+      ).join('');
+    const da = document.getElementById('diff-a') as HTMLSelectElement | null;
+    const db = document.getElementById('diff-b') as HTMLSelectElement | null;
+    if (da) da.innerHTML = opts;
+    if (db) db.innerHTML = opts;
+  };
+  refreshDiffSelects();
+  document.getElementById('diff-run')?.addEventListener('click', () => {
+    const aIdx = parseInt((document.getElementById('diff-a') as HTMLSelectElement).value);
+    const bIdx = parseInt((document.getElementById('diff-b') as HTMLSelectElement).value);
+    if (isNaN(aIdx) || isNaN(bIdx) || aIdx === bIdx) { showToast('Select two different entries', 'err'); return; }
+    const a = st.vault.api_keys[aIdx];
+    const b = st.vault.api_keys[bIdx];
+    const fields: Array<[string, string]> = [
+      ['provider', 'Provider'], ['account_name', 'Account'], ['api_key', 'Key (masked)'],
+      ['api_secret', 'Secret'], ['key_id', 'Label'], ['price_type', 'Price'],
+      ['environment', 'Environment'], ['api_url', 'API URL'], ['expires_at', 'Expires'],
+      ['rate_limit', 'Rate Limit'], ['version', 'Version'], ['api_description', 'Description'],
+    ];
+    const esc2 = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    const rows = fields.map(([f, label]) => {
+      const av = String((a as any)[f] || '');
+      const bv = String((b as any)[f] || '');
+      const isSec = f === 'api_key' || f === 'api_secret';
+      const av2 = isSec && av ? '••••••••' : esc2(av);
+      const bv2 = isSec && bv ? '••••••••' : esc2(bv);
+      const changed = av !== bv;
+      return `<tr class="${changed ? 'diff-changed' : 'diff-same'}">
+        <td class="diff-field">${label}</td>
+        <td class="diff-val">${av2 || '<em style="color:var(--text3)">—</em>'}</td>
+        <td class="diff-val">${bv2 || '<em style="color:var(--text3)">—</em>'}</td>
+      </tr>`;
+    }).join('');
+    document.getElementById('diff-output')!.innerHTML = `
+      <table class="diff-table">
+        <thead><tr><th>Field</th><th>${esc2(a.provider)}</th><th>${esc2(b.provider)}</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>`;
+  });
+
+  // ── EXPIRY CALENDAR ────────────────────────────────────────────────────────
+
+  let _calYear = new Date().getFullYear();
+  let _calMonth = new Date().getMonth();
+
+  const renderCalendar = () => {
+    const label = document.getElementById('cal-month-label')!;
+    const grid  = document.getElementById('cal-grid')!;
+    if (!label || !grid) return;
+    const monthName = new Date(_calYear, _calMonth, 1)
+      .toLocaleString('default', { month: 'long', year: 'numeric' });
+    label.textContent = monthName;
+
+    const firstDay    = new Date(_calYear, _calMonth, 1).getDay();
+    const daysInMonth = new Date(_calYear, _calMonth + 1, 0).getDate();
+    const today       = new Date().toISOString().slice(0, 10);
+    const warn30      = new Date(Date.now() + 30 * 86400000).toISOString().slice(0, 10);
+
+    const byDate = new Map<string, string[]>();
+    st.vault.api_keys.forEach(e => {
+      if (!e.expires_at) return;
+      const d = e.expires_at.slice(0, 10);
+      const [y, m] = d.split('-').map(Number);
+      if (y === _calYear && m === _calMonth + 1) {
+        if (!byDate.has(d)) byDate.set(d, []);
+        byDate.get(d)!.push(e.provider);
+      }
+    });
+
+    let html = '<div class="cal-header">';
+    ['Su','Mo','Tu','We','Th','Fr','Sa'].forEach(d => { html += `<div class="cal-day-name">${d}</div>`; });
+    html += '</div><div class="cal-body">';
+    for (let i = 0; i < firstDay; i++) html += '<div class="cal-cell empty"></div>';
+    for (let d = 1; d <= daysInMonth; d++) {
+      const ds = `${_calYear}-${String(_calMonth + 1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+      const entries = byDate.get(ds) || [];
+      const isPast = ds < today;
+      const isWarn = !isPast && ds <= warn30;
+      const isToday = ds === today;
+      let cls = 'cal-cell';
+      if (isToday) cls += ' cal-today';
+      if (entries.length) cls += isPast ? ' cal-expired' : isWarn ? ' cal-warn' : ' cal-safe';
+      const title = entries.slice(0, 5).join(', ') + (entries.length > 5 ? ` +${entries.length - 5}` : '');
+      const dots = entries.slice(0, 4).map(() => `<span class="cal-entry-dot"></span>`).join('');
+      html += `<div class="${cls}" title="${title}">
+        <span class="cal-day-num">${d}</span>
+        ${entries.length ? `<div class="cal-entries">${dots}${entries.length > 4 ? `<span class="cal-extra">+${entries.length - 4}</span>` : ''}</div>` : ''}
+      </div>`;
+    }
+    html += '</div>';
+    grid.innerHTML = html;
+  };
+  document.getElementById('cal-prev')?.addEventListener('click', () => {
+    _calMonth--; if (_calMonth < 0) { _calMonth = 11; _calYear--; } renderCalendar();
+  });
+  document.getElementById('cal-next')?.addEventListener('click', () => {
+    _calMonth++; if (_calMonth > 11) { _calMonth = 0; _calYear++; } renderCalendar();
+  });
+  // Render immediately if calendar tool is already active on init
+  if (Settings.get('activeTool') === 'expiry-calendar') setTimeout(renderCalendar, 50);
+
+  // ── CRON EXPLAINER ─────────────────────────────────────────────────────────
+
+  const CRON_NAMED: Record<string, string> = {
+    '@yearly': '0 0 1 1 *', '@annually': '0 0 1 1 *', '@monthly': '0 0 1 * *',
+    '@weekly': '0 0 * * 0', '@daily': '0 0 * * *', '@midnight': '0 0 * * *', '@hourly': '0 * * * *',
+    '@reboot': 'at system reboot',
+  };
+  const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  const DAYS   = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+
+  function explainField(val: string, unit: string, hi: number, names?: string[]): string {
+    if (val === '*' || val === '?') return `every ${unit}`;
+    if (val.includes(',')) {
+      return val.split(',').map(v => names?.[parseInt(v)] ?? v).join(', ');
+    }
+    if (val.includes('/')) {
+      const [range, step] = val.split('/');
+      return `every ${step} ${unit}s` + (range !== '*' ? ` from ${range}` : '');
+    }
+    if (val.includes('-')) {
+      const [a, b] = val.split('-');
+      return `${names?.[parseInt(a)] ?? a} – ${names?.[parseInt(b)] ?? b}`;
+    }
+    return names?.[parseInt(val)] ?? val;
+  }
+
+  function nextFireTimes(expr: string, count = 5): string[] {
+    const parts = expr.trim().split(/\s+/);
+    if (parts.length !== 5) return [];
+    // Simple approximation — just explain next N days that match
+    const results: string[] = [];
+    const now = new Date();
+    let cur = new Date(now);
+    cur.setSeconds(0, 0);
+    cur.setMinutes(cur.getMinutes() + 1);
+    for (let tries = 0; tries < 10000 && results.length < count; tries++) {
+      const [minP, hrP, domP, monP, dowP] = parts;
+      const matches = (val: string, cur: number, max: number) => {
+        if (val === '*') return true;
+        if (val.includes('/')) { const step = parseInt(val.split('/')[1]); return cur % step === 0; }
+        if (val.includes(',')) return val.split(',').map(Number).includes(cur);
+        if (val.includes('-')) { const [a,b] = val.split('-').map(Number); return cur >= a && cur <= b; }
+        return parseInt(val) === cur;
+      };
+      if (matches(monP, cur.getMonth() + 1, 12) &&
+          matches(domP, cur.getDate(), 31) &&
+          matches(dowP, cur.getDay(), 7) &&
+          matches(hrP,  cur.getHours(), 23) &&
+          matches(minP, cur.getMinutes(), 59)) {
+        results.push(cur.toLocaleString());
+      }
+      cur.setMinutes(cur.getMinutes() + 1);
+    }
+    return results;
+  }
+
+  document.getElementById('cron-parse')?.addEventListener('click', () => {
+    const raw = (document.getElementById('cron-input') as HTMLInputElement).value.trim();
+    const output = document.getElementById('cron-output')!;
+    if (!raw) { showToast('Enter a cron expression', 'err'); return; }
+
+    if (CRON_NAMED[raw] === 'at system reboot') {
+      output.style.display = '';
+      output.innerHTML = `<div class="cron-result"><div class="cron-resolved">@reboot — runs once when system starts</div></div>`;
+      return;
+    }
+
+    const resolved = CRON_NAMED[raw] || raw;
+    const parts = resolved.split(/\s+/);
+    if (parts.length !== 5) {
+      output.style.display = '';
+      output.innerHTML = `<div class="cron-result"><div class="tool-status err">Invalid: expected 5 fields (min hr dom mon dow)</div></div>`;
+      return;
+    }
+
+    const [min, hr, dom, mon, dow] = parts;
+    const lines = [
+      `Minute:  ${explainField(min, 'minute', 59)}`,
+      `Hour:    ${explainField(hr, 'hour', 23)}`,
+      `Day:     ${explainField(dom, 'day', 31)}`,
+      `Month:   ${explainField(mon, 'month', 12, MONTHS)}`,
+      `Weekday: ${explainField(dow, 'weekday', 7, DAYS)}`,
+    ];
+
+    const fires = nextFireTimes(resolved);
+    const nextBlock = fires.length
+      ? `<div style="margin-top:10px"><div class="tool-label" style="margin-bottom:6px">Next ${fires.length} fire times</div>${fires.map(f => `<div style="font-size:11px;color:var(--text2);padding:2px 0">${f}</div>`).join('')}</div>`
+      : '';
+
+    output.style.display = '';
+    output.innerHTML = `<div class="cron-result">
+      ${resolved !== raw ? `<div class="cron-resolved"><code>${raw}</code> → <code>${resolved}</code></div>` : ''}
+      <pre class="tool-pre" style="margin-top:8px">${lines.join('\n')}</pre>
+      ${nextBlock}
+    </div>`;
+  });
+
+  // ── CIDR CALCULATOR ────────────────────────────────────────────────────────
+
+  function calcCidr(cidr: string): { network: string; broadcast: string; first: string; last: string; mask: string; hosts: number } | null {
+    const m = cidr.match(/^(\d{1,3}(?:\.\d{1,3}){3})\/(\d{1,2})$/);
+    if (!m) return null;
+    const prefix = parseInt(m[2]);
+    if (prefix > 32) return null;
+    const ipParts = m[1].split('.').map(Number);
+    if (ipParts.some(p => p > 255)) return null;
+    const ip32   = ipParts.reduce((acc, v) => (acc * 256 + v), 0) >>> 0;
+    const mask32 = prefix === 0 ? 0 : (0xFFFFFFFF << (32 - prefix)) >>> 0;
+    const net32  = (ip32 & mask32) >>> 0;
+    const bc32   = (net32 | (~mask32 >>> 0)) >>> 0;
+    const toStr  = (n: number) => [(n >>> 24) & 255, (n >>> 16) & 255, (n >>> 8) & 255, n & 255].join('.');
+    const hosts  = prefix >= 31 ? (prefix === 32 ? 1 : 2) : Math.pow(2, 32 - prefix) - 2;
+    return {
+      network: toStr(net32), broadcast: toStr(bc32),
+      first: toStr(prefix >= 31 ? net32 : net32 + 1),
+      last:  toStr(prefix >= 31 ? bc32  : bc32 - 1),
+      mask: toStr(mask32), hosts,
+    };
+  }
+
+  document.getElementById('cidr-calc')?.addEventListener('click', () => {
+    const input = (document.getElementById('cidr-input') as HTMLInputElement).value.trim();
+    const output = document.getElementById('cidr-output')!;
+    const result = calcCidr(input);
+    if (!result) { output.style.display = 'none'; showToast('Invalid CIDR — use format 192.168.1.0/24', 'err'); return; }
+    output.style.display = '';
+    output.innerHTML = `<table class="cidr-table">
+      <tr><td class="cidr-key">Network</td><td class="cidr-val">${result.network}/${input.split('/')[1]}</td></tr>
+      <tr><td class="cidr-key">Broadcast</td><td class="cidr-val">${result.broadcast}</td></tr>
+      <tr><td class="cidr-key">First host</td><td class="cidr-val">${result.first}</td></tr>
+      <tr><td class="cidr-key">Last host</td><td class="cidr-val">${result.last}</td></tr>
+      <tr><td class="cidr-key">Subnet mask</td><td class="cidr-val">${result.mask}</td></tr>
+      <tr><td class="cidr-key">Usable hosts</td><td class="cidr-val">${result.hosts.toLocaleString()}</td></tr>
+    </table>`;
+  });
+
+  // Enter key submits CIDR
+  document.getElementById('cidr-input')?.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') document.getElementById('cidr-calc')?.click();
+  });
+  document.getElementById('cron-input')?.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') document.getElementById('cron-parse')?.click();
+  });
+
+  // ── JSON / YAML FORMATTER ──────────────────────────────────────────────────
+
+  let _fmtMode = 'json';
+  document.querySelectorAll<HTMLButtonElement>('.tool-fmt-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.tool-fmt-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      _fmtMode = btn.dataset.fmt!;
+    });
+  });
+
+  const setFmtStatus = (msg: string, type: 'ok' | 'err' | 'warn') => {
+    const el = document.getElementById('fmt-status')!;
+    el.className = `tool-status ${type}`;
+    el.textContent = msg;
+    el.style.display = '';
+  };
+
+  const showFmtOutput = (text: string) => {
+    const out = document.getElementById('fmt-output') as HTMLTextAreaElement;
+    out.value = text;
+    out.style.display = '';
+    document.getElementById('fmt-copy-row')!.style.display = '';
+  };
+
+  document.getElementById('fmt-format')?.addEventListener('click', () => {
+    const input = (document.getElementById('fmt-input') as HTMLTextAreaElement).value;
+    if (!input.trim()) { showToast('Enter text to format', 'err'); return; }
+    document.getElementById('fmt-output')!.style.display = 'none';
+    document.getElementById('fmt-copy-row')!.style.display = 'none';
+    if (_fmtMode === 'json') {
+      try {
+        const formatted = JSON.stringify(JSON.parse(input), null, 2);
+        showFmtOutput(formatted);
+        setFmtStatus(`Valid JSON — ${formatted.split('\n').length} lines`, 'ok');
+      } catch (e: any) { setFmtStatus(`JSON parse error: ${e.message}`, 'err'); }
+    } else {
+      try {
+        const parsed = yaml.load(input);
+        const formatted = yaml.dump(parsed, { indent: 2, lineWidth: 120 });
+        showFmtOutput(formatted);
+        setFmtStatus(`Valid YAML — ${formatted.split('\n').length} lines`, 'ok');
+      } catch (e: any) { setFmtStatus(`YAML parse error: ${e.message}`, 'err'); }
+    }
+  });
+
+  document.getElementById('fmt-validate')?.addEventListener('click', () => {
+    const input = (document.getElementById('fmt-input') as HTMLTextAreaElement).value;
+    if (!input.trim()) { showToast('Enter text to validate', 'err'); return; }
+    if (_fmtMode === 'json') {
+      try { JSON.parse(input); setFmtStatus('Valid JSON ✓', 'ok'); }
+      catch (e: any) { setFmtStatus(`Invalid JSON: ${e.message}`, 'err'); }
+    } else {
+      try { yaml.load(input); setFmtStatus('Valid YAML ✓', 'ok'); }
+      catch (e: any) { setFmtStatus(`Invalid YAML: ${e.message}`, 'err'); }
+    }
+  });
+
+  document.getElementById('fmt-minify')?.addEventListener('click', () => {
+    const input = (document.getElementById('fmt-input') as HTMLTextAreaElement).value;
+    if (!input.trim()) { showToast('Enter text to minify', 'err'); return; }
+    document.getElementById('fmt-output')!.style.display = 'none';
+    document.getElementById('fmt-copy-row')!.style.display = 'none';
+    if (_fmtMode === 'json') {
+      try {
+        showFmtOutput(JSON.stringify(JSON.parse(input)));
+        setFmtStatus('Minified ✓', 'ok');
+      } catch (e: any) { setFmtStatus(`JSON parse error: ${e.message}`, 'err'); }
+    } else {
+      // YAML minify: round-trip through js-yaml with flow style
+      try {
+        const parsed = yaml.load(input);
+        const minified = yaml.dump(parsed, { flowLevel: 0 }).trimEnd();
+        showFmtOutput(minified);
+        setFmtStatus('YAML minified (flow style) ✓', 'ok');
+      } catch (e: any) { setFmtStatus(`YAML parse error: ${e.message}`, 'err'); }
+    }
+  });
+
+  document.getElementById('fmt-copy')?.addEventListener('click', () => {
+    const v = (document.getElementById('fmt-output') as HTMLTextAreaElement).value;
+    if (v) clipboardWrite(v).then(() => showToast('Copied ✓', 'ok', 1500));
+  });
 }

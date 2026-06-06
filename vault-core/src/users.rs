@@ -134,6 +134,8 @@ pub fn init_users_schema(conn: &Connection) -> Result<(), String> {
     // Idempotent migrations
     conn.execute("ALTER TABLE users ADD COLUMN class_id TEXT", []).ok();
     conn.execute("ALTER TABLE users ADD COLUMN totp_secret TEXT", []).ok();
+    // Stores the last accepted TOTP counter step to prevent replay within the same window.
+    conn.execute("ALTER TABLE users ADD COLUMN totp_last_step INTEGER", []).ok();
 
     // Seed default classes if none exist
     let class_count: i32 = conn
@@ -209,24 +211,47 @@ fn new_uuid() -> String {
     )
 }
 
-/// Returns `"<salt_hex>:<sha256_hex>"`.
+/// Hashes `password` with Argon2id (m=32768, t=2, p=1) and returns a
+/// self-describing PHC string `$argon2id$v=19$...` suitable for long-term storage.
+///
+/// Uses lower cost params than the vault KDF to keep interactive login fast
+/// while still providing >200ms hash time on modern hardware.
 fn hash_password(password: &str) -> String {
-    let mut salt = [0u8; 16];
-    rand::thread_rng().fill_bytes(&mut salt);
-    let mut h = Sha256::new();
-    h.update(salt);
-    h.update(password.as_bytes());
-    format!("{}:{}", hex::encode(salt), hex::encode(h.finalize()))
+    use argon2::{Argon2, Algorithm, Version, Params, PasswordHasher};
+    use argon2::password_hash::{SaltString, rand_core::OsRng};
+
+    let salt   = SaltString::generate(&mut OsRng);
+    let params = Params::new(32_768, 2, 1, None).expect("valid argon2 params");
+    let argon2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
+    argon2.hash_password(password.as_bytes(), &salt)
+        .expect("argon2 hash")
+        .to_string()
 }
 
+/// Verifies `password` against `stored`.
+///
+/// Supports two on-disk formats:
+/// - **PHC** (`$argon2id$…`) — new default since Phase 5.1.
+/// - **Legacy SHA-256** (`<salt_hex>:<hash_hex>`) — written by Phase 5.0 and earlier.
+///
+/// Returns `true` only when the password matches.  Callers should re-hash with
+/// `hash_password` after a successful legacy verification to upgrade the stored hash.
 fn verify_password_hash(password: &str, stored: &str) -> bool {
-    let mut parts = stored.splitn(2, ':');
-    let (Some(salt_hex), Some(hash_hex)) = (parts.next(), parts.next()) else { return false; };
-    let Ok(salt) = hex::decode(salt_hex) else { return false; };
-    let mut h = Sha256::new();
-    h.update(&salt);
-    h.update(password.as_bytes());
-    hex::encode(h.finalize()) == hash_hex
+    if stored.starts_with("$argon2") {
+        use argon2::{Argon2, PasswordVerifier};
+        use argon2::password_hash::PasswordHash;
+        let Ok(parsed) = PasswordHash::new(stored) else { return false; };
+        Argon2::default().verify_password(password.as_bytes(), &parsed).is_ok()
+    } else {
+        // Legacy: "<salt_hex>:<sha256_hex>" — upgrade on next login
+        let mut parts = stored.splitn(2, ':');
+        let (Some(salt_hex), Some(hash_hex)) = (parts.next(), parts.next()) else { return false; };
+        let Ok(salt) = hex::decode(salt_hex) else { return false; };
+        let mut h = Sha256::new();
+        h.update(&salt);
+        h.update(password.as_bytes());
+        hex::encode(h.finalize()) == hash_hex
+    }
 }
 
 fn sha256_hex(input: &str) -> String {
@@ -300,6 +325,14 @@ pub fn verify_user_password(conn: &Connection, username: &str, password: &str) -
     let Some((id, uname, hash_opt, is_owner_i, created_at, last_seen)) = row else { return Ok(None); };
     let stored = hash_opt.ok_or_else(|| "User has no password set".to_string())?;
     if !verify_password_hash(password, &stored) { return Ok(None); }
+    // Transparent upgrade: rehash with Argon2id when the stored hash is legacy SHA-256.
+    if !stored.starts_with("$argon2") {
+        let new_hash = hash_password(password);
+        let _ = conn.execute(
+            "UPDATE users SET password_hash = ?1 WHERE id = ?2",
+            rusqlite::params![new_hash, id],
+        );
+    }
     touch_last_seen(conn, &id)?;
     Ok(Some(UserRecord {
         id, username: uname, has_password: true,
@@ -531,15 +564,23 @@ pub fn totp_enabled(conn: &Connection, user_id: &str) -> Result<bool, String> {
     Ok(secret.flatten().is_some())
 }
 
-/// Verifies a 6-digit TOTP code for `user_id`. Checks the current 30-second window
-/// plus one window on either side (clock skew tolerance).
+/// Verifies a 6-digit TOTP code for `user_id`.
+///
+/// Checks the current 30-second window plus one window on either side for clock skew.
+/// Tracks the last accepted counter step per user to prevent replay attacks — the same
+/// code cannot be accepted twice within the same (or adjacent) windows.
 pub fn verify_totp_code(conn: &Connection, user_id: &str, code: &str) -> Result<bool, String> {
-    let secret: Option<String> = conn
-        .query_row("SELECT totp_secret FROM users WHERE id = ?1", rusqlite::params![user_id],
-            |r| r.get::<_, Option<String>>(0))
-        .optional().map_err(|e| e.to_string())?
-        .flatten();
-    let Some(secret_b32) = secret else { return Ok(true); }; // TOTP not enabled — skip check
+    let row: Option<(Option<String>, Option<i64>)> = conn
+        .query_row(
+            "SELECT totp_secret, totp_last_step FROM users WHERE id = ?1",
+            rusqlite::params![user_id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional().map_err(|e| e.to_string())?;
+
+    let Some((secret_opt, last_step_opt)) = row else { return Ok(false); };
+    let Some(secret_b32) = secret_opt else { return Ok(true); }; // TOTP not enabled — pass
+
     let raw = base32::decode(base32::Alphabet::RFC4648 { padding: false }, &secret_b32)
         .ok_or("Invalid TOTP secret stored")?;
 
@@ -551,6 +592,15 @@ pub fn verify_totp_code(conn: &Connection, user_id: &str, code: &str) -> Result<
     for step_offset in [-1i64, 0, 1] {
         let step = (now_step as i64 + step_offset) as u64;
         if hotp_code(&raw, step) == code {
+            // Reject if this step (or an adjacent already-used step) was already consumed.
+            if let Some(last) = last_step_opt {
+                if step <= last as u64 { return Ok(false); } // replay detected
+            }
+            // Record the accepted step to block replay of this code.
+            let _ = conn.execute(
+                "UPDATE users SET totp_last_step = ?1 WHERE id = ?2",
+                rusqlite::params![step as i64, user_id],
+            );
             return Ok(true);
         }
     }

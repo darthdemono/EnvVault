@@ -57,6 +57,8 @@ export function getFiltered(): VaultEntry[] {
     if (filters.env && k.environment !== filters.env) return false;
     // Sidebar environment filter (separate from st.filter so it stacks with other filters)
     if (st.currentEnvFilter && k.environment !== st.currentEnvFilter) return false;
+    // Tag sidebar filter
+    if (st.activeTagFilter && !(k.tags ?? []).includes(st.activeTagFilter)) return false;
     if (text) {
       const hay = [k.provider, k.account_name, k.key_id, k.api_description, k.description, k.details,
                    ...(k.categories || []), ...((k as any).tags || [])].join(' ').toLowerCase();
@@ -85,6 +87,9 @@ export function sorted(arr: VaultEntry[]): VaultEntry[] {
   const by = st.currentSortBy;
   const priceOrder: Record<string, number> = { free: 0, local: 1, conditional: 2, paid: 3 };
   return [...arr].sort((a, b) => {
+    // Pinned entries always float to top
+    if (a.pinned && !b.pinned) return -1;
+    if (!a.pinned && b.pinned) return 1;
     if (by === 'price') return (priceOrder[a.price_type] || 9) - (priceOrder[b.price_type] || 9) || a.provider.localeCompare(b.provider);
     if (by === 'category') return (a.categories?.[0] || 'zzz').localeCompare(b.categories?.[0] || 'zzz') || a.provider.localeCompare(b.provider);
     if (by === 'expiry') {

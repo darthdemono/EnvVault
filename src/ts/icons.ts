@@ -265,6 +265,76 @@ const SI_REGISTRY: [string, string, string][] = [
   ['nextcloud', 'Nextcloud', 'Misc'], ['synology', 'Synology', 'Misc'],
   ['googlemaps', 'Google Maps', 'Misc'],
   ['pocketbase', 'PocketBase', 'Misc'],
+
+  // ── Cloud (extended) ───────────────────────────────────────────────────────
+  ['hetzner', 'Hetzner', 'Cloud'], ['linode', 'Linode', 'Cloud'],
+  ['ovh', 'OVH', 'Cloud'], ['scaleway', 'Scaleway', 'Cloud'],
+  ['vultr', 'Vultr', 'Cloud'], ['exoscale', 'Exoscale', 'Cloud'],
+  ['render', 'Render', 'Cloud'], ['railway', 'Railway', 'Cloud'],
+  ['fly', 'Fly.io', 'Cloud'], ['netlify', 'Netlify', 'Cloud'],
+  ['surge', 'Surge', 'Cloud'],
+
+  // ── Monitoring & Observability ─────────────────────────────────────────────
+  ['prometheus', 'Prometheus', 'Monitoring'], ['grafana', 'Grafana', 'Monitoring'],
+  ['loki', 'Loki', 'Monitoring'], ['jaeger', 'Jaeger', 'Monitoring'],
+  ['opentelemetry', 'OpenTelemetry', 'Monitoring'],
+  ['elastic', 'Elastic', 'Monitoring'], ['kibana', 'Kibana', 'Monitoring'],
+  ['logstash', 'Logstash', 'Monitoring'],
+  ['uptimekuma', 'Uptime Kuma', 'Monitoring'],
+  ['pingdom', 'Pingdom', 'Monitoring'], ['statuspage', 'Statuspage', 'Monitoring'],
+
+  // ── Databases (extended) ───────────────────────────────────────────────────
+  ['redis', 'Redis', 'Database'], ['mongodb', 'MongoDB', 'Database'],
+  ['cassandra', 'Cassandra', 'Database'],
+  ['elasticsearch', 'Elasticsearch', 'Database'],
+  ['influxdb', 'InfluxDB', 'Database'], ['neo4j', 'Neo4j', 'Database'],
+  ['mariadb', 'MariaDB', 'Database'], ['sqlite', 'SQLite', 'Database'],
+  ['cockroachdb', 'CockroachDB', 'Database'],
+  ['clickhouse', 'ClickHouse', 'Database'], ['planetscale', 'PlanetScale', 'Database'],
+  ['neon', 'Neon', 'Database'], ['turso', 'Turso', 'Database'],
+
+  // ── Auth (extended) ────────────────────────────────────────────────────────
+  ['authentik', 'Authentik', 'Auth'], ['authelia', 'Authelia', 'Auth'],
+  ['zitadel', 'Zitadel', 'Auth'], ['logto', 'Logto', 'Auth'],
+  ['clerk', 'Clerk', 'Auth'], ['stytch', 'Stytch', 'Auth'],
+
+  // ── Messaging & Queues ─────────────────────────────────────────────────────
+  ['rabbitmq', 'RabbitMQ', 'Messaging'],
+  ['apachekafka', 'Apache Kafka', 'Messaging'],
+  ['nats', 'NATS', 'Messaging'], ['mosquitto', 'Mosquitto', 'Messaging'],
+  ['apachepulsar', 'Apache Pulsar', 'Messaging'],
+  ['amazonsqs', 'Amazon SQS', 'Messaging'],
+  ['pusher', 'Pusher', 'Messaging'],
+
+  // ── Storage ────────────────────────────────────────────────────────────────
+  ['minio', 'MinIO', 'Storage'], ['backblaze', 'Backblaze', 'Storage'],
+  ['cloudflarer2', 'Cloudflare R2', 'Storage'],
+  ['amazons3', 'Amazon S3', 'Storage'],
+  ['googlecloudstorage', 'GCS', 'Storage'],
+
+  // ── DevOps (extended) ─────────────────────────────────────────────────────
+  ['argocd', 'Argo CD', 'DevOps'], ['flux', 'Flux', 'DevOps'],
+  ['consul', 'Consul', 'DevOps'], ['vault', 'Vault', 'DevOps'],
+  ['packer', 'Packer', 'DevOps'], ['vagrant', 'Vagrant', 'DevOps'],
+  ['ansible', 'Ansible', 'DevOps'], ['chef', 'Chef', 'DevOps'],
+  ['puppet', 'Puppet', 'DevOps'],
+
+  // ── CDN / Edge ─────────────────────────────────────────────────────────────
+  ['cloudflare', 'Cloudflare', 'CDN'], ['fastly', 'Fastly', 'CDN'],
+  ['bunny', 'Bunny.net', 'CDN'], ['akamai', 'Akamai', 'CDN'],
+
+  // ── Homelab ────────────────────────────────────────────────────────────────
+  ['truenas', 'TrueNAS', 'Homelab'], ['unraid', 'Unraid', 'Homelab'],
+  ['opnsense', 'OPNsense', 'Homelab'], ['pfsense', 'pfSense', 'Homelab'],
+  ['portainer', 'Portainer', 'Homelab'], ['unifi', 'UniFi', 'Homelab'],
+  ['pihole', 'Pi-hole', 'Homelab'], ['adguard', 'AdGuard', 'Homelab'],
+  ['paperlessngx', 'Paperless-ngx', 'Homelab'],
+
+  // ── AI (extended) ─────────────────────────────────────────────────────────
+  ['stability', 'Stability AI', 'AI'], ['cohere', 'Cohere', 'AI'],
+  ['replicate', 'Replicate', 'AI'], ['groq', 'Groq', 'AI'],
+  ['together', 'Together AI', 'AI'], ['fireworks', 'Fireworks AI', 'AI'],
+  ['deepseek', 'DeepSeek', 'AI'], ['xai', 'xAI / Grok', 'AI'],
 ];
 
 /**
@@ -347,6 +417,30 @@ Object.assign(SI_AUTO, {
   // Media
   'prime video': 'primevideo', 'amazon prime': 'primevideo',
   'disney plus': 'disneyplus', 'disney+': 'disneyplus',
+  // New cloud shortcuts
+  'hetzner cloud': 'hetzner',
+  'fly.io': 'fly', 'flyio': 'fly',
+  // New monitoring
+  'uptime kuma': 'uptimekuma',
+  // New databases
+  'postgres': 'postgresql', 'pg': 'postgresql',
+  'elastic search': 'elasticsearch', 'elk': 'elasticsearch',
+  // New homelab
+  'pi hole': 'pihole', 'adguard home': 'adguard',
+  'unifi network': 'unifi',
+  // New AI
+  'deepseek ai': 'deepseek', 'grok': 'xai', 'x ai': 'xai',
+  'stable diffusion': 'stability', 'stablediffusion': 'stability',
+  // New auth
+  'authentik': 'authentik',
+  // DevOps
+  'argo cd': 'argocd', 'argocd': 'argocd',
+  'hashicorp vault': 'vault', 'hcl': 'hashicorp',
+  // Storage
+  'minio': 'minio', 's3': 'amazons3', 'r2': 'cloudflarer2',
+  // Messaging
+  'rabbit mq': 'rabbitmq', 'rabbit': 'rabbitmq',
+  'nats.io': 'nats',
 });
 
 /**

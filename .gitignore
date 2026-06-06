@@ -24,6 +24,8 @@ target/
 .DS_Store
 Thumbs.db
 
+*.dot
+
 # LLM 
 .claude/
 handoff.md

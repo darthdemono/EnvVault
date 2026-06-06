@@ -98,6 +98,8 @@ export interface VaultEntry {
   last_rotated_at?: string | null;
   /** Free-form tags for quick cross-cutting labelling (separate from categories/projects). */
   tags?: string[];
+  /** When true the entry floats to the top of all filtered views. */
+  pinned?: boolean;
 }
 
 /**
@@ -120,7 +122,7 @@ export interface Project {
 }
 
 /** Sub-type of a field in a structured config chunk. */
-export type ChunkFieldType = 'var' | 'env_var' | 'secret' | 'list' | 'multiline' | 'port' | 'user_id' | 'subnet' | 'ip' | 'endpoint' | 'volume_mount';
+export type ChunkFieldType = 'var' | 'env_var' | 'secret' | 'list' | 'multiline' | 'port' | 'user_id' | 'subnet' | 'ip' | 'endpoint' | 'volume_mount' | 'cert';
 
 /** A single field within a structured config chunk (WireGuard section, Docker service, etc.). */
 export interface ChunkField {
@@ -152,6 +154,7 @@ export type ChunkType =
   | 'nginx_server'
   | 'nginx_upstream'
   | 'nginx_location'
+  | 'nginx_key'
   | 'k8s_deployment'
   | 'k8s_service'
   | 'k8s_configmap'
@@ -161,6 +164,15 @@ export type ChunkType =
   | 'traefik_router'
   | 'traefik_service'
   | 'traefik_middleware'
+  | 'apache_vhost'
+  | 'apache_directory'
+  | 'haproxy_global'
+  | 'haproxy_frontend'
+  | 'haproxy_backend'
+  | 'ansible_vars'
+  | 'ansible_task'
+  | 'pg_connection'
+  | 'pg_role'
   | 'generic';
 
 /** A named section within a structured project config. */
@@ -171,10 +183,14 @@ export interface SecretChunk {
   name: string;
   chunk_type: ChunkType;
   fields: ChunkField[];
+  /** Optional freetext notes shown under the chunk header. */
+  notes?: string;
+  /** When true the chunk is greyed-out and excluded from exports. */
+  disabled?: boolean;
 }
 
 /** High-level type of a project — drives the special config view. */
-export type ProjectType = 'generic' | 'wireguard' | 'docker' | 'nginx' | 'kubernetes' | 'ssh_config' | 'traefik';
+export type ProjectType = 'generic' | 'wireguard' | 'docker' | 'nginx' | 'kubernetes' | 'ssh_config' | 'traefik' | 'apache' | 'haproxy' | 'ansible' | 'postgres';
 
 /**
  * Root data structure persisted to the encrypted SQLCipher database.
@@ -270,6 +286,8 @@ export interface RemoteVaultConfig {
   name:     string;
   url:      string;
   username: string;
+  /** SHA-256 hex fingerprint of the server TLS cert (TOFU pinning). Present only for HTTPS servers. */
+  certFingerprint?: string;
 }
 
 /**
@@ -313,7 +331,7 @@ export interface AppSettings {
   /** Activity bar display style. */
   activityBarStyle: 'icon' | 'icon-label';
   /** Section keys that are currently collapsed in the secrets sidebar. */
-  collapsedSections: ('all' | 'price' | 'category' | 'project')[];
+  collapsedSections: ('all' | 'price' | 'env' | 'category' | 'project')[];
   /** Currently active top-level panel. */
   activePanel: 'secrets' | 'tools' | 'users' | 'remote';
   /** ID of the currently active tool pane (e.g. `'secret-gen'`). */

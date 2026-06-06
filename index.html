@@ -192,24 +192,24 @@
           </div>
         </div>
         <div class="sidebar-section" id="sidebar-section-env">
-          <div class="sidebar-heading">Environment</div>
+          <div class="sidebar-heading">Environment <button class="section-collapse-btn" data-section="env" title="Collapse">▾</button></div>
           <div class="section-body">
-          <button class="sidebar-item sidebar-subitem" data-filter-type="env" data-filter-value="production">
+          <button class="sidebar-item" data-filter-type="env" data-filter-value="production">
             <span class="env-dot env-production"></span>
             <span class="sidebar-label">Production</span>
             <span class="sidebar-count" id="count-env-production">0</span>
           </button>
-          <button class="sidebar-item sidebar-subitem" data-filter-type="env" data-filter-value="staging">
+          <button class="sidebar-item" data-filter-type="env" data-filter-value="staging">
             <span class="env-dot env-staging"></span>
             <span class="sidebar-label">Staging</span>
             <span class="sidebar-count" id="count-env-staging">0</span>
           </button>
-          <button class="sidebar-item sidebar-subitem" data-filter-type="env" data-filter-value="development">
+          <button class="sidebar-item" data-filter-type="env" data-filter-value="development">
             <span class="env-dot env-development"></span>
             <span class="sidebar-label">Development</span>
             <span class="sidebar-count" id="count-env-development">0</span>
           </button>
-          <button class="sidebar-item sidebar-subitem" data-filter-type="env" data-filter-value="testing">
+          <button class="sidebar-item" data-filter-type="env" data-filter-value="testing">
             <span class="env-dot env-testing"></span>
             <span class="sidebar-label">Testing</span>
             <span class="sidebar-count" id="count-env-testing">0</span>
@@ -227,6 +227,12 @@
           <div class="sidebar-heading">Projects <button id="new-category-btn" class="sidebar-add-btn" title="Add project">+</button><button class="section-collapse-btn" data-section="project" title="Collapse">▾</button></div>
           <div class="section-body">
           <div id="category-list"></div>
+          </div>
+        </div>
+        <div class="sidebar-section" id="sidebar-section-tags" style="display:none">
+          <div class="sidebar-heading">Tags</div>
+          <div class="section-body">
+            <div id="tag-filter-list"></div>
           </div>
         </div>
       </div>
@@ -286,6 +292,26 @@
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
             Templates
           </button>
+          <button class="tool-nav-btn" data-tool="diff">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+            Secret Diff
+          </button>
+          <button class="tool-nav-btn" data-tool="expiry-calendar">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+            Expiry Calendar
+          </button>
+          <button class="tool-nav-btn" data-tool="cron">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+            Cron Explainer
+          </button>
+          <button class="tool-nav-btn" data-tool="cidr">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z"/></svg>
+            CIDR Calc
+          </button>
+          <button class="tool-nav-btn" data-tool="formatter">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
+            JSON / YAML
+          </button>
         </div>
       </div>
 
@@ -328,6 +354,7 @@
         <div id="lock-status" class="lock-status"></div>
       </div>
     </aside>
+    <div id="sidebar-resizer"></div>
 
     <main id="content">
       <div id="vault-workspace">
@@ -338,7 +365,7 @@
           <button id="bulk-select-btn" class="btn btn-ghost btn-xs" title="Select multiple for bulk actions">Select</button>
         </div>
         <!-- Bulk action bar (item 8) — shown in select mode -->
-        <div id="bulk-bar" class="bulk-bar" style="display:none">
+        <div id="bulk-bar" class="bulk-bar">
           <span id="bulk-count" class="bulk-count">0 selected</span>
           <button id="bulk-delete-btn" class="btn btn-xs danger">Delete Selected</button>
           <button id="bulk-export-btn" class="btn btn-xs btn-ghost">Export .env</button>
@@ -693,6 +720,94 @@
           </div>
         </div>
 
+        <!-- Tool: Secret Diff -->
+        <div id="tool-diff" class="tool-pane" style="display:none">
+          <div class="tool-header"><h3>Secret Diff</h3><p>Compare two vault entries field by field.</p></div>
+          <div class="tool-body wide">
+            <div class="tool-row">
+              <div style="flex:1;display:flex;flex-direction:column;gap:4px">
+                <label class="tool-label">Entry A</label>
+                <select id="diff-a" class="tool-select" style="width:100%"><option value="">Select secret…</option></select>
+              </div>
+              <div style="flex:1;display:flex;flex-direction:column;gap:4px">
+                <label class="tool-label">Entry B</label>
+                <select id="diff-b" class="tool-select" style="width:100%"><option value="">Select secret…</option></select>
+              </div>
+            </div>
+            <div class="tool-actions"><button id="diff-run" class="btn btn-accent btn-sm">Compare</button></div>
+            <div id="diff-output"></div>
+          </div>
+        </div>
+
+        <!-- Tool: Expiry Calendar -->
+        <div id="tool-expiry-calendar" class="tool-pane" style="display:none">
+          <div class="tool-header"><h3>Expiry Calendar</h3><p>Month view of secrets with expiry dates.</p></div>
+          <div class="tool-body wide">
+            <div class="tool-row" style="margin-bottom:16px;gap:12px">
+              <button id="cal-prev" class="btn btn-ghost btn-sm">‹ Prev</button>
+              <span id="cal-month-label" style="font-weight:700;font-size:14px;min-width:180px;text-align:center"></span>
+              <button id="cal-next" class="btn btn-ghost btn-sm">Next ›</button>
+            </div>
+            <div id="cal-grid" class="calendar-grid"></div>
+            <div style="display:flex;gap:16px;margin-top:12px;font-size:11px;color:var(--text3)">
+              <span><span class="cal-dot expired"></span>Expired</span>
+              <span><span class="cal-dot expiring-soon"></span>&lt;30 days</span>
+              <span><span class="cal-dot safe"></span>Safe</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Tool: Cron Explainer -->
+        <div id="tool-cron" class="tool-pane" style="display:none">
+          <div class="tool-header"><h3>Cron Explainer</h3><p>Translate cron expressions to human language and show next fire times.</p></div>
+          <div class="tool-body">
+            <div class="tool-field-group">
+              <label class="tool-label">Expression</label>
+              <input id="cron-input" class="tool-input" style="font-family:var(--font-mono);max-width:300px" placeholder="0 2 * * 1-5  or  @daily">
+            </div>
+            <div class="tool-actions"><button id="cron-parse" class="btn btn-accent btn-sm">Explain</button></div>
+            <div id="cron-output" style="display:none"></div>
+          </div>
+        </div>
+
+        <!-- Tool: CIDR Calculator -->
+        <div id="tool-cidr" class="tool-pane" style="display:none">
+          <div class="tool-header"><h3>CIDR Calculator</h3><p>Network address, broadcast, host range and mask from CIDR notation.</p></div>
+          <div class="tool-body">
+            <div class="tool-field-group">
+              <label class="tool-label">CIDR Block</label>
+              <input id="cidr-input" class="tool-input" style="font-family:var(--font-mono);max-width:240px" placeholder="192.168.1.0/24">
+            </div>
+            <div class="tool-actions"><button id="cidr-calc" class="btn btn-accent btn-sm">Calculate</button></div>
+            <div id="cidr-output" style="display:none"></div>
+          </div>
+        </div>
+
+        <!-- Tool: JSON / YAML Formatter -->
+        <div id="tool-formatter" class="tool-pane" style="display:none">
+          <div class="tool-header"><h3>JSON / YAML Formatter</h3><p>Pretty-print, validate, and minify structured data.</p></div>
+          <div class="tool-body">
+            <div class="tool-row">
+              <label class="tool-label">Format</label>
+              <div class="btn-group-pill">
+                <button class="tool-fmt-btn active" data-fmt="json">JSON</button>
+                <button class="tool-fmt-btn" data-fmt="yaml">YAML</button>
+              </div>
+            </div>
+            <textarea id="fmt-input" class="tool-textarea" rows="9" placeholder="Paste JSON or YAML here…"></textarea>
+            <div class="tool-actions">
+              <button id="fmt-format" class="btn btn-accent btn-sm">Format</button>
+              <button id="fmt-validate" class="btn btn-ghost btn-sm">Validate</button>
+              <button id="fmt-minify" class="btn btn-ghost btn-sm">Minify</button>
+            </div>
+            <div id="fmt-status" class="tool-status" style="display:none"></div>
+            <textarea id="fmt-output" class="tool-output" readonly rows="9" placeholder="Output…" style="display:none"></textarea>
+            <div class="tool-actions" id="fmt-copy-row" style="display:none">
+              <button id="fmt-copy" class="btn btn-ghost btn-sm">Copy output</button>
+            </div>
+          </div>
+        </div>
+
       </div><!-- /#tools-workspace -->
 
       <!-- Remote Vaults workspace -->
@@ -772,13 +887,7 @@
       </div>
 
       <div class="modal-footer">
-        <div class="modal-footer-left">
-          <!-- Shown only in unlock mode (not first-run) -->
-          <button id="unlock-reset-btn" class="btn btn-ghost btn-sm" style="color:var(--text3);font-size:11px"
-            title="Permanently delete vault data">
-            Reset vault
-          </button>
-        </div>
+        <div class="modal-footer-left"></div>
         <button id="unlock-submit-btn" class="btn btn-accent">Unlock</button>
       </div>
     </div>
@@ -964,6 +1073,10 @@
         <div class="form-group">
           <label class="form-label" data-field="categories">Projects <span class="opt">optional</span></label>
           <div id="f-categories" class="cat-chips-wrap"></div>
+        </div>
+        <div class="form-group">
+          <label class="form-label" data-field="tags">Tags <span class="opt">optional — space separated</span></label>
+          <input class="form-input" id="f-tags-input" placeholder="e.g. critical infra prod-only">
         </div>
       </div><!-- /.modal-body -->
       <div class="modal-footer">
@@ -1331,6 +1444,22 @@
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2l3 7h7l-5.5 4 2 7L12 16l-6.5 4 2-7L2 9h7z"/></svg>
               Traefik
             </button>
+            <button class="project-type-btn" data-ptype="apache">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
+              Apache
+            </button>
+            <button class="project-type-btn" data-ptype="haproxy">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg>
+              HAProxy
+            </button>
+            <button class="project-type-btn" data-ptype="ansible">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+              Ansible
+            </button>
+            <button class="project-type-btn" data-ptype="postgres">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14a9 3 0 0 0 18 0V5"/><path d="M3 12a9 3 0 0 0 18 0"/></svg>
+              PostgreSQL
+            </button>
           </div>
         </div>
         <div class="form-group" id="project-create-desc-group">
@@ -1378,6 +1507,14 @@
           <label class="form-label">Chunk Name <span class="req">*</span></label>
           <input class="form-input" id="chunk-edit-name" type="text" placeholder="e.g. Interface, Peer — office">
         </div>
+        <div class="form-group">
+          <label class="form-label">Notes <span class="opt">optional</span></label>
+          <input class="form-input" id="chunk-edit-notes" type="text" placeholder="Optional notes shown under the chunk header">
+        </div>
+        <div class="form-group" style="flex-direction:row;align-items:center;gap:8px">
+          <input type="checkbox" id="chunk-edit-disabled" style="accent-color:var(--accent)">
+          <label for="chunk-edit-disabled" class="form-label" style="margin:0;cursor:pointer">Disabled (greyed-out, excluded from export)</label>
+        </div>
         <input type="hidden" id="chunk-edit-project-id">
         <input type="hidden" id="chunk-edit-chunk-id">
         <div style="margin-bottom:8px;font-size:11px;font-weight:600;color:var(--text2)">Fields</div>
@@ -1406,10 +1543,12 @@
 
   <!-- Prompt dialog -->
   <div id="prompt-overlay" class="modal-overlay">
-    <div class="modal" style="max-width:340px;width:100%">
+    <div id="prompt-modal" class="modal" style="max-width:340px;width:100%">
       <div class="modal-body" style="padding-top:24px">
         <p id="prompt-message" style="margin:0 0 12px;font-size:13px;line-height:1.5;color:var(--text)"></p>
         <input id="prompt-input" class="form-input" type="text" style="width:100%">
+        <textarea id="prompt-textarea" class="form-input mono" rows="14" style="width:100%;resize:vertical;font-size:11px;display:none"></textarea>
+        <p id="prompt-hint" style="margin:6px 0 0;font-size:10px;color:var(--text3);display:none">Ctrl+Enter to confirm</p>
       </div>
       <div class="modal-footer">
         <button id="prompt-cancel" class="btn btn-ghost">Cancel</button>

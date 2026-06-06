@@ -1,4 +1,4 @@
-//! `apiv-server` — remote vault HTTP server (Phase 5 with multi-user RBAC).
+//! `apiv-server` — remote vault HTTP server (Phase 6 with TLS + multi-user RBAC).
 //!
 //! # Auth flows
 //! - Owner: `POST /api/unlock` with master password → owner session token.
@@ -10,14 +10,20 @@
 //! - The vault key (AES-256 — owner's key, shared to user sessions after auth)
 //! - Whether the session belongs to the owner
 //! - The user ID (for permission lookups)
+//!
+//! # TLS
+//! Pass `--tls` to enable HTTPS.  Without `--cert`/`--key` a self-signed certificate is
+//! auto-generated and saved to `<data-dir>/server.crt` + `server.key`.
+//! The SHA-256 DER fingerprint is exposed in `GET /api/status` so clients can pin to it.
 
 use axum::{
-    extract::{Path, Query, State},
+    extract::{ConnectInfo, Path, Query, State},
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
     routing::get,
     Json, Router,
 };
+use std::net::SocketAddr;
 use clap::Parser;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -47,32 +53,106 @@ struct Session {
 // ── Rate limiter ──────────────────────────────────────────────────────────────
 
 #[derive(Default)]
-struct RateBucket { attempts: u32, window_start: Option<Instant> }
+struct RateBucket { failures: u32, window_start: Option<Instant> }
 
-fn check_rate_limit(buckets: &mut HashMap<String, RateBucket>, key: &str) -> bool {
+/// Returns `true` when the caller is **not** rate-limited (i.e. they may proceed).
+/// Does NOT increment the counter — call `record_auth_failure` on a failed attempt.
+fn rate_is_allowed(buckets: &mut HashMap<String, RateBucket>, key: &str) -> bool {
     let bucket = buckets.entry(key.to_string()).or_default();
     let now = Instant::now();
     match bucket.window_start {
-        Some(ws) if now.duration_since(ws) < Duration::from_secs(60) => {
-            bucket.attempts += 1;
-            bucket.attempts <= 10  // 10 attempts per minute per IP
-        }
+        Some(ws) if now.duration_since(ws) < Duration::from_secs(60) => bucket.failures < 10,
         _ => {
+            // Reset window on expiry
             bucket.window_start = Some(now);
-            bucket.attempts = 1;
+            bucket.failures = 0;
             true
         }
     }
+}
+
+/// Increments the failure counter for `key`.  Call this only after a confirmed
+/// authentication failure (wrong password / invalid token).
+fn record_auth_failure(buckets: &mut HashMap<String, RateBucket>, key: &str) {
+    let bucket = buckets.entry(key.to_string()).or_default();
+    let now = Instant::now();
+    if bucket.window_start.map_or(true, |ws| now.duration_since(ws) >= Duration::from_secs(60)) {
+        bucket.window_start = Some(now);
+        bucket.failures = 0;
+    }
+    bucket.failures += 1;
+}
+
+// ── TLS certificate helpers ───────────────────────────────────────────────────
+
+/// Decode standard base64 (with padding stripped from the PEM body).
+fn b64_decode(input: &str) -> Vec<u8> {
+    const T: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let val = |b: u8| T.iter().position(|&x| x == b).unwrap_or(0) as u8;
+    let bytes: Vec<u8> = input.bytes().filter(|&b| b != b'\n' && b != b'\r' && b != b'=').collect();
+    let mut out = Vec::with_capacity(bytes.len() * 3 / 4);
+    for c in bytes.chunks(4) {
+        let (a, b, d, e) = (val(c[0]), val(c[1]),
+            c.get(2).copied().map(val).unwrap_or(0),
+            c.get(3).copied().map(val).unwrap_or(0));
+        out.push((a << 2) | (b >> 4));
+        if c.len() >= 3 { out.push((b << 4) | (d >> 2)); }
+        if c.len() >= 4 { out.push((d << 6) | e); }
+    }
+    out
+}
+
+/// SHA-256 hex fingerprint of the first certificate DER found in a PEM file.
+fn fingerprint_of_cert_pem(path: &std::path::Path) -> Result<String, String> {
+    use sha2::{Sha256, Digest};
+    let pem = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
+    let b64: String = pem.lines()
+        .skip_while(|l| !l.contains("BEGIN CERTIFICATE"))
+        .skip(1)
+        .take_while(|l| !l.contains("END CERTIFICATE"))
+        .collect();
+    if b64.is_empty() { return Err("no certificate in PEM".into()); }
+    let der = b64_decode(&b64);
+    Ok(hex::encode(Sha256::digest(&der)))
+}
+
+/// Generate a self-signed TLS certificate valid for `localhost` / `127.0.0.1`.
+/// Saves PEM files to `data_dir/server.crt` + `server.key`.
+/// Returns `(cert_path, key_path, sha256_hex_fingerprint)`.
+fn generate_self_signed_cert(data_dir: &std::path::Path) -> Result<(PathBuf, PathBuf, String), String> {
+    use rcgen::{CertificateParams, KeyPair, SanType};
+    use sha2::{Sha256, Digest};
+
+    let cert_path = data_dir.join("server.crt");
+    let key_path  = data_dir.join("server.key");
+
+    let key_pair = KeyPair::generate().map_err(|e| e.to_string())?;
+    let mut params = CertificateParams::new(vec!["localhost".to_string()])
+        .map_err(|e| e.to_string())?;
+    params.subject_alt_names.push(SanType::IpAddress(
+        std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST)));
+    params.not_after = time::OffsetDateTime::now_utc()
+        .checked_add(time::Duration::days(365 * 3))
+        .ok_or("date overflow")?;
+
+    let cert = params.self_signed(&key_pair).map_err(|e| e.to_string())?;
+    std::fs::write(&cert_path, cert.pem()).map_err(|e| format!("write cert: {e}"))?;
+    std::fs::write(&key_path,  key_pair.serialize_pem()).map_err(|e| format!("write key: {e}"))?;
+
+    let fingerprint = hex::encode(Sha256::digest(cert.der()));
+    Ok((cert_path, key_path, fingerprint))
 }
 
 // ── App state ─────────────────────────────────────────────────────────────────
 
 #[derive(Clone)]
 struct AppState {
-    sessions:  Arc<Mutex<HashMap<String, Session>>>,
-    rate_limiter: Arc<Mutex<HashMap<String, RateBucket>>>,
-    db_path:   PathBuf,
-    salt_path: PathBuf,
+    sessions:        Arc<Mutex<HashMap<String, Session>>>,
+    rate_limiter:    Arc<Mutex<HashMap<String, RateBucket>>>,
+    db_path:         PathBuf,
+    salt_path:       PathBuf,
+    /// SHA-256 hex fingerprint of the TLS certificate (None when running plain HTTP).
+    cert_fingerprint: Option<String>,
 }
 
 // ── DTOs ──────────────────────────────────────────────────────────────────────
@@ -84,7 +164,12 @@ struct UnlockRequest { password: String }
 struct UnlockResponse { token: String }
 
 #[derive(Serialize, ToSchema)]
-struct StatusResponse { unlocked: bool, vault_exists: bool }
+struct StatusResponse {
+    unlocked:        bool,
+    vault_exists:    bool,
+    /// SHA-256 hex fingerprint of the server TLS certificate, or null when running plain HTTP.
+    cert_fingerprint: Option<String>,
+}
 
 #[derive(Serialize, ToSchema)]
 struct ErrorResponse { error: String }
@@ -162,17 +247,14 @@ fn owner_vault_key(state: &AppState) -> Option<VaultKey> {
     tag = "auth"
 )]
 async fn unlock(
-    headers: HeaderMap,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     State(state): State<AppState>,
     Json(req): Json<UnlockRequest>,
 ) -> impl IntoResponse {
-    // Rate limit by IP (item 1)
-    let ip = headers.get("x-forwarded-for")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("unknown")
-        .to_string();
-    if !check_rate_limit(&mut state.rate_limiter.lock().unwrap(), &ip) {
-        return err_json(StatusCode::TOO_MANY_REQUESTS, "Too many attempts — try again in a minute").into_response();
+    // Rate-limit by socket address — not by X-Forwarded-For (spoofable).
+    let ip = addr.ip().to_string();
+    if !rate_is_allowed(&mut state.rate_limiter.lock().unwrap(), &ip) {
+        return err_json(StatusCode::TOO_MANY_REQUESTS, "Too many failed attempts — try again in a minute").into_response();
     }
 
     let salt = match read_or_create_salt(&state.salt_path) {
@@ -183,7 +265,10 @@ async fn unlock(
     };
     let conn = match open_db(&state.db_path, &key) {
         Ok(conn) => { let _ = init_schema(&conn); conn }
-        Err(_)   => return err_json(StatusCode::UNAUTHORIZED, "Wrong master password").into_response(),
+        Err(_)   => {
+            record_auth_failure(&mut state.rate_limiter.lock().unwrap(), &ip);
+            return err_json(StatusCode::UNAUTHORIZED, "Wrong master password").into_response();
+        }
     };
     // Integrity check on unlock (item 5)
     match verify_vault_integrity(&conn) {
@@ -215,7 +300,7 @@ async fn lock(headers: HeaderMap, State(state): State<AppState>) -> StatusCode {
     StatusCode::NO_CONTENT
 }
 
-/// Return vault locked/exists status.
+/// Return vault locked/exists status plus the TLS cert fingerprint (if TLS is enabled).
 #[utoipa::path(
     get, path = "/api/status",
     responses((status = 200, description = "OK", body = StatusResponse)),
@@ -223,8 +308,9 @@ async fn lock(headers: HeaderMap, State(state): State<AppState>) -> StatusCode {
 )]
 async fn status(State(state): State<AppState>) -> Json<StatusResponse> {
     Json(StatusResponse {
-        unlocked:     !state.sessions.lock().unwrap().is_empty(),
-        vault_exists: state.db_path.exists(),
+        unlocked:         !state.sessions.lock().unwrap().is_empty(),
+        vault_exists:     state.db_path.exists(),
+        cert_fingerprint: state.cert_fingerprint.clone(),
     })
 }
 
@@ -243,17 +329,14 @@ async fn status(State(state): State<AppState>) -> Json<StatusResponse> {
     tag = "auth"
 )]
 async fn auth_user(
-    headers: HeaderMap,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     State(state): State<AppState>,
     Json(req): Json<AuthRequest>,
 ) -> impl IntoResponse {
-    // Rate limit by IP (item 1)
-    let ip = headers.get("x-forwarded-for")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("unknown")
-        .to_string();
-    if !check_rate_limit(&mut state.rate_limiter.lock().unwrap(), &ip) {
-        return err_json(StatusCode::TOO_MANY_REQUESTS, "Too many attempts — try again in a minute").into_response();
+    // Rate-limit by socket address — not by X-Forwarded-For (spoofable).
+    let ip = addr.ip().to_string();
+    if !rate_is_allowed(&mut state.rate_limiter.lock().unwrap(), &ip) {
+        return err_json(StatusCode::TOO_MANY_REQUESTS, "Too many failed attempts — try again in a minute").into_response();
     }
 
     let key = match owner_vault_key(&state) {
@@ -280,8 +363,11 @@ async fn auth_user(
                 }
                 match verify_totp_code(&conn, &user.id, code) {
                     Ok(true) => {}
-                    Ok(false) => return err_json(StatusCode::UNAUTHORIZED, "Invalid TOTP code").into_response(),
-                    Err(e)   => return err_json(StatusCode::INTERNAL_SERVER_ERROR, &e).into_response(),
+                    Ok(false) => {
+                        record_auth_failure(&mut state.rate_limiter.lock().unwrap(), &ip);
+                        return err_json(StatusCode::UNAUTHORIZED, "Invalid TOTP code").into_response();
+                    }
+                    Err(e) => return err_json(StatusCode::INTERNAL_SERVER_ERROR, &e).into_response(),
                 }
             }
             let session_token = uuid::Uuid::new_v4().to_string();
@@ -292,8 +378,11 @@ async fn auth_user(
             });
             (StatusCode::OK, Json(serde_json::json!({ "token": session_token }))).into_response()
         }
-        Ok(None) => err_json(StatusCode::UNAUTHORIZED, "Invalid credentials").into_response(),
-        Err(e)   => err_json(StatusCode::INTERNAL_SERVER_ERROR, &e).into_response(),
+        Ok(None) => {
+            record_auth_failure(&mut state.rate_limiter.lock().unwrap(), &ip);
+            err_json(StatusCode::UNAUTHORIZED, "Invalid credentials").into_response()
+        }
+        Err(e) => err_json(StatusCode::INTERNAL_SERVER_ERROR, &e).into_response(),
     }
 }
 
@@ -671,12 +760,18 @@ impl utoipa::Modify for SecurityAddon {
 // ── CLI args ──────────────────────────────────────────────────────────────────
 
 #[derive(Parser)]
-#[command(name = "apiv-server", version = "0.5.0", about = "API Vault remote vault server")]
+#[command(name = "apiv-server", version = "0.6.0", about = "API Vault remote vault server")]
 struct Args {
     #[arg(long, default_value_t = 8743)] port:      u16,
     #[arg(long, default_value = "127.0.0.1")] host: String,
     #[arg(long)] db_path:   Option<PathBuf>,
     #[arg(long)] salt_path: Option<PathBuf>,
+    /// Enable TLS (HTTPS).  A self-signed cert is auto-generated if --cert/--key are absent.
+    #[arg(long)] tls:       bool,
+    /// Path to PEM-encoded TLS certificate (requires --tls).
+    #[arg(long)] cert:      Option<PathBuf>,
+    /// Path to PEM-encoded TLS private key (requires --tls).
+    #[arg(long)] key:       Option<PathBuf>,
 }
 
 // ── Auto-unlock ───────────────────────────────────────────────────────────────
@@ -708,16 +803,51 @@ async fn main() {
     let data_dir = dirs::data_dir()
         .unwrap_or_else(|| PathBuf::from("/var/lib"))
         .join("apiv-server");
-    std::fs::create_dir_all(&data_dir).expect("create data dir");
 
     let db_path   = args.db_path.unwrap_or_else(|| data_dir.join("vault.db"));
     let salt_path = args.salt_path.unwrap_or_else(|| data_dir.join("vault.salt"));
 
+    if let Some(parent) = db_path.parent() {
+        std::fs::create_dir_all(parent).expect("create data dir");
+    }
+
+    // ── TLS setup ─────────────────────────────────────────────────────────────
+    // Resolve cert/key paths and compute fingerprint before building state.
+    let (tls_config, cert_fingerprint) = if args.tls {
+        let (cert_path, key_path) = match (args.cert, args.key) {
+            (Some(c), Some(k)) => (c, k),
+            (None, None) => {
+                // Auto-generate self-signed cert into data_dir
+                std::fs::create_dir_all(&data_dir).expect("create data dir for TLS cert");
+                match generate_self_signed_cert(&data_dir) {
+                    Ok((c, k, fp)) => {
+                        println!("TLS cert auto-generated → {}", c.display());
+                        println!("TLS cert fingerprint    → {fp}");
+                        (c, k) // fingerprint captured below via fingerprint_of_cert_pem
+                    }
+                    Err(e) => { eprintln!("TLS cert generation failed: {e}"); std::process::exit(1); }
+                }
+            }
+            _ => { eprintln!("--cert and --key must both be provided (or neither)"); std::process::exit(1); }
+        };
+        let fp = match fingerprint_of_cert_pem(&cert_path) {
+            Ok(f) => f,
+            Err(e) => { eprintln!("Cannot read TLS cert fingerprint: {e}"); std::process::exit(1); }
+        };
+        let cfg = axum_server::tls_rustls::RustlsConfig::from_pem_file(&cert_path, &key_path)
+            .await
+            .unwrap_or_else(|e| { eprintln!("TLS config error: {e}"); std::process::exit(1); });
+        (Some(cfg), Some(fp))
+    } else {
+        (None, None)
+    };
+
     let state = AppState {
-        sessions:     Arc::new(Mutex::new(HashMap::new())),
-        rate_limiter: Arc::new(Mutex::new(HashMap::new())),
+        sessions:         Arc::new(Mutex::new(HashMap::new())),
+        rate_limiter:     Arc::new(Mutex::new(HashMap::new())),
         db_path,
         salt_path,
+        cert_fingerprint: cert_fingerprint.clone(),
     };
 
     // Auto-unlock if APIV_PASSWORD is set in the environment
@@ -730,7 +860,24 @@ async fn main() {
         }
     }
 
-    let cors = tower_http::cors::CorsLayer::permissive();
+    let scheme = if args.tls { "https" } else { "http" };
+
+    // CORS: allow localhost and tauri origins, both http and https variants.
+    let port = args.port;
+    let cors = tower_http::cors::CorsLayer::new()
+        .allow_origin([
+            "http://localhost".parse::<axum::http::HeaderValue>().unwrap(),
+            "https://localhost".parse::<axum::http::HeaderValue>().unwrap(),
+            "http://127.0.0.1".parse::<axum::http::HeaderValue>().unwrap(),
+            "https://127.0.0.1".parse::<axum::http::HeaderValue>().unwrap(),
+            format!("http://localhost:{port}").parse::<axum::http::HeaderValue>().unwrap(),
+            format!("https://localhost:{port}").parse::<axum::http::HeaderValue>().unwrap(),
+            format!("http://127.0.0.1:{port}").parse::<axum::http::HeaderValue>().unwrap(),
+            format!("https://127.0.0.1:{port}").parse::<axum::http::HeaderValue>().unwrap(),
+            "tauri://localhost".parse::<axum::http::HeaderValue>().unwrap(),
+        ])
+        .allow_methods(tower_http::cors::Any)
+        .allow_headers(tower_http::cors::Any);
 
     use axum::routing::{delete, post};
     let vault_routes = Router::new()
@@ -740,15 +887,14 @@ async fn main() {
         .route("/api/vault",                    get(get_vault).put(put_vault))
         .route("/api/vault/expiring",           get(expiring))
         .route("/api/audit",                    get(audit))
-        // User management (owner-only)
         .route("/api/users",                    get(list_users_handler).post(create_user_handler))
-        .route("/api/users/{user_id}",           delete(delete_user_handler))
-        .route("/api/users/{user_id}/tokens",    get(list_tokens_handler).post(create_token_handler))
+        .route("/api/users/{user_id}",          delete(delete_user_handler))
+        .route("/api/users/{user_id}/tokens",   get(list_tokens_handler).post(create_token_handler))
         .route("/api/users/{user_id}/tokens/{token_id}", delete(revoke_token_handler))
         .route("/api/users/{user_id}/permissions", get(get_permissions_handler).put(set_permissions_handler))
-        .route("/api/users/{user_id}/totp",        axum::routing::post(totp_enable_handler).delete(totp_disable_handler))
-        .route("/api/ping",                        get(ping))
-        .route("/api/stats",                       get(stats))
+        .route("/api/users/{user_id}/totp",     axum::routing::post(totp_enable_handler).delete(totp_disable_handler))
+        .route("/api/ping",                     get(ping))
+        .route("/api/stats",                    get(stats))
         .with_state(state);
 
     let app: Router = Router::new()
@@ -756,13 +902,23 @@ async fn main() {
         .route("/api/openapi.json", get(|| async { Json(ApiDoc::openapi()) }))
         .layer(cors);
 
-    let addr = format!("{}:{}", args.host, args.port);
-    println!("apiv-server  →  http://{addr}");
-    println!("OpenAPI JSON →  http://{addr}/api/openapi.json");
-    println!("Stats        →  http://{addr}/api/stats  (public)");
-    println!("Users API    →  http://{addr}/api/users  (owner-only)");
+    let addr_str = format!("{}:{}", args.host, args.port);
+    println!("apiv-server  →  {scheme}://{addr_str}");
+    println!("OpenAPI JSON →  {scheme}://{addr_str}/api/openapi.json");
+    if let Some(fp) = &cert_fingerprint {
+        println!("TLS fingerprint (SHA-256) → {fp}");
+    }
 
-    let listener = tokio::net::TcpListener::bind(&addr).await
-        .unwrap_or_else(|e| panic!("bind {addr}: {e}"));
-    axum::serve(listener, app).await.expect("server error");
+    let addr: SocketAddr = addr_str.parse().expect("invalid bind address");
+
+    if let Some(tls_cfg) = tls_config {
+        axum_server::bind_rustls(addr, tls_cfg)
+            .serve(app.into_make_service_with_connect_info::<SocketAddr>())
+            .await.expect("server error");
+    } else {
+        let listener = tokio::net::TcpListener::bind(addr).await
+            .unwrap_or_else(|e| panic!("bind {addr}: {e}"));
+        axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>())
+            .await.expect("server error");
+    }
 }

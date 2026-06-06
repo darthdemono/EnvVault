@@ -15,13 +15,15 @@
 .config-view-header-btns { display: flex; align-items: center; gap: 6px; flex-wrap: nowrap; overflow-x: auto; padding-bottom: 2px; max-width: 100%; }
 .config-view-title { font-size: 16px; font-weight: 700; }
 .config-type-badge { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: .08em; padding: 2px 7px; border-radius: 4px; background: var(--accent-dim); color: var(--accent); }
-.chunks-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 640px), 1fr)); gap: 12px; }
+.chunks-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 400px), 1fr)); gap: 12px; min-width: 0; }
+.chunks-grid.nginx-grid { grid-template-columns: repeat(auto-fill, minmax(min(100%, 300px), 1fr)); }
+.chunk-card.span-full { grid-column: 1 / -1; }
 .chunks-two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; align-items: start; }
 .chunks-col { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
 .chunks-col-label { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .09em; color: var(--text3); padding-bottom: 6px; border-bottom: 1px solid var(--border); margin-bottom: 2px; }
 .chunk-card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; min-width: 0; }
 .chunk-card-head { display: flex; align-items: center; gap: 8px; padding: 10px 14px; background: var(--surface2); border-bottom: 1px solid var(--border); }
-.chunk-card-title { font-size: 13px; font-weight: 600; flex: 1; }
+.chunk-card-title { font-size: 13px; font-weight: 600; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .chunk-type-badge { font-size: 9px; text-transform: uppercase; letter-spacing: .08em; color: var(--text3); }
 .chunk-fields { display: flex; flex-direction: column; }
 .chunk-field-row { display: grid; grid-template-columns: 180px 1fr auto; gap: 8px; align-items: center; padding: 7px 14px; border-bottom: 1px solid var(--border); }
@@ -42,6 +44,7 @@ pre.chunk-field-val.code-block { background: var(--surface3); border: 1px solid 
 .img-tag { color: var(--accent); }
 .chunk-ref-badge { font-size: 9px; padding: 1px 5px; border-radius: 3px; background: rgba(79,201,126,.15); color: #4fc97e; font-family: 'JetBrains Mono', monospace; }
 .chunk-ref-unresolved { background: rgba(201,166,74,.15) !important; color: #c9a64a !important; }
+.chunk-ref-env { background: rgba(115,100,201,.15) !important; color: var(--accent) !important; }
 .chunk-no-fields { padding: 14px; font-size: 11px; color: var(--text3); text-align: center; }
 .chunk-field-row.env-row { background: rgba(115,100,201,.04); }
 .port-list { display: flex; flex-wrap: wrap; gap: 4px; padding: 4px 0; }
@@ -73,6 +76,100 @@ pre.chunk-field-val.code-block { background: var(--surface3); border: 1px solid 
 .project-type-btn { display: flex; align-items: center; gap: 6px; padding: 8px 12px; border-radius: 8px; border: 1px solid var(--border2); background: var(--surface2); color: var(--text2); font-size: 12px; font-family: 'Syne', sans-serif; font-weight: 600; cursor: pointer; transition: all .12s; }
 .project-type-btn:hover { border-color: var(--accent); color: var(--accent); }
 .project-type-btn.active { border-color: var(--accent); background: var(--accent-dim); color: var(--accent); }
+
+/* ── Nginx listen badges ──────────────────────────────────────────────────── */
+.listen-badge { display: inline-flex; align-items: center; gap: 4px; font-family: 'JetBrains Mono', monospace; }
+.listen-port { font-size: 12px; font-weight: 700; color: var(--text); }
+.listen-tag { font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; padding: 1px 5px; border-radius: 3px; }
+.listen-ssl { background: rgba(79,201,126,.15); color: #4fc97e; }
+.listen-proto { background: rgba(115,100,201,.18); color: var(--accent); }
+.listen-ipv6 { background: var(--surface3); color: var(--text3); }
+
+/* ── Hostname badges ──────────────────────────────────────────────────────── */
+.hostname-badge { display: inline-flex; align-items: center; font-size: 11px; font-family: 'JetBrains Mono', monospace; background: var(--surface2); border: 1px solid var(--border2); border-radius: 5px; padding: 2px 8px; margin-right: 4px; color: var(--text); }
+
+/* ── Redirect badge ───────────────────────────────────────────────────────── */
+.redirect-badge { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; font-family: 'JetBrains Mono', monospace; }
+.redirect-status { font-weight: 700; font-size: 12px; }
+.redirect-arrow { color: var(--text3); }
+.redirect-dest { color: var(--text2); word-break: break-all; }
+
+/* ── Certificate link panel ───────────────────────────────────────────────── */
+.cert-panel { margin: 0 14px 0 14px; padding: 8px 12px; background: var(--surface2); border: 1px solid var(--border2); border-radius: 7px; margin-bottom: 6px; }
+.cert-panel-row { display: flex; align-items: center; gap: 10px; }
+.cert-panel-icon { font-size: 14px; flex-shrink: 0; }
+.cert-panel-meta { display: flex; flex-direction: column; gap: 2px; flex: 1; min-width: 0; }
+.cert-panel-cn { font-size: 12px; font-weight: 600; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cert-panel-expiry { font-size: 10px; font-family: 'JetBrains Mono', monospace; }
+.cert-panel-actions { display: flex; gap: 4px; flex-shrink: 0; }
+.cert-panel-pem { font-size: 9px; font-family: 'JetBrains Mono', monospace; color: var(--text3); background: var(--surface3); border: 1px solid var(--border); border-radius: 4px; padding: 6px 8px; margin-top: 6px; overflow: hidden; white-space: pre; max-height: 60px; overflow-y: hidden; }
+.chunk-field-cert-row { background: rgba(79,201,126,.03); }
+.cert-ref-badge { font-size: 11px; font-family: 'JetBrains Mono', monospace; color: var(--accent); }
+
+/* ── NGINX KEY CHUNK ─────────────────────────────────────────────────────────── */
+.nginx-key-path {
+  font-size: 10px; font-family: 'JetBrains Mono', monospace;
+  color: var(--text3); padding: 4px 14px 0; background: var(--surface2);
+  border-bottom: 1px solid var(--border);
+}
+.nginx-key-body { display: flex; flex-direction: column; gap: 0; overflow: hidden; }
+.pem-block { border-bottom: 1px solid var(--border); }
+.pem-block:last-child { border-bottom: none; }
+.pem-label {
+  font-size: 9px; font-family: 'JetBrains Mono', monospace; font-weight: 700;
+  text-transform: uppercase; letter-spacing: .08em;
+  padding: 5px 14px 3px; border-bottom: 1px solid var(--border);
+}
+.pem-cert .pem-label  { color: #4fc97e; background: rgba(79,201,126,.06); }
+.pem-key .pem-label   { color: #c9a64a; background: rgba(201,166,74,.06); }
+.pem-other .pem-label { color: var(--text3); background: var(--surface2); }
+.pem-pre {
+  font-family: 'JetBrains Mono', monospace; font-size: 9.5px; line-height: 1.45;
+  color: var(--text2); background: var(--surface); margin: 0;
+  padding: 8px 14px; white-space: pre-wrap; word-break: break-all;
+  max-height: 180px; overflow-y: auto; user-select: text;
+}
+.pem-empty {
+  padding: 16px 14px; font-size: 11px; color: var(--text3); text-align: center;
+}
+
+/* ── DOCKER SERVICES NESTED CARD ────────────────────────────────────────────── */
+.chunks-two-col.docker-two-col { grid-template-columns: 3fr 2fr; }
+.docker-services-body { display: flex; flex-direction: column; gap: 10px; padding: 12px; }
+.docker-service-card { border: 1px solid var(--border); border-radius: 8px; overflow: hidden; background: var(--surface2); }
+.docker-service-header { display: flex; align-items: center; gap: 8px; padding: 7px 12px; background: rgba(115,100,201,.08); border-bottom: 1px solid var(--border); }
+.docker-service-name { font-size: 12px; font-weight: 700; font-family: 'JetBrains Mono', monospace; color: var(--accent); flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.docker-service-actions { display: flex; gap: 2px; opacity: 0; transition: opacity .12s; flex-shrink: 0; }
+.docker-service-card:hover .docker-service-actions { opacity: 1; }
+.docker-service-scalars { display: flex; flex-direction: column; }
+.docker-service-subcards { display: flex; flex-direction: column; gap: 6px; padding: 8px; background: var(--surface); border-top: 1px solid var(--border); }
+.docker-sub-card { border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+.docker-sub-card-label { font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: .07em; color: var(--text3); padding: 3px 10px; background: var(--surface2); border-bottom: 1px solid var(--border); }
+.docker-sub-card-body { display: flex; flex-direction: column; background: var(--surface); }
+.dsvc-env-badge { flex-shrink: 0; margin-left: auto; }
+.dsvc-field { display: grid; grid-template-columns: 150px 1fr; gap: 8px; padding: 4px 14px; align-items: center; border-bottom: 1px solid var(--border); }
+.dsvc-field:last-child { border-bottom: none; }
+.dsvc-key { font-size: 11px; font-family: 'JetBrains Mono', monospace; color: var(--text3); font-weight: 600; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dsvc-val { font-size: 11px; font-family: 'JetBrains Mono', monospace; color: var(--text); word-break: break-all; }
+.dsvc-section-key { padding: 3px 14px 2px; font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: .07em; color: var(--text3); background: var(--surface2); border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); }
+.dsvc-list-item { display: flex; align-items: center; gap: 6px; padding: 3px 10px; border-bottom: 1px solid var(--border); min-width: 0; }
+.dsvc-list-item:last-of-type { border-bottom: none; }
+.dsvc-list-bullet { color: var(--text3); font-size: 9px; flex-shrink: 0; }
+.dsvc-port-badge { display: flex; align-items: center; gap: 1px; font-size: 10px; font-family: 'JetBrains Mono', monospace; background: var(--accent-dim); border-radius: 3px; padding: 1px 5px; }
+.dsvc-port-host { color: var(--text2); }
+.dsvc-port-sep { color: var(--text3); }
+.dsvc-port-cont { color: var(--accent); font-weight: 600; }
+.dsvc-vol-badge { display: flex; align-items: center; gap: 1px; font-size: 10px; font-family: 'JetBrains Mono', monospace; min-width: 0; overflow: hidden; }
+.dsvc-vol-host { color: var(--text3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 300px; }
+.dsvc-vol-sep { color: var(--text3); flex-shrink: 0; }
+.dsvc-vol-cont { color: var(--accent); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 200px; }
+.dsvc-net-badge { display: inline-flex; align-items: center; font-size: 10px; font-family: 'JetBrains Mono', monospace; background: rgba(115,100,201,.12); color: var(--accent); border-radius: 3px; padding: 1px 5px; }
+.dsvc-env-row { display: grid; grid-template-columns: 1fr auto 1.2fr auto; gap: 4px; padding: 3px 10px 3px 10px; align-items: center; border-bottom: 1px solid var(--border); font-size: 11px; font-family: 'JetBrains Mono', monospace; min-width: 0; }
+.dsvc-env-row:last-of-type { border-bottom: none; }
+.dsvc-env-key { color: var(--text2); font-weight: 600; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dsvc-env-eq { color: var(--text3); font-size: 10px; flex-shrink: 0; }
+.dsvc-env-val { color: var(--text); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dsvc-empty { padding: 12px 14px; font-size: 11px; color: var(--text3); text-align: center; }
 
 /* ── VAULT WORKSPACE ────────────────────────────────────────────────────────── */
 #vault-workspace { display: flex; flex-direction: column; flex: 1; overflow: auto; }

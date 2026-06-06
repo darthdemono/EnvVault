@@ -232,13 +232,11 @@
 }
 
 .tool-label {
-  font-family: 'JetBrains Mono', monospace;
-  font-size: 9.5px;
-  font-weight: 600;
-  color: var(--text2);
-  letter-spacing: 0.07em;
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--text3);
+  letter-spacing: 0.06em;
   text-transform: uppercase;
-  min-width: 100px;
 }
 
 .tool-output {
@@ -709,17 +707,42 @@
 /* ── Bulk operations ─────────────────────────────────────────────────────── */
 
 .bulk-bar {
-  display: flex; align-items: center; gap: 8px;
+  display: none; align-items: center; gap: 8px;
   padding: 6px 14px; background: var(--accent-dim);
   border-bottom: 1px solid var(--accent-mid);
   font-size: 12px;
 }
+.bulk-bar.active { display: flex; }
 .bulk-count { font-weight: 600; color: var(--accent); flex-shrink: 0; }
 
 /* card-grid in bulk mode: cards show checkbox overlay */
-#card-grid.bulk-mode .card { cursor: pointer; }
+#card-grid.bulk-mode .card { cursor: pointer; position: relative; }
 #card-grid.bulk-mode .card:hover { border-color: var(--accent); }
 #card-grid.bulk-mode .card.bulk-selected { border-color: var(--accent); background: var(--accent-dim); }
+
+.bulk-checkbox {
+  display: none;
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 20px;
+  height: 20px;
+  border-radius: 5px;
+  border: 2px solid var(--border2);
+  background: var(--surface2);
+  cursor: pointer;
+  align-items: center;
+  justify-content: center;
+  z-index: 5;
+  transition: all .12s;
+  pointer-events: auto;
+}
+#card-grid.bulk-mode .bulk-checkbox { display: flex; }
+#card-grid.bulk-mode .card.bulk-selected .bulk-checkbox {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
 
 /* ── Environment dots (sidebar) ──────────────────────────────────────────── */
 
@@ -730,3 +753,336 @@
 .env-dot.env-staging     { background: #e09a2b; }
 .env-dot.env-development { background: #5ab05a; }
 .env-dot.env-testing     { background: #5889e0; }
+
+/* ── Tool workspace improvements ────────────────────────────────────────────── */
+
+.tool-section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.tool-section + .tool-section {
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+  margin-top: 2px;
+}
+.tool-section-label {
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--text3);
+  text-transform: uppercase;
+  letter-spacing: .07em;
+  margin-bottom: 2px;
+}
+
+.tool-field-group {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+/* ── Diff tool ───────────────────────────────────────────────────────────────── */
+
+.diff-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  margin-top: 12px;
+}
+.diff-table th {
+  text-align: left;
+  padding: 7px 10px;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text2);
+}
+.diff-table td {
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  vertical-align: top;
+  max-width: 220px;
+  word-break: break-all;
+}
+.diff-table .diff-field {
+  font-family: inherit;
+  font-weight: 600;
+  color: var(--text2);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  white-space: nowrap;
+}
+.diff-same   { background: transparent; color: var(--text3); }
+.diff-changed td { background: rgba(201,166,74,.08); color: var(--text); }
+.diff-changed td.diff-field { background: rgba(201,166,74,.04); }
+
+/* ── Expiry calendar ─────────────────────────────────────────────────────────── */
+
+.calendar-grid {
+  max-width: 560px;
+}
+.cal-header {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  margin-bottom: 4px;
+}
+.cal-day-name {
+  text-align: center;
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--text3);
+  padding: 4px 0;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+}
+.cal-body {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 3px;
+}
+.cal-cell {
+  min-height: 52px;
+  padding: 5px 6px;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  position: relative;
+  transition: border-color .1s;
+}
+.cal-cell.empty { background: transparent; }
+.cal-cell:not(.empty) { background: var(--surface2); }
+.cal-cell.cal-today { border-color: var(--accent); }
+.cal-cell.cal-expired { background: rgba(201,100,100,.12); border-color: rgba(201,100,100,.3); }
+.cal-cell.cal-warn { background: rgba(201,166,74,.12); border-color: rgba(201,166,74,.3); }
+.cal-cell.cal-safe { background: rgba(79,201,126,.08); border-color: rgba(79,201,126,.2); }
+.cal-day-num {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text2);
+  line-height: 1;
+}
+.cal-today .cal-day-num { color: var(--accent); }
+.cal-entries { display: flex; flex-wrap: wrap; gap: 2px; margin-top: 2px; }
+.cal-entry-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
+.cal-expired .cal-entry-dot { background: #e05252; }
+.cal-warn    .cal-entry-dot { background: #e09a2b; }
+.cal-safe    .cal-entry-dot { background: #5ab05a; }
+.cal-extra { font-size: 9px; color: var(--text3); }
+.cal-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 3px; vertical-align: middle; }
+.cal-dot.expired      { background: #e05252; }
+.cal-dot.expiring-soon { background: #e09a2b; }
+.cal-dot.safe         { background: #5ab05a; }
+
+/* ── Cron explainer ──────────────────────────────────────────────────────────── */
+
+.cron-result { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; }
+.cron-resolved {
+  font-size: 11px;
+  color: var(--text3);
+  padding: 6px 10px;
+  background: var(--surface2);
+  border-radius: 6px;
+}
+.cron-resolved code {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  background: var(--surface3);
+  padding: 1px 4px;
+  border-radius: 3px;
+  color: var(--text);
+}
+
+/* ── CIDR calculator ─────────────────────────────────────────────────────────── */
+
+.cidr-table {
+  width: 100%;
+  max-width: 360px;
+  border-collapse: collapse;
+  margin-top: 12px;
+  font-size: 12px;
+}
+.cidr-table tr + tr td { border-top: 1px solid var(--border); }
+.cidr-key {
+  padding: 7px 12px;
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--text3);
+  text-transform: uppercase;
+  letter-spacing: .05em;
+  background: var(--surface2);
+  white-space: nowrap;
+  width: 120px;
+}
+.cidr-val {
+  padding: 7px 12px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text);
+}
+
+/* ── Card expiry urgency borders ─────────────────────────────────────────────── */
+
+.card.expiry-urgent { border-left: 3px solid #e05252; }
+.card.expiry-warn   { border-left: 3px solid #e09a2b; }
+.card.expiry-safe   { border-left: 3px solid rgba(90,176,90,.4); }
+.card.pinned { border-left: 3px solid var(--accent); }
+.card.pinned::before {
+  content: '';
+  position: absolute;
+  top: 7px;
+  right: 32px;
+  width: 10px;
+  height: 10px;
+  opacity: .55;
+  background-color: var(--accent);
+  /* SVG pin icon as a mask so it inherits the accent colour */
+  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cline x1='12' y1='17' x2='12' y2='22'/%3E%3Cpath d='M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24Z'/%3E%3C/svg%3E");
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cline x1='12' y1='17' x2='12' y2='22'/%3E%3Cpath d='M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24Z'/%3E%3C/svg%3E");
+  -webkit-mask-size: contain;
+  mask-size: contain;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+}
+
+/* ── Tags on cards ───────────────────────────────────────────────────────────── */
+
+.card-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 0 12px 6px;
+}
+.tag-chip-card {
+  font-size: 9.5px;
+  font-weight: 600;
+  padding: 1px 7px;
+  border-radius: 10px;
+  letter-spacing: .03em;
+  opacity: .85;
+}
+
+.tag-chip-sidebar {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 10px;
+  letter-spacing: .03em;
+  opacity: .9;
+}
+
+.tag-filter-btn.active .tag-chip-sidebar { opacity: 1; box-shadow: 0 0 0 1.5px var(--accent); }
+
+/* ── Rotation age on cards ───────────────────────────────────────────────────── */
+
+.rotation-age-badge {
+  font-size: 9.5px;
+  font-weight: 600;
+  padding: 1px 7px;
+  border-radius: 10px;
+  background: rgba(201,166,74,.12);
+  color: #e09a2b;
+  flex-shrink: 0;
+}
+.rotation-age-badge.fresh { background: rgba(79,201,126,.1); color: #4fc97e; }
+
+/* ── Chunk notes ─────────────────────────────────────────────────────────────── */
+
+.chunk-notes {
+  font-size: 11px;
+  color: var(--text3);
+  font-style: italic;
+  padding: 4px 0 6px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 4px;
+  line-height: 1.5;
+}
+
+/* ── Chunk disabled state ────────────────────────────────────────────────────── */
+
+.chunk-card.chunk-disabled {
+  opacity: .45;
+  filter: saturate(0.3);
+}
+.chunk-card.chunk-disabled .chunk-card-head {
+  text-decoration: line-through;
+  text-decoration-color: var(--text3);
+}
+
+/* ── Chunk search ────────────────────────────────────────────────────────────── */
+
+.chunk-search-wrap {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 8px;
+}
+.chunk-search-input {
+  flex: 1;
+  padding: 5px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border2);
+  background: var(--surface2);
+  color: var(--text);
+  font-size: 12px;
+  outline: none;
+  transition: border-color .12s;
+}
+.chunk-search-input:focus { border-color: var(--accent); }
+
+/* ── Pinned entry star in card footer ────────────────────────────────────────── */
+
+.pin-btn.active { color: var(--accent); }
+
+/* Small pin icon in card header (visible at a glance without expanding card) */
+.pin-badge {
+  display: inline-flex;
+  align-items: center;
+  color: var(--accent);
+  margin-left: 3px;
+  vertical-align: middle;
+  opacity: .85;
+}
+
+/* ── Search highlight ────────────────────────────────────────────────────────── */
+
+mark.search-hl {
+  background: rgba(201,166,74,.35);
+  color: inherit;
+  border-radius: 2px;
+  padding: 0 1px;
+}
+
+/* ── Empty state improvement ─────────────────────────────────────────────────── */
+
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 60px 20px;
+  color: var(--text3);
+  text-align: center;
+  grid-column: 1 / -1;
+}
+.empty-state svg { opacity: .3; }
+.empty-state p { font-size: 14px; font-weight: 600; color: var(--text2); margin: 0; }
+.empty-state small { font-size: 12px; color: var(--text3); }
+.empty-state .empty-action { margin-top: 6px; }
+
+/* ── Tool pane: wider body for grid tools ────────────────────────────────────── */
+
+.tool-body.wide { max-width: 100%; }
+
+/* ── Tag input in modal ──────────────────────────────────────────────────────── */
+
+.tag-input-wrap { display: flex; flex-direction: column; gap: 6px; }
+.tag-chips-display { display: flex; flex-wrap: wrap; gap: 4px; min-height: 0; }

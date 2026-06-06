@@ -12,6 +12,10 @@ import {
   makeK8sStarterChunks,
   makeSshStarterChunks,
   makeTraefikStarterChunks,
+  makeApacheStarterChunks,
+  makeHaproxyStarterChunks,
+  makeAnsibleStarterChunks,
+  makePostgresStarterChunks,
 } from './chunk-ops';
 
 // ── Filter setter ─────────────────────────────────────────────────────────
@@ -170,6 +174,14 @@ export function saveProjectCreate() {
     newProject.chunks = makeSshStarterChunks();
   } else if (_projectCreateType === 'traefik') {
     newProject.chunks = makeTraefikStarterChunks();
+  } else if (_projectCreateType === 'apache') {
+    newProject.chunks = makeApacheStarterChunks();
+  } else if (_projectCreateType === 'haproxy') {
+    newProject.chunks = makeHaproxyStarterChunks();
+  } else if (_projectCreateType === 'ansible') {
+    newProject.chunks = makeAnsibleStarterChunks();
+  } else if (_projectCreateType === 'postgres') {
+    newProject.chunks = makePostgresStarterChunks();
   }
 
   const nameParts = trimmed.split('/');

@@ -505,7 +505,7 @@ fn main() {
     }
 }
 
-fn cmd_watch(access: &Access, file: &PathBuf, project: Option<&str>) -> Result<(), String> {
+fn cmd_watch(access: &Access, file: &PathBuf, _project: Option<&str>) -> Result<(), String> {
     use notify::{Event, RecursiveMode, Watcher, recommended_watcher};
     use std::sync::mpsc::channel;
 

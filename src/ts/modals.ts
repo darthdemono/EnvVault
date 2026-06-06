@@ -51,8 +51,8 @@ export const TYPE_CONFIG: Record<SecretType, TypeConfig> = {
   env_var:           { providerLabel: 'Variable Name',    providerPlaceholder: 'e.g. DATABASE_URL',     showAccount: false, keyLabel: 'Value',             keyPlaceholder: 'Variable value' },
   connection_string: { providerLabel: 'Service',          providerPlaceholder: 'e.g. PostgreSQL',       showAccount: false, keyLabel: 'Connection String', keyPlaceholder: 'postgresql://user:pass@host/db' },
   ssh_key:           { providerLabel: 'Host / Service',   providerPlaceholder: 'e.g. github.com',       showAccount: true,  keyLabel: 'SSH Key',           keyPlaceholder: '-----BEGIN OPENSSH PRIVATE KEY-----' },
-  certificate:       { providerLabel: 'Provider / Issuer',providerPlaceholder: "e.g. Let's Encrypt",   showAccount: false, keyLabel: 'API Key',           keyPlaceholder: '' },
-  file_blob:         { providerLabel: 'Name',             providerPlaceholder: 'e.g. config.yaml',      showAccount: false, keyLabel: 'API Key',           keyPlaceholder: '' },
+  certificate:       { providerLabel: 'Provider / Issuer',providerPlaceholder: "e.g. Let's Encrypt",   showAccount: false, keyLabel: 'Certificate',       keyPlaceholder: '' },
+  file_blob:         { providerLabel: 'Name',             providerPlaceholder: 'e.g. config.yaml',      showAccount: false, keyLabel: 'File Reference',    keyPlaceholder: '' },
 };
 
 // ── Dynamic form fields ───────────────────────────────────────────────────
@@ -106,7 +106,7 @@ export function formToEntry(): VaultEntry {
   const secretType = (getVal('f-secret-type') || 'api_key') as SecretType;
 
   const selectedProjectIds = [...document.querySelectorAll<HTMLElement>('#f-project .project-pick-item.selected')]
-    .map(el => el.dataset.value!);
+    .map(el => el.dataset.value!).filter(Boolean);
 
   return {
     provider: getVal('f-provider'),
@@ -118,7 +118,9 @@ export function formToEntry(): VaultEntry {
     key_id: getVal('f-keyid') || undefined,
     price_type: getVal('f-price', 'free') as VaultEntry['price_type'],
     environment: getVal('f-env') as VaultEntry['environment'] || undefined,
-    projectIds: selectedProjectIds.length ? selectedProjectIds : ['Universal'],
+    projectIds: selectedProjectIds.includes('Universal')
+      ? selectedProjectIds
+      : ['Universal', ...selectedProjectIds],
     api_url: getVal('f-apiurl') || undefined,
     callback_url: getVal('f-cburl') || undefined,
     version: getVal('f-version') || undefined,
@@ -130,6 +132,9 @@ export function formToEntry(): VaultEntry {
     details: getVal('f-details') || undefined,
     custom_icon: getVal('f-icon') || undefined,
     categories: cats,
+    tags: getVal('f-tags-input').split(/\s+/).filter(Boolean).length
+      ? getVal('f-tags-input').split(/\s+/).filter(Boolean)
+      : undefined,
     secretType,
     certificate_data: secretType === 'certificate' ? getVal('f-cert') : undefined,
     cert_key_data: secretType === 'certificate' ? (getVal('f-cert-key') || undefined) : undefined,
@@ -167,6 +172,8 @@ export function fillForm(entry: Partial<VaultEntry>) {
   (document.getElementById('f-desc') as HTMLInputElement).value = entry.description || '';
   (document.getElementById('f-details') as HTMLInputElement).value = entry.details || '';
   (document.getElementById('f-icon') as HTMLInputElement).value = entry.custom_icon || '';
+  const tagsInput = document.getElementById('f-tags-input') as HTMLInputElement | null;
+  if (tagsInput) tagsInput.value = (entry.tags || []).join(' ');
   (document.getElementById('f-icon-preview')!).innerHTML = entry.custom_icon ? iconHTML('', entry.custom_icon) : '';
   const stVal = entry.secretType || 'api_key';
   (document.getElementById('f-secret-type') as HTMLSelectElement).value = stVal;
@@ -269,6 +276,7 @@ export function saveModal() {
         ...entry,
         last_rotated_at: old.last_rotated_at,
         version_history: old.version_history,
+        pinned: old.pinned,
       };
     } else {
       st.vault.api_keys.push(entry);
@@ -305,11 +313,12 @@ export function duplicateKey(e: Event, idx: number) {
 export function deleteKey(e: Event, idx: number) {
   e.stopPropagation();
   const removed = st.vault.api_keys.splice(idx, 1)[0];
+  const restoreIdx = idx; // capture position; undo restores to same slot
   st.store.save(st.vault);
   st.expanded.delete(idx);
   triggerRender();
   pushUndo(`Deleted "${removed.provider}"`, () => {
-    st.vault.api_keys.splice(idx, 0, removed);
+    st.vault.api_keys.splice(restoreIdx, 0, removed);
     st.store.save(st.vault);
     triggerRender();
   });
@@ -319,7 +328,17 @@ export function pushUndo(msg: string, fn: () => void) {
   const bar = document.getElementById('undo-bar')!;
   document.getElementById('undo-msg')!.textContent = msg;
   bar.classList.add('visible');
-  st.undoStack.push({ fn, t: setTimeout(() => { bar.classList.remove('visible'); st.undoStack.pop(); }, 5000) });
+  // Use a unique token so the timeout removes *this* entry, not whatever happens to be last.
+  const entry: { fn: () => void; t: ReturnType<typeof setTimeout> } = {
+    fn,
+    t: 0 as unknown as ReturnType<typeof setTimeout>,
+  };
+  entry.t = setTimeout(() => {
+    const idx = st.undoStack.indexOf(entry);
+    if (idx >= 0) st.undoStack.splice(idx, 1);
+    if (!st.undoStack.length) bar.classList.remove('visible');
+  }, 5000);
+  st.undoStack.push(entry);
 }
 
 // ── Form helpers ──────────────────────────────────────────────────────────
@@ -460,6 +479,8 @@ export function showDropdown(anchorEl: HTMLElement, items: Array<DropdownItem | 
       if (item === '---') return '<div class="dropdown-sep"></div>';
       const id = _dropdownItemId++;
       _dropdownCallbacks.set(id, item.fn);
+      // Labels from callers are already escaped or are static strings — render as-is.
+      // Callers that include user data (e.g. entry.provider) must pre-escape with esc().
       return `<div class="dropdown-item${item.active ? ' active' : ''}" data-ddid="${id}">${item.label}</div>`;
     })
     .join('');
