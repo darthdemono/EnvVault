@@ -3,7 +3,7 @@
  */
 
 import type { VaultEntry, SecretType, Project, ProjectType, SecretChunk, ChunkFieldType } from './types';
-import { st, Settings, setRenderFn, applyGridSettings, dotenvKey, switchPanel, isSidebarSectionEnabled, persist, entryId } from './state';
+import { st, Settings, setRenderFn, applyGridSettings, dotenvKey, switchPanel, isSidebarSectionEnabled, persist, entryId, saveViewState } from './state';
 import { getFiltered, sorted, buildProjectTree, getDescendantProjectIds } from './filters';
 import { iconHTML } from './icons';
 import { esc, escAttr, maskKey, showToast, showConfirm, showPrompt, showPromptLarge, clipboardWrite, eyeSVG, copySVG, editSVG, delSVG, dupSVG } from './utils';
@@ -1472,6 +1472,10 @@ function renderConfigView(project: Project) {
 // ── Top-level render ───────────────────────────────────────────────────────
 
 export function render() {
+  // Single hook for view persistence, mirroring resetViewState's single hook for
+  // clearing it. Every filter/project/tag change routes through triggerRender(),
+  // so snapshotting here catches all of them without each call site remembering.
+  saveViewState();
   renderSidebar();
   renderProjectTree();
   const selectedId = st.currentSelectedProjectIds[0] ?? 'Universal';
@@ -1487,7 +1491,42 @@ export function render() {
   updateCopyAllBtn();
 }
 
+/**
+ * Every filter currently narrowing the grid, as human-readable labels.
+ *
+ * Project ids are resolved to names — a raw UUID in the toolbar tells the user
+ * nothing about what is being hidden.
+ */
+export function activeFilterLabels(): string[] {
+  const out: string[] = [];
+  if (st.filter.type !== 'all' && st.filter.value) out.push(`${st.filter.type}: ${st.filter.value}`);
+  if (st.currentEnvFilter)   out.push(`env: ${st.currentEnvFilter}`);
+  if (st.activeTagFilter)    out.push(`tag: ${st.activeTagFilter}`);
+  if (st.activePrefixFilter) out.push(`prefix: ${st.activePrefixFilter}`);
+  if (st.searchQ)            out.push(`search: ${st.searchQ}`);
+  const proj = st.currentSelectedProjectIds.filter(id => id !== 'Universal');
+  proj.forEach(id => {
+    const p = st.vault.projects.find(x => x.id === id);
+    out.push(`project: ${p?.name ?? id}`);
+  });
+  return out;
+}
+
+/** Shows or hides the "Clear filters" button and its count. */
+export function updateActiveFilterBar(): void {
+  const btn = document.getElementById('clear-filters-btn');
+  if (!btn) return;
+  const labels = activeFilterLabels();
+  btn.style.display = labels.length ? '' : 'none';
+  const countEl = document.getElementById('clear-filters-count');
+  if (countEl) countEl.textContent = labels.length > 1 ? `(${labels.length})` : '';
+  btn.title = labels.length
+    ? `Active — ${labels.join(', ')}\nClear every filter (Shift+Esc)`
+    : 'Clear every active filter (Shift+Esc)';
+}
+
 export function updateCopyAllBtn() {
+  updateActiveFilterBar();
   const wrap = document.getElementById('copy-all-wrap');
   if (!wrap) return;
   const items = getFiltered();

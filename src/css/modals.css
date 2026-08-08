@@ -350,3 +350,65 @@ select.form-input {
   color: var(--price-paid)
 }
 
+
+/* ── INPUT AFFIX (reveal button, inline picker) ────── */
+.input-affix { position: relative; display: block; }
+.input-affix > .form-input { padding-right: 32px; width: 100%; }
+
+.input-affix-btn {
+  position: absolute;
+  right: 6px;
+  top: 50%;
+  transform: translateY(-50%);
+  background: none;
+  border: none;
+  padding: 4px;
+  cursor: pointer;
+  color: var(--text3);
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 0;
+}
+.input-affix-btn:hover { color: var(--text); background: var(--surface3); }
+.input-affix-btn.active { color: var(--accent); }
+
+/* ── CAPS LOCK WARNING ─────────────────────────────── */
+.capslock-hint {
+  margin-top: 6px;
+  font-size: 11px;
+  color: var(--warn, #e8a33d);
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+.capslock-hint::before { content: '⇪'; font-size: 13px; line-height: 1; }
+
+/* ── PASSWORD STRENGTH METER ───────────────────────── */
+.pw-strength { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+
+.pw-strength-bar {
+  flex: 1;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--surface3);
+  overflow: hidden;
+}
+
+.pw-strength-bar > span {
+  display: block;
+  height: 100%;
+  width: 0;
+  border-radius: 2px;
+  transition: width .18s, background .18s;
+}
+
+.pw-strength-label {
+  font-size: 10px;
+  letter-spacing: .05em;
+  text-transform: uppercase;
+  color: var(--text3);
+  min-width: 52px;
+  text-align: right;
+}

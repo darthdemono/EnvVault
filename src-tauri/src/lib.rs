@@ -828,6 +828,27 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
+        // Restore the window where the user left it.
+        //
+        // VISIBLE is deliberately excluded from the saved flags. Clicking the
+        // tray icon hides the window (see the tray handler in `setup` below),
+        // so with VISIBLE on, hiding to the tray and then quitting would save
+        // "not visible" and the next launch would restore an invisible window —
+        // the app would appear to start and do nothing, with only the tray icon
+        // as a way back. Size and position are what the user actually wants
+        // remembered; visibility is a transient tray state.
+        //
+        // MAXIMIZED is kept: it is an explicit window-manager state the user
+        // set, and restoring maximized is the expected behaviour.
+        .plugin(
+            tauri_plugin_window_state::Builder::default()
+                .with_state_flags(
+                    tauri_plugin_window_state::StateFlags::SIZE
+                        | tauri_plugin_window_state::StateFlags::POSITION
+                        | tauri_plugin_window_state::StateFlags::MAXIMIZED,
+                )
+                .build(),
+        )
         .manage(VaultState(Mutex::new(None)))
         .manage(LanState(Mutex::new(None)))
         .invoke_handler(tauri::generate_handler![

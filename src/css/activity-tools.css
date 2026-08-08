@@ -606,6 +606,7 @@
 .remote-item-info { display: flex; flex-direction: column; gap: 2px; flex: 1; min-width: 0; }
 .remote-item-name { font-size: 12px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .remote-item-url  { font-size: 10px; color: var(--text3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-family: var(--font-mono); }
+.remote-item-seen { font-size: 9px; color: var(--text3); opacity: .75; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 .remote-connected-dot {
   width: 6px; height: 6px; border-radius: 50%;

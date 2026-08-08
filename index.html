@@ -55,6 +55,10 @@
             <line x1="6" y1="6" x2="18" y2="18" />
           </svg>
         </button>
+        <!-- Recent-search history. Hidden by default; opened on focus of an empty
+             search box. Not a native <datalist>: WebKitGTK renders those as a
+             native popup positioned wrong inside the Tauri window. -->
+        <div id="search-history" class="search-history" style="display:none"></div>
       </div>
     </div>
 
@@ -372,6 +376,11 @@
           <span id="result-count" class="result-count">0 secrets</span>
           <button id="expand-all-btn" class="btn btn-ghost btn-xs">Expand All</button>
           <button id="bulk-select-btn" class="btn btn-ghost btn-xs" title="Select multiple for bulk actions">Select</button>
+          <!-- Shown by updateActiveFilterBar() only while something is filtering
+               the grid. Filters now survive a restart, so the app can open with
+               a selection the user does not remember making. -->
+          <button id="clear-filters-btn" class="btn btn-ghost btn-xs" style="display:none"
+            title="Clear every active filter (Shift+Esc)">Clear filters <span id="clear-filters-count"></span></button>
         </div>
         <!-- Bulk action bar (item 8) — shown in select mode -->
         <div id="bulk-bar" class="bulk-bar">
@@ -478,8 +487,16 @@
             Server URL
             <span style="font-size:10px;color:var(--text3);font-weight:400">leave blank for local vault</span>
           </label>
-          <input class="form-input mono" id="unlock-server" type="url" placeholder="http://localhost:8743"
-            autocomplete="url" spellcheck="false">
+          <div class="input-affix">
+            <input class="form-input mono" id="unlock-server" type="url" placeholder="http://localhost:8743"
+              autocomplete="url" spellcheck="false">
+            <button type="button" class="input-affix-btn" id="unlock-server-recent"
+              title="Recently connected servers" aria-label="Recently connected servers">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                <polyline points="6 9 12 15 18 9" />
+              </svg>
+            </button>
+          </div>
         </div>
 
         <div class="form-group">
@@ -490,14 +507,28 @@
 
         <div class="form-group">
           <label class="form-label">Password</label>
-          <input class="form-input mono" id="unlock-password" type="password" placeholder="Master password"
-            autocomplete="current-password">
+          <div class="input-affix">
+            <input class="form-input mono" id="unlock-password" type="password" placeholder="Master password"
+              autocomplete="current-password">
+            <button type="button" class="input-affix-btn" data-reveal="unlock-password"
+              title="Show password" aria-label="Show password">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
+                <circle cx="12" cy="12" r="3" />
+              </svg>
+            </button>
+          </div>
+          <div class="capslock-hint" id="unlock-capslock" style="display:none">Caps Lock is on</div>
         </div>
 
         <div class="form-group" id="unlock-confirm-group" style="display:none">
           <label class="form-label">Confirm Password</label>
           <input class="form-input mono" id="unlock-confirm" type="password" placeholder="Confirm master password"
             autocomplete="new-password">
+          <div class="pw-strength" id="unlock-strength" style="display:none">
+            <div class="pw-strength-bar"><span id="unlock-strength-fill"></span></div>
+            <span class="pw-strength-label" id="unlock-strength-label"></span>
+          </div>
         </div>
 
         <div id="unlock-error" style="display:none;margin-top:10px;font-size:12px;
@@ -531,8 +562,18 @@
         </p>
         <div class="form-group">
           <label class="form-label">Master Password</label>
-          <input class="form-input mono" id="relock-password" type="password"
-            placeholder="Enter master password" autocomplete="current-password">
+          <div class="input-affix">
+            <input class="form-input mono" id="relock-password" type="password"
+              placeholder="Enter master password" autocomplete="current-password">
+            <button type="button" class="input-affix-btn" data-reveal="relock-password"
+              title="Show password" aria-label="Show password">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
+                <circle cx="12" cy="12" r="3" />
+              </svg>
+            </button>
+          </div>
+          <div class="capslock-hint" id="relock-capslock" style="display:none">Caps Lock is on</div>
         </div>
         <div id="relock-error" style="display:none;margin-top:10px;font-size:12px;
           color:var(--danger,#e05);padding:8px 10px;
@@ -902,6 +943,23 @@
             </div>
           </div>
           <div class="settings-section">
+            <div class="settings-section-title">Session</div>
+            <div class="settings-row">
+              <div class="settings-label">
+                Remember filters between sessions
+                <div class="settings-hint">Restores the category, project, tag and environment filter you last had selected. Selections that no longer exist in the vault are dropped.</div>
+              </div>
+              <label class="toggle"><input type="checkbox" id="s-remember-filters"><span class="toggle-track"></span></label>
+            </div>
+            <div class="settings-row">
+              <div class="settings-label">
+                Recent searches
+                <div class="settings-hint">Shown when you focus the empty search box.</div>
+              </div>
+              <button id="s-clear-recent" class="btn btn-sm">Clear history</button>
+            </div>
+          </div>
+          <div class="settings-section">
             <div class="settings-section-title">Secrets Display</div>
             <div class="settings-row">
               <div class="settings-label">Mask secrets by default</div>
@@ -1078,9 +1136,11 @@
         <kbd>Ctrl+K</kbd><span>Focus search</span>
         <kbd>Ctrl+N</kbd><span>Add new key</span>
         <kbd>Esc</kbd><span>Clear search / close</span>
+        <kbd>Shift+Esc</kbd><span>Clear all filters</span>
         <kbd>S</kbd><span>Open settings</span>
         <kbd>B</kbd><span>Toggle sidebar</span>
         <kbd>?</kbd><span>Show shortcuts</span>
+        <kbd>Dbl-click</kbd><span>Sidebar edge — reset width</span>
       </div>
     </div>
   </div>

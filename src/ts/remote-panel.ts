@@ -5,6 +5,7 @@
 import type { RemoteVaultConfig } from './types';
 import { st, Settings, RemoteVaultStore, TauriVaultStore, LocalVaultStore, inTauri, applyUsersPanelVisibility, resetViewState, triggerRender } from './state';
 import { esc, escAttr, showToast, showConfirm, showPasswordPrompt } from './utils';
+import { relativeTime } from './ui-qol';
 
 let _finishInitFn: () => Promise<void> = async () => {};
 export function setRemoteFinishInitFn(fn: () => Promise<void>) { _finishInitFn = fn; }
@@ -117,6 +118,21 @@ export function upsertSavedRemote(input: { url: string; username: string; certFi
   return cfg;
 }
 
+/**
+ * Stamps a saved remote as connected *now*.
+ *
+ * Call this only after authentication has actually succeeded. The unlock
+ * screen's server picker sorts on this field, so stamping it on save — or on a
+ * failed attempt — would promote a server the user could not get into.
+ */
+export function markRemoteConnected(id: string): void {
+  const saved = getSaved();
+  const idx = saved.findIndex(c => c.id === id);
+  if (idx < 0) return;
+  saved[idx] = { ...saved[idx], lastConnectedAt: new Date().toISOString() };
+  saveSaved(saved);
+}
+
 // ── Render ────────────────────────────────────────────────────────────────────
 
 export function renderRemotePanel() {
@@ -137,6 +153,7 @@ export function renderRemotePanel() {
       <span class="remote-item-info">
         <span class="remote-item-name">${esc(cfg.name)}</span>
         <span class="remote-item-url">${esc(cfg.url)}</span>
+        <span class="remote-item-seen">${esc(relativeTime(cfg.lastConnectedAt))}</span>
       </span>
       ${activeId === cfg.id ? '<span class="remote-connected-dot" title="Connected"></span>' : ''}
     </button>
@@ -276,6 +293,7 @@ async function connectRemote(cfg: RemoteVaultConfig) {
       }
     }
 
+    markRemoteConnected(cfg.id);
     st.store = remote;
     st.activeRemoteId = cfg.id;
     Settings.set('remote', { enabled: true, serverUrl: cfg.url });

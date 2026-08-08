@@ -3,8 +3,10 @@
  */
 
 import { st, TauriVaultStore, RemoteVaultStore, LocalVaultStore, inTauri, Settings, triggerRender, resetViewState } from './state';
-import { showToast, showConfirm } from './utils';
-import { upsertSavedRemote, findSavedRemote, renderRemotePanel } from './remote-panel';
+import { showToast, showConfirm, esc } from './utils';
+import { upsertSavedRemote, findSavedRemote, renderRemotePanel, markRemoteConnected } from './remote-panel';
+import { showDropdown } from './modals';
+import { wireRevealButtons, resetReveal, wireCapsLockHint, wirePasswordStrength, relativeTime } from './ui-qol';
 
 let _finishInitFn: () => Promise<void> = async () => {};
 let _warnTimer: ReturnType<typeof setTimeout> | null = null;
@@ -83,6 +85,12 @@ export function showRelockScreen(reason: 'auto' | 'manual' | 'visibility' | 'swi
   errEl.style.display = 'none';
   submitBtn.disabled = false;
   submitBtn.textContent = 'Unlock';
+  // Re-mask on every lock: a reveal left switched on would otherwise show the
+  // master password in plaintext on the auto-lock screen — the exact moment the
+  // user is most likely to be away from the machine.
+  resetReveal('relock-password');
+  wireRevealButtons(document.getElementById('relock-overlay')!);
+  wireCapsLockHint('relock-password', 'relock-capslock');
   setTimeout(() => pwField.focus(), 80);
 
   function showErr(msg: string) {
@@ -160,6 +168,24 @@ export function resetLock() {
 
 // ── Unlock modal ──────────────────────────────────────────────────────────────
 
+/**
+ * Saved remotes ordered most-recently-connected first.
+ *
+ * Servers that have never authenticated sort last rather than being dropped:
+ * one added through the Remote panel but not yet used is still worth offering,
+ * it just should not outrank the one used every morning.
+ */
+export function recentServers() {
+  // Date.parse returns NaN for a missing timestamp, and NaN in a comparator
+  // makes *every* comparison return NaN — the sort then leaves the list in
+  // whatever order it started, so never-connected servers do not sort last.
+  const at = (c: { lastConnectedAt?: string }) => {
+    const n = Date.parse(c.lastConnectedAt ?? '');
+    return Number.isNaN(n) ? 0 : n;
+  };
+  return [...(Settings.get('remoteSaved') ?? [])].sort((a, b) => at(b) - at(a));
+}
+
 export async function showUnlockModal(isFirstRun: boolean) {
   const overlay      = document.getElementById('unlock-overlay')!;
   const titleEl      = document.getElementById('unlock-title')!;
@@ -206,14 +232,69 @@ export async function showUnlockModal(isFirstRun: boolean) {
   errEl.style.display = 'none';
   if (userField && !userField.value) userField.value = '';
 
-  // Pre-fill server URL from saved remote config
+  resetReveal('unlock-password');
+  wireRevealButtons(overlay);
+  wireCapsLockHint('unlock-password', 'unlock-capslock');
+  wirePasswordStrength('unlock-password', 'unlock-strength');
+
+  // Pre-fill server URL from the most recently *connected* remote, falling back
+  // to the legacy single-remote setting. Ordering by lastConnectedAt matters:
+  // `remote.serverUrl` is whatever was typed last, including a URL that never
+  // authenticated, so it would happily re-offer a server the user gave up on.
   if (serverField) {
     const savedUrl = Settings.get('remote')?.serverUrl ?? '';
+    const recent = recentServers()[0];
     if (st.store instanceof RemoteVaultStore) {
       serverField.value = (st.store as RemoteVaultStore).baseUrl;
+    } else if (recent) {
+      serverField.value = recent.url;
+      if (userField && !userField.value) userField.value = recent.username;
     } else if (savedUrl) {
       serverField.value = savedUrl;
     }
+  }
+
+  // Recent-servers picker. Saves retyping a URL and, more importantly, restores
+  // the *username* that goes with it — the two are a pair, and connecting with
+  // the right URL under the wrong account just fails authentication.
+  const recentBtn = document.getElementById('unlock-server-recent') as HTMLButtonElement | null;
+  if (recentBtn && serverField) {
+    recentBtn.onclick = () => {
+      const servers = recentServers();
+      const items: Array<{ label: string; active: boolean; fn: () => void } | '---'> = [
+        {
+          label: '&nbsp;&nbsp;Local Vault',
+          active: !serverField.value,
+          fn: () => {
+            serverField.value = '';
+            if (userField) userField.value = '';
+            configure(isFirstRun);
+            pwField.focus();
+          },
+        },
+      ];
+      if (servers.length) items.push('---');
+      servers.forEach(cfg => {
+        items.push({
+          label:
+            `<div>${esc(cfg.name)}</div>` +
+            `<div style="font-size:10px;color:var(--text3);margin-top:2px">` +
+            `${esc(cfg.url)} · ${esc(relativeTime(cfg.lastConnectedAt))}</div>`,
+          active: serverField.value.replace(/\/$/, '') === cfg.url,
+          fn: () => {
+            serverField.value = cfg.url;
+            if (userField) userField.value = cfg.username;
+            configure(isFirstRun);
+            pwField.focus();
+          },
+        });
+      });
+      if (!servers.length) {
+        items.push('---');
+        items.push({ label: '<span style="color:var(--text3)">No servers connected yet</span>', active: false, fn: () => {} });
+      }
+      showDropdown(recentBtn, items);
+    };
   }
 
   // Re-run configure when server URL changes (switches between local/remote layout).
@@ -265,6 +346,7 @@ export async function showUnlockModal(isFirstRun: boolean) {
         // never reached the saved list, so it was absent from the Remote panel
         // and the vault switcher and had to be retyped every session.
         const cfg = upsertSavedRemote({ url: serverUrl, username, certFingerprint: fingerprint });
+        markRemoteConnected(cfg.id);
 
         st.store = remote;
         st.activeRemoteId = cfg.id;

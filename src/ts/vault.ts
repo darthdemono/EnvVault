@@ -4,7 +4,7 @@
  * This file wires everything together and registers event listeners.
  */
 
-import { st, Settings, TauriVaultStore, LocalVaultStore, RemoteVaultStore, inTauri, setRenderFn, triggerRender, switchPanel, switchTool, persist, entryId, ensureEntryIds, applyUsersPanelVisibility } from './state';
+import { st, Settings, TauriVaultStore, LocalVaultStore, RemoteVaultStore, inTauri, setRenderFn, triggerRender, switchPanel, switchTool, persist, entryId, ensureEntryIds, applyUsersPanelVisibility, applySidebarLayout, restoreViewState, clearAllFilters, SIDEBAR_MIN_W, SIDEBAR_MAX_W } from './state';
 import { initIconPicker, openIconPicker, iconHTML } from './icons';
 import {
   showToast, showConfirm, clipboardWrite,
@@ -45,6 +45,7 @@ import {
   openChunkEditModal, closeChunkEditModal, saveChunkEdit,
   renderChunkEditFields, readChunkEditFields,
 } from './chunk-ops';
+import { wireSearchHistory, closeSearchHistory, wireCloseGuard } from './ui-qol';
 import type { ProjectType } from './types';
 
 // Wire the global render callback so all modules can call triggerRender()
@@ -52,6 +53,30 @@ setRenderFn(render);
 setFinishInitFn(finishInit);
 
 /* ================================ BOOTSTRAP ================================ */
+
+/** Grid sort modes. Module-level so the persisted value can be validated against it. */
+const SORT_OPTIONS = [
+  { value: 'provider', label: 'A – Z' },
+  { value: 'price',    label: 'Price Type' },
+  { value: 'category', label: 'Category' },
+  { value: 'expiry',   label: 'Expiry' },
+];
+
+/**
+ * Applies the persisted sort mode and syncs the toolbar label to it.
+ *
+ * The stored value is checked against SORT_OPTIONS rather than trusted: an
+ * unrecognised mode falls through every branch of `sorted()` and leaves the
+ * grid in insertion order while the button claims otherwise.
+ */
+function restoreSort(): void {
+  const saved = Settings.get('lastSortBy');
+  const opt = SORT_OPTIONS.find(o => o.value === saved);
+  if (!opt) return;
+  st.currentSortBy = opt.value;
+  const labelEl = document.getElementById('sort-label-text');
+  if (labelEl) labelEl.textContent = opt.label;
+}
 
 let searchDebounceTimer: ReturnType<typeof setTimeout>;
 
@@ -123,6 +148,11 @@ async function finishInit() {
     }
   } catch { document.getElementById('load-banner')!.style.display = 'flex'; }
 
+  // Restore the last grid view *before* the first render, so the app paints once
+  // in its final state instead of flashing the unfiltered grid. restoreViewState
+  // drops any id the loaded vault does not have — see its doc comment.
+  restoreViewState();
+
   render();
   resetLock();
   initTools();
@@ -139,7 +169,20 @@ async function init() {
   mountToolsPanes();
 
   await Settings.init();
+  applySidebarLayout();
+  restoreSort();
   initIconPicker();
+  wireSearchHistory((q) => {
+    // Store the query exactly as typed — parseSearch() lowercases what it needs
+    // to, and pre-lowercasing here would both diverge from the input handler and
+    // display a mangled query in the active-filter tooltip.
+    const el = document.getElementById('search') as HTMLInputElement;
+    el.value = q;
+    st.searchQ = q;
+    document.getElementById('search-clear')?.classList.add('visible');
+    renderGrid(); updateCopyAllBtn();
+  });
+  wireCloseGuard();
 
   // Wrap form selects as custom dropdowns (WebKitGTK compositing workaround)
   ['f-secret-type', 'f-price', 'f-env'].forEach(id => {
@@ -244,17 +287,13 @@ async function init() {
 
   // Sort dropdown
   document.getElementById('sort-btn')?.addEventListener('click', (e) => {
-    const opts = [
-      { value: 'provider', label: 'A – Z' },
-      { value: 'price',    label: 'Price Type' },
-      { value: 'category', label: 'Category' },
-      { value: 'expiry',   label: 'Expiry' },
-    ];
+    const opts = SORT_OPTIONS;
     showDropdown(e.currentTarget as HTMLElement, opts.map(opt => ({
       label: (opt.value === st.currentSortBy ? '✓ ' : '    ') + opt.label,
       active: opt.value === st.currentSortBy,
       fn: () => {
         st.currentSortBy = opt.value;
+        Settings.set('lastSortBy', opt.value);
         const labelEl = document.getElementById('sort-label-text');
         if (labelEl) labelEl.textContent = opt.label;
         renderGrid();
@@ -270,8 +309,15 @@ async function init() {
     renderGrid();   // renderGrid syncs the button label from st.allExpanded
   });
 
-  // Sidebar toggle + add button
-  document.getElementById('sidebar-toggle')!.addEventListener('click', () => document.getElementById('sidebar')?.classList.toggle('collapsed'));
+  // Sidebar toggle + add button. The collapsed state is persisted: it is a
+  // layout preference, and resetting it on every launch made Ctrl-B feel like
+  // it had not been remembered.
+  document.getElementById('sidebar-toggle')!.addEventListener('click', () => {
+    const sb = document.getElementById('sidebar');
+    if (!sb) return;
+    sb.classList.toggle('collapsed');
+    Settings.set('sidebarCollapsed', sb.classList.contains('collapsed'));
+  });
   document.getElementById('add-btn')!.addEventListener('click', openAdd);
 
   // Sidebar resize handle
@@ -284,18 +330,30 @@ async function init() {
         _startX = e.clientX;
         _startW = sidebar.getBoundingClientRect().width;
         resizer.classList.add('dragging');
+        let _w = _startW;
         const onMove = (ev: MouseEvent) => {
-          const w = Math.max(140, Math.min(420, _startW + ev.clientX - _startX));
-          sidebar.style.width = w + 'px';
+          _w = Math.max(SIDEBAR_MIN_W, Math.min(SIDEBAR_MAX_W, _startW + ev.clientX - _startX));
+          sidebar.style.width = _w + 'px';
         };
         const onUp = () => {
           resizer.classList.remove('dragging');
           document.removeEventListener('mousemove', onMove);
           document.removeEventListener('mouseup', onUp);
+          // Persist on mouseup, not on every mousemove: writing localStorage on
+          // each pixel of the drag serialises the whole settings blob ~60×/sec.
+          Settings.set('sidebarWidth', Math.round(_w));
         };
         document.addEventListener('mousemove', onMove);
         document.addEventListener('mouseup', onUp);
         e.preventDefault();
+      });
+
+      // Double-click the handle to go back to the stylesheet default — the only
+      // way out once a persisted width has been dragged to an awkward size.
+      resizer.addEventListener('dblclick', () => {
+        Settings.set('sidebarWidth', 0);
+        sidebar.style.width = '';
+        showToast('Sidebar width reset', 'ok', 1500);
       });
     }
   }
@@ -448,6 +506,13 @@ async function init() {
     renderChunkEditFields(current);
   });
 
+  // Clear every active filter
+  document.getElementById('clear-filters-btn')?.addEventListener('click', () => {
+    clearAllFilters();
+    closeSearchHistory();
+    triggerRender();
+  });
+
   // Lock
   document.getElementById('lock-btn')!.addEventListener('click', async () => { if (await showConfirm('Lock vault?')) lockVault(); });
 
@@ -475,6 +540,16 @@ async function init() {
     if (!inInput && e.key === 's') openSettings();
     if (!inInput && e.key === 'b') document.getElementById('sidebar-toggle')!.click();
     if (!inInput && e.key === '?') shortcutsEl.classList.add('open');
+    // Shift+Esc: drop every filter at once. Plain Escape only clears the search
+    // box, which is not enough now that a category/project/tag selection can be
+    // restored from a previous session.
+    if (e.key === 'Escape' && e.shiftKey) {
+      e.preventDefault();
+      clearAllFilters();
+      triggerRender();
+      showToast('Filters cleared', 'ok', 1500);
+      return;
+    }
     if (e.key === 'Escape') {
       shortcutsEl.classList.remove('open');
       // Escape used to just hide the panel: theme and accent apply live, so the

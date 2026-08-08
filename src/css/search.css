@@ -64,3 +64,62 @@
   z-index: 1
 }
 
+
+/* ── RECENT SEARCH HISTORY ─────────────────────────── */
+/* Anchored to .search-wrap (position:relative) rather than fixed, so it tracks
+   the input without the WebKitGTK fixed-element ghost that bit .dropdown. */
+.search-history {
+  position: absolute;
+  top: calc(100% + 5px);
+  left: 0;
+  right: 0;
+  z-index: 60;
+  background: var(--surface2, var(--surface));
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, .35);
+  overflow: hidden;
+  max-height: 260px;
+  overflow-y: auto;
+}
+
+.search-history-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 10px;
+  font-size: 10px;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  color: var(--text3);
+  border-bottom: 1px solid var(--border);
+}
+
+.search-history-clear {
+  background: none;
+  border: none;
+  color: var(--text3);
+  font-size: 10px;
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: 3px;
+}
+.search-history-clear:hover { color: var(--text); background: var(--surface3); }
+
+.search-history-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 10px;
+  background: none;
+  border: none;
+  color: var(--text2, var(--text));
+  font-family: 'Syne', sans-serif;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+.search-history-item:hover,
+.search-history-item.active { background: var(--surface3); color: var(--text); }
+.search-history-item svg { position: static; transform: none; flex-shrink: 0; }

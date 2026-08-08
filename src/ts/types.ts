@@ -331,6 +331,31 @@ export interface RemoteVaultConfig {
   username: string;
   /** SHA-256 hex fingerprint of the server TLS cert (TOFU pinning). Present only for HTTPS servers. */
   certFingerprint?: string;
+  /**
+   * ISO timestamp of the last *successful* connection.
+   *
+   * Written only after authentication succeeds, never on save or on a failed
+   * attempt — the unlock screen's server picker sorts on it, and a server you
+   * typed once and could not reach must not outrank the one you use daily.
+   */
+  lastConnectedAt?: string;
+}
+
+/**
+ * The parts of the grid view worth carrying across a restart.
+ *
+ * Deliberately not the whole of `st`: expand/reveal/bulk state is per-session
+ * and restoring it would un-mask secrets the user never asked to see. Every id
+ * in here is validated against the loaded vault before being applied — see
+ * `restoreViewState()`.
+ */
+export interface PersistedView {
+  filterType:     string;
+  filterValue:    string;
+  envFilter:      string;
+  tagFilter:      string | null;
+  prefixFilter:   string | null;
+  projectIds:     string[];
 }
 
 /**
@@ -395,4 +420,26 @@ export interface AppSettings {
   panelOrder: string[];
   /** VaultEntry field used as the resolved value when doing ".env copy". */
   envCopyField: 'api_key' | 'api_secret' | 'key_id';
+
+  // ── Layout persistence ───────────────────────────────────────────────────
+  /**
+   * Sidebar width in px, or 0 to use the stylesheet default.
+   *
+   * A number rather than a CSS string so a corrupt settings blob cannot inject
+   * arbitrary CSS into `style.width`; it is clamped to the same bounds the drag
+   * handle enforces before being applied.
+   */
+  sidebarWidth: number;
+  /** Whether the sidebar is collapsed (the `sidebar-toggle` / Ctrl-B state). */
+  sidebarCollapsed: boolean;
+  /** Last sort mode chosen in the grid toolbar. */
+  lastSortBy: string;
+
+  // ── Search / view persistence ────────────────────────────────────────────
+  /** Most-recent-first search strings, capped at RECENT_SEARCH_MAX. */
+  recentSearches: string[];
+  /** When true, the grid filter/project selection is restored on next launch. */
+  rememberFilters: boolean;
+  /** Last grid view, restored at launch when `rememberFilters` is set. */
+  lastView: PersistedView | null;
 }

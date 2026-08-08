@@ -14,6 +14,10 @@ tauri-build = { version = "2", features = [] }
 tauri                        = { version = "2", features = ["tray-icon"] }
 tauri-plugin-shell           = "2"
 tauri-plugin-global-shortcut = "2"
+# Window size/position persistence. Saved to <app_config_dir>/.window-state.json
+# by the plugin itself — no vault data involved, so it is deliberately outside
+# SQLCipher and survives a vault reset.
+tauri-plugin-window-state    = "2"
 serde             = { version = "1", features = ["derive"] }
 serde_json        = "1"
 vault-core        = { path = "../vault-core" }

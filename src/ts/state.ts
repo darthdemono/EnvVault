@@ -1,4 +1,4 @@
-import type { VaultData, AppSettings, VaultEntry, RemoteVaultConfig } from './types';
+import type { VaultData, AppSettings, VaultEntry, RemoteVaultConfig, PersistedView } from './types';
 import { dump as yamlDump } from 'js-yaml';
 import { hexAlpha, showToast } from './utils';
 
@@ -353,6 +353,32 @@ export function resetViewState(): void {
   st.bulkMode = false;
   st.bulkSelected.clear();
 
+  // The persisted copy is a reference too. `restoreViewState()` validates before
+  // applying, but leaving a previous vault's selection on disk means the *next*
+  // launch tries to reapply a filter belonging to a vault the user replaced.
+  Settings.set('lastView', null);
+
+  const searchEl = document.getElementById('search') as HTMLInputElement | null;
+  if (searchEl) searchEl.value = '';
+  document.getElementById('search-clear')?.classList.remove('visible');
+}
+
+/**
+ * Clears every filter narrowing the grid, without touching the rest of the view.
+ *
+ * Distinct from `resetViewState()` on purpose: that one is for when the *data*
+ * is replaced and expand/reveal/bulk state has to go too. This is the user
+ * saying "show me everything again", where dropping their expanded cards and
+ * bulk ticks as a side effect would be a surprise.
+ */
+export function clearAllFilters(): void {
+  st.filter = { type: 'all', value: '' };
+  st.searchQ = '';
+  st.currentSelectedProjectIds = ['Universal'];
+  st.currentEnvFilter = '';
+  st.activeTagFilter = null;
+  st.activePrefixFilter = null;
+
   const searchEl = document.getElementById('search') as HTMLInputElement | null;
   if (searchEl) searchEl.value = '';
   document.getElementById('search-clear')?.classList.remove('visible');
@@ -475,6 +501,8 @@ const DEFAULT_SETTINGS: AppSettings = {
   remoteSaved: [] as RemoteVaultConfig[],
   panelOrder: ['secrets', 'tools', 'remote', 'users'],
   envCopyField: 'api_key' as const,
+  sidebarWidth: 0, sidebarCollapsed: false, lastSortBy: 'provider',
+  recentSearches: [] as string[], rememberFilters: true, lastView: null as PersistedView | null,
 };
 
 export const Settings = {
@@ -518,7 +546,7 @@ export const Settings = {
     document.documentElement.style.setProperty('--accent', d.accentColor);
     document.documentElement.style.setProperty('--accent-dim', hexAlpha(d.accentColor, 0.14));
     document.documentElement.style.setProperty('--accent-mid', hexAlpha(d.accentColor, 0.3));
-    applyGridSettings(); applySidebarOrder(); applyActivityBar();
+    applyGridSettings(); applySidebarOrder(); applyActivityBar(); applySidebarLayout();
     import('./settings-panel').then(m => m.applyPanelOrder()).catch(() => {});
     const styleEl = document.getElementById('custom-style') as HTMLStyleElement | null;
     if (styleEl) styleEl.textContent = d.customCss || '';
@@ -589,6 +617,115 @@ export function applySidebarOrder() {
   const collapsed = Settings.get('collapsedSections') || [];
   (['all', 'price', 'env', 'category', 'project', 'tags', 'prefixes'] as const).forEach(key =>
     document.getElementById(`sidebar-section-${key}`)?.classList.toggle('collapsed', collapsed.includes(key)));
+}
+
+// ── Sidebar width / collapse persistence ───────────────────────────────────
+
+/** Drag bounds for the sidebar, also used to sanitise the persisted width. */
+export const SIDEBAR_MIN_W = 140;
+export const SIDEBAR_MAX_W = 420;
+
+/**
+ * Applies the persisted sidebar width and collapsed state.
+ *
+ * Width is clamped here rather than only at drag time: the value survives in
+ * localStorage, so a width written by an older build, a hand-edited settings
+ * file or a different screen size can otherwise leave the sidebar at 3px wide
+ * with no visible handle to drag it back.
+ */
+export function applySidebarLayout(): void {
+  const sidebar = document.getElementById('sidebar');
+  if (!sidebar) return;
+  const w = Number(Settings.get('sidebarWidth')) || 0;
+  sidebar.style.width = w > 0 ? `${Math.max(SIDEBAR_MIN_W, Math.min(SIDEBAR_MAX_W, w))}px` : '';
+  sidebar.classList.toggle('collapsed', !!Settings.get('sidebarCollapsed'));
+}
+
+// ── Recent searches ────────────────────────────────────────────────────────
+
+/** How many search strings the history dropdown keeps. */
+export const RECENT_SEARCH_MAX = 8;
+
+/**
+ * Records a search string, most-recent-first, de-duplicated.
+ *
+ * Case-insensitive de-dup, but the *newest* casing wins, so retyping a query
+ * differently does not leave two near-identical rows in the dropdown.
+ */
+export function pushRecentSearch(q: string): void {
+  const query = q.trim();
+  if (!query) return;
+  const prev = (Settings.get('recentSearches') || []).filter(
+    s => s.toLowerCase() !== query.toLowerCase(),
+  );
+  Settings.set('recentSearches', [query, ...prev].slice(0, RECENT_SEARCH_MAX));
+}
+
+// ── View persistence ───────────────────────────────────────────────────────
+
+/** Snapshots the current grid view so the next launch can restore it. */
+export function saveViewState(): void {
+  if (!Settings.get('rememberFilters')) return;
+  Settings.set('lastView', {
+    filterType:   st.filter.type,
+    filterValue:  st.filter.value,
+    envFilter:    st.currentEnvFilter,
+    tagFilter:    st.activeTagFilter,
+    prefixFilter: st.activePrefixFilter,
+    projectIds:   [...st.currentSelectedProjectIds],
+  });
+}
+
+/**
+ * Restores the last grid view, dropping anything the loaded vault does not have.
+ *
+ * The validation is the whole point. A persisted selection is a reference held
+ * across a restart, and the vault it pointed at may have been edited, replaced
+ * by an import, or swapped for a remote in the meantime (invariant 3). An id
+ * that no longer resolves matches nothing in `getFiltered()`, so the user would
+ * open the app to an empty grid with their secrets present but invisible — and
+ * with no obvious control to un-stick it, because the stale filter is not one
+ * they set this session.
+ *
+ * @returns true when anything was applied, so the caller knows to repaint.
+ */
+export function restoreViewState(): boolean {
+  if (!Settings.get('rememberFilters')) return false;
+  const v = Settings.get('lastView');
+  if (!v || typeof v !== 'object') return false;
+
+  const entries = st.vault.api_keys || [];
+  let applied = false;
+
+  const categories = new Set(st.vault.user_categories || []);
+  const okFilter =
+    v.filterType === 'all' ||
+    (v.filterType === 'price' && entries.some(e => e.price_type === v.filterValue)) ||
+    (v.filterType === 'category' && (categories.has(v.filterValue) ||
+      [...categories].some(c => c.startsWith(v.filterValue + '/'))));
+  if (okFilter && typeof v.filterType === 'string') {
+    st.filter = { type: v.filterType, value: String(v.filterValue ?? '') };
+    applied = applied || v.filterType !== 'all';
+  }
+
+  if (v.envFilter && entries.some(e => e.environment === v.envFilter)) {
+    st.currentEnvFilter = v.envFilter; applied = true;
+  }
+  if (v.tagFilter && entries.some(e => (e.tags || []).includes(v.tagFilter!))) {
+    st.activeTagFilter = v.tagFilter; applied = true;
+  }
+  if (v.prefixFilter && entries.some(e => (e.provider || '').startsWith(v.prefixFilter!))) {
+    st.activePrefixFilter = v.prefixFilter; applied = true;
+  }
+
+  const known = new Set((st.vault.projects || []).map(p => p.id));
+  const projects = (Array.isArray(v.projectIds) ? v.projectIds : []).filter(id => known.has(id));
+  if (projects.length) {
+    st.currentSelectedProjectIds = projects;
+    applied = applied || !(projects.length === 1 && projects[0] === 'Universal');
+  }
+
+  return applied;
 }
 
 export function applyActivityBar() {
