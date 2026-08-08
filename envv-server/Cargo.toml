@@ -1,10 +1,16 @@
 [package]
-name    = "apiv-server"
+name    = "envv-server"
 version = "0.6.0"
 edition = "2021"
 
+# Library first: the desktop app embeds this router for "Open to LAN", so the
+# binary is only a CLI wrapper around it.
+[lib]
+name = "envv_server"
+path = "src/lib.rs"
+
 [[bin]]
-name = "apiv-server"
+name = "envv-server"
 path = "src/main.rs"
 
 [dependencies]
@@ -21,6 +27,7 @@ clap         = { version = "4", features = ["derive"] }
 dirs         = "5"
 utoipa       = { version = "5", features = ["axum_extras"] }
 rcgen        = "=0.13.2"
+rustls-pemfile = "2"
 sha2         = "0.10"
 hex          = "=0.4.3"
 time         = "=0.3.37"

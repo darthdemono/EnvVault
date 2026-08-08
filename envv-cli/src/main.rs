@@ -1,12 +1,12 @@
-//! `apiv` — API Vault CLI.
+//! `envv` — EnvVault CLI.
 //!
 //! Works in two modes:
 //! - **Local**: reads the Tauri app's SQLCipher DB directly
-//!   (`~/.local/share/io.apivault/vault.db`).
-//! - **Remote**: connects to a running `apiv-server` via HTTP.
+//!   (`~/.local/share/io.envvault/vault.db`).
+//! - **Remote**: connects to a running `envv-server` via HTTP.
 //!
-//! Set `APIV_SERVER_URL` or pass `--server` to switch to remote mode.
-//! Password is read from `APIV_PASSWORD` env var or prompted interactively.
+//! Set `ENVV_SERVER_URL` or pass `--server` to switch to remote mode.
+//! Password is read from `ENVV_PASSWORD` env var or prompted interactively.
 
 use clap::{CommandFactory, Parser, Subcommand};
 use clap_complete::{generate, Shell};
@@ -20,20 +20,21 @@ use vault_core::{
 
 #[derive(Parser)]
 #[command(
-    name    = "apiv",
-    version = "0.4.0",
-    about   = "API Vault CLI — manage secrets from the terminal",
+    name    = "envv",
+    // Single source of truth: the crate version in Cargo.toml. Never hardcode.
+    version,
+    about   = "EnvVault CLI — manage secrets from the terminal",
     long_about = "Local mode reads the Tauri desktop app vault directly.\n\
-                  Remote mode (--server / $APIV_SERVER_URL) connects to apiv-server."
+                  Remote mode (--server / $ENVV_SERVER_URL) connects to envv-server."
 )]
 struct Cli {
-    /// Remote apiv-server URL, e.g. http://localhost:8743.
+    /// Remote envv-server URL, e.g. http://localhost:8743.
     /// If set, all commands go through the server instead of the local DB.
-    #[arg(long, env = "APIV_SERVER_URL", global = true)]
+    #[arg(long, env = "ENVV_SERVER_URL", global = true)]
     server: Option<String>,
 
-    /// Vault password (avoid in scripts — prefer APIV_PASSWORD env var or interactive prompt).
-    #[arg(long, env = "APIV_PASSWORD", global = true, hide_env_values = true)]
+    /// Vault password (avoid in scripts — prefer ENVV_PASSWORD env var or interactive prompt).
+    #[arg(long, env = "ENVV_PASSWORD", global = true, hide_env_values = true)]
     password: Option<String>,
 
     #[command(subcommand)]
@@ -93,15 +94,20 @@ enum Commands {
         #[arg(long)]
         project: Option<String>,
     },
+    /// Resolve a project's env_file chunks into a deployable .env (${refs} resolved).
+    Env {
+        /// Project ID (exact) or name (substring match).
+        project: String,
+    },
 }
 
 // ── Path resolution (local mode) ──────────────────────────────────────────────
 
-/// Returns the default vault.db path: `~/.local/share/io.apivault/vault.db`.
+/// Returns the default vault.db path: `~/.local/share/io.envvault/vault.db`.
 fn default_db_path() -> PathBuf {
     dirs::data_dir()
         .unwrap_or_else(|| PathBuf::from("~/.local/share"))
-        .join("io.apivault")
+        .join("io.envvault")
         .join("vault.db")
 }
 
@@ -109,7 +115,7 @@ fn default_db_path() -> PathBuf {
 fn default_salt_path() -> PathBuf {
     dirs::data_dir()
         .unwrap_or_else(|| PathBuf::from("~/.local/share"))
-        .join("io.apivault")
+        .join("io.envvault")
         .join("vault.salt")
 }
 
@@ -160,27 +166,45 @@ impl RemoteClient {
     }
 
     fn get_vault(&self) -> Result<serde_json::Value, String> {
-        self.client
+        let resp = self.client
             .get(format!("{}/api/vault", self.base))
             .bearer_auth(&self.token)
-            .send().map_err(|e| e.to_string())?
-            .json().map_err(|e| e.to_string())
+            .send().map_err(|e| e.to_string())?;
+        let status = resp.status();
+        if status.as_u16() == 404 {
+            return Ok(serde_json::json!({ "api_keys": [], "user_categories": [], "projects": [] }));
+        }
+        if !status.is_success() {
+            let body = resp.text().unwrap_or_default();
+            return Err(format!("Server error {}: {}", status, body));
+        }
+        resp.json().map_err(|e| e.to_string())
     }
 
     fn get_expiring(&self, days: u32) -> Result<Vec<serde_json::Value>, String> {
-        self.client
+        let resp = self.client
             .get(format!("{}/api/vault/expiring?days={days}", self.base))
             .bearer_auth(&self.token)
-            .send().map_err(|e| e.to_string())?
-            .json().map_err(|e| e.to_string())
+            .send().map_err(|e| e.to_string())?;
+        let status = resp.status();
+        if !status.is_success() {
+            let body = resp.text().unwrap_or_default();
+            return Err(format!("Server error {}: {}", status, body));
+        }
+        resp.json().map_err(|e| e.to_string())
     }
 
     fn get_audit(&self) -> Result<Vec<serde_json::Value>, String> {
-        self.client
+        let resp = self.client
             .get(format!("{}/api/audit", self.base))
             .bearer_auth(&self.token)
-            .send().map_err(|e| e.to_string())?
-            .json().map_err(|e| e.to_string())
+            .send().map_err(|e| e.to_string())?;
+        let status = resp.status();
+        if !status.is_success() {
+            let body = resp.text().unwrap_or_default();
+            return Err(format!("Server error {}: {}", status, body));
+        }
+        resp.json().map_err(|e| e.to_string())
     }
 
     fn save_vault(&self, data: &serde_json::Value) -> Result<(), String> {
@@ -226,7 +250,14 @@ impl Access {
         match self {
             Access::Local(key) => {
                 let conn = open_db(&default_db_path(), key)?;
-                save_vault(&conn, data.clone())
+                // Local CLI access is by definition the master-password holder.
+                let actor = vault_core::ensure_owner_user(&conn).ok();
+                // Single-process CLI use; nothing else is writing this vault in
+                // the same instant, so an unconditional write is correct here.
+                save_vault(&conn, data.clone(), vault_core::SaveCtx {
+                    actor: actor.as_deref(),
+                    ..Default::default()
+                }).map(|_| ())
             }
             Access::Remote(c) => c.save_vault(data),
         }
@@ -240,7 +271,7 @@ fn open_access(server: Option<&str>, password: Option<&str>) -> Result<Access, S
     } else {
         if !default_db_path().exists() {
             return Err(format!(
-                "No vault found at {}\nMake sure API Vault desktop app has been run at least once.",
+                "No vault found at {}\nMake sure EnvVault desktop app has been run at least once.",
                 default_db_path().display()
             ));
         }
@@ -280,7 +311,7 @@ fn dotenv_export(entries: &[serde_json::Value]) -> String {
 }
 
 fn yaml_export(entries: &[serde_json::Value]) -> String {
-    let mut out = String::from("# API Vault Export\n");
+    let mut out = String::from("# EnvVault Export\n");
     for e in entries {
         let p = (e.get("provider").and_then(|v| v.as_str()).unwrap_or("UNKNOWN"))
             .to_uppercase().replace(|c: char| !c.is_ascii_alphanumeric(), "_");
@@ -372,6 +403,134 @@ fn cmd_export(access: &Access, format: &str, project: Option<&str>) -> Result<()
         _       => dotenv_export(&entries),
     };
     println!("{output}");
+    Ok(())
+}
+
+/// Map an env-var field suffix to the canonical vault-entry JSON field name.
+fn canonical_field(field: &str) -> &str {
+    match field.to_uppercase().as_str() {
+        "APIKEY" | "API_KEY" | "KEY" | "TOKEN" | "ACCESS_TOKEN" | "BEARER" | "SECRET_KEY" => "api_key",
+        "SECRET" | "API_SECRET" | "CLIENT_SECRET" | "SHARED_SECRET" => "api_secret",
+        "USERNAME" | "USER" | "LOGIN" | "USER_NAME" => "username",
+        "URL" | "URI" | "ENDPOINT" | "API_URL" | "BASE_URL" => "api_url",
+        "EMAIL" | "MAIL" => "email",
+        "KEY_ID" | "KEYID" | "KID" => "key_id",
+        _ => field,
+    }
+}
+
+/// Resolve a named field on a vault entry (built-in fields, aliases, then extra_vars).
+fn entry_field(entry: &serde_json::Value, field: &str) -> Option<String> {
+    let canonical = canonical_field(field);
+    if let Some(s) = entry.get(canonical).and_then(|v| v.as_str()) {
+        if !s.is_empty() { return Some(s.to_string()); }
+    }
+    if let Some(arr) = entry.get("extra_vars").and_then(|v| v.as_array()) {
+        for xv in arr {
+            let k = xv.get("key").and_then(|v| v.as_str());
+            if k == Some(field) || k == Some(canonical) {
+                return xv.get("value").and_then(|v| v.as_str()).map(String::from);
+            }
+        }
+    }
+    None
+}
+
+/// Find a vault entry by exact provider, or by `Provider_keyid` compound split.
+fn find_entry<'a>(entries: &'a [serde_json::Value], prov: &str) -> Option<&'a serde_json::Value> {
+    if let Some(e) = entries.iter().find(|e| e.get("provider").and_then(|v| v.as_str()) == Some(prov)) {
+        return Some(e);
+    }
+    if let Some(us) = prov.rfind('_') {
+        let (p, k) = (&prov[..us], &prov[us + 1..]);
+        return entries.iter().find(|e|
+            e.get("provider").and_then(|v| v.as_str()) == Some(p) &&
+            e.get("key_id").and_then(|v| v.as_str()) == Some(k));
+    }
+    None
+}
+
+/// Resolve a `${...}` ref inner-string against vault entries and chunks.
+/// Supports `${Provider/field}`, `${Provider_keyid/field}`, `${Provider}`,
+/// and cross-chunk `${chunk:ChunkName/FieldKey}` (depth-guarded).
+fn resolve_ref(entries: &[serde_json::Value], projects: &[serde_json::Value], inner: &str, depth: u8) -> Option<String> {
+    if let Some(body) = inner.strip_prefix("chunk:") {
+        let slash = body.find('/')?;
+        let (chunk_name, field_key) = (&body[..slash], &body[slash + 1..]);
+        for p in projects {
+            let chunks = p.get("chunks").and_then(|v| v.as_array());
+            for c in chunks.into_iter().flatten() {
+                if c.get("name").and_then(|v| v.as_str()) != Some(chunk_name) { continue; }
+                let fields = c.get("fields").and_then(|v| v.as_array());
+                for f in fields.into_iter().flatten() {
+                    if f.get("key").and_then(|v| v.as_str()) != Some(field_key) { continue; }
+                    let raw = f.get("value").and_then(|v| v.as_str()).unwrap_or("");
+                    if depth < 4 && raw.starts_with("${") && raw.ends_with('}') && raw.len() > 3 {
+                        return resolve_ref(entries, projects, &raw[2..raw.len() - 1], depth + 1);
+                    }
+                    return Some(raw.to_string());
+                }
+            }
+        }
+        return None;
+    }
+    if let Some(slash) = inner.find('/') {
+        let (prov, field) = (&inner[..slash], &inner[slash + 1..]);
+        return entry_field(find_entry(entries, prov)?, field);
+    }
+    find_entry(entries, inner)?
+        .get("api_key").and_then(|v| v.as_str()).map(String::from)
+}
+
+fn cmd_env(access: &Access, project: &str) -> Result<(), String> {
+    let vault = access.load_vault()?;
+    let entries: Vec<serde_json::Value> = vault
+        .get("api_keys").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+    let projects: Vec<serde_json::Value> = vault
+        .get("projects").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+
+    let proj_lc = project.to_lowercase();
+    let proj = projects.iter().find(|p|
+        p.get("id").and_then(|i| i.as_str()) == Some(project) ||
+        p.get("name").and_then(|n| n.as_str()).map_or(false, |n| n.to_lowercase().contains(&proj_lc))
+    ).ok_or_else(|| format!("No project matching '{project}'"))?;
+
+    let chunks = proj.get("chunks").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+    let mut out: Vec<String> = Vec::new();
+    let mut unresolved = 0usize;
+
+    for chunk in &chunks {
+        if chunk.get("chunk_type").and_then(|v| v.as_str()) != Some("env_file") { continue; }
+        if chunk.get("disabled").and_then(|v| v.as_bool()).unwrap_or(false) { continue; }
+        let name = chunk.get("name").and_then(|v| v.as_str()).unwrap_or("env");
+        out.push(format!("# {name}"));
+        let fields = chunk.get("fields").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+        for f in &fields {
+            let key = f.get("key").and_then(|v| v.as_str()).unwrap_or("");
+            if key.is_empty() { continue; }
+            let raw = f.get("value").and_then(|v| v.as_str()).unwrap_or("");
+            let val = if raw.starts_with("${") && raw.ends_with('}') && raw.len() > 3 {
+                let inner = &raw[2..raw.len() - 1];
+                match resolve_ref(&entries, &projects, inner, 0) {
+                    Some(v) => v,
+                    None => { unresolved += 1; eprintln!("# WARN unresolved ref: {raw}"); raw.to_string() }
+                }
+            } else {
+                raw.to_string()
+            };
+            out.push(format!("{key}={val}"));
+        }
+        out.push(String::new());
+    }
+
+    if out.is_empty() {
+        let pname = proj.get("name").and_then(|n| n.as_str()).unwrap_or(project);
+        return Err(format!("Project '{pname}' has no env_file chunks"));
+    }
+    print!("{}", out.join("\n"));
+    if unresolved > 0 {
+        eprintln!("\n{unresolved} unresolved ref(s) emitted as literal ${{...}}");
+    }
     Ok(())
 }
 
@@ -489,13 +648,17 @@ fn main() {
         }
         // Completions (item 13): generate shell completion scripts
         Commands::Completions { shell } => {
-            generate(*shell, &mut Cli::command(), "apiv", &mut std::io::stdout());
+            generate(*shell, &mut Cli::command(), "envv", &mut std::io::stdout());
             Ok(())
         }
         // Watch (item 14): sync .env file changes into vault
         Commands::Watch { file, project } => {
             open_access(cli.server.as_deref(), cli.password.as_deref())
                 .and_then(|a| cmd_watch(&a, file, project.as_deref()))
+        }
+        Commands::Env { project } => {
+            open_access(cli.server.as_deref(), cli.password.as_deref())
+                .and_then(|a| cmd_env(&a, project))
         }
     };
 

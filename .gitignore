@@ -30,8 +30,11 @@ Thumbs.db
 .claude/
 handoff.md
 newHandoff.md
+# Numbered session handoffs (Handoff-1.md, Handoff-2.md, …)
+Handoff-*.md
 repomix-output.md
 pattern1.md
 CLAUDE.md
 *.original.md
 Handoff.md
+coverage/

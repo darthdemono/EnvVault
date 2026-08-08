@@ -1,6 +1,6 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "title": "API Vault Data",
+  "title": "EnvVault Data",
   "description": "Root structure of the encrypted vault database. The UI reads this file to populate form tooltips. Field names match data-field attributes on form labels in index.html.",
   "type": "object",
   "required": ["api_keys", "user_categories", "projects"],

@@ -1,5 +1,5 @@
 [workspace]
-members  = ["src-tauri", "vault-core", "apiv-server", "apiv-cli"]
+members  = ["src-tauri", "vault-core", "envv-server", "envv-cli"]
 resolver = "2"
 
 [profile.release]

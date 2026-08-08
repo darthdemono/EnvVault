@@ -1,10 +1,10 @@
 /**
- * @file Icon resolution and picker for API Vault.
+ * @file Icon resolution and picker for EnvVault.
  * @description Provides Simple Icons CDN integration, provider-name-to-slug auto-detection,
  *              and an interactive icon-picker overlay for custom icon assignment.
  */
 
-import type { VaultEntry } from './types';
+import { esc, escAttr } from './utils';
 
 /**
  * Master registry of supported Simple Icons entries.
@@ -471,7 +471,9 @@ export function getIconSlug(provider: string, customIcon?: string | null): strin
  * @returns Absolute CDN URL string.
  */
 function iconImgURL(slug: string): string {
-  return `https://cdn.simpleicons.org/${slug}/e4e4e4`;
+  // encodeURIComponent prevents a user-controlled custom_icon slug from breaking
+  // out of the src="" attribute (e.g. `x" onerror=...`) — a stored XSS vector.
+  return `https://cdn.simpleicons.org/${encodeURIComponent(slug)}/e4e4e4`;
 }
 
 /**
@@ -489,10 +491,10 @@ export function iconHTML(provider: string, customIcon?: string | null): string {
   const slug = getIconSlug(provider, customIcon);
   const letter = (provider || '?')[0].toUpperCase();
   if (slug) {
-    return `<img class="si-icon" src="${iconImgURL(slug)}"
-          alt="${(provider || '').replace(/"/g, '&quot;')}" loading="lazy">`;
+    return `<img class="si-icon" src="${escAttr(iconImgURL(slug))}"
+          alt="${escAttr(provider || '')}" loading="lazy">`;
   }
-  return `<span class="si-fallback">${letter}</span>`;
+  return `<span class="si-fallback">${esc(letter)}</span>`;
 }
 
 /**
@@ -532,12 +534,16 @@ function renderIconGrid(query: string) {
     return;
   }
 
+  // No inline onerror= handler: WebKitGTK suppresses inline event handlers under
+  // our CSP (script-src 'self'), so it silently never ran. The `si-icon` class
+  // routes failures to the global capture-phase error listener in
+  // initIconPicker(), which swaps in a letter fallback for real.
   grid.innerHTML = items.map(([slug, name]) => `
     <div class="icon-item${iconPicker.selected === slug ? ' selected' : ''}"
-         data-action="select" data-slug="${slug}" title="${name}">
-      <img src="${iconImgURL(slug)}" alt="${name}" width="24" height="24"
-           onerror="this.style.opacity='.2';" loading="lazy">
-      <div class="icon-item-name">${name}</div>
+         data-action="select" data-slug="${escAttr(slug)}" title="${escAttr(name)}">
+      <img class="si-icon" src="${escAttr(iconImgURL(slug))}" alt="${escAttr(name)}"
+           width="24" height="24" loading="lazy">
+      <div class="icon-item-name">${esc(name)}</div>
     </div>
   `).join('');
 }
@@ -626,6 +632,14 @@ export function initIconPicker() {
   document.getElementById('icon-picker-close')!.addEventListener('click', closeIconPicker);
   document.getElementById('icon-picker-overlay')!.addEventListener('click', e => {
     if (e.target === e.currentTarget) closeIconPicker();
+  });
+  // Every other overlay in the app closes on Escape; this one did not, and the
+  // global handler in vault.ts does not know about it.
+  document.addEventListener('keydown', e => {
+    if (e.key !== 'Escape') return;
+    if (!document.getElementById('icon-picker-overlay')?.classList.contains('open')) return;
+    e.stopPropagation();
+    closeIconPicker();
   });
   document.getElementById('icon-manual-apply')!.addEventListener('click', () => {
     const v = (document.getElementById('icon-manual') as HTMLInputElement).value.trim();

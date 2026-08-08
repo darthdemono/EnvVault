@@ -2,12 +2,60 @@
  * @file Users panel — multi-user RBAC management for vault owners.
  */
 
-import type { UserInfo, TokenInfo, PermissionEntry, UserClass, ClassPermission } from './types';
-import { st } from './state';
-import { esc, escAttr, showToast, showConfirm, showPrompt, clipboardWrite } from './utils';
+import type { UserInfo, TokenInfo, UserClass } from './types';
+import { st, RemoteVaultStore } from './state';
+import { esc, escAttr, showToast, showConfirm, showPrompt, showPasswordPrompt, clipboardWrite } from './utils';
+import { permEditorHtml, wirePermEditor, type PermExprs } from './perm-editor';
 
-const invoke = (cmd: string, args?: Record<string, any>) =>
+const localInvoke = (cmd: string, args?: Record<string, any>) =>
   (window as any).__TAURI__?.core?.invoke?.(cmd, args) as Promise<any> | undefined;
+
+/**
+ * User/class management dispatcher. On a remote vault the local SQLCipher DB is
+ * locked, so route each command to the server's owner-only REST endpoints; on a
+ * local vault, fall through to the Tauri command. Keeps every call site unchanged.
+ */
+async function invoke(cmd: string, args: Record<string, any> = {}): Promise<any> {
+  const store = st.store;
+  if (!(store instanceof RemoteVaultStore)) return localInvoke(cmd, args);
+
+  const api = (p: string, m?: string, b?: any) => store.api(p, m, b);
+  const uid = args.userId;
+  const cid = args.classId;
+  const caps = (a: Record<string, any>) => ({
+    name: a.name,
+    description: a.description ?? '',
+    cap_manage_users:    !!a.capManageUsers,
+    cap_manage_classes:  !!a.capManageClasses,
+    cap_delete_projects: !!a.capDeleteProjects,
+  });
+
+  switch (cmd) {
+    case 'list_users':            return api('/api/users');
+    case 'create_user':           return api('/api/users', 'POST', { username: args.username, password: args.password ?? null });
+    case 'delete_user':           return api(`/api/users/${uid}`, 'DELETE');
+    case 'rename_user':           return api(`/api/users/${uid}/rename`,   'PUT', { username: args.newUsername });
+    case 'set_user_password':     return api(`/api/users/${uid}/password`, 'PUT', { password: args.password ?? null });
+    case 'assign_user_class':     return api(`/api/users/${uid}/class`,    'PUT', { class_id: args.classId ?? null });
+    case 'list_user_tokens':      return api(`/api/users/${uid}/tokens`);
+    case 'create_user_token':     return api(`/api/users/${uid}/tokens`, 'POST', { description: args.description ?? '' });
+    case 'revoke_user_token':     return api(`/api/users/${args.userId}/tokens/${args.tokenId}`, 'DELETE');
+    case 'get_user_permissions':  return api(`/api/users/${uid}/permissions`);
+    case 'set_user_permissions':  return api(`/api/users/${uid}/permissions`, 'PUT', args.permissions);
+    case 'list_user_classes':     return api('/api/classes');
+    case 'create_user_class':     return api('/api/classes', 'POST', caps(args));
+    case 'update_user_class':     return api(`/api/classes/${cid}`, 'PUT', caps(args));
+    case 'delete_user_class':     return api(`/api/classes/${cid}`, 'DELETE');
+    case 'get_class_permissions': return api(`/api/classes/${cid}/permissions`);
+    case 'set_class_permissions': return api(`/api/classes/${cid}/permissions`, 'PUT', args.permissions);
+    default: throw new Error(`Unsupported remote user op: ${cmd}`);
+  }
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+
+
 
 // ── Render user list ──────────────────────────────────────────────────────────
 
@@ -49,7 +97,7 @@ export async function renderUserDetail(userId: string) {
 
   let users: UserInfo[] = [];
   let tokens: TokenInfo[] = [];
-  let perms: PermissionEntry[] = [];
+  let perms: PermExprs = { read: "", write: "" };
   let classes: UserClass[] = [];
 
   try {
@@ -57,7 +105,9 @@ export async function renderUserDetail(userId: string) {
     [users, tokens, perms, classes] = await Promise.all([
       invoke?.('list_users') ?? [],
       invoke?.('list_user_tokens', { userId }) ?? [],
-      invoke?.('get_user_permissions', { userId }) ?? [],
+      // `?? []` here handed an array to a PermExprs, so both expression boxes
+      // silently rendered blank — indistinguishable from "no rules set".
+      invoke?.('get_user_permissions', { userId }) ?? { read: '', write: '' },
       invoke?.('list_user_classes') ?? [],
     ]);
   } catch (e: any) {
@@ -75,10 +125,6 @@ export async function renderUserDetail(userId: string) {
   const user = users.find((u: UserInfo) => u.id === userId);
   if (!user) { ws.innerHTML = '<div class="users-detail-empty">User not found.</div>'; return; }
 
-  const scopeTypeOpts = ['vault', 'project', 'category'].map(t =>
-    `<option value="${t}">${t}</option>`).join('');
-  const permLevelOpts = ['read', 'write'].map(l =>
-    `<option value="${l}">${l}</option>`).join('');
 
   ws.innerHTML = `
     <div class="users-detail">
@@ -133,64 +179,31 @@ export async function renderUserDetail(userId: string) {
           <button class="btn btn-xs accent" id="new-token-btn">+ New Token</button>
         </div>
         <div id="tokens-list" class="tokens-list">
-          ${tokens.length ? tokens.map((t: TokenInfo) => `
-            <div class="token-row">
+          ${tokens.length ? tokens.map((t: TokenInfo) => {
+            const exp = t.expires_at ? t.expires_at.slice(0, 10) : null;
+            const today = new Date().toISOString().slice(0, 10);
+            const soon = exp ? new Date(exp).getTime() - Date.now() < 7 * 86400000 : false;
+            const expired = exp ? exp < today : false;
+            const expHtml = !exp ? 'never expires'
+              : expired ? `<span style="color:var(--price-paid);font-weight:700">⚠ EXPIRED ${esc(exp)}</span>`
+              : soon ? `<span style="color:#e69632">⚠ expires ${esc(exp)}</span>`
+              : `expires ${esc(exp)}`;
+            return `
+            <div class="token-row"${expired ? ' style="opacity:.6"' : ''}>
               <div class="token-info">
                 <span class="token-desc">${esc(t.description ?? 'Unnamed token')}</span>
-                <span class="token-meta">Created ${esc(t.created_at.slice(0, 10))} · ${t.expires_at ? 'expires ' + esc(t.expires_at.slice(0, 10)) : 'never expires'}</span>
+                <span class="token-meta">Created ${esc(t.created_at.slice(0, 10))} · ${expHtml}</span>
               </div>
               <button class="btn btn-xs danger revoke-token-btn" data-token-id="${escAttr(t.id)}">Revoke</button>
-            </div>
-          `).join('') : '<div class="users-empty">No tokens — create one so this user can authenticate via CLI or API.</div>'}
+            </div>`;
+          }).join('') : '<div class="users-empty">No tokens — create one so this user can authenticate via CLI or API.</div>'}
         </div>
       </section>
 
       <!-- Permissions -->
       <section class="users-section">
-        <div class="users-section-head">
-          <span>Permissions</span>
-          <button class="btn btn-xs accent" id="add-perm-btn">+ Add Rule</button>
-        </div>
-
-        ${!perms.length ? `
-          <div class="perm-empty-state">
-            <div class="perm-empty-icon">⊘</div>
-            <div>No permissions — this user cannot access any vault data.</div>
-            <div style="font-size:11px;color:var(--text3);margin-top:4px">Add rules to grant read or write access to vault, projects, or categories.</div>
-          </div>
-        ` : ''}
-
-        <div id="perms-list" class="perms-list">
-          ${perms.map((p: PermissionEntry, i: number) => `
-            <div class="perm-row" data-perm-idx="${i}">
-              <span class="perm-badge scope-${p.scope_type}">${esc(p.scope_type)}</span>
-              <span class="perm-scope-value">${esc(p.scope_value)}</span>
-              <span class="perm-badge level-${p.permission}">${esc(p.permission)}</span>
-              <button class="btn btn-xs danger del-perm-btn" data-perm-idx="${i}" title="Remove permission">✕</button>
-            </div>
-          `).join('')}
-        </div>
-
-        <div id="perm-add-form" class="perm-add-form" style="display:none">
-          <div class="perm-add-row">
-            <div class="perm-add-group">
-              <label class="perm-add-label">Scope type</label>
-              <select id="perm-scope-type" class="perm-input">${scopeTypeOpts}</select>
-            </div>
-            <div class="perm-add-group perm-add-flex">
-              <label class="perm-add-label">Value <span class="perm-add-hint">(glob: * = all, wg0-* = prefix)</span></label>
-              <input id="perm-scope-value" class="perm-input" placeholder="* or glob pattern" value="*">
-            </div>
-            <div class="perm-add-group">
-              <label class="perm-add-label">Level</label>
-              <select id="perm-level" class="perm-input">${permLevelOpts}</select>
-            </div>
-          </div>
-          <div style="display:flex;gap:6px;margin-top:8px">
-            <button class="btn btn-xs accent" id="perm-add-confirm">Add Rule</button>
-            <button class="btn btn-xs btn-ghost" id="perm-add-cancel">Cancel</button>
-          </div>
-        </div>
+        <div class="users-section-head"><span>Permissions</span></div>
+        ${permEditorHtml('uperm', perms)}
       </section>
 
     </div>
@@ -221,20 +234,12 @@ export async function renderUserDetail(userId: string) {
   });
   document.getElementById('new-token-btn')?.addEventListener('click', () => newToken(userId));
 
-  document.getElementById('add-perm-btn')?.addEventListener('click', () => {
-    const form = document.getElementById('perm-add-form')!;
-    form.style.display = form.style.display === 'none' ? 'block' : 'none';
+  wirePermEditor('uperm', async (exprs) => {
+    await invoke?.('set_user_permissions', { userId, permissions: exprs });
   });
-  document.getElementById('perm-add-cancel')?.addEventListener('click', () => {
-    document.getElementById('perm-add-form')!.style.display = 'none';
-  });
-  document.getElementById('perm-add-confirm')?.addEventListener('click', () => addPermission(userId, perms));
 
   document.querySelectorAll<HTMLButtonElement>('.revoke-token-btn').forEach(btn => {
     btn.addEventListener('click', () => revokeToken(btn.dataset.tokenId!, userId));
-  });
-  document.querySelectorAll<HTMLButtonElement>('.del-perm-btn').forEach(btn => {
-    btn.addEventListener('click', () => deletePermission(userId, perms, parseInt(btn.dataset.permIdx!)));
   });
 }
 
@@ -255,7 +260,9 @@ async function renameUser(userId: string) {
 }
 
 async function changePassword(userId: string) {
-  const pw = await showPrompt('New password (leave blank to switch to token-only auth):');
+  // Masked prompt, not the plain one: this echoed the new password in clear
+  // text in a normal input, and did not preserve leading/trailing spaces.
+  const pw = await showPasswordPrompt('New password (leave blank to switch to token-only auth):');
   if (pw === null) return;
   try {
     await invoke?.('set_user_password', { userId, password: pw || null });
@@ -315,7 +322,14 @@ function showTokenCreatedOverlay(token: string) {
   document.body.appendChild(overlay);
   overlay.querySelector('#copy-new-token')!.addEventListener('click', () =>
     clipboardWrite(token).then(() => showToast('Copied ✓', 'ok', 1500)));
-  const close = () => { if (document.body.contains(overlay)) document.body.removeChild(overlay); };
+  const close = () => {
+    document.removeEventListener('keydown', onKey);
+    if (document.body.contains(overlay)) document.body.removeChild(overlay);
+  };
+  // Escape dismisses it like every other overlay in the app; without this the
+  // token stayed on screen in clear text until the mouse found the button.
+  const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') close(); };
+  document.addEventListener('keydown', onKey);
   overlay.querySelector('#close-token-overlay')!.addEventListener('click', close);
   overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
 }
@@ -323,7 +337,7 @@ function showTokenCreatedOverlay(token: string) {
 async function revokeToken(tokenId: string, userId: string) {
   if (!await showConfirm('Revoke this token? The token will stop working immediately.')) return;
   try {
-    await invoke?.('revoke_user_token', { tokenId });
+    await invoke?.('revoke_user_token', { tokenId, userId });
     showToast('Token revoked', 'ok');
     await renderUserDetail(userId);
   } catch (e: any) {
@@ -331,34 +345,7 @@ async function revokeToken(tokenId: string, userId: string) {
   }
 }
 
-async function addPermission(userId: string, currentPerms: PermissionEntry[]) {
-  const scopeType  = (document.getElementById('perm-scope-type') as HTMLSelectElement).value as PermissionEntry['scope_type'];
-  const scopeValue = (document.getElementById('perm-scope-value') as HTMLInputElement).value.trim();
-  const permission = (document.getElementById('perm-level') as HTMLSelectElement).value as PermissionEntry['permission'];
-  if (!scopeValue) { showToast('Scope value is required', 'err'); return; }
 
-  const newPerm: PermissionEntry = { user_id: userId, scope_type: scopeType, scope_value: scopeValue, permission };
-  const updated = [...currentPerms.filter(p => !(p.scope_type === scopeType && p.scope_value === scopeValue)), newPerm];
-
-  try {
-    await invoke?.('set_user_permissions', { userId, permissions: updated });
-    showToast('Permission added', 'ok');
-    await renderUserDetail(userId);
-  } catch (e: any) {
-    showToast('Failed: ' + (e?.message ?? e), 'err');
-  }
-}
-
-async function deletePermission(userId: string, currentPerms: PermissionEntry[], idx: number) {
-  const updated = currentPerms.filter((_, i) => i !== idx);
-  try {
-    await invoke?.('set_user_permissions', { userId, permissions: updated });
-    showToast('Permission removed', 'ok');
-    await renderUserDetail(userId);
-  } catch (e: any) {
-    showToast('Failed: ' + (e?.message ?? e), 'err');
-  }
-}
 
 // ── Create user form ──────────────────────────────────────────────────────────
 
@@ -444,11 +431,11 @@ async function renderClassDetail(classId: string) {
   await renderClassesPanel();
 
   let classes: UserClass[] = [];
-  let perms: ClassPermission[] = [];
+  let perms: PermExprs = { read: "", write: "" };
   try {
     [classes, perms] = await Promise.all([
       invoke?.('list_user_classes') ?? [],
-      invoke?.('get_class_permissions', { classId }) ?? [],
+      invoke?.('get_class_permissions', { classId }) ?? { read: '', write: '' },
     ]);
   } catch (e: any) {
     ws.innerHTML = `<div class="users-detail-empty">${esc(String(e?.message ?? e))}</div>`;
@@ -520,67 +507,20 @@ async function renderClassDetail(classId: string) {
 
       <!-- Class permissions -->
       <section class="users-section">
-        <div class="users-section-head">
-          <span>Permissions</span>
-          <button class="btn btn-xs accent" id="add-class-perm-btn">+ Add Rule</button>
-        </div>
-        <div class="perm-empty-state" style="${perms.length ? 'display:none' : ''}">
-          <div class="perm-empty-icon">⊘</div>
-          <div>No permission rules. All members of this class have no access.</div>
-        </div>
-        <div class="perms-list" id="class-perms-list">
-          ${perms.map((p, i) => `
-            <div class="perm-row" data-perm-idx="${i}">
-              <span class="perm-badge scope-${p.scope_type}">${esc(p.scope_type)}</span>
-              <span class="perm-scope-value">${esc(p.scope_value)}</span>
-              <span class="perm-badge level-${p.permission}">${esc(p.permission)}</span>
-              <button class="btn btn-xs danger del-class-perm-btn" data-perm-idx="${i}">✕</button>
-            </div>
-          `).join('')}
-        </div>
-        <div id="class-perm-add-form" class="perm-add-form" style="display:none">
-          <div class="perm-add-row">
-            <div class="perm-add-group">
-              <label class="perm-add-label">Scope type</label>
-              <select id="cls-perm-scope-type" class="perm-input">
-                <option value="vault">vault</option>
-                <option value="project">project</option>
-                <option value="category">category</option>
-              </select>
-            </div>
-            <div class="perm-add-group perm-add-flex">
-              <label class="perm-add-label">Value <span class="perm-add-hint">(* = all, project-* = prefix glob)</span></label>
-              <input id="cls-perm-scope-value" class="perm-input" placeholder="* or glob" value="*">
-            </div>
-            <div class="perm-add-group">
-              <label class="perm-add-label">Level</label>
-              <select id="cls-perm-level" class="perm-input">
-                <option value="read">read</option>
-                <option value="write">write</option>
-              </select>
-            </div>
-          </div>
-          <div style="display:flex;gap:6px;margin-top:8px">
-            <button class="btn btn-xs accent" id="cls-perm-add-confirm">Add Rule</button>
-            <button class="btn btn-xs btn-ghost" id="cls-perm-add-cancel">Cancel</button>
-          </div>
-        </div>
+        <div class="users-section-head"><span>Permissions</span></div>
+        <p class="perm-expr-note">
+          Class rules are <strong>ANDed</strong> with each member's individual rules,
+          so an exclusion here cannot be undone by an individual grant.
+        </p>
+        ${permEditorHtml('cperm', perms)}
       </section>
     </div>
   `;
 
   document.getElementById('delete-class-btn')?.addEventListener('click', () => deleteClass(classId));
   document.getElementById('save-class-btn')?.addEventListener('click', () => saveClassDetails(classId));
-  document.getElementById('add-class-perm-btn')?.addEventListener('click', () => {
-    const f = document.getElementById('class-perm-add-form')!;
-    f.style.display = f.style.display === 'none' ? 'block' : 'none';
-  });
-  document.getElementById('cls-perm-add-cancel')?.addEventListener('click', () => {
-    document.getElementById('class-perm-add-form')!.style.display = 'none';
-  });
-  document.getElementById('cls-perm-add-confirm')?.addEventListener('click', () => addClassPermission(classId, perms));
-  document.querySelectorAll<HTMLButtonElement>('.del-class-perm-btn').forEach(btn => {
-    btn.addEventListener('click', () => deleteClassPermission(classId, perms, parseInt(btn.dataset.permIdx!)));
+  wirePermEditor('cperm', async (exprs) => {
+    await invoke?.('set_class_permissions', { classId, permissions: exprs });
   });
 }
 
@@ -610,28 +550,7 @@ async function deleteClass(classId: string) {
   } catch (e: any) { showToast('Failed: ' + (e?.message ?? e), 'err'); }
 }
 
-async function addClassPermission(classId: string, current: ClassPermission[]) {
-  const scopeType  = (document.getElementById('cls-perm-scope-type')  as HTMLSelectElement).value as ClassPermission['scope_type'];
-  const scopeValue = (document.getElementById('cls-perm-scope-value') as HTMLInputElement).value.trim();
-  const permission = (document.getElementById('cls-perm-level')       as HTMLSelectElement).value as ClassPermission['permission'];
-  if (!scopeValue) { showToast('Scope value required', 'err'); return; }
-  const newP: ClassPermission = { class_id: classId, scope_type: scopeType, scope_value: scopeValue, permission };
-  const updated = [...current.filter(p => !(p.scope_type === scopeType && p.scope_value === scopeValue)), newP];
-  try {
-    await invoke?.('set_class_permissions', { classId, permissions: updated });
-    showToast('Permission added', 'ok');
-    await renderClassDetail(classId);
-  } catch (e: any) { showToast('Failed: ' + (e?.message ?? e), 'err'); }
-}
 
-async function deleteClassPermission(classId: string, current: ClassPermission[], idx: number) {
-  const updated = current.filter((_, i) => i !== idx);
-  try {
-    await invoke?.('set_class_permissions', { classId, permissions: updated });
-    showToast('Permission removed', 'ok');
-    await renderClassDetail(classId);
-  } catch (e: any) { showToast('Failed: ' + (e?.message ?? e), 'err'); }
-}
 
 async function openCreateClassForm() {
   const ws = document.getElementById('users-workspace');
@@ -692,8 +611,26 @@ async function openCreateClassForm() {
 // ── Init ──────────────────────────────────────────────────────────────────────
 
 let _activeSubPanel: 'users' | 'classes' = 'users';
+let _usersPanelInited = false;
+
+/**
+ * Forgets which user/class was open.
+ *
+ * User and class ids are scoped to one vault, so carrying a selection from one
+ * server to the next made the panel highlight — and try to load — an id that
+ * belongs to a different vault entirely. Call whenever the backing vault
+ * changes.
+ */
+export function resetUsersPanelState(): void {
+  st.selectedUserId = null;
+  _activeClassId = null;
+  const ws = document.getElementById('users-workspace');
+  if (ws) ws.innerHTML = '<div class="users-detail-empty">Select a user to manage, or create one.</div>';
+}
 
 export function initUsersPanel() {
+  if (_usersPanelInited) { renderUsersPanel(); return; }
+  _usersPanelInited = true;
   // Sub-nav switching
   document.querySelectorAll<HTMLButtonElement>('.users-subnav-btn').forEach(btn => {
     btn.addEventListener('click', async () => {

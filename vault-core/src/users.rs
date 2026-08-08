@@ -1,4 +1,4 @@
-//! User management, token management, and RBAC for API Vault.
+//! User management, token management, and RBAC for EnvVault.
 //!
 //! Users are stored in the SQLCipher-encrypted vault database — they can only
 //! be read or created when the owner has unlocked the vault (i.e. the vault key
@@ -20,8 +20,6 @@ use std::collections::{HashMap, HashSet};
 use rusqlite::{Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use sha2::{Sha256, Digest};
-use hmac::{Hmac, Mac};
-use sha1::Sha1;
 use rand::RngCore;
 use crate::iso_now;
 
@@ -128,14 +126,18 @@ pub fn init_users_schema(conn: &Connection) -> Result<(), String> {
              scope_value TEXT NOT NULL,
              permission  TEXT NOT NULL,
              PRIMARY KEY (class_id, scope_type, scope_value)
+         );
+         CREATE TABLE IF NOT EXISTS permission_expressions (
+             subject_kind TEXT NOT NULL,   -- 'user' | 'class'
+             subject_id   TEXT NOT NULL,
+             permission   TEXT NOT NULL,   -- 'read' | 'write'
+             expression   TEXT NOT NULL,
+             PRIMARY KEY (subject_kind, subject_id, permission)
          );"
     ).map_err(|e| e.to_string())?;
 
     // Idempotent migrations
     conn.execute("ALTER TABLE users ADD COLUMN class_id TEXT", []).ok();
-    conn.execute("ALTER TABLE users ADD COLUMN totp_secret TEXT", []).ok();
-    // Stores the last accepted TOTP counter step to prevent replay within the same window.
-    conn.execute("ALTER TABLE users ADD COLUMN totp_last_step INTEGER", []).ok();
 
     // Seed default classes if none exist
     let class_count: i32 = conn
@@ -144,7 +146,150 @@ pub fn init_users_schema(conn: &Connection) -> Result<(), String> {
     if class_count == 0 {
         seed_default_classes(conn)?;
     }
+
+    // Must run *after* seeding: on a fresh database the seeded class permission
+    // rows are themselves what gets compiled into expressions. Run before, and
+    // the built-in Admin/Moderator/Viewer classes would end up with no rules at
+    // all — silently denying everything.
+    migrate_rows_to_expressions(conn)?;
     Ok(())
+}
+
+// ── Permission expressions ────────────────────────────────────────────────────
+
+/// One-time compilation of the legacy `(scope_type, scope_value, permission)`
+/// rows into equivalent expressions.
+///
+/// Legacy rows always meant "any of these matches", so they compile to an OR
+/// chain — which reproduces the old read behaviour exactly. Guarded by a marker
+/// in `vault_meta` rather than by "is the table empty", so deliberately clearing
+/// every expression does not resurrect the old rules on the next start.
+fn migrate_rows_to_expressions(conn: &Connection) -> Result<(), String> {
+    let done: Option<String> = conn
+        .query_row("SELECT value FROM vault_meta WHERE key = 'perm_expr_migrated'", [], |r| r.get(0))
+        .optional().map_err(|e| e.to_string())?;
+    if done.is_some() { return Ok(()); }
+
+    for (kind, table, id_col) in [
+        ("user",  "user_permissions",       "user_id"),
+        ("class", "user_class_permissions", "class_id"),
+    ] {
+        let sql = format!("SELECT {id_col}, scope_type, scope_value, permission FROM {table}");
+        let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
+        let rows: Vec<(String, String, String, String)> = stmt
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
+            .map_err(|e| e.to_string())?
+            .filter_map(Result::ok)
+            .collect();
+
+        // subject -> (read scopes, write scopes). Write also grants read.
+        let mut by_subject: HashMap<String, (Vec<(String, String)>, Vec<(String, String)>)> = HashMap::new();
+        for (sid, scope_type, scope_value, permission) in rows {
+            let e = by_subject.entry(sid).or_default();
+            e.0.push((scope_type.clone(), scope_value.clone()));
+            if permission == "write" { e.1.push((scope_type, scope_value)); }
+        }
+
+        for (sid, (read_scopes, write_scopes)) in by_subject {
+            for (perm, scopes) in [("read", read_scopes), ("write", write_scopes)] {
+                let refs: Vec<(&str, &str)> = scopes.iter().map(|(a, b)| (a.as_str(), b.as_str())).collect();
+                if let Some(expr) = crate::permex::compile_scopes(refs) {
+                    conn.execute(
+                        "INSERT OR REPLACE INTO permission_expressions \
+                         (subject_kind, subject_id, permission, expression) VALUES (?1, ?2, ?3, ?4)",
+                        rusqlite::params![kind, sid, perm, expr.to_string()],
+                    ).map_err(|e| e.to_string())?;
+                }
+            }
+        }
+    }
+
+    conn.execute(
+        "INSERT OR REPLACE INTO vault_meta (key, value) VALUES ('perm_expr_migrated', ?1)",
+        rusqlite::params![iso_now()],
+    ).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// Reads a stored expression for a subject, if any.
+pub fn get_permission_expr(
+    conn: &Connection, subject_kind: &str, subject_id: &str, permission: &str,
+) -> Result<Option<String>, String> {
+    conn.query_row(
+        "SELECT expression FROM permission_expressions \
+         WHERE subject_kind = ?1 AND subject_id = ?2 AND permission = ?3",
+        rusqlite::params![subject_kind, subject_id, permission],
+        |r| r.get(0),
+    ).optional().map_err(|e| e.to_string())
+}
+
+/// Stores an expression, or clears it when `expression` is empty/blank.
+///
+/// Validates by parsing first: an unparseable expression denies everything at
+/// evaluation time, so letting one be saved would silently lock a user out.
+pub fn set_permission_expr(
+    conn: &Connection, subject_kind: &str, subject_id: &str, permission: &str, expression: &str,
+) -> Result<(), String> {
+    if !matches!(subject_kind, "user" | "class") {
+        return Err(format!("unknown subject kind '{subject_kind}'"));
+    }
+    if !matches!(permission, "read" | "write") {
+        return Err(format!("unknown permission '{permission}'"));
+    }
+    if expression.trim().is_empty() {
+        conn.execute(
+            "DELETE FROM permission_expressions \
+             WHERE subject_kind = ?1 AND subject_id = ?2 AND permission = ?3",
+            rusqlite::params![subject_kind, subject_id, permission],
+        ).map_err(|e| e.to_string())?;
+        return Ok(());
+    }
+    let parsed = crate::permex::parse(expression)?;
+    conn.execute(
+        "INSERT OR REPLACE INTO permission_expressions \
+         (subject_kind, subject_id, permission, expression) VALUES (?1, ?2, ?3, ?4)",
+        rusqlite::params![subject_kind, subject_id, permission, parsed.to_string()],
+    ).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// Resolves what a user may actually do, combining their class and individual rules.
+///
+/// - Class and individual are **AND**ed, so a class exclusion cannot be undone
+///   by an individual grant.
+/// - `None` means no grant at all — callers must deny. Absent expressions are
+///   deliberately not treated as "no restriction": under AND that would give a
+///   user with no permissions whatsoever full access.
+/// - Write implies read, so the effective read rule is `read OR write`.
+pub fn effective_permission_expr(
+    conn: &Connection, user_id: &str, permission: &str,
+) -> Result<Option<crate::permex::Expr>, String> {
+    let class_id: Option<String> = conn
+        .query_row("SELECT class_id FROM users WHERE id = ?1", rusqlite::params![user_id], |r| r.get(0))
+        .optional().map_err(|e| e.to_string())?
+        .flatten();
+
+    // Stored text is always re-parsed rather than trusted: a row edited outside
+    // the app must fail closed.
+    let load = |kind: &str, id: &str, perm: &str| -> Result<Option<crate::permex::Expr>, String> {
+        Ok(get_permission_expr(conn, kind, id, perm)?
+            .and_then(|src| crate::permex::parse(&src).ok()))
+    };
+
+    let raw = |perm: &str| -> Result<Option<crate::permex::Expr>, String> {
+        let individual = load("user", user_id, perm)?;
+        let class = match &class_id {
+            Some(cid) => load("class", cid, perm)?,
+            None => None,
+        };
+        Ok(crate::permex::combine(class, individual))
+    };
+
+    match permission {
+        "write" => raw("write"),
+        "read"  => Ok(crate::permex::any_of(raw("read")?, raw("write")?)),
+        other   => Err(format!("unknown permission '{other}'")),
+    }
 }
 
 /// Seeds the three built-in user classes: Admin, Moderator, Viewer.
@@ -247,10 +392,14 @@ fn verify_password_hash(password: &str, stored: &str) -> bool {
         let mut parts = stored.splitn(2, ':');
         let (Some(salt_hex), Some(hash_hex)) = (parts.next(), parts.next()) else { return false; };
         let Ok(salt) = hex::decode(salt_hex) else { return false; };
+        let Ok(expected) = hex::decode(hash_hex) else { return false; };
         let mut h = Sha256::new();
         h.update(&salt);
         h.update(password.as_bytes());
-        hex::encode(h.finalize()) == hash_hex
+        let computed = h.finalize();
+        // Constant-time comparison — avoids timing side-channel on legacy hashes.
+        computed.len() == expected.len()
+            && computed.iter().zip(expected.iter()).fold(0u8, |acc, (a, b)| acc | (a ^ b)) == 0
     }
 }
 
@@ -323,7 +472,15 @@ pub fn verify_user_password(conn: &Connection, username: &str, password: &str) -
         .map_err(|e| e.to_string())?;
 
     let Some((id, uname, hash_opt, is_owner_i, created_at, last_seen)) = row else { return Ok(None); };
-    let stored = hash_opt.ok_or_else(|| "User has no password set".to_string())?;
+    // A user with no password (token-only, or the owner row) simply cannot
+    // authenticate this way — that is an ordinary credential failure, not a
+    // server error.
+    //
+    // This previously returned Err, which the server turned into a 500 while a
+    // nonexistent username returned 401, and only the 401 path incremented the
+    // rate limiter. The 500-vs-401 difference was an unthrottled username
+    // enumeration oracle.
+    let Some(stored) = hash_opt else { return Ok(None); };
     if !verify_password_hash(password, &stored) { return Ok(None); }
     // Transparent upgrade: rehash with Argon2id when the stored hash is legacy SHA-256.
     if !stored.starts_with("$argon2") {
@@ -484,38 +641,6 @@ pub fn assign_user_class(conn: &Connection, user_id: &str, class_id: Option<&str
         .map(|_| ()).map_err(|e| e.to_string())
 }
 
-/// Returns the merged effective permissions for a user: class permissions ∪ individual permissions.
-/// Write permission for a given scope supersedes read.
-pub fn get_user_effective_permissions(conn: &Connection, user_id: &str) -> Result<Vec<PermissionRecord>, String> {
-    // Individual permissions
-    let individual = get_user_permissions(conn, user_id)?;
-
-    // Class permissions (via the user's class_id)
-    let class_id: Option<String> = conn
-        .query_row("SELECT class_id FROM users WHERE id = ?1", rusqlite::params![user_id], |r| r.get(0))
-        .optional().map_err(|e| e.to_string())?
-        .flatten();
-
-    let class_perms: Vec<PermissionRecord> = if let Some(cid) = class_id {
-        get_class_permissions(conn, &cid)?.into_iter().map(|cp| PermissionRecord {
-            user_id:     user_id.to_string(),
-            scope_type:  cp.scope_type,
-            scope_value: cp.scope_value,
-            permission:  cp.permission,
-        }).collect()
-    } else { vec![] };
-
-    // Merge: individual overrides class for same scope; write wins over read
-    let mut merged: std::collections::HashMap<(String, String), String> = std::collections::HashMap::new();
-    for p in class_perms.iter().chain(individual.iter()) {
-        let key = (p.scope_type.clone(), p.scope_value.clone());
-        let cur = merged.entry(key).or_insert_with(|| p.permission.clone());
-        if p.permission == "write" { *cur = "write".to_string(); }
-    }
-    Ok(merged.into_iter().map(|((scope_type, scope_value), permission)| PermissionRecord {
-        user_id: user_id.to_string(), scope_type, scope_value, permission,
-    }).collect())
-}
 
 /// Returns the capabilities of the user's class (None values mean no class = no extra capabilities).
 pub fn get_user_capabilities(conn: &Connection, user_id: &str) -> Result<(bool, bool, bool), String> {
@@ -537,88 +662,117 @@ pub fn get_user_capabilities(conn: &Connection, user_id: &str) -> Result<(bool, 
     Ok((false, false, false))
 }
 
-// ── TOTP (2FA for sub-users) ──────────────────────────────────────────────────
+// ── Authority hierarchy (Discord-style: owner > admin > moderator > user) ──────
 
-/// Generates a new 20-byte TOTP secret, stores it for `user_id`, and returns it
-/// as a base32-encoded string that the user scans into their authenticator app.
-pub fn enable_totp(conn: &Connection, user_id: &str) -> Result<String, String> {
-    let mut raw = [0u8; 20];
-    rand::thread_rng().fill_bytes(&mut raw);
-    let secret = base32::encode(base32::Alphabet::RFC4648 { padding: false }, &raw);
-    conn.execute("UPDATE users SET totp_secret = ?1 WHERE id = ?2", rusqlite::params![secret, user_id])
-        .map_err(|e| e.to_string())?;
-    Ok(secret)
+/// Derives an authority tier from capability flags. Higher acts on strictly lower.
+/// - 3 = owner (master-password session; never a stored user row)
+/// - 2 = admin     (`cap_manage_classes`)
+/// - 1 = moderator (`cap_manage_users` only)
+/// - 0 = user      (no management capabilities)
+pub fn authority_tier(is_owner: bool, cap_manage_users: bool, cap_manage_classes: bool) -> i32 {
+    if is_owner { 3 } else if cap_manage_classes { 2 } else if cap_manage_users { 1 } else { 0 }
 }
 
-/// Disables TOTP for `user_id` by clearing the stored secret.
-pub fn disable_totp(conn: &Connection, user_id: &str) -> Result<(), String> {
-    conn.execute("UPDATE users SET totp_secret = NULL WHERE id = ?1", rusqlite::params![user_id])
-        .map(|_| ()).map_err(|e| e.to_string())
-}
-
-/// Returns whether TOTP is enabled for the given user.
-pub fn totp_enabled(conn: &Connection, user_id: &str) -> Result<bool, String> {
-    let secret: Option<Option<String>> = conn
-        .query_row("SELECT totp_secret FROM users WHERE id = ?1", rusqlite::params![user_id], |r| r.get(0))
-        .optional().map_err(|e| e.to_string())?;
-    Ok(secret.flatten().is_some())
-}
-
-/// Verifies a 6-digit TOTP code for `user_id`.
-///
-/// Checks the current 30-second window plus one window on either side for clock skew.
-/// Tracks the last accepted counter step per user to prevent replay attacks — the same
-/// code cannot be accepted twice within the same (or adjacent) windows.
-pub fn verify_totp_code(conn: &Connection, user_id: &str, code: &str) -> Result<bool, String> {
-    let row: Option<(Option<String>, Option<i64>)> = conn
+/// Authority tier implied by a class's stored capabilities. Returns 0 if unknown.
+pub fn class_authority_tier(conn: &Connection, class_id: &str) -> Result<i32, String> {
+    let row: Option<(i32, i32)> = conn
         .query_row(
-            "SELECT totp_secret, totp_last_step FROM users WHERE id = ?1",
-            rusqlite::params![user_id],
+            "SELECT cap_manage_users, cap_manage_classes FROM user_classes WHERE id = ?1",
+            rusqlite::params![class_id],
             |r| Ok((r.get(0)?, r.get(1)?)),
-        )
-        .optional().map_err(|e| e.to_string())?;
-
-    let Some((secret_opt, last_step_opt)) = row else { return Ok(false); };
-    let Some(secret_b32) = secret_opt else { return Ok(true); }; // TOTP not enabled — pass
-
-    let raw = base32::decode(base32::Alphabet::RFC4648 { padding: false }, &secret_b32)
-        .ok_or("Invalid TOTP secret stored")?;
-
-    let now_step = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH).map_err(|e| e.to_string())?
-        .as_secs() / 30;
-
-    // Check current step and ±1 for clock skew
-    for step_offset in [-1i64, 0, 1] {
-        let step = (now_step as i64 + step_offset) as u64;
-        if hotp_code(&raw, step) == code {
-            // Reject if this step (or an adjacent already-used step) was already consumed.
-            if let Some(last) = last_step_opt {
-                if step <= last as u64 { return Ok(false); } // replay detected
-            }
-            // Record the accepted step to block replay of this code.
-            let _ = conn.execute(
-                "UPDATE users SET totp_last_step = ?1 WHERE id = ?2",
-                rusqlite::params![step as i64, user_id],
-            );
-            return Ok(true);
-        }
-    }
-    Ok(false)
+        ).optional().map_err(|e| e.to_string())?;
+    Ok(row.map(|(u, c)| authority_tier(false, u != 0, c != 0)).unwrap_or(0))
 }
 
-fn hotp_code(secret: &[u8], counter: u64) -> String {
-    let mut mac = <Hmac<Sha1> as Mac>::new_from_slice(secret).expect("HMAC init");
-    mac.update(&counter.to_be_bytes());
-    let result = mac.finalize().into_bytes();
-    let offset = (result[19] & 0x0f) as usize;
-    let code = u32::from_be_bytes([
-        result[offset] & 0x7f,
-        result[offset + 1],
-        result[offset + 2],
-        result[offset + 3],
-    ]) % 1_000_000;
-    format!("{:06}", code)
+/// Returns the owning user id of a token, or `None` if the token id is unknown.
+pub fn token_user_id(conn: &Connection, token_id: &str) -> Result<Option<String>, String> {
+    conn.query_row(
+        "SELECT user_id FROM user_tokens WHERE id = ?1",
+        rusqlite::params![token_id],
+        |r| r.get(0),
+    ).optional().map_err(|e| e.to_string())
+}
+
+/// Authority tier of a stored user (by their class capabilities, or the `is_owner` flag).
+/// Returns 0 for an unknown user id.
+pub fn user_authority_tier(conn: &Connection, user_id: &str) -> Result<i32, String> {
+    let is_owner: Option<i32> = conn
+        .query_row("SELECT is_owner FROM users WHERE id = ?1", rusqlite::params![user_id], |r| r.get(0))
+        .optional().map_err(|e| e.to_string())?;
+    let Some(owner_flag) = is_owner else { return Ok(0); };
+    let (mu, mc, _) = get_user_capabilities(conn, user_id)?;
+    Ok(authority_tier(owner_flag != 0, mu, mc))
+}
+
+/// Ensures the vault has exactly one owner row and returns its id.
+///
+/// The owner is whoever can derive the SQLCipher key from the master password.
+/// Before this existed the server represented them with the magic string
+/// `"owner"`, which meant they appeared in no user list, carried no class, and
+/// could not be named in an audit row.
+///
+/// The row is deliberately created with **`password_hash = NULL`**. Storing a
+/// hash of the master password here would put an offline oracle for the vault
+/// key back into the database — the exact hole removed from the desktop
+/// `unlock_vault`. Proof of ownership stays "your password opened the
+/// database"; `verify_user_password` refuses a NULL hash, so this row can never
+/// be logged into via `/api/auth`.
+pub fn ensure_owner_user(conn: &Connection) -> Result<String, String> {
+    if let Some(id) = conn
+        .query_row("SELECT id FROM users WHERE is_owner = 1 LIMIT 1", [], |r| r.get::<_, String>(0))
+        .optional().map_err(|e| e.to_string())?
+    {
+        return Ok(id);
+    }
+
+    // `username` is UNIQUE, so fall back if a normal user already took "owner".
+    let taken: bool = conn
+        .query_row("SELECT 1 FROM users WHERE username = 'owner'", [], |r| r.get::<_, i32>(0))
+        .optional().map_err(|e| e.to_string())?
+        .is_some();
+    let id = new_uuid();
+    let username = if taken { format!("owner-{}", &id[..8]) } else { "owner".to_string() };
+
+    conn.execute(
+        "INSERT INTO users (id, username, password_hash, is_owner, created_at) \
+         VALUES (?1, ?2, NULL, 1, ?3)",
+        rusqlite::params![id, username, iso_now()],
+    ).map_err(|e| e.to_string())?;
+    Ok(id)
+}
+
+/// Outcome of [`seed_default_admin`].
+pub enum AdminSeed {
+    /// An `admin` user already existed — nothing was created.
+    Exists,
+    /// A new `admin` user (assigned the built-in `cls-admin` class) was created.
+    /// `generated_password` is `Some` only when no env password was supplied and a
+    /// random one was generated — the caller must surface it once.
+    Created { generated_password: Option<String> },
+}
+
+/// Idempotently seeds a default `admin` user assigned to the built-in `cls-admin`
+/// class. Never hardcodes a credential: uses `env_password` when present, otherwise
+/// generates a 128-bit random password the caller is responsible for displaying once.
+pub fn seed_default_admin(conn: &Connection, env_password: Option<&str>) -> Result<AdminSeed, String> {
+    let exists: Option<String> = conn
+        .query_row("SELECT id FROM users WHERE username = 'admin'", [], |r| r.get(0))
+        .optional().map_err(|e| e.to_string())?;
+    if exists.is_some() { return Ok(AdminSeed::Exists); }
+
+    let (password, generated) = match env_password {
+        Some(p) if !p.is_empty() => (p.to_string(), None),
+        _ => {
+            let mut raw = [0u8; 16];
+            rand::thread_rng().fill_bytes(&mut raw);
+            let pw = hex::encode(raw);
+            (pw.clone(), Some(pw))
+        }
+    };
+
+    let user = create_user(conn, "admin", Some(&password), false)?;
+    assign_user_class(conn, &user.id, Some("cls-admin"))?;
+    Ok(AdminSeed::Created { generated_password: generated })
 }
 
 // ── Token management ──────────────────────────────────────────────────────────
@@ -728,52 +882,25 @@ fn build_project_names(vault: &serde_json::Value) -> HashMap<String, String> {
         .unwrap_or_default()
 }
 
-/// Returns true when `entry` satisfies at least one permission at `perm_level`.
-/// `perm_level` is `"read"` or `"write"`. Write permission satisfies read checks.
-fn entry_matches_permissions(
-    entry:         &serde_json::Value,
-    permissions:   &[PermissionRecord],
-    project_names: &HashMap<String, String>,
-    perm_level:    &str,
-) -> bool {
-    let empty = vec![];
-    let categories: Vec<&str> = entry.get("categories")
-        .and_then(|v| v.as_array()).unwrap_or(&empty)
-        .iter().filter_map(|v| v.as_str()).collect();
-    let project_ids: Vec<&str> = entry.get("projectIds")
-        .and_then(|v| v.as_array()).unwrap_or(&empty)
-        .iter().filter_map(|v| v.as_str()).collect();
-
-    for p in permissions {
-        if p.permission != "write" && p.permission != perm_level { continue; }
-        match p.scope_type.as_str() {
-            "vault"    => return true,
-            "category" => { if categories.iter().any(|c| glob_matches(&p.scope_value, c)) { return true; } }
-            "project"  => {
-                for pid in &project_ids {
-                    let name = project_names.get(*pid).map(|s| s.as_str()).unwrap_or(pid);
-                    if glob_matches(&p.scope_value, name) || glob_matches(&p.scope_value, pid) {
-                        return true;
-                    }
-                }
-            }
-            _ => {}
-        }
-    }
-    false
-}
-
-/// Returns a filtered copy of `vault` containing only entries readable by the user.
-/// Also trims the `projects` list to those referenced by the visible entries.
-pub fn filter_vault_for_user(vault: serde_json::Value, permissions: &[PermissionRecord]) -> serde_json::Value {
-    if permissions.iter().any(|p| p.scope_type == "vault") { return vault; }
+/// Returns a filtered copy of `vault` containing only entries readable under `read`.
+/// Also trims the `projects` and `user_categories` lists to what the visible
+/// entries actually reference, so the taxonomy itself does not leak.
+///
+/// `read = None` means no grant at all and yields an empty vault.
+pub fn filter_vault_for_user(
+    vault: serde_json::Value,
+    read: Option<&crate::permex::Expr>,
+) -> serde_json::Value {
+    let Some(expr) = read else {
+        return serde_json::json!({ "api_keys": [], "user_categories": [], "projects": [] });
+    };
 
     let project_names = build_project_names(&vault);
     let empty = vec![];
     let api_keys = vault.get("api_keys").and_then(|v| v.as_array()).unwrap_or(&empty);
 
     let visible: Vec<serde_json::Value> = api_keys.iter()
-        .filter(|e| entry_matches_permissions(e, permissions, &project_names, "read"))
+        .filter(|e| crate::permex::eval(expr, &crate::permex::EntryView::from_entry(e, &project_names)))
         .cloned().collect();
 
     let visible_pids: HashSet<String> = visible.iter()
@@ -787,9 +914,27 @@ pub fn filter_vault_for_user(vault: serde_json::Value, permissions: &[Permission
             .map_or(false, |id| id == "Universal" || visible_pids.contains(id)))
         .cloned().collect();
 
+    // Don't leak the full category taxonomy: expose only category tags that a
+    // visible entry actually carries (plus their slash-hierarchy parents so the
+    // sidebar tree still renders).
+    let visible_cats: HashSet<String> = visible.iter()
+        .flat_map(|e| e.get("categories").and_then(|v| v.as_array()).unwrap_or(&empty)
+            .iter().filter_map(|v| v.as_str()))
+        .flat_map(|c| {
+            // "Cloud/AWS/Prod" -> ["Cloud", "Cloud/AWS", "Cloud/AWS/Prod"]
+            let parts: Vec<&str> = c.split('/').collect();
+            (1..=parts.len()).map(move |n| parts[..n].join("/"))
+        })
+        .collect();
+    let user_categories: Vec<serde_json::Value> = vault.get("user_categories")
+        .and_then(|v| v.as_array()).unwrap_or(&empty)
+        .iter()
+        .filter(|c| c.as_str().map_or(false, |s| visible_cats.contains(s)))
+        .cloned().collect();
+
     serde_json::json!({
         "api_keys":        visible,
-        "user_categories": vault.get("user_categories").cloned().unwrap_or(serde_json::json!([])),
+        "user_categories": user_categories,
         "projects":        visible_projects,
     })
 }
@@ -802,32 +947,31 @@ pub fn filter_vault_for_user(vault: serde_json::Value, permissions: &[Permission
 ///
 /// Returns `Err` if the user's submission contains an entry outside their write scope.
 pub fn merge_user_vault_write(
-    full_vault:  serde_json::Value,
-    user_data:   serde_json::Value,
-    permissions: &[PermissionRecord],
+    full_vault: serde_json::Value,
+    user_data:  serde_json::Value,
+    write:      Option<&crate::permex::Expr>,
 ) -> Result<serde_json::Value, String> {
     let project_names = build_project_names(&full_vault);
-    let write_perms: Vec<PermissionRecord> = permissions.iter()
-        .filter(|p| p.permission == "write")
-        .cloned().collect();
-
-    if write_perms.is_empty() {
+    let Some(write_expr) = write else {
         return Err("No write permissions".to_string());
-    }
+    };
+    let writable = |e: &serde_json::Value| {
+        crate::permex::eval(write_expr, &crate::permex::EntryView::from_entry(e, &project_names))
+    };
 
     let empty = vec![];
     let full_keys = full_vault.get("api_keys").and_then(|v| v.as_array()).unwrap_or(&empty);
     let user_keys = user_data.get("api_keys").and_then(|v| v.as_array()).unwrap_or(&empty);
 
-    let entry_ck = |e: &serde_json::Value| -> String {
-        format!("{}|{}",
-            e.get("provider").and_then(|v| v.as_str()).unwrap_or(""),
-            e.get("account_name").and_then(|v| v.as_str()).unwrap_or(""))
-    };
+    // Identity comes from the shared `crate::entry_ck` so this merge and
+    // `save_vault` can never disagree about what "the same entry" means. A
+    // mismatch here would let a write-scoped entry alias one in an out-of-scope
+    // project (overwrite/delete bypass).
+    use crate::entry_ck;
 
-    // Validate: every submitted entry must be within write scope
+    // Validate: every submitted entry must satisfy the write expression.
     for entry in user_keys {
-        if !entry_matches_permissions(entry, &write_perms, &project_names, "write") {
+        if !writable(entry) {
             return Err(format!(
                 "Write permission denied for '{}'",
                 entry.get("provider").and_then(|v| v.as_str()).unwrap_or("?")
@@ -839,7 +983,7 @@ pub fn merge_user_vault_write(
         user_keys.iter().map(|e| (entry_ck(e), e)).collect();
 
     let user_writable_cks: HashSet<String> = full_keys.iter()
-        .filter(|e| entry_matches_permissions(e, &write_perms, &project_names, "write"))
+        .filter(|e| writable(e))
         .map(|e| entry_ck(e))
         .collect();
 
@@ -872,4 +1016,373 @@ pub fn merge_user_vault_write(
         obj.insert("api_keys".to_string(), serde_json::Value::Array(result));
     }
     Ok(out)
+}
+
+// ── Tests ─────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    // ── Glob matching ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn glob_exact_and_wildcards() {
+        assert!(glob_matches("*", "anything"));
+        assert!(glob_matches("*", ""));
+        assert!(glob_matches("Cloud/AWS", "Cloud/AWS"));
+        assert!(!glob_matches("Cloud/AWS", "Cloud/GCP"));
+        assert!(glob_matches("wg0-*", "wg0-office"));
+        assert!(!glob_matches("wg0-*", "wg1-office"));
+        assert!(glob_matches("*-prod", "app-prod"));
+        assert!(glob_matches("a?c", "abc"));
+        assert!(!glob_matches("a?c", "ac"));
+        assert!(glob_matches("a*b*c", "axxbyyc"));
+    }
+
+    #[test]
+    fn glob_does_not_match_prefix_by_accident() {
+        // "Cloud" must not grant access to "CloudSecrets".
+        assert!(!glob_matches("Cloud", "CloudSecrets"));
+        assert!(glob_matches("Cloud*", "CloudSecrets"));
+    }
+
+    // ── Password hashing ──────────────────────────────────────────────────────
+
+    #[test]
+    fn argon2_hash_roundtrips_and_rejects_wrong_password() {
+        let stored = hash_password("correct horse");
+        assert!(stored.starts_with("$argon2id$"), "must emit PHC format, got {stored}");
+        assert!(verify_password_hash("correct horse", &stored));
+        assert!(!verify_password_hash("wrong horse", &stored));
+    }
+
+    #[test]
+    fn hashes_are_salted_per_call() {
+        assert_ne!(hash_password("same"), hash_password("same"),
+                   "identical passwords must not produce identical hashes");
+    }
+
+    #[test]
+    fn legacy_sha256_hashes_still_verify() {
+        // Phase 5.0 format: "<salt_hex>:<sha256(salt||password)_hex>"
+        let salt = [0xABu8; 16];
+        let mut h = Sha256::new();
+        h.update(salt);
+        h.update(b"legacy-pass");
+        let legacy = format!("{}:{}", hex::encode(salt), hex::encode(h.finalize()));
+        assert!(verify_password_hash("legacy-pass", &legacy));
+        assert!(!verify_password_hash("nope", &legacy));
+    }
+
+    #[test]
+    fn malformed_hashes_are_rejected_not_accepted() {
+        assert!(!verify_password_hash("x", ""));
+        assert!(!verify_password_hash("x", "garbage"));
+        assert!(!verify_password_hash("x", "$argon2id$broken"));
+        assert!(!verify_password_hash("x", "nothex:alsonothex"));
+    }
+
+    // ── Authority hierarchy ───────────────────────────────────────────────────
+
+    #[test]
+    fn authority_tiers_are_ordered() {
+        let owner = authority_tier(true,  false, false);
+        let admin = authority_tier(false, true,  true);
+        let moder = authority_tier(false, true,  false);
+        let user  = authority_tier(false, false, false);
+        assert!(owner > admin && admin > moder && moder > user,
+                "owner {owner} > admin {admin} > moderator {moder} > user {user}");
+    }
+
+    // ── Write scoping ─────────────────────────────────────────────────────────
+    //
+    // Predicate-level semantics (wildcards, Universal, globs) are covered by the
+    // permex tests. What matters here is that the merge honours the expression.
+
+    fn ex(src: &str) -> crate::permex::Expr { crate::permex::parse(src).unwrap() }
+
+    // ── Owner row ─────────────────────────────────────────────────────────────
+
+    fn scratch_conn(tag: &str) -> Connection {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+        let dir = std::env::temp_dir().join(format!("envvault-users-{tag}-{nanos}"));
+        std::fs::create_dir_all(&dir).unwrap();
+        let key = crate::derive_key("pw", b"0123456789abcdef").unwrap();
+        let conn = crate::open_db(&dir.join("vault.db"), &key).unwrap();
+        crate::init_schema(&conn).unwrap();
+        conn
+    }
+
+    #[test]
+    fn owner_row_is_created_once_and_is_idempotent() {
+        let conn = scratch_conn("owner");
+        let a = ensure_owner_user(&conn).unwrap();
+        let b = ensure_owner_user(&conn).unwrap();
+        assert_eq!(a, b, "must not create a second owner");
+        let owners: i32 = conn
+            .query_row("SELECT COUNT(*) FROM users WHERE is_owner = 1", [], |r| r.get(0)).unwrap();
+        assert_eq!(owners, 1);
+    }
+
+    #[test]
+    fn owner_row_has_no_password_and_cannot_be_logged_into() {
+        let conn = scratch_conn("owner-nopw");
+        ensure_owner_user(&conn).unwrap();
+        // Storing a hash of the master password here would be an offline oracle
+        // for the vault key, so the row must never have one.
+        let hash: Option<String> = conn
+            .query_row("SELECT password_hash FROM users WHERE is_owner = 1", [], |r| r.get(0)).unwrap();
+        assert!(hash.is_none(), "owner row must have a NULL password_hash");
+        assert!(verify_user_password(&conn, "owner", "anything").unwrap().is_none());
+        assert!(verify_user_password(&conn, "owner", "").unwrap().is_none());
+    }
+
+    #[test]
+    fn passwordless_user_is_a_credential_failure_not_an_error() {
+        // 500-vs-401 used to leak which usernames existed, unthrottled, because
+        // only the Ok(None) path incremented the rate limiter.
+        let conn = scratch_conn("nopw");
+        create_user(&conn, "tokenonly", None, false).unwrap();
+        let existing = verify_user_password(&conn, "tokenonly", "guess");
+        let missing  = verify_user_password(&conn, "ghost", "guess");
+        assert!(existing.is_ok() && existing.unwrap().is_none());
+        assert!(missing.is_ok()  && missing.unwrap().is_none());
+    }
+
+    #[test]
+    fn owner_username_collision_falls_back() {
+        let conn = scratch_conn("collide");
+        create_user(&conn, "owner", Some("pw"), false).unwrap();
+        let id = ensure_owner_user(&conn).unwrap();
+        let uname: String = conn
+            .query_row("SELECT username FROM users WHERE id = ?1", rusqlite::params![id], |r| r.get(0)).unwrap();
+        assert_ne!(uname, "owner", "must not collide with the existing UNIQUE username");
+        assert!(uname.starts_with("owner-"));
+    }
+
+    #[test]
+    fn owner_outranks_every_class() {
+        let conn = scratch_conn("tier");
+        let id = ensure_owner_user(&conn).unwrap();
+        assert_eq!(user_authority_tier(&conn, &id).unwrap(), 3);
+    }
+
+    // ── Permission expressions ────────────────────────────────────────────────
+
+    #[test]
+    fn legacy_rows_are_migrated_into_expressions() {
+        let conn = scratch_conn("permmig");
+        let u = create_user(&conn, "u1", Some("pw"), false).unwrap();
+        set_user_permissions(&conn, &u.id, &[
+            PermissionRecord { user_id: u.id.clone(), scope_type: "project".into(),
+                               scope_value: "Alpha".into(), permission: "write".into() },
+            PermissionRecord { user_id: u.id.clone(), scope_type: "category".into(),
+                               scope_value: "dev".into(), permission: "read".into() },
+        ]).unwrap();
+        // Re-run the migration as a fresh database would.
+        conn.execute("DELETE FROM vault_meta WHERE key = 'perm_expr_migrated'", []).unwrap();
+        migrate_rows_to_expressions(&conn).unwrap();
+
+        let read  = get_permission_expr(&conn, "user", &u.id, "read").unwrap().unwrap();
+        let write = get_permission_expr(&conn, "user", &u.id, "write").unwrap().unwrap();
+        assert!(read.contains("project:Alpha") && read.contains("category:dev"),
+                "read should be the OR of every row, got {read}");
+        assert!(write.contains("project:Alpha") && !write.contains("category:dev"),
+                "write should only include write rows, got {write}");
+    }
+
+    #[test]
+    fn migration_runs_once_only() {
+        let conn = scratch_conn("permmig-once");
+        let u = create_user(&conn, "u1", Some("pw"), false).unwrap();
+        set_permission_expr(&conn, "user", &u.id, "read", "tag:mine").unwrap();
+        set_user_permissions(&conn, &u.id, &[
+            PermissionRecord { user_id: u.id.clone(), scope_type: "vault".into(),
+                               scope_value: "*".into(), permission: "write".into() },
+        ]).unwrap();
+        migrate_rows_to_expressions(&conn).unwrap();
+        // Already migrated at schema init, so the legacy rows must not clobber
+        // an expression an admin has since written.
+        assert_eq!(get_permission_expr(&conn, "user", &u.id, "read").unwrap().unwrap(), "tag:mine");
+    }
+
+    #[test]
+    fn built_in_classes_get_expressions_on_a_fresh_vault() {
+        // The seeded class rows must be compiled, or Admin/Viewer would silently
+        // grant nothing at all.
+        let conn = scratch_conn("permmig-seed");
+        let admin = get_permission_expr(&conn, "class", "cls-admin", "write").unwrap();
+        let viewer_read = get_permission_expr(&conn, "class", "cls-viewer", "read").unwrap();
+        assert_eq!(admin.as_deref(), Some("vault:*"));
+        assert_eq!(viewer_read.as_deref(), Some("vault:*"));
+        assert!(get_permission_expr(&conn, "class", "cls-viewer", "write").unwrap().is_none(),
+                "Viewer is read-only");
+    }
+
+    #[test]
+    fn invalid_expressions_are_rejected_on_save() {
+        let conn = scratch_conn("permbad");
+        let u = create_user(&conn, "u1", Some("pw"), false).unwrap();
+        assert!(set_permission_expr(&conn, "user", &u.id, "read", "project:a AND").is_err());
+        assert!(set_permission_expr(&conn, "user", &u.id, "read", "bogus:a").is_err());
+        assert!(get_permission_expr(&conn, "user", &u.id, "read").unwrap().is_none(),
+                "a rejected expression must not be stored");
+    }
+
+    #[test]
+    fn blank_expression_clears_the_rule() {
+        let conn = scratch_conn("permclear");
+        let u = create_user(&conn, "u1", Some("pw"), false).unwrap();
+        set_permission_expr(&conn, "user", &u.id, "read", "tag:x").unwrap();
+        set_permission_expr(&conn, "user", &u.id, "read", "   ").unwrap();
+        assert!(get_permission_expr(&conn, "user", &u.id, "read").unwrap().is_none());
+    }
+
+    #[test]
+    fn effective_read_includes_write_because_write_implies_read() {
+        let conn = scratch_conn("permeff");
+        let u = create_user(&conn, "u1", Some("pw"), false).unwrap();
+        set_permission_expr(&conn, "user", &u.id, "write", "project:Alpha").unwrap();
+        let read = effective_permission_expr(&conn, &u.id, "read").unwrap()
+            .expect("write should imply read");
+        assert!(read.to_string().contains("project:Alpha"));
+    }
+
+    #[test]
+    fn effective_expr_ands_class_with_individual() {
+        let conn = scratch_conn("permand");
+        let u = create_user(&conn, "u1", Some("pw"), false).unwrap();
+        let cls = create_user_class(&conn, "Contractor", "", false, false, false).unwrap();
+        assign_user_class(&conn, &u.id, Some(&cls.id)).unwrap();
+        set_permission_expr(&conn, "class", &cls.id, "read", "NOT category:secret").unwrap();
+        set_permission_expr(&conn, "user",  &u.id,  "read", "vault:*").unwrap();
+
+        let expr = effective_permission_expr(&conn, &u.id, "read").unwrap().unwrap();
+        let pn: HashMap<String, String> = HashMap::new();
+        let secret = json!({ "provider": "S", "categories": ["secret"], "projectIds": ["Universal"] });
+        let plain  = json!({ "provider": "P", "categories": ["dev"],    "projectIds": ["Universal"] });
+        assert!(!crate::permex::eval(&expr, &crate::permex::EntryView::from_entry(&secret, &pn)),
+                "the class exclusion must survive the individual grant");
+        assert!(crate::permex::eval(&expr, &crate::permex::EntryView::from_entry(&plain, &pn)));
+    }
+
+    #[test]
+    fn a_user_with_no_rules_gets_nothing() {
+        let conn = scratch_conn("permnone");
+        let u = create_user(&conn, "u1", Some("pw"), false).unwrap();
+        assert!(effective_permission_expr(&conn, &u.id, "read").unwrap().is_none());
+        assert!(effective_permission_expr(&conn, &u.id, "write").unwrap().is_none());
+    }
+
+    // ── Vault filtering ───────────────────────────────────────────────────────
+
+    fn sample_vault() -> serde_json::Value {
+        json!({
+            "api_keys": [
+                { "id": "1", "provider": "Mine",   "categories": ["dev"],  "projectIds": ["Universal", "p1"] },
+                { "id": "2", "provider": "Theirs", "categories": ["ops"],  "projectIds": ["Universal", "p2"] },
+            ],
+            "user_categories": ["dev", "ops", "secret/taxonomy"],
+            "projects": [
+                { "id": "Universal", "name": "Universal" },
+                { "id": "p1", "name": "Alpha" },
+                { "id": "p2", "name": "Beta" },
+            ],
+        })
+    }
+
+    #[test]
+    fn vault_scope_sees_everything_untouched() {
+        let out = filter_vault_for_user(sample_vault(), Some(&ex("vault:*")));
+        assert_eq!(out["api_keys"].as_array().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn project_scope_hides_other_projects() {
+        let out = filter_vault_for_user(sample_vault(), Some(&ex("project:Alpha")));
+        let keys = out["api_keys"].as_array().unwrap();
+        assert_eq!(keys.len(), 1);
+        assert_eq!(keys[0]["provider"], "Mine");
+    }
+
+    #[test]
+    fn filtering_does_not_leak_the_category_taxonomy() {
+        let out = filter_vault_for_user(sample_vault(), Some(&ex("project:Alpha")));
+        let cats: Vec<&str> = out["user_categories"].as_array().unwrap()
+            .iter().filter_map(|c| c.as_str()).collect();
+        assert!(cats.contains(&"dev"), "categories on visible entries are kept");
+        assert!(!cats.contains(&"ops"), "categories only on hidden entries must not leak");
+        assert!(!cats.contains(&"secret/taxonomy"), "unused category names must not leak");
+    }
+
+    // ── Write merge ───────────────────────────────────────────────────────────
+
+    #[test]
+    fn merge_rejects_submission_outside_write_scope() {
+        let full = sample_vault();
+        let submitted = json!({ "api_keys": [
+            { "id": "2", "provider": "Theirs", "categories": ["ops"], "projectIds": ["Universal", "p2"] }
+        ]});
+        let err = merge_user_vault_write(full, submitted, Some(&ex("project:Alpha")))
+            .expect_err("writing an out-of-scope entry must be refused");
+        assert!(err.contains("Theirs"), "error should name the offending entry, got: {err}");
+    }
+
+    #[test]
+    fn merge_requires_some_write_permission() {
+        let err = merge_user_vault_write(sample_vault(), json!({ "api_keys": [] }), None)
+            .expect_err("read-only users must not be able to write at all");
+        assert_eq!(err, "No write permissions");
+    }
+
+    /// Write coverage for entry "Mine" — under ANY-match the project grant alone
+    /// is sufficient, since the entry belongs to project Alpha.
+
+
+    #[test]
+    fn merge_applies_in_scope_edits_and_preserves_the_rest() {
+        let submitted = json!({ "api_keys": [
+            { "id": "1", "provider": "Mine", "api_key": "updated",
+              "categories": ["dev"], "projectIds": ["Universal", "p1"] }
+        ]});
+        let out = merge_user_vault_write(sample_vault(), submitted, Some(&ex("project:Alpha"))).unwrap();
+        let keys = out["api_keys"].as_array().unwrap();
+        assert_eq!(keys.len(), 2, "the out-of-scope entry must survive");
+        let mine = keys.iter().find(|e| e["id"] == "1").unwrap();
+        assert_eq!(mine["api_key"], "updated");
+        assert!(keys.iter().any(|e| e["id"] == "2"), "Theirs must be untouched");
+    }
+
+    #[test]
+    fn merge_deletes_in_scope_entries_omitted_from_the_submission() {
+        let out = merge_user_vault_write(sample_vault(), json!({ "api_keys": [] }), Some(&ex("project:Alpha"))).unwrap();
+        let keys = out["api_keys"].as_array().unwrap();
+        assert_eq!(keys.len(), 1, "the in-scope entry is deleted");
+        assert_eq!(keys[0]["id"], "2", "the out-of-scope entry is not");
+    }
+
+    #[test]
+    fn merge_cannot_alias_an_out_of_scope_entry_via_key_id() {
+        // Identity includes key_id. If it did not, a writable entry could be
+        // crafted to collide with an out-of-scope one and overwrite it.
+        let full = json!({ "api_keys": [
+            { "provider": "AWS", "account_name": "acct", "key_id": "locked",
+              "api_key": "secret", "categories": ["ops"], "projectIds": ["Universal", "p2"] },
+            { "provider": "AWS", "account_name": "acct", "key_id": "mine",
+              "api_key": "ok",     "categories": ["dev"], "projectIds": ["Universal", "p1"] },
+        ],
+        "projects": [{ "id": "p1", "name": "Alpha" }, { "id": "p2", "name": "Beta" }]});
+
+        let submitted = json!({ "api_keys": [
+            { "provider": "AWS", "account_name": "acct", "key_id": "mine",
+              "api_key": "changed", "categories": ["dev"], "projectIds": ["Universal", "p1"] }
+        ]});
+        let out = merge_user_vault_write(full, submitted, Some(&ex("project:Alpha"))).unwrap();
+        let keys = out["api_keys"].as_array().unwrap();
+        let locked = keys.iter().find(|e| e["key_id"] == "locked").unwrap();
+        assert_eq!(locked["api_key"], "secret", "the out-of-scope key must be untouched");
+    }
 }

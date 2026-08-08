@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "API-Vault",
+  "productName": "EnvVault",
   "version": "0.6.0",
-  "identifier": "io.apivault",
+  "identifier": "io.envvault",
   "build": {
     "frontendDist": "../dist",
     "beforeBuildCommand": "npm run build:frontend"
@@ -11,7 +11,7 @@
     "withGlobalTauri": true,
     "windows": [
       {
-        "title": "API Vault",
+        "title": "EnvVault",
         "width": 1280,
         "height": 800,
         "minWidth": 860,
@@ -22,7 +22,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self' blob: ipc: http://ipc.localhost tauri:; connect-src 'self' ipc: http://ipc.localhost tauri: http: https:; img-src 'self' data: blob: https://cdn.simpleicons.org tauri:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; script-src 'self'"
+      "csp": "default-src 'self' blob: ipc: http://ipc.localhost tauri:; connect-src 'self' ipc: http://ipc.localhost tauri: http: https:; img-src 'self' data: blob: https://cdn.simpleicons.org tauri:; style-src 'self' 'unsafe-inline'; font-src 'self'; script-src 'self'"
     }
   },
   "bundle": {

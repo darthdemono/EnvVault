@@ -1,5 +1,5 @@
 /**
- * @file Data models for API Vault.
+ * @file Data models for EnvVault.
  * @description Defines the structure of vault entries, projects, and application settings
  *              shared between the TypeScript frontend and the persisted JSON format.
  *              These types mirror the JSON blob stored in the SQLCipher `vault` table.
@@ -37,6 +37,16 @@ export type SecretType =
  * Every entry always belongs to at least the "Universal" category (`projectIds`).
  */
 export interface VaultEntry {
+  /**
+   * Stable unique identifier, assigned once on creation and never mutated.
+   *
+   * This is the entry's identity for every purpose that must survive edits and
+   * array reordering: `version_history` attribution, audit rows, RBAC write
+   * scoping, and UI expand/reveal state. Optional only so vaults written before
+   * this field existed still parse — `finishInit()` backfills a UUID into every
+   * entry lacking one, and everything written afterwards always has it.
+   */
+  id?: string;
   /** Service or provider name (e.g. `"GitHub"`, `"DATABASE_URL"`). Always required. */
   provider: string;
   /** Optional sub-account identifier within the same provider. */
@@ -55,7 +65,16 @@ export interface VaultEntry {
   price_type: 'free' | 'local' | 'paid' | 'conditional';
   /** Deployment context this credential belongs to. */
   environment?: 'production' | 'staging' | 'development' | 'testing' | null;
-  /** Flat project tag names (UI label: "Projects"). Backed by `VaultData.user_categories`. */
+  /**
+   * Category tags this entry carries. Backed by `VaultData.user_categories`,
+   * shown in the sidebar's "Categories" section, and matched by RBAC
+   * `scope_type: "category"`.
+   *
+   * (An earlier comment here claimed these were labelled "Projects" in the UI.
+   * They are not — the data names, the sidebar headings and the RBAC scope
+   * names all agree. Only the DOM element ids were crossed, and those have
+   * since been renamed.)
+   */
   categories: string[];
   /** Base URL of the service's API. */
   api_url?: string | null;
@@ -76,30 +95,48 @@ export interface VaultEntry {
   /** Snapshots of previous `api_key` values. Prepended automatically on save when the value changes. */
   version_history?: Array<{ value: string; saved_at: string }>;
   /**
-   * Hierarchical category IDs (UI label: "Categories") this entry belongs to.
-   * Backed by `VaultData.projects`. Always contains `"Universal"`.
+   * Ids of the projects this entry belongs to. Backed by `VaultData.projects`,
+   * shown in the sidebar's "Projects" section, and matched by RBAC
+   * `scope_type: "project"`.
+   *
+   * Always contains `"Universal"` — the catch-all every entry carries. A
+   * specific project grant is never satisfied by it.
    */
   projectIds: string[];
   /** Discriminates which secret-type-specific fields and form layout apply. */
-  secretType?: 'api_key' | 'password' | 'certificate' | 'env_var' | 'connection_string' | 'ssh_key' | 'file_blob';
+  secretType?: SecretType;
   /** Username for `password` or `ssh_key` entries. */
   username?: string | null;
   /** Email associated with this credential. */
   email?: string | null;
-  /** PEM-encoded certificate content. `certificate` entries only. */
+  /** PEM-encoded certificate content (fullchain). `certificate` entries only. */
   certificate_data?: string | null;
   /** Private key PEM paired with this certificate. */
   cert_key_data?: string | null;
+  /** Issuer / CA that provided the certificate (e.g. "Let's Encrypt", "Google", "EnvV"). `certificate` entries only. */
+  cert_issuer?: string | null;
   /** File-system path or reference to a credential file. `file_blob` entries only. */
   blob_ref?: string | null;
   /** Sub-type hint for env_var entries (used for display and filtering). */
   env_var_subtype?: 'string' | 'multiline' | 'secret' | 'boolean' | 'number' | 'ip' | 'cidr' | 'port' | 'url' | 'date' | 'json';
   /** ISO-8601 timestamp of the last manual rotation (set via "Mark as rotated"). */
   last_rotated_at?: string | null;
+  /** Rotation cadence in days. When set, health scan flags entries overdue since `last_rotated_at`. */
+  rotation_days?: number | null;
+  /** Marks a credential as known-leaked / emergency-rotate. Surfaces as a critical health issue. */
+  compromised?: boolean;
   /** Free-form tags for quick cross-cutting labelling (separate from categories/projects). */
   tags?: string[];
   /** When true the entry floats to the top of all filtered views. */
   pinned?: boolean;
+  /** Extra named fields beyond the fixed schema (e.g. db, port, host for database entries). */
+  extra_vars?: Array<{ key: string; value: string; secret?: boolean }>;
+  /**
+   * Env-var prefixes added by services that consume this credential.
+   * For Key type: e.g. ["ND", "SPOTIFYD"] means Navidrome uses ND_LASTFM_APIKEY.
+   * For Chunk type: the first prefix IS the chunk's env-namespace identifier (e.g. ["AM"] for AM_JWT_SECRET).
+   */
+  env_prefixes?: string[];
 }
 
 /**
@@ -187,6 +224,10 @@ export interface SecretChunk {
   notes?: string;
   /** When true the chunk is greyed-out and excluded from exports. */
   disabled?: boolean;
+  /** Snapshot of resolved env output (KEY→value hash map) at last copy — powers "changed since last copy". */
+  last_copied_snapshot?: Record<string, string>;
+  /** ISO-8601 timestamp of the last resolved copy. */
+  last_copied_at?: string;
 }
 
 /** High-level type of a project — drives the special config view. */
@@ -272,6 +313,8 @@ export interface AuditRow {
   details:        string | null;
   entry_hash:     string | null;
   prev_hash:      string | null;
+  /** User id that performed the action; null for rows written before actor tracking. */
+  actor:          string | null;
 }
 
 /** Remote vault server configuration stored in AppSettings. */
@@ -311,6 +354,14 @@ export interface AppSettings {
   defaultExportFormat: 'dotenv' | 'yaml' | 'json';
   /** Minutes of inactivity before the vault auto-locks. */
   autoLockMinutes: number;
+  /**
+   * Lock the vault the instant the window is hidden (alt-tab, minimise).
+   *
+   * Defaults to `false`: this used to be unconditional, so simply switching
+   * windows nuked your session. The inactivity timer already covers walking
+   * away from the machine; this is the paranoid opt-in on top.
+   */
+  lockOnHide: boolean;
   /** Whether secret values are masked (dotted) by default when cards load. */
   maskKeysByDefault: boolean;
   /** Whether to display a warning badge for secrets approaching expiry. */
@@ -323,7 +374,7 @@ export interface AppSettings {
    * Ordered array of sidebar section keys to display.
    * Sections absent from this array are hidden.
    */
-  sidebarSections: ('all' | 'price' | 'category' | 'project')[];
+  sidebarSections: ('all' | 'price' | 'env' | 'category' | 'project' | 'tags' | 'prefixes')[];
   /** When `true`, the main grid renders section headers grouping cards by secret type. */
   groupByType: boolean;
   /** Position of the activity bar. */
@@ -331,7 +382,7 @@ export interface AppSettings {
   /** Activity bar display style. */
   activityBarStyle: 'icon' | 'icon-label';
   /** Section keys that are currently collapsed in the secrets sidebar. */
-  collapsedSections: ('all' | 'price' | 'env' | 'category' | 'project')[];
+  collapsedSections: ('all' | 'price' | 'env' | 'category' | 'project' | 'tags' | 'prefixes')[];
   /** Currently active top-level panel. */
   activePanel: 'secrets' | 'tools' | 'users' | 'remote';
   /** ID of the currently active tool pane (e.g. `'secret-gen'`). */

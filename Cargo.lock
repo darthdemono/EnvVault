@@ -110,58 +110,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7f202df86484c868dbad7eaa557ef785d5c66295e41b460ef922eca0723b842c"
 
 [[package]]
-name = "api-vault"
-version = "0.6.0"
-dependencies = [
- "reqwest 0.12.28",
- "serde",
- "serde_json",
- "tauri",
- "tauri-build",
- "tauri-plugin-global-shortcut",
- "tauri-plugin-shell",
- "vault-core",
- "zeroize",
-]
-
-[[package]]
-name = "apiv-cli"
-version = "0.5.0"
-dependencies = [
- "clap",
- "clap_complete",
- "dirs 5.0.1",
- "notify",
- "reqwest 0.12.28",
- "rpassword",
- "serde",
- "serde_json",
- "vault-core",
-]
-
-[[package]]
-name = "apiv-server"
-version = "0.6.0"
-dependencies = [
- "axum",
- "axum-server",
- "clap",
- "dirs 5.0.1",
- "hex",
- "rcgen",
- "serde",
- "serde_json",
- "sha2",
- "time",
- "tokio",
- "tower-http",
- "utoipa",
- "uuid",
- "vault-core",
- "zeroize",
-]
-
-[[package]]
 name = "arc-swap"
 version = "1.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -318,12 +266,6 @@ name = "base16ct"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4c7f02d4ea65f2c1853089ffd8d2787bdbc63de2f0d29dedbcf8ccdfa0ccd4cf"
-
-[[package]]
-name = "base32"
-version = "0.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "23ce669cd6c8588f79e15cf450314f9638f967fc5770ff1c7c1deb0925ea7cfa"
 
 [[package]]
 name = "base64"
@@ -1188,6 +1130,65 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "75030f3c4f45dafd7586dd6780965a8c7e8e285a5ecb86713e63a79c5b2766f3"
 dependencies = [
  "cfg-if",
+]
+
+[[package]]
+name = "envv-cli"
+version = "0.6.0"
+dependencies = [
+ "clap",
+ "clap_complete",
+ "dirs 5.0.1",
+ "notify",
+ "reqwest 0.12.28",
+ "rpassword",
+ "serde",
+ "serde_json",
+ "vault-core",
+]
+
+[[package]]
+name = "envv-server"
+version = "0.6.0"
+dependencies = [
+ "axum",
+ "axum-server",
+ "clap",
+ "dirs 5.0.1",
+ "hex",
+ "rcgen",
+ "rustls-pemfile",
+ "serde",
+ "serde_json",
+ "sha2",
+ "time",
+ "tokio",
+ "tower-http",
+ "utoipa",
+ "uuid",
+ "vault-core",
+ "zeroize",
+]
+
+[[package]]
+name = "envvault"
+version = "0.6.0"
+dependencies = [
+ "envv-server",
+ "hex",
+ "reqwest 0.12.28",
+ "rustls",
+ "rustls-pki-types",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-global-shortcut",
+ "tauri-plugin-shell",
+ "tokio",
+ "vault-core",
+ "zeroize",
 ]
 
 [[package]]
@@ -3464,7 +3465,7 @@ dependencies = [
  "once_cell",
  "socket2",
  "tracing",
- "windows-sys 0.52.0",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -3850,6 +3851,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "rustls-pemfile"
+version = "2.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dce314e5fee3f39953d46bb63bb8a46d40c2f8fb7cc5a3b6cab2bde9721d6e50"
+dependencies = [
+ "rustls-pki-types",
+]
+
+[[package]]
 name = "rustls-pki-types"
 version = "1.14.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4202,17 +4212,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "170fb83ab34de17dc69aa7c67482b22218ddb85da56546f9bd6b929e32a05930"
 dependencies = [
  "stable_deref_trait",
-]
-
-[[package]]
-name = "sha1"
-version = "0.10.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e3bf829a2d51ab4a5ddf1352d8470c140cadc8301b2ae1789db023f01cedd6ba"
-dependencies = [
- "cfg-if",
- "cpufeatures",
- "digest",
 ]
 
 [[package]]
@@ -5427,18 +5426,15 @@ dependencies = [
 
 [[package]]
 name = "vault-core"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "argon2",
- "base32",
  "hex",
- "hmac",
  "rand 0.8.5",
  "rcgen",
  "rusqlite",
  "serde",
  "serde_json",
- "sha1",
  "sha2",
  "ssh-key",
  "time",

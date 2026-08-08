@@ -3,9 +3,10 @@
  */
 
 import type { VaultEntry, SecretType } from './types';
-import { st, Settings, triggerRender, Exporter, dotenvKey } from './state';
+import { st, Settings, triggerRender, Exporter, dotenvKey, persist, entryId, newEntryId } from './state';
 import { esc, escAttr, maskKey, showToast, showConfirm, clipboardWrite, eyeSVG, copySVG, dupSVG, editSVG, delSVG } from './utils';
 import { iconHTML, openIconPicker, iconPicker } from './icons';
+import { renameProviderRefs } from './chunk-ops';
 
 // ── Schema tooltips & category chips ──────────────────────────────────────
 
@@ -51,7 +52,7 @@ export const TYPE_CONFIG: Record<SecretType, TypeConfig> = {
   env_var:           { providerLabel: 'Variable Name',    providerPlaceholder: 'e.g. DATABASE_URL',     showAccount: false, keyLabel: 'Value',             keyPlaceholder: 'Variable value' },
   connection_string: { providerLabel: 'Service',          providerPlaceholder: 'e.g. PostgreSQL',       showAccount: false, keyLabel: 'Connection String', keyPlaceholder: 'postgresql://user:pass@host/db' },
   ssh_key:           { providerLabel: 'Host / Service',   providerPlaceholder: 'e.g. github.com',       showAccount: true,  keyLabel: 'SSH Key',           keyPlaceholder: '-----BEGIN OPENSSH PRIVATE KEY-----' },
-  certificate:       { providerLabel: 'Provider / Issuer',providerPlaceholder: "e.g. Let's Encrypt",   showAccount: false, keyLabel: 'Certificate',       keyPlaceholder: '' },
+  certificate:       { providerLabel: 'Site / Domain',    providerPlaceholder: 'e.g. darthdemono.com',  showAccount: false, keyLabel: 'Fullchain',         keyPlaceholder: '' },
   file_blob:         { providerLabel: 'Name',             providerPlaceholder: 'e.g. config.yaml',      showAccount: false, keyLabel: 'File Reference',    keyPlaceholder: '' },
 };
 
@@ -67,6 +68,7 @@ export function dynamicSecretFields() {
   const usernameRow       = document.getElementById('f-username-row');
   const certGroup         = document.getElementById('f-cert-group');
   const certKeyGroup      = document.getElementById('f-cert-key-group');
+  const certIssuerGroup   = document.getElementById('f-cert-issuer-group');
   const blobGroup         = document.getElementById('f-blob-group');
   const accountGroup      = document.getElementById('f-account-group');
   const providerLabel     = document.getElementById('f-provider-label');
@@ -82,6 +84,7 @@ export function dynamicSecretFields() {
   if (usernameRow)        usernameRow.style.display        = showUser                   ? 'grid' : 'none';
   if (certGroup)          certGroup.style.display          = type === 'certificate'     ? 'flex' : 'none';
   if (certKeyGroup)       certKeyGroup.style.display       = type === 'certificate'     ? 'flex' : 'none';
+  if (certIssuerGroup)    certIssuerGroup.style.display    = type === 'certificate'     ? 'flex' : 'none';
   if (blobGroup)          blobGroup.style.display          = type === 'file_blob'       ? 'flex' : 'none';
   if (accountGroup)       accountGroup.style.display       = cfg.showAccount            ? ''     : 'none';
   if (envvarSubtypeGroup) envvarSubtypeGroup.style.display = type === 'env_var'         ? 'flex' : 'none';
@@ -126,6 +129,8 @@ export function formToEntry(): VaultEntry {
     version: getVal('f-version') || undefined,
     rate_limit: getVal('f-ratelimit') || undefined,
     expires_at: getVal('f-expires') || undefined,
+    rotation_days: getVal('f-rotation-days') ? parseInt(getVal('f-rotation-days')) || undefined : undefined,
+    compromised: (document.getElementById('f-compromised') as HTMLInputElement | null)?.checked || undefined,
     scopes,
     api_description: getVal('f-apidesc') || undefined,
     description: getVal('f-desc') || undefined,
@@ -138,8 +143,23 @@ export function formToEntry(): VaultEntry {
     secretType,
     certificate_data: secretType === 'certificate' ? getVal('f-cert') : undefined,
     cert_key_data: secretType === 'certificate' ? (getVal('f-cert-key') || undefined) : undefined,
+    cert_issuer: secretType === 'certificate' ? (getVal('f-cert-issuer') || undefined) : undefined,
     blob_ref: secretType === 'file_blob' ? getVal('f-blob') : undefined,
     env_var_subtype: secretType === 'env_var' ? (getVal('f-envvar-subtype') as VaultEntry['env_var_subtype'] || undefined) : undefined,
+    extra_vars: (() => {
+      const rows = [...document.querySelectorAll<HTMLElement>('#f-extra-vars-list .extra-var-row')];
+      const result = rows.map(row => ({
+        key: (row.querySelector<HTMLInputElement>('.extra-var-key')?.value.trim()) || '',
+        value: (row.querySelector<HTMLInputElement>('.extra-var-value')?.value.trim()) || '',
+        secret: (row.querySelector<HTMLInputElement>('.extra-var-secret')?.checked) || false,
+      })).filter(v => v.key);
+      return result.length ? result : undefined;
+    })(),
+    env_prefixes: (() => {
+      const raw = getVal('f-env-prefixes');
+      const parts = raw.split(/[,\s]+/).map(p => p.trim().replace(/_+$/, '')).filter(Boolean);
+      return parts.length ? parts : undefined;
+    })(),
   };
 }
 
@@ -167,6 +187,10 @@ export function fillForm(entry: Partial<VaultEntry>) {
   (document.getElementById('f-version') as HTMLInputElement).value = entry.version || '';
   (document.getElementById('f-ratelimit') as HTMLInputElement).value = entry.rate_limit || '';
   (document.getElementById('f-expires') as HTMLInputElement).value = entry.expires_at || '';
+  const rotEl = document.getElementById('f-rotation-days') as HTMLInputElement | null;
+  if (rotEl) rotEl.value = entry.rotation_days ? String(entry.rotation_days) : '';
+  const compEl = document.getElementById('f-compromised') as HTMLInputElement | null;
+  if (compEl) compEl.checked = !!entry.compromised;
   (document.getElementById('f-scopes') as HTMLInputElement).value = (entry.scopes || []).join(', ');
   (document.getElementById('f-apidesc') as HTMLInputElement).value = entry.api_description || '';
   (document.getElementById('f-desc') as HTMLInputElement).value = entry.description || '';
@@ -181,12 +205,22 @@ export function fillForm(entry: Partial<VaultEntry>) {
   if (entry.secretType === 'certificate') {
     (document.getElementById('f-cert') as HTMLInputElement).value = entry.certificate_data || '';
     (document.getElementById('f-cert-key') as HTMLInputElement).value = entry.cert_key_data || '';
+    (document.getElementById('f-cert-issuer') as HTMLInputElement).value = entry.cert_issuer || '';
   }
   if (entry.secretType === 'file_blob') (document.getElementById('f-blob') as HTMLInputElement).value = entry.blob_ref || '';
   if (entry.secretType === 'env_var') {
     const envSubtype = document.getElementById('f-envvar-subtype') as HTMLSelectElement | null;
     if (envSubtype) envSubtype.value = entry.env_var_subtype || 'string';
   }
+  const extraList = document.getElementById('f-extra-vars-list');
+  if (extraList) {
+    extraList.innerHTML = '';
+    for (const xv of (entry.extra_vars || [])) {
+      extraList.appendChild(_makeExtraVarRow(xv.key, xv.value, xv.secret));
+    }
+  }
+  const pfxInput = document.getElementById('f-env-prefixes') as HTMLInputElement | null;
+  if (pfxInput) pfxInput.value = (entry.env_prefixes || []).join(', ');
   dynamicSecretFields();
 }
 
@@ -213,7 +247,29 @@ export function openModal(title: string, idx: number) {
   populateProjectSelect();
 }
 
-const DRAFT_KEY = 'apivault-form-draft';
+const DRAFT_KEY = 'envvault-form-draft';
+
+function _saveDraft() {
+  try { sessionStorage.setItem(DRAFT_KEY, JSON.stringify(formToEntry())); } catch {}
+}
+let _draftBound = false;
+
+function _makeExtraVarRow(key = '', value = '', secret = false): HTMLElement {
+  const row = document.createElement('div');
+  row.className = 'extra-var-row';
+  row.innerHTML = `
+    <input class="form-input mono extra-var-key" placeholder="KEY" value="${escAttr(key)}">
+    <input class="form-input mono extra-var-value" placeholder="value" value="${escAttr(value)}"${secret ? ' type="password"' : ''}>
+    <label class="extra-var-secret-label" title="Mask value in UI"><input type="checkbox" class="extra-var-secret"${secret ? ' checked' : ''}> secret</label>
+    <button type="button" class="icon-btn sm extra-var-remove" title="Remove">×</button>
+  `;
+  const inp = row.querySelector<HTMLInputElement>('.extra-var-value')!;
+  row.querySelector<HTMLInputElement>('.extra-var-secret')!.addEventListener('change', ev => {
+    inp.type = (ev.target as HTMLInputElement).checked ? 'password' : 'text';
+  });
+  row.querySelector('.extra-var-remove')!.addEventListener('click', () => row.remove());
+  return row;
+}
 
 export function openAdd(e?: Event) {
   if (e) e.stopPropagation();
@@ -233,15 +289,20 @@ export function openAdd(e?: Event) {
     buildCatChips([]);
   }
   openModal('Add Secret', -1);
-  // Auto-save draft on any input change
-  const overlay = document.getElementById('modal-overlay')!;
-  const saveDraft = () => {
-    try { sessionStorage.setItem(DRAFT_KEY, JSON.stringify(formToEntry())); } catch {}
-  };
-  overlay.querySelectorAll('input, textarea, select').forEach(el => {
-    el.addEventListener('input', saveDraft);
-    el.addEventListener('change', saveDraft);
-  });
+  // Bind auto-save draft listeners once — the overlay and its inputs are permanent DOM nodes.
+  if (!_draftBound) {
+    const overlay = document.getElementById('modal-overlay')!;
+    overlay.querySelectorAll('input, textarea, select').forEach(el => {
+      el.addEventListener('input', _saveDraft);
+      el.addEventListener('change', _saveDraft);
+    });
+    document.getElementById('f-extra-vars-add')?.addEventListener('click', () => {
+      const row = _makeExtraVarRow();
+      document.getElementById('f-extra-vars-list')?.appendChild(row);
+      row.querySelector<HTMLInputElement>('.extra-var-key')?.focus();
+    });
+    _draftBound = true;
+  }
 }
 
 function clearDraft() { sessionStorage.removeItem(DRAFT_KEY); }
@@ -270,18 +331,28 @@ export function saveModal() {
     }
     const idx = parseInt((document.getElementById('edit-index') as HTMLInputElement).value);
     if (idx >= 0) {
-      // Preserve fields not represented in the form
+      // Preserve fields not represented in the form.
+      // `id` above all: it is this entry's identity for audit attribution,
+      // version history and RBAC write scoping. Dropping it on every edit would
+      // make each save look like a delete-plus-create.
       const old = st.vault.api_keys[idx];
       st.vault.api_keys[idx] = {
         ...entry,
+        id: old.id ?? newEntryId(),
         last_rotated_at: old.last_rotated_at,
         version_history: old.version_history,
         pinned: old.pinned,
       };
+      // Chunk references address entries by provider name, so a rename has to
+      // carry them or every `${Provider/field}` pointing here goes stale.
+      if (old.provider !== entry.provider || (old.key_id ?? '') !== (entry.key_id ?? '')) {
+        const moved = renameProviderRefs(old.provider, old.key_id, entry.provider, entry.key_id);
+        if (moved) showToast(`Updated ${moved} project reference${moved === 1 ? '' : 's'}`, 'ok', 2500);
+      }
     } else {
-      st.vault.api_keys.push(entry);
+      st.vault.api_keys.push({ ...entry, id: newEntryId() });
     }
-    st.store.save(st.vault);
+    persist();
     closeModal();
     document.getElementById('load-banner')!.style.display = 'none';
     triggerRender();
@@ -290,22 +361,46 @@ export function saveModal() {
   }
 }
 
-/** Sets last_rotated_at to today on the given entry and saves. */
+/**
+ * Marks an entry as rotated: stamps last_rotated_at, snapshots the current
+ * value into version_history (capped 50), resets the rotation clock, and
+ * clears the compromised flag. Links three previously separate rotation facts.
+ */
 export function markAsRotated(idx: number) {
   const entry = st.vault.api_keys[idx];
   if (!entry) return;
   const today = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
-  st.vault.api_keys[idx] = { ...entry, last_rotated_at: today };
-  st.store.save(st.vault);
+  const history = [...(entry.version_history || [])];
+  if (entry.api_key) {
+    history.unshift({ value: entry.api_key, saved_at: new Date().toISOString() });
+    if (history.length > 50) history.length = 50;
+  }
+  st.vault.api_keys[idx] = {
+    ...entry,
+    last_rotated_at: today,
+    version_history: history,
+    compromised: false,
+  };
+  persist();
   triggerRender();
-  showToast(`Marked as rotated on ${today}`, 'ok', 2500);
+  showToast(`Rotated ${today}${entry.compromised ? ' — compromised flag cleared' : ''}`, 'ok', 2500);
 }
 
 export function duplicateKey(e: Event, idx: number) {
   e.stopPropagation();
-  const copy = { ...st.vault.api_keys[idx], key_id: (st.vault.api_keys[idx].key_id || 'copy') + '_copy' };
+  // A duplicate is a *new* entry — it must not inherit the source's identity,
+  // and that includes its rotation record. Copying version_history handed the
+  // new entry a log of *another* entry's previous secret values, which then
+  // showed in its history panel and rode along into every future export.
+  const copy = {
+    ...st.vault.api_keys[idx],
+    id: newEntryId(),
+    key_id: (st.vault.api_keys[idx].key_id || 'copy') + '_copy',
+    version_history: undefined,
+    last_rotated_at: undefined,
+  };
   st.vault.api_keys.splice(idx + 1, 0, copy);
-  st.store.save(st.vault);
+  persist();
   triggerRender();
   showToast('Duplicated ✓', 'ok');
 }
@@ -313,13 +408,23 @@ export function duplicateKey(e: Event, idx: number) {
 export function deleteKey(e: Event, idx: number) {
   e.stopPropagation();
   const removed = st.vault.api_keys.splice(idx, 1)[0];
-  const restoreIdx = idx; // capture position; undo restores to same slot
-  st.store.save(st.vault);
-  st.expanded.delete(idx);
+  // Anchor the undo to the identity of the entry that followed, not to a raw
+  // index. Deleting a second entry before undoing the first shifted every
+  // higher position, so the restore landed in the wrong slot.
+  const anchorId = st.vault.api_keys[idx]?.id ?? null;
+  persist();
+  if (removed?.id) {
+    st.expanded.delete(removed.id);
+    // Reveal state is keyed by entry id. Left behind, it both grows unbounded
+    // and re-reveals the secret if the entry comes back via undo.
+    delete st.revealed[`key-${removed.id}`];
+    delete st.revealed[`secret-${removed.id}`];
+  }
   triggerRender();
   pushUndo(`Deleted "${removed.provider}"`, () => {
-    st.vault.api_keys.splice(restoreIdx, 0, removed);
-    st.store.save(st.vault);
+    const at = anchorId ? st.vault.api_keys.findIndex(k => k.id === anchorId) : -1;
+    st.vault.api_keys.splice(at >= 0 ? at : st.vault.api_keys.length, 0, removed);
+    persist();
     triggerRender();
   });
 }
@@ -401,15 +506,20 @@ export async function quickGenerate() {
 
 export function toggleCard(e: Event, idx: number) {
   e.stopPropagation();
+  const entry = st.vault.api_keys[idx];
+  if (!entry) return;
   const card = document.querySelector(`.card[data-idx="${idx}"]`);
   card?.classList.toggle('expanded');
-  if (card?.classList.contains('expanded')) st.expanded.add(idx);
-  else st.expanded.delete(idx);
+  // Track by stable id, not array position — see st.expanded.
+  if (card?.classList.contains('expanded')) st.expanded.add(entryId(entry));
+  else st.expanded.delete(entryId(entry));
 }
 
 export function toggleReveal(e: Event, field: string, idx: number, value: string) {
   e.stopPropagation();
-  const key = `${field}-${idx}`;
+  const entry = st.vault.api_keys[idx];
+  if (!entry) return;
+  const key = `${field}-${entryId(entry)}`;
   const el = document.getElementById(`kv-${field}-${idx}`);
   if (!el) return;
   st.revealed[key] = !st.revealed[key];
@@ -450,7 +560,7 @@ export function openIconPickerFor(idx: number) {
   const entry = st.vault.api_keys[idx];
   openIconPicker(undefined, undefined, (slug) => {
     st.vault.api_keys[idx] = { ...st.vault.api_keys[idx], custom_icon: slug || undefined };
-    st.store.save(st.vault);
+    persist();
     triggerRender();
   });
   iconPicker.selected = entry.custom_icon || null;
@@ -468,9 +578,19 @@ export interface DropdownItem {
 
 const _dropdownCallbacks = new Map<number, () => void>();
 let _dropdownItemId = 0;
+let _ddCleanup: (() => void) | null = null;
+
+function _ddClose() {
+  if (_ddCleanup) { _ddCleanup(); _ddCleanup = null; }
+  const dd = document.getElementById('dropdown');
+  if (dd) dd.style.display = 'none';
+}
 
 export function showDropdown(anchorEl: HTMLElement, items: Array<DropdownItem | '---'>) {
   const dd = document.getElementById('dropdown')!;
+  // Remove any listeners from a previously open dropdown that was not explicitly closed.
+  if (_ddCleanup) { _ddCleanup(); _ddCleanup = null; }
+
   const r = anchorEl.getBoundingClientRect();
   _dropdownCallbacks.clear();
 
@@ -493,17 +613,20 @@ export function showDropdown(anchorEl: HTMLElement, items: Array<DropdownItem | 
     if (item) {
       const id = parseInt(item.dataset.ddid!);
       const fn = _dropdownCallbacks.get(id);
+      _ddClose();
       if (fn) fn();
-      dd.style.display = 'none';
     }
   };
 
   const close = (e: MouseEvent) => {
     if (!dd.contains(e.target as Node) && e.target !== anchorEl) {
-      dd.style.display = 'none';
-      document.removeEventListener('click', close);
-      dd.removeEventListener('click', onClick);
+      _ddClose();
     }
+  };
+
+  _ddCleanup = () => {
+    dd.removeEventListener('click', onClick);
+    document.removeEventListener('click', close);
   };
 
   dd.addEventListener('click', onClick);
@@ -512,6 +635,8 @@ export function showDropdown(anchorEl: HTMLElement, items: Array<DropdownItem | 
 
 export function showContextMenu(x: number, y: number, items: Array<DropdownItem | '---'>) {
   const dd = document.getElementById('dropdown')!;
+  if (_ddCleanup) { _ddCleanup(); _ddCleanup = null; }
+
   _dropdownCallbacks.clear();
   dd.innerHTML = items.map(item => {
     if (item === '---') return '<div class="dropdown-sep"></div>';
@@ -527,15 +652,23 @@ export function showContextMenu(x: number, y: number, items: Array<DropdownItem 
   });
   const onClick = (e: MouseEvent) => {
     const item = (e.target as HTMLElement).closest<HTMLElement>('[data-ddid]');
-    if (item) { _dropdownCallbacks.get(parseInt(item.dataset.ddid!))?.(); dd.style.display = 'none'; }
+    if (item) {
+      const fn = _dropdownCallbacks.get(parseInt(item.dataset.ddid!));
+      _ddClose();
+      fn?.();
+    }
   };
   const close = (e: MouseEvent) => {
     if (!dd.contains(e.target as Node)) {
-      dd.style.display = 'none';
-      document.removeEventListener('click', close);
-      dd.removeEventListener('click', onClick);
+      _ddClose();
     }
   };
+
+  _ddCleanup = () => {
+    dd.removeEventListener('click', onClick);
+    document.removeEventListener('click', close);
+  };
+
   dd.addEventListener('click', onClick);
   setTimeout(() => document.addEventListener('click', close), 50);
 }

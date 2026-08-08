@@ -1,26 +1,26 @@
 /**
- * @file Remote Vaults panel — manage and connect to multiple remote apiv-server instances.
+ * @file Remote Vaults panel — manage and connect to multiple remote envv-server instances.
  */
 
 import type { RemoteVaultConfig } from './types';
-import { st, Settings, RemoteVaultStore, TauriVaultStore, LocalVaultStore, inTauri } from './state';
-import { esc, escAttr, showToast, showConfirm } from './utils';
+import { st, Settings, RemoteVaultStore, TauriVaultStore, LocalVaultStore, inTauri, applyUsersPanelVisibility, resetViewState, triggerRender } from './state';
+import { esc, escAttr, showToast, showConfirm, showPasswordPrompt } from './utils';
 
 let _finishInitFn: () => Promise<void> = async () => {};
 export function setRemoteFinishInitFn(fn: () => Promise<void>) { _finishInitFn = fn; }
 
-// Keep-alive ping — sends GET /api/ping every 90s when connected
+// Keep-alive ping — sends GET /api/ping every 90s while connected.
 let _pingInterval: ReturnType<typeof setInterval> | null = null;
 
-function startPing(url: string) {
+function startPing() {
   stopPing();
   _pingInterval = setInterval(async () => {
-    try {
-      if (!(st.store instanceof RemoteVaultStore)) { stopPing(); return; }
-      await fetch(`${url}/api/ping`, {
-        headers: { Authorization: `Bearer ${(st.store as any)._token ?? ''}` },
-      });
-    } catch {}
+    // Delegate to the store: it owns the session token and routes through the
+    // TLS-pinning proxy. This used to hand-build a request reading a `_token`
+    // field that does not exist (the field is `token`), so every ping went out
+    // as `Bearer ` and was rejected — the keep-alive never kept anything alive.
+    if (!(st.store instanceof RemoteVaultStore)) { stopPing(); return; }
+    await (st.store as RemoteVaultStore).ping();
   }, 90_000);
 }
 
@@ -40,11 +40,88 @@ function saveSaved(list: RemoteVaultConfig[]) {
   Settings.set('remoteSaved', list);
 }
 
+/** Groups a fingerprint into readable pairs so a human can actually compare it. */
+function formatFingerprint(fp: string): string {
+  return (fp.match(/.{1,2}/g) ?? [fp]).join(':').toUpperCase();
+}
+
+/**
+ * Trust-on-first-use for an https:// server we have no pin for yet.
+ *
+ * `remote_request` pins when handed a fingerprint and applies normal CA
+ * validation when not, so a self-signed server was unreachable: connecting
+ * needed a fingerprint, and obtaining one needed a connection. This breaks the
+ * deadlock the same way SSH does — probe the certificate with an
+ * unauthenticated request that carries no credentials, show the user what was
+ * presented, and pin only what they accept.
+ *
+ * Returns the accepted fingerprint, or `null` if the user declined or the
+ * server is not reachable.
+ */
+export async function acquireFingerprint(url: string): Promise<string | null> {
+  const invoke = (window as any).__TAURI__?.core?.invoke;
+  if (!invoke || !url.startsWith('https://')) return null;
+  let fp: string;
+  try {
+    fp = await invoke('probe_cert_fingerprint', { url });
+  } catch (e: any) {
+    showToast(`Could not reach ${url}: ${e?.message ?? e}`, 'err', 4000);
+    return null;
+  }
+  const ok = await showConfirm(
+    `${url} presented a certificate this app has not seen before.\n\n` +
+    `SHA-256 fingerprint:\n${formatFingerprint(fp)}\n\n` +
+    `Check this against the server before accepting. OK pins this certificate; ` +
+    `future connections are refused if it changes.`,
+  );
+  return ok ? fp : null;
+}
+
+/** Saved config for a server, matched on the pair that identifies a login. */
+export function findSavedRemote(url: string, username = ''): RemoteVaultConfig | undefined {
+  const clean = url.replace(/\/$/, '');
+  return getSaved().find(c => c.url === clean && c.username === username);
+}
+
+/**
+ * Records a server the user just connected to in the saved-remotes list.
+ *
+ * The unlock screen has its own server/username fields, so a vault reached that
+ * way never went through the "Add Remote" form. It therefore never appeared in
+ * the Remote panel or the vault switcher, and the next session had to retype the
+ * URL. Connecting is the intent to use a server — that is enough to remember it.
+ */
+export function upsertSavedRemote(input: { url: string; username: string; certFingerprint?: string }): RemoteVaultConfig {
+  const url = input.url.replace(/\/$/, '');
+  const saved = getSaved();
+  const idx = saved.findIndex(c => c.url === url && c.username === input.username);
+
+  if (idx >= 0) {
+    const prev = saved[idx];
+    if (input.certFingerprint && prev.certFingerprint && prev.certFingerprint !== input.certFingerprint) {
+      showToast('⚠ TLS cert fingerprint changed — server certificate may have rotated', 'err');
+    }
+    saved[idx] = { ...prev, ...(input.certFingerprint ? { certFingerprint: input.certFingerprint } : {}) };
+    saveSaved(saved);
+    return saved[idx];
+  }
+
+  const cfg: RemoteVaultConfig = {
+    id: genId(),
+    name: url.replace(/^https?:\/\//, '') + (input.username ? ` (${input.username})` : ''),
+    url,
+    username: input.username,
+    ...(input.certFingerprint ? { certFingerprint: input.certFingerprint } : {}),
+  };
+  saveSaved([...saved, cfg]);
+  return cfg;
+}
+
 // ── Render ────────────────────────────────────────────────────────────────────
 
 export function renderRemotePanel() {
   const sidebar = document.getElementById('remote-panel-list');
-  const workspace = document.getElementById('remote-workspace');
+  const workspace = document.getElementById('remote-detail-host');
   if (!sidebar) return;
 
   const saved = getSaved();
@@ -140,7 +217,7 @@ function renderRemoteDetail(cfg: RemoteVaultConfig, ws: HTMLElement) {
   document.getElementById('remote-disconnect-btn')?.addEventListener('click', () => disconnectRemote());
   document.getElementById('remote-delete-btn')?.addEventListener('click', () => deleteRemote(cfg.id));
   document.getElementById('re-save-btn')?.addEventListener('click', () => saveRemoteEdits(cfg.id));
-  document.getElementById('re-test-btn')?.addEventListener('click', () => testRemote());
+  document.getElementById('re-test-btn')?.addEventListener('click', () => testRemote(cfg));
   document.getElementById('remote-refresh-status-btn')?.addEventListener('click', () => refreshRemoteStatus(cfg));
 
   if (isConnected) refreshRemoteStatus(cfg);
@@ -149,7 +226,21 @@ function renderRemoteDetail(cfg: RemoteVaultConfig, ws: HTMLElement) {
 // ── Connect / Disconnect ──────────────────────────────────────────────────────
 
 async function connectRemote(cfg: RemoteVaultConfig) {
-  const pw = prompt(`${cfg.username ? `Password for "${cfg.username}"` : 'Master password'} on ${cfg.name}:`);
+  // Styled masked prompt — the native window.prompt() renders as an unstyled
+  // system dialog under WebKitGTK and echoes the password in clear text.
+  // Establish trust in the certificate *before* asking for a password, so the
+  // credential is never typed for a connection the user then declines.
+  if (cfg.url.startsWith('https://') && !cfg.certFingerprint) {
+    const fp = await acquireFingerprint(cfg.url);
+    if (!fp) return;
+    const saved = getSaved();
+    const idx = saved.findIndex(c => c.id === cfg.id);
+    if (idx >= 0) { saved[idx] = { ...saved[idx], certFingerprint: fp }; saveSaved(saved); cfg = saved[idx]; }
+    else cfg = { ...cfg, certFingerprint: fp };
+  }
+
+  const pw = await showPasswordPrompt(
+    `${cfg.username ? `Password for "${cfg.username}"` : 'Master password'} on ${cfg.name}:`);
   if (pw === null) return;
 
   const remote = new RemoteVaultStore(cfg.url, cfg.certFingerprint);
@@ -162,32 +253,54 @@ async function connectRemote(cfg: RemoteVaultConfig) {
     }
     if (!ok) { showToast('Authentication failed', 'err'); return; }
 
-    // Fetch and persist cert fingerprint (TOFU pinning — trust on first use).
-    // If the fingerprint changes on a subsequent connect, warn the user.
+    // Record the fingerprint on first contact. A *changed* fingerprint is not
+    // silently re-pinned: the old code overwrote the stored value on every
+    // connect, so a pin only ever held until the next mismatch — which is the
+    // one moment it needs to hold. (The pinned handshake normally rejects a
+    // different certificate before this point; this covers the case where the
+    // server reports one certificate and serves another.)
     const serverStatus = await remote.getStatus();
     if (serverStatus.cert_fingerprint) {
       const saved = getSaved();
       const idx = saved.findIndex(c => c.id === cfg.id);
       if (idx >= 0) {
-        if (cfg.certFingerprint && cfg.certFingerprint !== serverStatus.cert_fingerprint) {
-          showToast('⚠ TLS cert fingerprint changed — server certificate may have rotated', 'err');
+        const stored = saved[idx].certFingerprint;
+        if (stored && stored !== serverStatus.cert_fingerprint) {
+          showToast('⚠ TLS certificate does not match the pinned one — not trusting it', 'err', 6000);
+        } else if (!stored) {
+          saved[idx] = { ...saved[idx], certFingerprint: serverStatus.cert_fingerprint };
+          saveSaved(saved);
+          remote.fingerprint = serverStatus.cert_fingerprint;
+          cfg = saved[idx];
         }
-        saved[idx] = { ...saved[idx], certFingerprint: serverStatus.cert_fingerprint };
-        saveSaved(saved);
-        remote.fingerprint = serverStatus.cert_fingerprint;
-        cfg = saved[idx];
       }
     }
 
     st.store = remote;
     st.activeRemoteId = cfg.id;
     Settings.set('remote', { enabled: true, serverUrl: cfg.url });
+    // Same invariant as switchToLocalVault: every view-scoped selection points
+    // at the vault being left. Only switchToLocalVault used to do this, so the
+    // local→remote direction carried a project selection, expanded/revealed
+    // entry ids and bulk ticks into the remote's data. A selected local project
+    // id that the remote does not have matches nothing, so the remote loaded
+    // into an empty-looking grid.
+    // `st.vault` is deliberately *not* cleared here — finishInit compares the
+    // in-memory entries against the remote's to offer the "push local entries"
+    // prompt, and clearing them would silently disable it.
+    resetViewState();
+    // User ids, class ids and audit rows all belong to the vault we just left.
+    const { resetUsersPanelState } = await import('./users');
+    resetUsersPanelState();
+    const { resetAuditPanel } = await import('./audit');
+    resetAuditPanel();
 
     const nameEl = document.getElementById('vault-name');
     if (nameEl) nameEl.textContent = cfg.name;
 
     showToast(`Connected to ${cfg.name}`, 'ok');
-    startPing(cfg.url);
+    applyUsersPanelVisibility();
+    startPing();
     renderRemotePanel();
     await _finishInitFn();
   } catch (e: any) {
@@ -195,7 +308,21 @@ async function connectRemote(cfg: RemoteVaultConfig) {
   }
 }
 
-function disconnectRemote() {
+/**
+ * Tears down the remote session and returns to the local vault.
+ *
+ * Single path for both "Disconnect" and the vault switcher's "Local Vault", so
+ * the two cannot drift apart. Two things it must get right:
+ *
+ * 1. **Clear the whole in-memory vault, projects included.** The switcher used
+ *    to null out `api_keys` and `user_categories` but leave `projects`, so the
+ *    remote's project tree stayed in the sidebar after its entries vanished.
+ * 2. **Do not silently load nothing.** The local vault is usually still locked
+ *    here — a user who connected to a remote from the unlock screen never
+ *    entered their master password. `load()` then fails, and the old code left
+ *    an empty grid with no prompt and no error.
+ */
+export async function switchToLocalVault(): Promise<void> {
   stopPing();
   if (st.store instanceof RemoteVaultStore) {
     (st.store as RemoteVaultStore).lock().catch(() => {});
@@ -204,12 +331,46 @@ function disconnectRemote() {
   st.activeRemoteId = null;
   Settings.set('remote', { enabled: false, serverUrl: '' });
 
+  st.vault.api_keys        = [];
+  st.vault.user_categories = [];
+  st.vault.projects        = [{ id: 'Universal', name: 'Universal', description: '' }];
+  resetViewState();
+  const { resetUsersPanelState } = await import('./users');
+  resetUsersPanelState();
+  const { resetAuditPanel } = await import('./audit');
+  resetAuditPanel();
+  st.vaultOpen = false;
+
+  // Paint the cleared vault *now*, not only via finishInit. Clearing `st.vault`
+  // does nothing to the DOM, and the path below where the local vault is still
+  // locked returns before finishInit ever runs — which left the remote's
+  // sidebar, its project tree and a whole config view of chunk cards (secret
+  // values included) alive in the document for a vault we are no longer
+  // authenticated to. It also reappeared intact if the unlock was abandoned.
+  triggerRender();
+
   const nameEl = document.getElementById('vault-name');
   if (nameEl) nameEl.textContent = 'Local Vault';
 
-  showToast('Disconnected from remote vault', 'ok');
+  showToast('Switched to local vault', 'ok');
+  applyUsersPanelVisibility();
   renderRemotePanel();
+
+  if (st.store instanceof TauriVaultStore) {
+    const unlocked = await (st.store as TauriVaultStore).isUnlocked().catch(() => false);
+    if (!unlocked) {
+      // Dynamic import: lock.ts imports this module statically, and a static
+      // import back would be a cycle.
+      const { showRelockScreen } = await import('./lock');
+      showRelockScreen('switch');
+      return;
+    }
+  }
+
+  await _finishInitFn();
 }
+
+function disconnectRemote() { void switchToLocalVault(); }
 
 async function deleteRemote(id: string) {
   const saved = getSaved();
@@ -232,17 +393,37 @@ async function saveRemoteEdits(id: string) {
   renderRemotePanel();
 }
 
-async function testRemote() {
+async function testRemote(cfg?: RemoteVaultConfig) {
   const url      = (document.getElementById('re-url')  as HTMLInputElement)?.value.trim().replace(/\/$/, '');
   const statusEl = document.getElementById('re-test-status');
   if (!url) { showToast('Enter a URL first', 'err'); return; }
   if (statusEl) statusEl.textContent = 'Testing…';
   try {
-    const r = await fetch(`${url}/api/status`);
-    const body = await r.json();
-    if (statusEl) statusEl.textContent = body.vault_exists
-      ? `✓ Server OK · vault ${body.unlocked ? 'unlocked' : 'locked'}`
-      : '✓ Server OK · no vault yet';
+    // Must go through RemoteVaultStore, not bare fetch(): for an https:// server
+    // with a self-signed cert WebKit rejects the connection outright, so a raw
+    // fetch reported "Unreachable" for servers that were perfectly reachable.
+    // The store routes via the Tauri proxy and honours the pinned fingerprint.
+    let fingerprint = cfg?.certFingerprint;
+    // Same bootstrap as connect: an untrusted https server is unreachable until
+    // its certificate is pinned, so offer to pin it here too rather than
+    // reporting a reachable server as down.
+    if (!fingerprint && url.startsWith('https://')) {
+      const fp = await acquireFingerprint(url);
+      if (!fp) { if (statusEl) statusEl.textContent = '✗ Certificate not trusted'; return; }
+      fingerprint = fp;
+      if (cfg) {
+        const saved = getSaved();
+        const idx = saved.findIndex(c => c.id === cfg.id);
+        if (idx >= 0) { saved[idx] = { ...saved[idx], certFingerprint: fp }; saveSaved(saved); }
+      }
+    }
+    const body = await new RemoteVaultStore(url, fingerprint).getStatus();
+    if (statusEl) {
+      const base = body.vault_exists
+        ? `✓ Server OK · vault ${body.unlocked ? 'unlocked' : 'locked'}`
+        : '✓ Server OK · no vault yet';
+      statusEl.textContent = base + (body.cert_fingerprint ? ' · TLS ✓' : '');
+    }
   } catch {
     if (statusEl) statusEl.textContent = '✗ Unreachable';
   }
@@ -252,8 +433,8 @@ async function refreshRemoteStatus(cfg: RemoteVaultConfig) {
   const area = document.getElementById('remote-status-area');
   if (!area) return;
   try {
-    const r = await fetch(`${cfg.url}/api/status`);
-    const body = await r.json();
+    // Same reasoning as testRemote(): proxy-aware, fingerprint-aware.
+    const body = await new RemoteVaultStore(cfg.url, cfg.certFingerprint).getStatus();
     area.innerHTML = `
       <div class="remote-status-grid">
         <div class="remote-status-item">
@@ -282,7 +463,7 @@ async function refreshRemoteStatus(cfg: RemoteVaultConfig) {
 // ── Add remote form ───────────────────────────────────────────────────────────
 
 function openAddRemoteForm() {
-  const ws = document.getElementById('remote-workspace');
+  const ws = document.getElementById('remote-detail-host');
   if (!ws) return;
 
   ws.innerHTML = `
@@ -295,7 +476,7 @@ function openAddRemoteForm() {
         </div>
         <div class="users-detail-meta">
           <div class="users-detail-name">Add Remote Vault</div>
-          <div class="users-detail-sub">Connect to a running apiv-server instance.</div>
+          <div class="users-detail-sub">Connect to a running envv-server instance.</div>
         </div>
       </div>
       <section class="users-section">
@@ -360,15 +541,21 @@ function openAddRemoteForm() {
 
 // ── Init ──────────────────────────────────────────────────────────────────────
 
-export function initRemotePanel() {
-  document.getElementById('remote-panel-list')?.addEventListener('click', (e) => {
-    const btn = (e.target as HTMLElement).closest<HTMLButtonElement>('[data-remote-id]');
-    if (!btn?.dataset.remoteId) return;
-    st.activeRemoteId = btn.dataset.remoteId;
-    renderRemotePanel();
-  });
+let _remotePanelListenersAdded = false;
 
-  document.getElementById('add-remote-btn')?.addEventListener('click', openAddRemoteForm);
+export function initRemotePanel() {
+  if (!_remotePanelListenersAdded) {
+    _remotePanelListenersAdded = true;
+
+    document.getElementById('remote-panel-list')?.addEventListener('click', (e) => {
+      const btn = (e.target as HTMLElement).closest<HTMLButtonElement>('[data-remote-id]');
+      if (!btn?.dataset.remoteId) return;
+      st.activeRemoteId = btn.dataset.remoteId;
+      renderRemotePanel();
+    });
+
+    document.getElementById('add-remote-btn')?.addEventListener('click', openAddRemoteForm);
+  }
 
   renderRemotePanel();
 }

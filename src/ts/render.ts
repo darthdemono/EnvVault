@@ -3,11 +3,11 @@
  */
 
 import type { VaultEntry, SecretType, Project, ProjectType, SecretChunk, ChunkFieldType } from './types';
-import { st, Settings, setRenderFn, applyGridSettings, dotenvKey } from './state';
+import { st, Settings, setRenderFn, applyGridSettings, dotenvKey, switchPanel, isSidebarSectionEnabled, persist, entryId } from './state';
 import { getFiltered, sorted, buildProjectTree, getDescendantProjectIds } from './filters';
 import { iconHTML } from './icons';
 import { esc, escAttr, maskKey, showToast, showConfirm, showPrompt, showPromptLarge, clipboardWrite, eyeSVG, copySVG, editSVG, delSVG, dupSVG } from './utils';
-import { TYPE_CONFIG, showDropdown, markAsRotated } from './modals';
+import { TYPE_CONFIG, showDropdown, markAsRotated, openModal } from './modals';
 import {
   renderChunkCard,
   renderDockerServicesCard,
@@ -34,13 +34,19 @@ import {
   openChunkEditModal,
   resolveFieldRef,
   chunkToString,
+  buildEnvLinkMatches,
+  nginxCertDomains,
+  renderNginxCertCard,
+  ensureCertForDomain,
+  redundantCertKeyChunkIds,
 } from './chunk-ops';
+import type { EnvLinkMatch } from './chunk-ops';
 import { parseEnvFile } from './import-export';
 
 // ── Project tree renderers ─────────────────────────────────────────────────
 
 export function renderProjectTree() {
-  const container = document.getElementById('project-tree');
+  const container = document.getElementById('category-tree');
   if (!container) return;
   container.innerHTML = '';
   renderUserCatTree(container, st.vault.user_categories || [], st.vault.api_keys);
@@ -58,7 +64,9 @@ function renderProjectList(container: HTMLElement, projects: Project[], all: Vau
     const isActive = st.currentSelectedProjectIds[0] === nodeId;
     const _ptLabels: Record<string, string> = { wireguard: 'WG', docker: 'DC', nginx: 'Nginx', kubernetes: 'K8s', ssh_config: 'SSH', traefik: 'TF' };
     const ptBadge = !node.virtual && node.project_type && node.project_type !== 'generic'
-      ? ` <span class="badge badge-ptype">${_ptLabels[node.project_type] ?? node.project_type}</span>`
+      // The lookup hits a fixed table, but the fallback prints the raw stored
+      // value, which an imported vault controls.
+      ? ` <span class="badge badge-ptype">${esc(_ptLabels[node.project_type] ?? node.project_type)}</span>`
       : '';
     const row = document.createElement('div');
     row.className = 'sidebar-cat-row';
@@ -117,11 +125,34 @@ function renderSidebar() {
     }
   });
 
-  const catList = document.getElementById('category-list')!;
+  const catList = document.getElementById('project-list')!;
   catList.innerHTML = '';
   renderProjectList(catList, st.vault.projects || [], all);
 
   renderTagSection(all);
+  renderPrefixSection(all);
+}
+
+function renderPrefixSection(all: VaultEntry[]) {
+  const container = document.getElementById('prefix-filter-list');
+  if (!container) return;
+  const pfxMap = new Map<string, number>();
+  for (const k of all) for (const p of (k.env_prefixes ?? [])) pfxMap.set(p, (pfxMap.get(p) ?? 0) + 1);
+
+  const section = document.getElementById('sidebar-section-prefixes');
+  if (section) section.style.display = (isSidebarSectionEnabled('prefixes') && pfxMap.size > 0) ? '' : 'none';
+
+  container.innerHTML = [...pfxMap.entries()]
+    .sort((a, b) => a[0].localeCompare(b[0]))
+    .map(([pfx, count]) => {
+      const active = st.activePrefixFilter === pfx;
+      return `<div class="sidebar-cat-row">
+        <button class="sidebar-item prefix-filter-btn${active ? ' active' : ''}" data-prefix="${escAttr(pfx)}">
+          <span class="badge badge-prefix">${esc(pfx)}_</span>
+          <span class="sidebar-count">${count}</span>
+        </button>
+      </div>`;
+    }).join('');
 }
 
 function renderTagSection(all: VaultEntry[]) {
@@ -137,7 +168,7 @@ function renderTagSection(all: VaultEntry[]) {
   }
 
   const section = document.getElementById('sidebar-section-tags');
-  if (section) section.style.display = tagMap.size > 0 ? '' : 'none';
+  if (section) section.style.display = (isSidebarSectionEnabled('tags') && tagMap.size > 0) ? '' : 'none';
 
   container.innerHTML = [...tagMap.entries()]
     .sort((a, b) => a[0].localeCompare(b[0]))
@@ -209,9 +240,66 @@ function renderUserCatTree(container: HTMLElement, cats: string[], all: VaultEnt
 
 // ── Grid ───────────────────────────────────────────────────────────────────
 
+/**
+ * Reverse index: vault-entry key (`provider` or `provider_keyid`) → chunk fields
+ * that reference it via `${ref}`. Powers the "Used by" row on each card.
+ */
+interface RefConsumer { project: string; chunk: string; field: string; }
+let _refIndex = new Map<string, RefConsumer[]>();
+
+function buildRefIndex() {
+  const idx = new Map<string, RefConsumer[]>();
+  for (const project of st.vault.projects) {
+    for (const chunk of project.chunks || []) {
+      for (const f of chunk.fields) {
+        const m = f.value.match(/^\$\{(.+)}$/);
+        if (!m) continue;
+        let inner = m[1];
+        if (inner.startsWith('chunk:')) continue; // chunk→chunk refs are not vault consumers
+        const slash = inner.indexOf('/');
+        const target = slash >= 0 ? inner.slice(0, slash) : inner; // provider or provider_keyid
+        if (!idx.has(target)) idx.set(target, []);
+        idx.get(target)!.push({ project: project.name, chunk: chunk.name, field: f.key });
+      }
+    }
+  }
+  _refIndex = idx;
+}
+
+/** Compare a freshly-resolved env snapshot to the chunk's last copy, toast the delta, and stash it. */
+function diffAndStashCopy(chunk: SecretChunk, snapshot: Record<string, string>) {
+  const prev = chunk.last_copied_snapshot;
+  if (prev) {
+    const changed = Object.keys(snapshot).filter(k => k in prev && prev[k] !== snapshot[k]);
+    const added   = Object.keys(snapshot).filter(k => !(k in prev));
+    const removed = Object.keys(prev).filter(k => !(k in snapshot));
+    const parts: string[] = [];
+    if (changed.length) parts.push(`${changed.length} changed`);
+    if (added.length)   parts.push(`${added.length} added`);
+    if (removed.length) parts.push(`${removed.length} removed`);
+    if (parts.length) {
+      const names = [...changed, ...added].slice(0, 4).join(', ');
+      showToast(`Copied ✓ — since last: ${parts.join(', ')}${names ? ` (${names})` : ''}`, 'ok', 3500);
+    } else {
+      showToast('Copied ✓ — unchanged since last copy', 'ok', 1800);
+    }
+  } else {
+    showToast('Copied ✓', 'ok', 1500);
+  }
+  chunk.last_copied_snapshot = snapshot;
+  chunk.last_copied_at = new Date().toISOString();
+  persist();
+}
+
 export function renderGrid() {
+  buildRefIndex();
   const items = sorted(getFiltered());
   const grid = document.getElementById('card-grid')!;
+  // Derived here rather than only flipped on click: lock, import and vault
+  // switch all reset st.allExpanded, and the button was left reading
+  // "Collapse All" with nothing expanded.
+  const expandBtn = document.getElementById('expand-all-btn');
+  if (expandBtn) expandBtn.textContent = st.allExpanded ? 'Collapse All' : 'Expand All';
   document.getElementById('result-count')!.textContent = `${items.length} secret${items.length !== 1 ? 's' : ''}`;
   applyGridSettings();
   if (!items.length) {
@@ -219,6 +307,11 @@ export function renderGrid() {
     return;
   }
   grid.innerHTML = '';
+  // One pass to map entry -> array position. `indexOf` per card made rendering
+  // O(n²), which is invisible at 100 entries and very visible at a few thousand.
+  const posOf = new Map<VaultEntry, number>();
+  st.vault.api_keys.forEach((e, i) => posOf.set(e, i));
+  const idxOf = (e: VaultEntry) => posOf.get(e) ?? -1;
   if (Settings.get('groupByType')) {
     const GROUP_ORDER: SecretType[] = ['api_key', 'password', 'env_var', 'connection_string', 'ssh_key', 'certificate', 'file_blob'];
     const GROUP_LABELS: Record<string, string> = { api_key: 'API Keys', password: 'Passwords', env_var: 'Env Variables', connection_string: 'Connections', ssh_key: 'SSH Keys', certificate: 'Certificates', file_blob: 'File Blobs' };
@@ -236,28 +329,53 @@ export function renderGrid() {
       hdr.className = 'type-group-header';
       hdr.textContent = GROUP_LABELS[stType] || stType;
       grid.appendChild(hdr);
-      groupItems.forEach(entry => grid.appendChild(buildCard(entry, st.vault.api_keys.indexOf(entry), animIdx++)));
+      groupItems.forEach(entry => grid.appendChild(buildCard(entry, idxOf(entry), animIdx++)));
     });
   } else {
-    items.forEach((entry, i) => grid.appendChild(buildCard(entry, st.vault.api_keys.indexOf(entry), i)));
+    items.forEach((entry, i) => grid.appendChild(buildCard(entry, idxOf(entry), i)));
   }
 }
 
 function buildCard(entry: VaultEntry, idx: number, animIdx: number): HTMLElement {
-  const isExp = st.allExpanded || st.expanded.has(idx);
+  const eid = entryId(entry);
+  const isExp = st.allExpanded || st.expanded.has(eid);
   const pt = entry.price_type || 'free';
   const expiry = expiryBadge(entry);
-  const envBadge = entry.environment ? `<span class="badge badge-env" data-env="${entry.environment}">${entry.environment}</span>` : '';
+  // `environment`, `secretType` and `price_type` are declared as unions, but the
+  // type is erased at runtime and the vault is JSON off disk, off a remote
+  // server, or out of an imported backup — none of which this app controls.
+  // `key_id` on the next line was already escaped for exactly that reason.
+  const envBadge = entry.environment ? `<span class="badge badge-env" data-env="${escAttr(entry.environment)}">${esc(entry.environment)}</span>` : '';
   const keyIdBadge = entry.key_id ? `<span class="badge badge-keyid">${esc(entry.key_id)}</span>` : '';
-  const typeBadge = entry.secretType && entry.secretType !== 'api_key' ? `<span class="badge badge-keyid">${entry.secretType}</span>` : '';
-  const hasMask = Settings.get('maskKeysByDefault');
+  const typeBadge = entry.secretType && entry.secretType !== 'api_key' ? `<span class="badge badge-keyid">${esc(entry.secretType)}</span>` : '';
+  const compromisedBadge = entry.compromised ? `<span class="badge badge-compromised" title="Marked compromised — rotate immediately">⚠ LEAKED</span>` : '';
+  const rotBadge = (() => {
+    if (!entry.rotation_days || entry.rotation_days <= 0 || !entry.last_rotated_at) return '';
+    const dueMs = new Date(entry.last_rotated_at).getTime() + entry.rotation_days * 86_400_000;
+    if (dueMs >= Date.now()) return '';
+    const overdue = Math.floor((Date.now() - dueMs) / 86_400_000);
+    return `<span class="badge badge-rotation-due" title="Rotation cadence ${escAttr(entry.rotation_days)}d, overdue ${overdue}d">⟳ rotate</span>`;
+  })();
+  // Per-field mask state: default from settings, overridden by any explicit
+  // reveal the user has toggled. Previously this read the setting alone, so a
+  // revealed secret silently re-masked itself on the next re-render.
+  const masked = (field: string) =>
+    st.revealed[`${field}-${eid}`] !== undefined
+      ? !st.revealed[`${field}-${eid}`]
+      : Settings.get('maskKeysByDefault');
+  const hasMask = masked('key');
+  const secretMasked = masked('secret');
   const envFmt = Settings.get('defaultExportFormat');
   const envLabel = envFmt === 'yaml' ? 'YAML' : '.env';
 
   const card = document.createElement('div');
   const expiryBorderCls = getExpiryBorderClass(entry);
   const pinnedCls = entry.pinned ? ' pinned' : '';
-  card.className = `card${isExp ? ' expanded' : ''}${expiryBorderCls}${pinnedCls}`;
+  // Bulk ticks are keyed by entry id, so they survive a re-render that happens
+  // mid-selection (a single delete, a pin, a sort change) instead of the grid
+  // coming back with every card visually unticked but still in the set.
+  const bulkCls = st.bulkMode && st.bulkSelected.has(eid) ? ' bulk-selected' : '';
+  card.className = `card${isExp ? ' expanded' : ''}${expiryBorderCls}${pinnedCls}${bulkCls}`;
   card.style.animationDelay = `${Math.min(animIdx * 20, 180)}ms`;
   card.dataset.idx = String(idx);
 
@@ -277,6 +395,18 @@ function buildCard(entry: VaultEntry, idx: number, animIdx: number): HTMLElement
   if (entry.callback_url) metaRows.push(['Callback', safeUrl(entry.callback_url)]);
   if (entry.details) metaRows.push(['Details', esc(entry.details)]);
 
+  // Reverse "used by" — chunk fields that reference this entry via ${ref}.
+  const uses = [
+    ...(_refIndex.get(entry.provider) || []),
+    ...(entry.key_id ? (_refIndex.get(`${entry.provider}_${entry.key_id}`) || []) : []),
+  ];
+  if (uses.length) {
+    const seen = new Set<string>();
+    const chips = uses.filter(u => { const k = `${u.project}|${u.field}`; if (seen.has(k)) return false; seen.add(k); return true; })
+      .map(u => `<span class="usedby-badge" title="${escAttr(`${u.chunk} · ${u.field}`)}">${esc(u.project)} · ${esc(u.field)}</span>`).join('');
+    metaRows.push(['Used by', `<div class="usedby-row">${chips}</div>`]);
+  }
+
   const projectBadges = entry.projectIds?.filter(pid => pid !== 'Universal').map(pid => {
     const proj = st.vault.projects.find(p => p.id === pid);
     if (!proj) return '';
@@ -294,8 +424,8 @@ function buildCard(entry: VaultEntry, idx: number, animIdx: number): HTMLElement
         <div class="card-provider">
           ${esc(entry.provider)}
           ${entry.pinned ? `<span class="pin-badge" title="Pinned"><svg width="9" height="9" viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24Z"/></svg></span>` : ''}
-          <span class="badge badge-price" data-price="${pt}">${pt}</span>
-          ${envBadge}${keyIdBadge}${typeBadge}${expiry}
+          <span class="badge badge-price" data-price="${escAttr(pt)}">${esc(pt)}</span>
+          ${envBadge}${keyIdBadge}${typeBadge}${expiry}${compromisedBadge}${rotBadge}${(entry.env_prefixes?.length) ? entry.env_prefixes.map(p => `<span class="badge badge-prefix" title="Env prefix">${esc(p)}_</span>`).join('') : ''}
         </div>
         <div class="card-account">${esc(entry.account_name || entry.username || entry.email || '')}</div>
         <div class="card-projects" style="margin-top: 4px; display: flex; gap: 4px; flex-wrap: wrap;">${projectBadges}</div>
@@ -313,9 +443,13 @@ function buildCard(entry: VaultEntry, idx: number, animIdx: number): HTMLElement
             <button class="icon-btn sm" data-action="copy-field" data-value="${escAttr(entry.api_key)}">${copySVG}</button>
           </div>
         </div>
-        ${entry.api_secret ? `<div class="key-row"><div class="key-label">SECRET</div><div class="key-value${hasMask ? '' : ' revealed'}" id="kv-secret-${idx}" data-action="copy-field" data-value="${escAttr(entry.api_secret)}">${hasMask ? maskKey(entry.api_secret) : esc(entry.api_secret)}</div><div class="key-actions"><button class="icon-btn sm${hasMask ? '' : ' active'}" id="reveal-secret-${idx}" data-action="reveal" data-field="secret" data-idx="${idx}" data-value="${escAttr(entry.api_secret)}">${eyeSVG}</button><button class="icon-btn sm" data-action="copy-field" data-value="${escAttr(entry.api_secret)}">${copySVG}</button></div></div>` : ''}
+        ${entry.api_secret ? `<div class="key-row"><div class="key-label">SECRET</div><div class="key-value${secretMasked ? '' : ' revealed'}" id="kv-secret-${idx}" data-action="copy-field" data-value="${escAttr(entry.api_secret)}">${secretMasked ? maskKey(entry.api_secret) : esc(entry.api_secret)}</div><div class="key-actions"><button class="icon-btn sm${secretMasked ? '' : ' active'}" id="reveal-secret-${idx}" data-action="reveal" data-field="secret" data-idx="${idx}" data-value="${escAttr(entry.api_secret)}">${eyeSVG}</button><button class="icon-btn sm" data-action="copy-field" data-value="${escAttr(entry.api_secret)}">${copySVG}</button></div></div>` : ''}
         ${entry.username ? `<div class="key-row"><div class="key-label">USERNAME</div><div class="key-value" data-action="copy-field" data-value="${escAttr(entry.username)}">${esc(entry.username)}</div><button class="icon-btn sm" data-action="copy-field" data-value="${escAttr(entry.username)}">${copySVG}</button></div>` : ''}
         ${entry.email ? `<div class="key-row"><div class="key-label">EMAIL</div><div class="key-value" data-action="copy-field" data-value="${escAttr(entry.email)}">${esc(entry.email)}</div><button class="icon-btn sm" data-action="copy-field" data-value="${escAttr(entry.email)}">${copySVG}</button></div>` : ''}
+        ${(entry.extra_vars || []).filter(xv => xv.key).map(xv => {
+          const display = xv.secret ? maskKey(xv.value) : esc(xv.value);
+          return `<div class="key-row"><div class="key-label">${esc(xv.key.toUpperCase())}</div><div class="key-value${xv.secret ? '' : ' revealed'}" data-action="copy-field" data-value="${escAttr(xv.value)}">${display}</div><button class="icon-btn sm" data-action="copy-field" data-value="${escAttr(xv.value)}">${copySVG}</button></div>`;
+        }).join('')}
       </div>
       ${entry.scopes?.length ? `<div class="scopes-row">${entry.scopes.map(s => `<span class="scope-pill">${esc(s)}</span>`).join('')}</div>` : ''}
       ${entry.description ? `<div class="desc-section"><button class="desc-toggle" data-action="toggle-desc"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 18 15 12 9 6"/></svg>General Description</button><div class="desc-content">${esc(entry.description)}</div></div>` : ''}
@@ -372,8 +506,8 @@ function expiryBadge(entry: VaultEntry): string {
   const now = new Date();
   exp.setHours(23, 59, 59);
   const days = Math.round((exp.getTime() - now.getTime()) / 86400000);
-  if (days < 0) return `<span class="badge badge-expiry-expired" title="${entry.expires_at}">Expired ${Math.abs(days)}d ago</span>`;
-  if (days <= Settings.get('expiryWarningDays')) return `<span class="badge badge-expiry-warn" title="${entry.expires_at}">Expires in ${days}d</span>`;
+  if (days < 0) return `<span class="badge badge-expiry-expired" title="${escAttr(entry.expires_at)}">Expired ${Math.abs(days)}d ago</span>`;
+  if (days <= Settings.get('expiryWarningDays')) return `<span class="badge badge-expiry-warn" title="${escAttr(entry.expires_at)}">Expires in ${days}d</span>`;
   return '';
 }
 
@@ -444,9 +578,14 @@ function renderConfigView(project: Project) {
     }
   } else if (project.project_type === 'nginx') {
     const nginxChunks = chunks.filter(c => c.chunk_type !== 'nginx_key' && c.chunk_type !== 'env_file');
-    const keyChunks   = chunks.filter(c => c.chunk_type === 'nginx_key');
+    const allKeyChunks = chunks.filter(c => c.chunk_type === 'nginx_key');
     const nginxEnvChunks = chunks.filter(c => c.chunk_type === 'env_file');
-    if (keyChunks.length > 0 || nginxEnvChunks.length > 0) {
+    // Auto-link: certificate vault entries whose site matches a domain this project references.
+    const certDomains = nginxCertDomains(project);
+    // Hide nginx_key chunks whose PEM duplicates a shown cert entry — the cert card is canonical.
+    const redundantIds = new Set(redundantCertKeyChunkIds(project));
+    const keyChunks = allKeyChunks.filter(c => !redundantIds.has(c.id));
+    if (keyChunks.length > 0 || nginxEnvChunks.length > 0 || certDomains.length > 0) {
       const twoCol = document.createElement('div');
       twoCol.className = 'chunks-two-col';
       const leftGrid = document.createElement('div');
@@ -455,6 +594,23 @@ function renderConfigView(project: Project) {
       twoCol.appendChild(leftGrid);
       const rightCol = document.createElement('div');
       rightCol.className = 'chunks-col';
+      if (certDomains.length) {
+        const hdrC = document.createElement('div');
+        hdrC.className = 'chunks-col-label';
+        hdrC.textContent = 'TLS Certificates';
+        rightCol.appendChild(hdrC);
+        const certWrap = document.createElement('div');
+        certWrap.innerHTML = certDomains.map(d => renderNginxCertCard(d)).join('');
+        rightCol.appendChild(certWrap);
+        if (redundantIds.size) {
+          const cleanup = document.createElement('button');
+          cleanup.className = 'btn btn-ghost btn-xs cert-cleanup-btn';
+          cleanup.dataset.action = 'remove-redundant-cert-chunks';
+          cleanup.dataset.projectId = project.id;
+          cleanup.textContent = `Remove ${redundantIds.size} duplicate key-file chunk${redundantIds.size > 1 ? 's' : ''} (shown above)`;
+          rightCol.appendChild(cleanup);
+        }
+      }
       if (keyChunks.length) {
         const hdr = document.createElement('div');
         hdr.className = 'chunks-col-label';
@@ -564,6 +720,62 @@ function renderConfigView(project: Project) {
       return;
     }
 
+    // Auto-linked cert: create a stub certificate entry for a referenced domain.
+    if (action === 'create-cert-stub') {
+      const domain = el.dataset.domain || '';
+      if (!domain) return;
+      ensureCertForDomain(domain, projId);
+      persist();
+      showToast(`Created certificate entry for ${domain} — paste the PEMs`, 'ok');
+      render();
+      return;
+    }
+
+    // Auto-linked cert: open the matched certificate entry in the edit modal.
+    if (action === 'edit-cert-entry') {
+      const provider = el.dataset.provider || '';
+      const idx = st.vault.api_keys.findIndex(en => en.secretType === 'certificate' && en.provider === provider);
+      if (idx < 0) { showToast('Certificate entry not found', 'err'); return; }
+      openModal('Edit Secret', idx);
+      return;
+    }
+
+    // Delete nginx_key chunks that duplicate a shown cert entry (the cert card is canonical).
+    if (action === 'remove-redundant-cert-chunks') {
+      const p = st.vault.projects.find(pr => pr.id === el.dataset.projectId);
+      if (!p) return;
+      const ids = new Set(redundantCertKeyChunkIds(p));
+      if (!ids.size) return;
+      p.chunks = (p.chunks || []).filter(c => !ids.has(c.id));
+      persist();
+      showToast(`Removed ${ids.size} duplicate key-file chunk${ids.size > 1 ? 's' : ''}`, 'ok');
+      render();
+      return;
+    }
+
+    // Click a ${ref} badge → jump to the linked vault entry in the secrets panel.
+    if (action === 'jump-ref') {
+      const ref = el.dataset.ref || '';
+      const provPart = ref.includes('/') ? ref.slice(0, ref.indexOf('/')) : ref;
+      let i = st.vault.api_keys.findIndex(en => en.provider === provPart);
+      if (i < 0 && provPart.includes('_')) {
+        const us = provPart.lastIndexOf('_');
+        const p = provPart.slice(0, us), k = provPart.slice(us + 1);
+        i = st.vault.api_keys.findIndex(en => en.provider === p && en.key_id === k);
+      }
+      if (i < 0) { showToast(`No vault entry matches "${ref}"`, 'err'); return; }
+      switchPanel('secrets');
+      st.expanded.add(entryId(st.vault.api_keys[i]));
+      render();
+      setTimeout(() => {
+        const cardEl = document.querySelector<HTMLElement>(`#card-grid [data-idx="${i}"]`);
+        cardEl?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        cardEl?.classList.add('flash-highlight');
+        setTimeout(() => cardEl?.classList.remove('flash-highlight'), 1500);
+      }, 80);
+      return;
+    }
+
     const proj = st.vault.projects.find(p => p.id === projId);
     if (!proj) return;
 
@@ -584,8 +796,15 @@ function renderConfigView(project: Project) {
     if (action === 'copy-chunk-raw') {
       const chunk = proj.chunks?.find(c => c.id === chunkId);
       if (chunk) {
-        const envF = chunk.fields.filter(f => f.description === 'env' || chunk.chunk_type === 'env_file');
-        clipboardWrite(envF.map(f => `${f.key}=${f.value}`).join('\n')).then(() => showToast('Copied ✓', 'ok', 1500));
+        const envF = chunk.fields.filter(f => f.description === 'env' || f.field_type === 'env_var' || chunk.chunk_type === 'env_file');
+        const snapshot: Record<string, string> = {};
+        const text = envF.map(f => {
+          const { resolved } = resolveFieldRef(f.value, false);
+          const v = resolved ?? f.value;
+          snapshot[f.key] = v;
+          return `${f.key}=${v}`;
+        }).join('\n');
+        clipboardWrite(text).then(() => diffAndStashCopy(chunk, snapshot));
       }
       return;
     }
@@ -593,9 +812,14 @@ function renderConfigView(project: Project) {
     if (action === 'copy-chunk-env') {
       const chunk = proj.chunks?.find(c => c.id === chunkId);
       if (chunk) {
-        const envF = chunk.fields.filter(f => f.description === 'env');
-        const text = envF.map(f => `${f.key}=${resolveFieldRef(f.value, true).resolved ?? f.value}`).join('\n');
-        clipboardWrite(text).then(() => showToast('Copied .env ✓', 'ok', 1500));
+        const envF = chunk.fields.filter(f => f.description === 'env' || f.field_type === 'env_var');
+        const snapshot: Record<string, string> = {};
+        const text = envF.map(f => {
+          const v = resolveFieldRef(f.value, true).resolved ?? f.value;
+          snapshot[f.key] = v;
+          return `${f.key}=${v}`;
+        }).join('\n');
+        clipboardWrite(text).then(() => diffAndStashCopy(chunk, snapshot));
       }
       return;
     }
@@ -603,7 +827,7 @@ function renderConfigView(project: Project) {
     if (action === 'delete-chunk') {
       if (!await showConfirm(`Delete chunk "${proj.chunks?.find(c => c.id === chunkId)?.name}"?`)) return;
       proj.chunks = (proj.chunks || []).filter(c => c.id !== chunkId);
-      st.store.save(st.vault);
+      persist();
       render();
       return;
     }
@@ -615,7 +839,7 @@ function renderConfigView(project: Project) {
       if (action === 'chunk-up' && _ci > 0) [_cks[_ci - 1], _cks[_ci]] = [_cks[_ci], _cks[_ci - 1]];
       if (action === 'chunk-down' && _ci < _cks.length - 1) [_cks[_ci], _cks[_ci + 1]] = [_cks[_ci + 1], _cks[_ci]];
       proj.chunks = _cks;
-      st.store.save(st.vault); render(); return;
+      persist(); render(); return;
     }
 
     if (action === 'dup-chunk') {
@@ -625,7 +849,7 @@ function renderConfigView(project: Project) {
       if (!proj.chunks) proj.chunks = [];
       const _ci2 = proj.chunks.findIndex(c => c.id === chunkId);
       proj.chunks.splice(_ci2 + 1, 0, _dup);
-      st.store.save(st.vault); render();
+      persist(); render();
       showToast(`Duplicated "${_src.name}"`, 'ok'); return;
     }
 
@@ -644,7 +868,7 @@ function renderConfigView(project: Project) {
       };
       if (!proj.chunks) proj.chunks = [];
       proj.chunks.push(newPeer);
-      st.store.save(st.vault);
+      persist();
       render();
       return;
     }
@@ -653,7 +877,7 @@ function renderConfigView(project: Project) {
       const n = ((proj.chunks || []).filter(c => c.chunk_type === 'docker_service').length + 1);
       if (!proj.chunks) proj.chunks = [];
       proj.chunks.push({ id: crypto.randomUUID(), name: `service-${n}`, chunk_type: 'docker_service', fields: [] });
-      st.store.save(st.vault); render(); return;
+      persist(); render(); return;
     }
 
     if (action === 'add-docker-network') {
@@ -666,7 +890,7 @@ function renderConfigView(project: Project) {
       } else {
         proj.chunks.push({ id: crypto.randomUUID(), name: 'networks', chunk_type: 'docker_network', fields: [{ key: name, value: '', field_type: 'var' }] });
       }
-      st.store.save(st.vault); render(); return;
+      persist(); render(); return;
     }
 
     if (action === 'add-docker-volume') {
@@ -679,7 +903,7 @@ function renderConfigView(project: Project) {
       } else {
         proj.chunks.push({ id: crypto.randomUUID(), name: 'volumes', chunk_type: 'docker_volume', fields: [{ key: name, value: '', field_type: 'var' }] });
       }
-      st.store.save(st.vault); render(); return;
+      persist(); render(); return;
     }
 
     if (action === 'export-wg') {
@@ -734,7 +958,7 @@ function renderConfigView(project: Project) {
         if (!parsed.length) { showToast('No WireGuard sections found', 'err'); return; }
         if (proj.chunks?.length && !await showConfirm(`Replace ${proj.chunks.length} existing chunk(s) with ${parsed.length} imported sections?`)) return;
         proj.chunks = parsed;
-        st.store.save(st.vault); render();
+        persist(); render();
         showToast(`Imported ${parsed.length} sections ✓`, 'ok');
       };
       showDropdown(el, [
@@ -753,7 +977,7 @@ function renderConfigView(project: Project) {
         if (!parsed.length) { showToast('No services/networks/volumes found', 'err'); return; }
         if (proj.chunks?.length && !await showConfirm(`Replace ${proj.chunks.length} existing chunk(s) with ${parsed.length} imported chunks?`)) return;
         proj.chunks = parsed;
-        st.store.save(st.vault); render();
+        persist(); render();
         showToast(`Imported ${parsed.length} chunks ✓`, 'ok');
       };
       showDropdown(el, [
@@ -772,7 +996,7 @@ function renderConfigView(project: Project) {
         if (!parsed.length) { showToast('No Host blocks found in file', 'err'); return; }
         if (proj.chunks?.length && !await showConfirm(`Replace ${proj.chunks.length} existing chunk(s) with ${parsed.length} imported host blocks?`)) return;
         proj.chunks = parsed;
-        st.store.save(st.vault); render();
+        persist(); render();
         showToast(`Imported ${parsed.length} host blocks ✓`, 'ok');
       });
       return;
@@ -789,7 +1013,7 @@ function renderConfigView(project: Project) {
           if (!proj.chunks) proj.chunks = [];
           proj.chunks.push(...parsed);
         }
-        st.store.save(st.vault); render();
+        persist(); render();
         // Surface any SSL cert domains found so user can add them to vault
         const certDomains = new Set<string>();
         for (const chunk of parsed) {
@@ -821,7 +1045,7 @@ function renderConfigView(project: Project) {
       const chunk = proj.chunks?.find(c => c.id === chunkId);
       if (!chunk) return;
       const dotenv = chunk.fields.filter(f => f.key && f.value !== undefined)
-        .map(f => `${f.key}=${f.value}`).join('\n');
+        .map(f => `${f.key}=${resolveFieldRef(f.value, true).resolved ?? f.value}`).join('\n');
       showDropdown(el, [
         { label: 'Copy .env',    fn: () => clipboardWrite(dotenv).then(() => showToast('Copied ✓', 'ok')) },
         { label: 'Download .env', fn: () => {
@@ -833,6 +1057,12 @@ function renderConfigView(project: Project) {
           showToast('Downloaded', 'ok');
         }},
       ]);
+      return;
+    }
+
+    if (action === 'link-env-chunk') {
+      const chunk = proj.chunks?.find(c => c.id === chunkId);
+      if (chunk) openEnvLinkModal(proj, chunk);
       return;
     }
 
@@ -855,7 +1085,7 @@ function renderConfigView(project: Project) {
         } else {
           proj.chunks.push({ id: crypto.randomUUID(), name: chunkName, chunk_type: 'env_file', fields: vars.map(toFields) });
         }
-        st.store.save(st.vault); render();
+        persist(); render();
         showToast(`Imported ${vars.length} vars into "${chunkName}" ✓`, 'ok');
       };
       showDropdown(el, [
@@ -894,15 +1124,7 @@ function renderConfigView(project: Project) {
           { key: 'proxy_pass', value: '',  field_type: 'var' },
         ],
       }),
-      'add-nginx-key': () => ({
-        id: crypto.randomUUID(),
-        name: `key-${(proj.chunks || []).filter(c => c.chunk_type === 'nginx_key').length + 1}`,
-        chunk_type: 'nginx_key' as const,
-        fields: [
-          { key: 'path',    value: '', field_type: 'var' as const },
-          { key: 'content', value: '', field_type: 'multiline' as const },
-        ],
-      }),
+      // 'add-nginx-key' handled separately below (needs dropdown + file picker)
       'add-k8s-deployment': () => ({
         id: crypto.randomUUID(), name: 'Deployment', chunk_type: 'k8s_deployment',
         fields: [
@@ -1066,7 +1288,66 @@ function renderConfigView(project: Project) {
     if (action in addChunkFns) {
       if (!proj.chunks) proj.chunks = [];
       proj.chunks.push(addChunkFns[action]!());
-      st.store.save(st.vault); render();
+      persist(); render();
+      return;
+    }
+
+    if (action === 'add-nginx-key') {
+      const makeKeyChunk = (keyType: 'fullchain' | 'privkey', path = '', content = '') => ({
+        id: crypto.randomUUID(),
+        name: path ? path.split('/').pop()!.replace(/\.pem$/i, '') : `key-${(proj.chunks || []).filter(c => c.chunk_type === 'nginx_key').length + 1}`,
+        chunk_type: 'nginx_key' as const,
+        fields: [
+          { key: 'path',     value: path,    field_type: 'var'  as const },
+          { key: 'key_type', value: keyType, field_type: 'var'  as const },
+          { key: 'content',  value: content, field_type: 'cert' as const },
+        ],
+      });
+      const doImportKey = (keyType: 'fullchain' | 'privkey') =>
+        pickFileText('.pem,.crt,.key,.cer', (text, name) => {
+          const pem = text.trim();
+          const domains = nginxCertDomains(proj);
+          if (domains.length === 1) {
+            // Single domain → store in that domain's cert entry. No redundant nginx_key chunk.
+            const entry = ensureCertForDomain(domains[0], proj.id);
+            if (keyType === 'fullchain') entry.certificate_data = pem;
+            else                         entry.cert_key_data    = pem;
+            persist(); render();
+            showToast(`Imported ${name} into ${domains[0]} certificate ✓`, 'ok');
+          } else {
+            // No single domain to attach to → fall back to a standalone key-file chunk.
+            if (!proj.chunks) proj.chunks = [];
+            proj.chunks.push(makeKeyChunk(keyType, name, pem));
+            persist(); render();
+            showToast(`Imported ${name} ✓`, 'ok');
+          }
+        });
+      showDropdown(el, [
+        { label: 'Import fullchain.pem', fn: () => doImportKey('fullchain') },
+        { label: 'Import privkey.pem',   fn: () => doImportKey('privkey') },
+        { label: 'Blank key file',        fn: () => {
+          if (!proj.chunks) proj.chunks = [];
+          proj.chunks.push(makeKeyChunk('fullchain'));
+          persist(); render();
+        }},
+      ]);
+      return;
+    }
+
+    if (action === 'import-nginx-key-file') {
+      const chunk = proj.chunks?.find(c => c.id === chunkId);
+      if (!chunk) return;
+      pickFileText('.pem,.crt,.key,.cer', (text, name) => {
+        const isPrivkey = /privkey|private[-_.]?key/i.test(name) && !/cert|chain|fullchain/i.test(name);
+        const ktF = chunk.fields.find(f => f.key === 'key_type');
+        if (ktF) ktF.value = isPrivkey ? 'privkey' : 'fullchain';
+        else chunk.fields.unshift({ key: 'key_type', value: isPrivkey ? 'privkey' : 'fullchain', field_type: 'var' });
+        const cF = chunk.fields.find(f => f.key === 'content');
+        if (cF) cF.value = text.trim();
+        else chunk.fields.push({ key: 'content', value: text.trim(), field_type: 'cert' });
+        persist(); render();
+        showToast(`Imported ${name} ✓`, 'ok');
+      });
       return;
     }
 
@@ -1121,7 +1402,7 @@ function renderConfigView(project: Project) {
         if (!merge && proj.chunks?.length && !await showConfirm(`Replace ${proj.chunks.length} existing chunk(s)?`)) return;
         if (merge) { if (!proj.chunks) proj.chunks = []; proj.chunks.push(...parsed); }
         else proj.chunks = parsed;
-        st.store.save(st.vault); render();
+        persist(); render();
         showToast(`Imported ${parsed.length} chunks ✓`, 'ok');
       };
       showDropdown(el, [
@@ -1148,7 +1429,7 @@ function renderConfigView(project: Project) {
         if (!merge && proj.chunks?.length && !await showConfirm(`Replace ${proj.chunks.length} existing chunk(s)?`)) return;
         if (merge) { if (!proj.chunks) proj.chunks = []; proj.chunks.push(...parsed); }
         else proj.chunks = parsed;
-        st.store.save(st.vault); render();
+        persist(); render();
         showToast(`Imported ${parsed.length} chunks ✓`, 'ok');
       };
       showDropdown(el, [
@@ -1193,7 +1474,7 @@ function renderConfigView(project: Project) {
 export function render() {
   renderSidebar();
   renderProjectTree();
-  const selectedId = st.currentSelectedProjectIds[0];
+  const selectedId = st.currentSelectedProjectIds[0] ?? 'Universal';
   if (selectedId !== 'Universal' && !selectedId.startsWith('virtual:')) {
     const project = st.vault.projects.find(p => p.id === selectedId);
     if (project && project.project_type && project.project_type !== 'generic') {
@@ -1212,7 +1493,7 @@ export function updateCopyAllBtn() {
   const items = getFiltered();
   wrap.style.display = items.length ? 'flex' : 'none';
   const btn = document.getElementById('copy-all-btn')!;
-  const projectFiltered = st.currentSelectedProjectIds[0] !== 'Universal';
+  const projectFiltered = (st.currentSelectedProjectIds[0] ?? 'Universal') !== 'Universal';
   const ST_LABELS: Record<string, string> = { api_key: 'API Keys', password: 'Passwords', env_var: 'Env Vars', connection_string: 'Connections', ssh_key: 'SSH Keys', certificate: 'Certificates', file_blob: 'File Blobs' };
   const label = st.filter.type === 'category' ? `Copy "${st.filter.value}"`
     : st.filter.type === 'price' ? `Copy ${st.filter.value}`
@@ -1224,3 +1505,143 @@ export function updateCopyAllBtn() {
 
 // Register render as the global render function
 setRenderFn(render);
+
+// ── ENV chunk ↔ vault link modal ───────────────────────────────────────────
+
+let _envLinkProj: import('./types').Project | null = null;
+let _envLinkChunk: import('./types').SecretChunk | null = null;
+
+function _renderEnvLinkRow(m: EnvLinkMatch): string {
+  if (m.alreadyLinked) {
+    return `<div class="env-link-row env-link-row--linked">
+      <span class="env-link-key">${esc(m.key)}</span>
+      <span class="env-link-badge env-link-badge--linked" title="Linked to ${esc(m.existingRef || '')}">→ ${esc(m.existingRef || '')} ✓</span>
+    </div>`;
+  }
+  if (m.match) {
+    const { entry, ref, field, confidence } = m.match;
+    return `<div class="env-link-row env-link-row--match" data-key="${escAttr(m.key)}" data-ref="${escAttr(ref)}">
+      <label class="env-link-check-label">
+        <input type="checkbox" class="env-link-cb" checked>
+        <span class="env-link-key">${esc(m.key)}</span>
+      </label>
+      <span class="env-link-badge env-link-badge--vault">→ ${esc(entry.provider)} / ${esc(field)} <span class="env-link-conf">${confidence}%</span></span>
+    </div>`;
+  }
+  if (m.suggestCreate) {
+    const { provider, keyId, secretType } = m.suggestCreate;
+    const typeOpts = (['api_key', 'password', 'connection_string', 'env_var', 'ssh_key'] as SecretType[])
+      .map(t => `<option value="${t}"${t === secretType ? ' selected' : ''}>${t}</option>`).join('');
+    return `<div class="env-link-row env-link-row--create" data-key="${escAttr(m.key)}" data-key-id="${escAttr(keyId || '')}">
+      <label class="env-link-check-label">
+        <input type="checkbox" class="env-link-cb">
+        <span class="env-link-key">${esc(m.key)}</span>
+      </label>
+      <span class="env-link-badge env-link-badge--new">New:</span>
+      <input class="form-input env-link-name-input" value="${escAttr(provider)}" placeholder="provider name" style="width:130px;height:24px;padding:2px 6px;font-size:11px">
+      <select class="form-input env-link-type-select" style="width:130px;height:24px;padding:2px 4px;font-size:11px">${typeOpts}</select>
+    </div>`;
+  }
+  return `<div class="env-link-row env-link-row--skip">
+    <span class="env-link-key">${esc(m.key)}</span>
+    <span class="env-link-badge" style="color:var(--text3)">empty — skip</span>
+  </div>`;
+}
+
+export function openEnvLinkModal(proj: import('./types').Project, chunk: import('./types').SecretChunk) {
+  _envLinkProj = proj;
+  _envLinkChunk = chunk;
+  const matches = buildEnvLinkMatches(chunk);
+  const sub = document.getElementById('env-link-subtitle');
+  if (sub) sub.textContent = `${chunk.name} — ${matches.length} fields`;
+  const list = document.getElementById('env-link-list');
+  if (list) list.innerHTML = matches.map(_renderEnvLinkRow).join('');
+  document.getElementById('env-link-overlay')?.classList.add('open');
+}
+
+export function closeEnvLinkModal() {
+  document.getElementById('env-link-overlay')?.classList.remove('open');
+  _envLinkProj = null;
+  _envLinkChunk = null;
+}
+
+export function applyEnvLink() {
+  if (!_envLinkProj || !_envLinkChunk) return;
+  const chunk = _envLinkChunk;
+  const projectId = _envLinkProj.id !== 'Universal' ? _envLinkProj.id : null;
+  let linked = 0, created = 0;
+
+  for (const row of document.querySelectorAll<HTMLElement>('.env-link-row')) {
+    const key = row.dataset.key;
+    if (!key) continue;
+    const cb = row.querySelector<HTMLInputElement>('.env-link-cb');
+    if (!cb?.checked) continue;
+    const field = chunk.fields.find(f => f.key === key);
+    if (!field) continue;
+
+    if (row.classList.contains('env-link-row--match')) {
+      const ref = row.dataset.ref!;
+      field.value = `\${${ref}}`;
+      // Auto-assign the containing project to the matched vault entry.
+      if (projectId) {
+        const provPart = ref.includes('/') ? ref.slice(0, ref.indexOf('/')) : ref;
+        let entry = st.vault.api_keys.find(e => e.provider === provPart);
+        if (!entry && provPart.includes('_')) {
+          const lastUs = provPart.lastIndexOf('_');
+          entry = st.vault.api_keys.find(e =>
+            e.provider === provPart.slice(0, lastUs) && e.key_id === provPart.slice(lastUs + 1)
+          );
+        }
+        if (entry && !entry.projectIds.includes(projectId)) entry.projectIds.push(projectId);
+      }
+      linked++;
+    } else if (row.classList.contains('env-link-row--create')) {
+      const provider = (row.querySelector<HTMLInputElement>('.env-link-name-input')?.value.trim()) || key;
+      const keyId = row.dataset.keyId || undefined;
+      const secretType = (row.querySelector<HTMLSelectElement>('.env-link-type-select')?.value || 'api_key') as SecretType;
+      const baseProjectIds = ['Universal', ...(projectId ? [projectId] : [])];
+
+      // The provider name is editable, so the user can type one that already
+      // exists. References resolve by name and take the first match, so
+      // creating a second entry under the same name would point the new
+      // reference at the *old* secret and orphan the one just created. Adopt
+      // the existing entry instead.
+      const clash = st.vault.api_keys.find(e =>
+        e.provider === provider && (e.key_id ?? undefined) === keyId);
+      if (clash) {
+        if (projectId && !clash.projectIds.includes(projectId)) clash.projectIds.push(projectId);
+        const clashRef = keyId ? `${provider}_${keyId}` : provider;
+        const clashIsUser = /user(name)?$/i.test(key) && clash.secretType === 'password';
+        field.value = `\${${clashRef}/${clashIsUser ? 'username' : clash.secretType === 'password' ? 'password' : 'key'}}`;
+        linked++;
+        continue;
+      }
+
+      const newEntry: import('./types').VaultEntry = {
+        provider,
+        ...(keyId ? { key_id: keyId } : {}),
+        api_key: /user(name)?$/i.test(key) && secretType === 'password' ? '' : field.value,
+        ...((/user(name)?$/i.test(key) && secretType === 'password') ? { username: field.value } : {}),
+        secretType,
+        price_type: 'local',
+        categories: [],
+        projectIds: baseProjectIds,
+        scopes: [],
+      };
+      st.vault.api_keys.push(newEntry);
+      // Use slash notation for new refs. Point at the field the value was stored in:
+      // username for user-style password entries, password for other password entries.
+      const provRef = keyId ? `${provider}_${keyId}` : provider;
+      const isUserField = /user(name)?$/i.test(key) && secretType === 'password';
+      const refField = isUserField ? 'username' : (secretType === 'password' ? 'password' : 'key');
+      field.value = `\${${provRef}/${refField}}`;
+      created++;
+    }
+  }
+
+  if (linked + created === 0) { showToast('Nothing selected', '', 1500); return; }
+  persist();
+  render();
+  closeEnvLinkModal();
+  showToast(`${linked} linked, ${created} created ✓`, 'ok');
+}

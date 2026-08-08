@@ -1,10 +1,10 @@
 /**
- * @file API Vault — application bootstrap.
+ * @file EnvVault — application bootstrap.
  * All logic lives in the dedicated modules under src/.
  * This file wires everything together and registers event listeners.
  */
 
-import { st, Settings, TauriVaultStore, LocalVaultStore, RemoteVaultStore, inTauri, setRenderFn, triggerRender, switchPanel, switchTool } from './state';
+import { st, Settings, TauriVaultStore, LocalVaultStore, RemoteVaultStore, inTauri, setRenderFn, triggerRender, switchPanel, switchTool, persist, entryId, ensureEntryIds, applyUsersPanelVisibility } from './state';
 import { initIconPicker, openIconPicker, iconHTML } from './icons';
 import {
   showToast, showConfirm, clipboardWrite,
@@ -28,14 +28,18 @@ import {
 import {
   copyAll, exportAs, handleFileSelect,
   openEnvImportModal, closeEnvImportModal, confirmEnvImport,
+  exportK8sSecret, exportTfvars, exportEncryptedBackup, importEncryptedBackup,
 } from './import-export';
-import { openSettings, saveSettings, closeSettings } from './settings-panel';
+import { openSettings, saveSettings, closeSettings, cancelSettings } from './settings-panel';
 import { lockVault, resetLock, showUnlockModal, setFinishInitFn } from './lock';
 import { initTools } from './tools';
+import { mountToolsPanes } from './tools-markup';
 import { initUsersPanel, renderUsersPanel } from './users';
-import { initRemotePanel, setRemoteFinishInitFn } from './remote-panel';
+import { initRemotePanel, setRemoteFinishInitFn, renderRemotePanel, switchToLocalVault } from './remote-panel';
+import { initLanPanel } from './lan';
 import {
   render, renderGrid, updateCopyAllBtn, renderProjectTree,
+  openEnvLinkModal, closeEnvLinkModal, applyEnvLink,
 } from './render';
 import {
   openChunkEditModal, closeChunkEditModal, saveChunkEdit,
@@ -65,9 +69,31 @@ async function finishInit() {
   try {
     const data = await st.store.load();
     if (data) {
-      st.vault.api_keys        = data.api_keys;
-      st.vault.user_categories = data.user_categories || [];
-      st.vault.projects        = data.projects || [{ id: 'Universal', name: 'Universal', description: '' }];
+      const remoteEmpty = !data.api_keys?.length;
+      const localHasData = st.vault.api_keys.length > 0;
+
+      // Remote vault empty but in-memory vault has data: offer to push before overwriting.
+      if (remoteEmpty && localHasData && st.store.isRemote) {
+        const push = await showConfirm(
+          `Remote vault is empty — push your ${st.vault.api_keys.length} local entries to it?`
+        );
+        if (push) {
+          await persist();
+          showToast(`Pushed ${st.vault.api_keys.length} entries to remote ✓`, 'ok', 2500);
+          // Keep existing st.vault — do not overwrite with empty remote data.
+        } else {
+          st.vault.api_keys        = [];
+          st.vault.user_categories = [];
+          st.vault.projects        = [{ id: 'Universal', name: 'Universal', description: '' }];
+        }
+      } else {
+        // `|| []` on all three: a vault blob written by an older build (or an
+        // edited backup) can be missing a key entirely, and an undefined
+        // api_keys threw on the very next line that iterates it.
+        st.vault.api_keys        = data.api_keys || [];
+        st.vault.user_categories = data.user_categories || [];
+        st.vault.projects        = data.projects || [{ id: 'Universal', name: 'Universal', description: '' }];
+      }
 
       if (!st.vault.projects.find(p => p.id === 'Universal')) {
         st.vault.projects.unshift({ id: 'Universal', name: 'Universal', description: '' });
@@ -78,10 +104,19 @@ async function finishInit() {
         if (!key.projectIds)                          { key.projectIds = ['Universal']; needsSave = true; }
         else if (!key.projectIds.includes('Universal')){ key.projectIds.push('Universal'); needsSave = true; }
         if (!key.secretType)                          { key.secretType = 'api_key';   needsSave = true; }
+        // The 'chunk' secret type has been removed — it could never be saved
+        // through the UI anyway (its key field was hidden but still required).
+        // Its content lived in extra_vars, which the normal card renders too, so
+        // relabelling loses nothing.
+        if ((key.secretType as string) === 'chunk')   { key.secretType = 'env_var';   needsSave = true; }
       }
-      if (needsSave) await st.store.save(st.vault);
+      // Backfill stable ids for vaults written before the field existed, and
+      // repair any duplicates. Runs once; afterwards every entry carries an id.
+      if (ensureEntryIds(st.vault.api_keys)) needsSave = true;
+      if (needsSave) await persist();
 
       document.getElementById('load-banner')!.style.display = 'none';
+      st.vaultOpen = true;
       showToast(`Loaded ${st.vault.api_keys.length} keys`, 'ok', 1800);
     } else {
       document.getElementById('load-banner')!.style.display = 'flex';
@@ -92,11 +127,17 @@ async function finishInit() {
   resetLock();
   initTools();
   initUsersPanel();
+  applyUsersPanelVisibility();
   initRemotePanel();
+  initLanPanel();
   setRemoteFinishInitFn(finishInit);
 }
 
 async function init() {
+  // Must run before anything queries the tools DOM: the tool panes live in
+  // tools-markup.ts and are injected here, not present in index.html.
+  mountToolsPanes();
+
   await Settings.init();
   initIconPicker();
 
@@ -134,6 +175,13 @@ async function init() {
       triggerRender();
       return;
     }
+    // Env-prefix filter button
+    if (btn.classList.contains('prefix-filter-btn')) {
+      const pfx = btn.dataset.prefix ?? '';
+      st.activePrefixFilter = (st.activePrefixFilter === pfx) ? null : pfx;
+      triggerRender();
+      return;
+    }
     const filterType  = btn.dataset.filterType;
     const filterValue = btn.dataset.filterValue;
     if (filterType && filterValue !== undefined) {
@@ -145,6 +193,10 @@ async function init() {
           st.currentSelectedProjectIds = ['Universal'];
           st.currentEnvFilter = '';
           st.activeTagFilter = null;
+          // The prefix filter was added after this reset was written and never
+          // added to it, so "All" left the grid narrowed with nothing in the
+          // sidebar looking active to explain why.
+          st.activePrefixFilter = null;
         }
         doSetFilter(filterType, filterValue);
       }
@@ -152,7 +204,7 @@ async function init() {
   });
 
   // Categories section: rename/delete tags
-  document.getElementById('project-tree')!.addEventListener('click', (e) => {
+  document.getElementById('category-tree')!.addEventListener('click', (e) => {
     const target = e.target as HTMLElement;
     const renameBtn = target.closest<HTMLElement>('.rename-cat');
     if (renameBtn?.dataset.category) { renameCategory(renameBtn.dataset.category); return; }
@@ -161,7 +213,7 @@ async function init() {
   });
 
   // Projects section: selection, rename, delete
-  document.getElementById('category-list')!.addEventListener('click', (e) => {
+  document.getElementById('project-list')!.addEventListener('click', (e) => {
     const target = e.target as HTMLElement;
     const projBtn = target.closest<HTMLButtonElement>('[data-project-id]');
     if (projBtn?.dataset.projectId) {
@@ -211,12 +263,11 @@ async function init() {
   });
 
   // Expand all
-  document.getElementById('expand-all-btn')!.addEventListener('click', function () {
+  document.getElementById('expand-all-btn')!.addEventListener('click', () => {
     st.allExpanded = !st.allExpanded;
-    this.textContent = st.allExpanded ? 'Collapse All' : 'Expand All';
-    if (st.allExpanded) st.vault.api_keys.forEach((_, i) => st.expanded.add(i));
+    if (st.allExpanded) st.vault.api_keys.forEach(k => st.expanded.add(entryId(k)));
     else st.expanded.clear();
-    renderGrid();
+    renderGrid();   // renderGrid syncs the button label from st.allExpanded
   });
 
   // Sidebar toggle + add button
@@ -324,11 +375,38 @@ async function init() {
     document.querySelectorAll<HTMLInputElement>('.env-import-check').forEach(cb => cb.checked = false));
   document.getElementById('env-import-overlay')?.addEventListener('click', (e) => { if (e.target === e.currentTarget) closeEnvImportModal(); });
 
+  // ENV link modal
+  document.getElementById('env-link-close')?.addEventListener('click', closeEnvLinkModal);
+  document.getElementById('env-link-cancel')?.addEventListener('click', closeEnvLinkModal);
+  document.getElementById('env-link-apply')?.addEventListener('click', applyEnvLink);
+  document.getElementById('env-link-overlay')?.addEventListener('click', (e) => { if (e.target === e.currentTarget) closeEnvLinkModal(); });
+
   // Data import/export
-  document.getElementById('settings-import-btn')?.addEventListener('click', () => openFilePicker('.json,.env,text/plain'));
+  document.getElementById('settings-import-btn')?.addEventListener('click', () => openFilePicker('.json,.env,.yaml,.yml,text/plain'));
   document.getElementById('settings-export-dotenv')?.addEventListener('click', () => exportAs('dotenv'));
   document.getElementById('settings-export-yaml')?.addEventListener('click', () => exportAs('yaml'));
   document.getElementById('settings-export-json')?.addEventListener('click', () => exportAs('json'));
+  document.getElementById('settings-export-k8s')?.addEventListener('click', () => exportK8sSecret());
+  document.getElementById('settings-export-tfvars')?.addEventListener('click', () => exportTfvars());
+  document.getElementById('settings-export-encrypted')?.addEventListener('click', () => {
+    const pw = (document.getElementById('settings-backup-pw') as HTMLInputElement).value;
+    exportEncryptedBackup(pw);
+  });
+  document.getElementById('settings-import-encrypted')?.addEventListener('click', () => {
+    const pw = (document.getElementById('settings-backup-pw') as HTMLInputElement).value;
+    if (!pw) { showToast('Enter the backup password first', 'err'); return; }
+    const inp = document.createElement('input');
+    inp.type = 'file'; inp.accept = '.vaultbak,.json,text/plain';
+    inp.onchange = () => {
+      const f = inp.files?.[0];
+      if (!f) { inp.remove(); return; }
+      const reader = new FileReader();
+      reader.onload = e => { importEncryptedBackup(String(e.target?.result ?? ''), pw); inp.remove(); };
+      reader.readAsText(f);
+    };
+    document.body.appendChild(inp);
+    inp.click();
+  });
 
   // Category create modal
   document.getElementById('new-category-root-btn')?.addEventListener('click', openCategoryCreateModal);
@@ -342,7 +420,7 @@ async function init() {
   });
 
   // Project create modal
-  document.getElementById('new-category-btn')!.addEventListener('click', openProjectCreateModal);
+  document.getElementById('new-project-btn')!.addEventListener('click', openProjectCreateModal);
   document.getElementById('project-create-close')?.addEventListener('click', closeProjectCreateModal);
   document.getElementById('project-create-cancel')?.addEventListener('click', closeProjectCreateModal);
   document.getElementById('project-create-save')?.addEventListener('click', saveProjectCreate);
@@ -399,7 +477,14 @@ async function init() {
     if (!inInput && e.key === '?') shortcutsEl.classList.add('open');
     if (e.key === 'Escape') {
       shortcutsEl.classList.remove('open');
-      closeSettings(); closeModal();
+      // Escape used to just hide the panel: theme and accent apply live, so the
+      // preview stayed on screen while never being committed — neither saved
+      // nor reverted. Escape is a cancel, same as the Cancel button.
+      if (document.getElementById('settings-overlay')?.classList.contains('open')) cancelSettings();
+      // Only close the entry modal if it is actually open: closeModal() also
+      // discards the saved form draft, so a stray Escape used to throw away a
+      // draft left by a previous session before it could be restored.
+      if (document.getElementById('modal-overlay')?.classList.contains('open')) closeModal();
       if (st.searchQ) { st.searchQ = ''; (document.getElementById('search') as HTMLInputElement).value = ''; renderGrid(); }
     }
   });
@@ -413,9 +498,9 @@ async function init() {
     const value  = el.dataset.value ?? '';
     const field  = el.dataset.field ?? '';
     if (action === 'copy-env' && el.classList.contains('card-head') && (e.target as HTMLElement).closest('[data-action]') !== el) return;
-    if ((window as any).__apivIsBulkMode?.() && action !== 'bulk-toggle') {
+    if ((window as any).__envvIsBulkMode?.() && action !== 'bulk-toggle') {
       const card = el.closest<HTMLElement>('[data-idx]');
-      if (card) { (window as any).__apivBulkToggle?.(parseInt(card.dataset.idx!)); return; }
+      if (card) { (window as any).__envvBulkToggle?.(parseInt(card.dataset.idx!)); return; }
     }
     e.stopPropagation();
     switch (action) {
@@ -428,13 +513,13 @@ async function init() {
         const entry = st.vault.api_keys[idx];
         if (entry) {
           entry.pinned = entry.pinned ? undefined : true;
-          st.store.save(st.vault);
+          persist();
           triggerRender();
           showToast(entry.pinned ? 'Pinned ✓' : 'Unpinned', 'ok', 1500);
         }
         break;
       }
-      case 'bulk-toggle': (window as any).__apivBulkToggle?.(idx); break;
+      case 'bulk-toggle': (window as any).__envvBulkToggle?.(idx); break;
       case 'duplicate':   duplicateKey(e, idx); break;
       case 'edit':        openEdit(e, idx); break;
       case 'delete':      deleteKey(e, idx); break;
@@ -468,13 +553,23 @@ async function init() {
       { label: `Copy ${_keyLabel}`,               fn: () => copyField(e as MouseEvent, entry.api_key, card) },
     ];
     if (entry.api_secret) _items.push({ label: 'Copy Secret', fn: () => copyField(e as MouseEvent, entry.api_secret!, card) });
+    // Resolve the position again when the item is actually clicked. The menu
+    // captures `idx` at open time, and anything that splices api_keys in
+    // between (an undo restoring an entry, a peer's edit reloading the vault)
+    // would otherwise point these at the wrong secret.
+    const liveIdx = () => st.vault.api_keys.indexOf(entry);
+    const onEntry = (fn: (i: number) => void) => () => {
+      const i = liveIdx();
+      if (i < 0) { showToast('That secret no longer exists', 'err'); return; }
+      fn(i);
+    };
     _items.push(
-      { label: 'Copy .env line', fn: () => doCopyEnv(e as MouseEvent, idx) },
+      { label: 'Copy .env line', fn: onEntry(i => doCopyEnv(e as MouseEvent, i)) },
       '---',
-      { label: 'Edit',      fn: () => openEdit(e as MouseEvent, idx) },
-      { label: 'Duplicate', fn: () => duplicateKey(e as MouseEvent, idx) },
+      { label: 'Edit',      fn: onEntry(i => openEdit(e as MouseEvent, i)) },
+      { label: 'Duplicate', fn: onEntry(i => duplicateKey(e as MouseEvent, i)) },
       '---',
-      { label: 'Delete',    fn: () => deleteKey(e as MouseEvent, idx) },
+      { label: 'Delete',    fn: onEntry(i => deleteKey(e as MouseEvent, i)) },
     );
     showContextMenu(e.clientX, e.clientY, _items);
   });
@@ -487,16 +582,10 @@ async function init() {
       {
         label: isRemote ? '  Local Vault' : '⬤ Local Vault',
         active: !isRemote,
-        fn: () => {
-          if (isRemote) {
-            if (st.store instanceof RemoteVaultStore) (st.store as RemoteVaultStore).lock().catch(() => {});
-            st.store = inTauri ? new TauriVaultStore() : new LocalVaultStore();
-            st.activeRemoteId = null;
-            Settings.set('remote', { enabled: false, serverUrl: '' });
-            document.getElementById('vault-name')!.textContent = 'Local Vault';
-            showToast('Switched to local vault', 'ok');
-          }
-        },
+        // Shared with the Remote panel's Disconnect button — it also clears
+        // st.vault.projects (which this used to leave behind) and prompts for
+        // the master password when the local vault is still locked.
+        fn: () => { if (isRemote) void switchToLocalVault(); },
       },
       '---',
     ];
@@ -509,7 +598,9 @@ async function init() {
           if (!connected) {
             switchPanel('remote');
             st.activeRemoteId = cfg.id;
-            import('./remote-panel').then(m => m.renderRemotePanel()).catch(() => {});
+            // Static import — remote-panel is already in this module's graph, so a
+            // dynamic import here only produced a Vite chunking warning.
+            renderRemotePanel();
           }
         },
       });

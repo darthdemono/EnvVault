@@ -1,13 +1,34 @@
 /** Pure utilities — no state, no DOM side effects on module load. */
 
+/** Escape for HTML *text* content. */
 export function esc(s: unknown): string {
   if (s == null) return '';
-  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  return String(s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
 }
 
+/**
+ * Escape for an HTML *attribute* value.
+ *
+ * `&` MUST be escaped first and always. This function used to escape only
+ * backslash, `'` and `"` — leftovers from the pre-Phase-3 era when values were
+ * interpolated into `onclick="..."` JavaScript string literals. That context no
+ * longer exists, and leaving `&` raw was actively corrupting data: a secret
+ * containing the literal text `&amp;` round-tripped through
+ * `data-value="..."` as `&`, so **copy-to-clipboard silently returned the wrong
+ * secret**. Any `&`-prefixed entity-looking sequence hit the same bug.
+ */
 export function escAttr(s: unknown): string {
   if (s == null) return '';
-  return String(s).replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/"/g, '&quot;');
+  return String(s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 }
 
 export function maskKey(val: string): string {
@@ -95,6 +116,48 @@ export function showPrompt(msg: string, defaultVal = ''): Promise<string | null>
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') { e.stopPropagation(); cleanup(null); }
       else if (e.key === 'Enter') { e.stopPropagation(); cleanup(input.value.trim() || null); }
+    };
+    okBtn.addEventListener('click', onOk);
+    cancelBtn.addEventListener('click', onCancel);
+    overlay.addEventListener('click', onBackdrop);
+    document.addEventListener('keydown', onKey);
+  });
+}
+
+/**
+ * Prompt for a secret. Same modal as {@link showPrompt} but the input is masked
+ * and the value is not trimmed (passwords may legitimately contain edge spaces).
+ *
+ * Replaces the native `window.prompt()`, which WebKitGTK renders as an unstyled
+ * system dialog and can suppress entirely.
+ */
+export function showPasswordPrompt(msg: string): Promise<string | null> {
+  return new Promise(resolve => {
+    const overlay = document.getElementById('prompt-overlay')!;
+    const input = document.getElementById('prompt-input') as HTMLInputElement;
+    document.getElementById('prompt-message')!.textContent = msg;
+    input.value = '';
+    input.type = 'password';
+    overlay.classList.add('open');
+    setTimeout(() => input.focus(), 50);
+    const cleanup = (result: string | null) => {
+      overlay.classList.remove('open');
+      input.type = 'text';
+      input.value = '';
+      okBtn.removeEventListener('click', onOk);
+      cancelBtn.removeEventListener('click', onCancel);
+      overlay.removeEventListener('click', onBackdrop);
+      document.removeEventListener('keydown', onKey);
+      resolve(result);
+    };
+    const okBtn = document.getElementById('prompt-ok')!;
+    const cancelBtn = document.getElementById('prompt-cancel')!;
+    const onOk = () => cleanup(input.value || null);
+    const onCancel = () => cleanup(null);
+    const onBackdrop = (e: Event) => { if (e.target === overlay) cleanup(null); };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') { e.stopPropagation(); cleanup(null); }
+      else if (e.key === 'Enter') { e.stopPropagation(); cleanup(input.value || null); }
     };
     okBtn.addEventListener('click', onOk);
     cancelBtn.addEventListener('click', onCancel);

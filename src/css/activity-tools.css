@@ -1086,3 +1086,37 @@ mark.search-hl {
 
 .tag-input-wrap { display: flex; flex-direction: column; gap: 6px; }
 .tag-chips-display { display: flex; flex-wrap: wrap; gap: 4px; min-height: 0; }
+
+/* ── Audit log table ─────────────────────────────────────────────────────────── */
+
+.audit-table { width: 100%; border-collapse: collapse; font-size: 11px; margin-top: 10px; }
+.audit-table thead th {
+  position: sticky; top: 0; z-index: 1;
+  text-align: left; padding: 6px 8px;
+  background: var(--surface2); color: var(--text3);
+  font-weight: 600; text-transform: uppercase; letter-spacing: .05em; font-size: 9.5px;
+  border-bottom: 1px solid var(--border);
+}
+.audit-table tbody tr { border-bottom: 1px solid var(--border); }
+.audit-table tbody tr:hover { background: var(--surface2); }
+.audit-table td { padding: 5px 8px; vertical-align: top; }
+
+.audit-id      { color: var(--text3); font-family: var(--font-mono); width: 48px; }
+.audit-target  { color: var(--text1); font-weight: 500; }
+.audit-ts      { color: var(--text2); font-family: var(--font-mono); white-space: nowrap; }
+.audit-details { color: var(--text3); }
+.audit-hash    { color: var(--text3); font-family: var(--font-mono); cursor: help; }
+
+.audit-action {
+  display: inline-block; padding: 1px 6px; border-radius: 3px;
+  font-size: 9.5px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em;
+  background: var(--surface3); color: var(--text2);
+}
+.audit-action.audit-add    { background: rgba(79, 201, 126, .15); color: #4fc97e; }
+.audit-action.audit-update { background: rgba(88, 180, 220, .15); color: #58b4dc; }
+.audit-action.audit-delete { background: rgba(201, 100, 100, .15); color: #e07070; }
+.audit-action.audit-read   { background: rgba(140, 140, 150, .15); color: var(--text3); }
+
+/* Wide table must scroll inside its own box, never the page. */
+#audit-results { overflow-x: auto; max-height: 60vh; overflow-y: auto; }
+.audit-actor { color: var(--text2); font-family: var(--font-mono); white-space: nowrap; cursor: help; }

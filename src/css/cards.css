@@ -507,3 +507,73 @@
   font-size: 11px
 }
 
+.badge-prefix {
+  background: rgba(88, 180, 220, .12);
+  color: #58b4dc;
+  border-color: rgba(88, 180, 220, .25);
+  font-family: 'JetBrains Mono', monospace
+}
+
+.badge-compromised {
+  background: rgba(201, 60, 60, .18);
+  color: #ff6b6b;
+  border-color: rgba(201, 60, 60, .45);
+  font-weight: 700
+}
+
+.badge-rotation-due {
+  background: rgba(230, 150, 50, .15);
+  color: #e69632;
+  border-color: rgba(230, 150, 50, .35)
+}
+
+.chunk-ref-jump:hover {
+  text-decoration: underline;
+  filter: brightness(1.25)
+}
+
+.usedby-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px
+}
+
+.usedby-badge {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 9px;
+  color: #58b4dc;
+  background: rgba(88, 180, 220, .1);
+  border: 1px solid rgba(88, 180, 220, .25);
+  border-radius: 4px;
+  padding: 1px 5px
+}
+
+.chunk-ref-chunk {
+  color: #b48ad0;
+  background: rgba(180, 138, 208, .12);
+  border-color: rgba(180, 138, 208, .3)
+}
+
+@keyframes flashHighlight {
+  0%, 100% { box-shadow: 0 0 0 0 transparent }
+  30% { box-shadow: 0 0 0 2px var(--accent), 0 0 18px 2px var(--accent-dim) }
+}
+
+.card.flash-highlight {
+  animation: flashHighlight 1.4s ease
+}
+
+/* Chunk type card — env-style field rows */
+.chunk-field-row .chunk-field-key {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  color: var(--text2);
+  text-transform: none;
+  letter-spacing: 0;
+  min-width: 120px;
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap
+}
+

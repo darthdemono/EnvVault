@@ -36,6 +36,7 @@
 }
 
 html:has(#unlock-overlay.open) #header { display: none !important; }
+html:has(#relock-overlay.open) #header { display: none !important; }
 
 .logo {
   display: flex;

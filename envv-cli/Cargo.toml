@@ -1,10 +1,10 @@
 [package]
-name    = "apiv-cli"
-version = "0.5.0"
+name    = "envv-cli"
+version = "0.6.0"
 edition = "2021"
 
 [[bin]]
-name = "apiv"
+name = "envv"
 path = "src/main.rs"
 
 [dependencies]

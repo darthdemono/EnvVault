@@ -306,3 +306,47 @@ select.form-input {
   border-top: 1px solid var(--border)
 }
 
+/* Extra vars section in add/edit modal */
+.extra-vars-list {
+  display: flex;
+  flex-direction: column;
+  gap: 5px
+}
+
+.extra-var-row {
+  display: grid;
+  grid-template-columns: 1fr 2fr auto auto;
+  gap: 6px;
+  align-items: center
+}
+
+.extra-var-row .extra-var-key,
+.extra-var-row .extra-var-value {
+  padding: 5px 8px;
+  font-size: 11px
+}
+
+.extra-var-secret-label {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10px;
+  color: var(--text2);
+  white-space: nowrap;
+  cursor: pointer
+}
+
+.extra-var-secret-label input[type="checkbox"] {
+  accent-color: var(--accent)
+}
+
+.extra-var-remove {
+  font-size: 14px;
+  color: var(--text3);
+  padding: 2px 6px
+}
+
+.extra-var-remove:hover {
+  color: var(--price-paid)
+}
+

@@ -106,7 +106,26 @@ pre.chunk-field-val.code-block { background: var(--surface3); border: 1px solid 
 .chunk-field-cert-row { background: rgba(79,201,126,.03); }
 .cert-ref-badge { font-size: 11px; font-family: 'JetBrains Mono', monospace; color: var(--accent); }
 
+/* ── Auto-linked TLS cert cards (nginx view) ─────────────────────────────────── */
+.cert-link-card { background: var(--surface2); border: 1px solid var(--border2); border-radius: 7px; padding: 10px 12px; margin-bottom: 8px; }
+.cert-link-card--missing { border-style: dashed; opacity: .85; }
+.cert-link-head { display: flex; align-items: center; gap: 8px; }
+.cert-link-domain { font-size: 13px; font-weight: 700; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; min-width: 0; }
+.cert-link-issuer { font-size: 9px; font-weight: 600; color: var(--accent); background: var(--accent-dim); border-radius: 4px; padding: 1px 5px; flex-shrink: 0; max-width: 110px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cert-link-expiry { font-size: 10px; font-family: 'JetBrains Mono', monospace; flex-shrink: 0; }
+.cert-link-empty { font-size: 11px; color: var(--text3); margin: 6px 0; }
+.cert-link-section { margin-top: 10px; }
+.cert-link-section-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 4px; }
+.cert-link-section-label { font-size: 10px; font-weight: 700; color: var(--text2); text-transform: uppercase; letter-spacing: .04em; }
+.cert-link-pem-full { font-size: 9px; line-height: 1.35; font-family: 'JetBrains Mono', monospace; color: var(--text2); background: var(--surface3); border: 1px solid var(--border); border-radius: 5px; padding: 8px 10px; margin: 0 0 4px; overflow: auto; white-space: pre; max-height: 180px; }
+.cert-link-pem-full.cert-link-pem-empty { color: var(--text3); font-style: italic; }
+.cert-cleanup-btn { margin-top: 4px; color: var(--price-paid); }
+
 /* ── NGINX KEY CHUNK ─────────────────────────────────────────────────────────── */
+.pem-cert-badge { background: rgba(79,201,126,.15) !important; color: #4fc97e !important; }
+.pem-key-badge  { background: rgba(201,166,74,.15) !important; color: #c9a64a !important; }
+.nginx-key-usedby { display: flex; gap: 4px; align-items: center; flex-wrap: wrap; }
+.nginx-key-usedby-badge { font-size: 9px; padding: 1px 6px; border-radius: 3px; background: rgba(115,100,201,.15); color: var(--accent); font-family: 'JetBrains Mono', monospace; cursor: default; }
 .nginx-key-path {
   font-size: 10px; font-family: 'JetBrains Mono', monospace;
   color: var(--text3); padding: 4px 14px 0; background: var(--surface2);
@@ -159,12 +178,12 @@ pre.chunk-field-val.code-block { background: var(--surface3); border: 1px solid 
 .dsvc-port-host { color: var(--text2); }
 .dsvc-port-sep { color: var(--text3); }
 .dsvc-port-cont { color: var(--accent); font-weight: 600; }
-.dsvc-vol-badge { display: flex; align-items: center; gap: 1px; font-size: 10px; font-family: 'JetBrains Mono', monospace; min-width: 0; overflow: hidden; }
-.dsvc-vol-host { color: var(--text3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 300px; }
-.dsvc-vol-sep { color: var(--text3); flex-shrink: 0; }
-.dsvc-vol-cont { color: var(--accent); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 200px; }
+.dsvc-list-item .dsvc-vol-badge { display: grid; grid-template-columns: 300px auto 200px; gap: 2px; align-items: center; font-size: 10px; font-family: 'JetBrains Mono', monospace; min-width: 0; }
+.dsvc-vol-host { color: var(--text3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dsvc-vol-sep { color: var(--text3); text-align: center; }
+.dsvc-vol-cont { color: var(--accent); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dsvc-net-badge { display: inline-flex; align-items: center; font-size: 10px; font-family: 'JetBrains Mono', monospace; background: rgba(115,100,201,.12); color: var(--accent); border-radius: 3px; padding: 1px 5px; }
-.dsvc-env-row { display: grid; grid-template-columns: 1fr auto 1.2fr auto; gap: 4px; padding: 3px 10px 3px 10px; align-items: center; border-bottom: 1px solid var(--border); font-size: 11px; font-family: 'JetBrains Mono', monospace; min-width: 0; }
+.dsvc-env-row { display: grid; grid-template-columns: 160px auto 1fr auto; gap: 4px; padding: 3px 10px; align-items: center; border-bottom: 1px solid var(--border); font-size: 11px; font-family: 'JetBrains Mono', monospace; min-width: 0; }
 .dsvc-env-row:last-of-type { border-bottom: none; }
 .dsvc-env-key { color: var(--text2); font-weight: 600; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dsvc-env-eq { color: var(--text3); font-size: 10px; flex-shrink: 0; }

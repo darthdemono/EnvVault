@@ -2,8 +2,9 @@
  * @file Lock / unlock vault: lockVault, resetLock, showUnlockModal.
  */
 
-import { st, TauriVaultStore, RemoteVaultStore, LocalVaultStore, inTauri, Settings, triggerRender } from './state';
+import { st, TauriVaultStore, RemoteVaultStore, LocalVaultStore, inTauri, Settings, triggerRender, resetViewState } from './state';
 import { showToast, showConfirm } from './utils';
+import { upsertSavedRemote, findSavedRemote, renderRemotePanel } from './remote-panel';
 
 let _finishInitFn: () => Promise<void> = async () => {};
 let _warnTimer: ReturnType<typeof setTimeout> | null = null;
@@ -13,7 +14,15 @@ export function setFinishInitFn(fn: () => Promise<void>): void {
   _finishInitFn = fn;
 }
 
-export async function lockVault() {
+export async function lockVault(reason: 'auto' | 'manual' | 'visibility' = 'manual') {
+  // Locking tears down the LAN server — it holds a copy of the key, so leaving
+  // it up would mean "locked" on screen while peers kept reading and writing.
+  // Confirm first if anyone is actually connected.
+  if (st.lanServerRunning) {
+    const { confirmStopForLock } = await import('./lan');
+    if (!await confirmStopForLock()) return;
+  }
+
   clearTimeout(_warnTimer!);
   clearTimeout(st.lockTimer!);
   _warnTimer = null;
@@ -25,16 +34,82 @@ export async function lockVault() {
   st.vault.api_keys = [];
   st.vault.user_categories = [];
   st.vault.projects = [{ id: 'Universal', name: 'Universal', description: '' }];
-  sessionStorage.removeItem('api-vault');
-  st.expanded.clear();
-  st.revealed = {};
+  sessionStorage.removeItem('envvault');
+
+  // Pending undos close over the entries they would restore — including their
+  // secret values — and the Undo button stayed live after locking. Locking has
+  // to drop them, or a locked vault still holds plaintext secrets in memory and
+  // offers a button that puts one back.
+  for (const u of st.undoStack) clearTimeout(u.t);
+  st.undoStack = [];
+  document.getElementById('undo-bar')?.classList.remove('visible');
+
+  // Covers expanded/revealed/filters/search plus bulk mode, which used to stay
+  // switched on across a lock.
+  resetViewState();
+  st.vaultOpen = false;
   triggerRender();
 
   const lockStatus = document.getElementById('lock-status');
   if (lockStatus) lockStatus.textContent = 'Locked';
 
-  if (st.store instanceof TauriVaultStore) showUnlockModal(false);
+  if (st.store instanceof TauriVaultStore) showRelockScreen(reason);
   else { document.getElementById('load-banner')!.style.display = 'flex'; showToast('Vault locked', 'err', 3500); }
+}
+
+export function showRelockScreen(reason: 'auto' | 'manual' | 'visibility' | 'switch' = 'manual') {
+  const overlay   = document.getElementById('relock-overlay')!;
+  const reasonEl  = document.getElementById('relock-reason')!;
+  const pwField   = document.getElementById('relock-password') as HTMLInputElement;
+  const errEl     = document.getElementById('relock-error')!;
+  const submitBtn = document.getElementById('relock-submit-btn') as HTMLButtonElement;
+  const labelEl   = document.getElementById('relock-vault-label');
+
+  if (labelEl) {
+    const vaultName = document.getElementById('vault-name')?.textContent ?? 'Local Vault';
+    labelEl.textContent = vaultName;
+  }
+
+  const msgs: Record<typeof reason, string> = {
+    auto:       'Auto-locked after inactivity. Enter your master password to continue.',
+    visibility: 'Vault locked while the app was in the background.',
+    manual:     'Vault locked. Enter your master password to continue.',
+    switch:     'Switched to the local vault. Enter your master password to unlock it.',
+  };
+  reasonEl.textContent = msgs[reason];
+
+  overlay.classList.add('open');
+  pwField.value = '';
+  errEl.style.display = 'none';
+  submitBtn.disabled = false;
+  submitBtn.textContent = 'Unlock';
+  setTimeout(() => pwField.focus(), 80);
+
+  function showErr(msg: string) {
+    errEl.textContent = msg;
+    errEl.style.display = 'block';
+    pwField.select();
+  }
+
+  async function doUnlock() {
+    const pw = pwField.value;
+    if (!pw) { showErr('Password cannot be empty.'); return; }
+    submitBtn.disabled = true;
+    submitBtn.textContent = 'Unlocking…';
+    try {
+      await (st.store as TauriVaultStore).unlock(pw);
+      overlay.classList.remove('open');
+      await _finishInitFn();
+      resetLock();
+    } catch (err: any) {
+      submitBtn.disabled = false;
+      submitBtn.textContent = 'Unlock';
+      showErr(err?.message ?? 'Wrong password');
+    }
+  }
+
+  submitBtn.onclick = doUnlock;
+  pwField.onkeydown = (e) => { if (e.key === 'Enter') doUnlock(); };
 }
 
 export function resetLock() {
@@ -44,6 +119,15 @@ export function resetLock() {
 
   const mins = Settings.get('autoLockMinutes');
   const lockStatus = document.getElementById('lock-status');
+
+  // Suspended while serving: peers are actively using the vault, and the host
+  // not touching the keyboard is not a reason to cut them off. lan.ts closes an
+  // idle server instead, which lands back here and re-arms the timer.
+  if (st.lanServerRunning) {
+    st.lockTimer = null;
+    if (lockStatus) lockStatus.textContent = 'Auto-lock: paused (serving LAN)';
+    return;
+  }
 
   if (!mins || mins <= 0) {
     st.lockTimer = null;
@@ -60,7 +144,7 @@ export function resetLock() {
     }, warnMs);
   }
 
-  st.lockTimer = setTimeout(lockVault, ms);
+  st.lockTimer = setTimeout(() => lockVault('auto'), ms);
   if (lockStatus) lockStatus.textContent = `Auto-lock: ${mins}min`;
 
   // Bind activity listeners once — any mouse or keyboard event resets the timer.
@@ -82,7 +166,6 @@ export async function showUnlockModal(isFirstRun: boolean) {
   const subtitleEl   = document.getElementById('unlock-subtitle')!;
   const confirmGroup = document.getElementById('unlock-confirm-group')!;
   const submitBtn    = document.getElementById('unlock-submit-btn') as HTMLButtonElement;
-  const resetBtn     = document.getElementById('unlock-reset-btn') as HTMLButtonElement | null;
   const pwField      = document.getElementById('unlock-password') as HTMLInputElement;
   const confirmField = document.getElementById('unlock-confirm') as HTMLInputElement;
   const userField    = document.getElementById('unlock-username') as HTMLInputElement | null;
@@ -133,8 +216,11 @@ export async function showUnlockModal(isFirstRun: boolean) {
     }
   }
 
-  // Re-run configure when server URL changes (switches between local/remote layout)
-  serverField?.addEventListener('input', () => configure(isFirstRun));
+  // Re-run configure when server URL changes (switches between local/remote layout).
+  // Assignment, not addEventListener: showUnlockModal can be called repeatedly
+  // (lock -> unlock -> lock), and addEventListener stacked a duplicate handler
+  // every time.
+  if (serverField) serverField.oninput = () => configure(isFirstRun);
 
   setTimeout(() => (serverField ?? userField ?? pwField).focus(), 80);
 
@@ -156,7 +242,11 @@ export async function showUnlockModal(isFirstRun: boolean) {
       submitBtn.disabled = true;
       submitBtn.textContent = 'Connecting…';
       try {
-        const remote = new RemoteVaultStore(serverUrl);
+        // Reuse the pinned fingerprint if this server is already known, so an
+        // https:// server with a self-signed cert connects on the first try
+        // instead of being rejected by WebKit.
+        const known = findSavedRemote(serverUrl, username);
+        const remote = new RemoteVaultStore(serverUrl, known?.certFingerprint);
         let ok: boolean;
         if (username) {
           ok = await remote.authUser(username, pw);
@@ -164,13 +254,26 @@ export async function showUnlockModal(isFirstRun: boolean) {
           ok = await remote.unlock(pw);
         }
         if (!ok) throw new Error('Authentication failed — wrong password or username');
+
+        // TOFU pinning, same as the Remote panel's connect path.
+        const fingerprint = await remote.getStatus()
+          .then(s => s.cert_fingerprint ?? undefined)
+          .catch(() => undefined);
+        if (fingerprint) remote.fingerprint = fingerprint;
+
+        // Remember the server. Without this, a vault reached from this screen
+        // never reached the saved list, so it was absent from the Remote panel
+        // and the vault switcher and had to be retyped every session.
+        const cfg = upsertSavedRemote({ url: serverUrl, username, certFingerprint: fingerprint });
+
         st.store = remote;
-        st.activeRemoteId = null; // connected via modal, not from saved list
+        st.activeRemoteId = cfg.id;
         Settings.set('remote', { enabled: true, serverUrl });
         const nameEl = document.getElementById('vault-name');
-        if (nameEl) nameEl.textContent = username ? `Remote — ${username}` : serverUrl.replace(/^https?:\/\//, '');
+        if (nameEl) nameEl.textContent = cfg.name;
         overlay.classList.remove('open');
         document.getElementById('header')!.style.display = '';
+        renderRemotePanel();
         await _finishInitFn();
       } catch (err: any) {
         submitBtn.disabled = false;

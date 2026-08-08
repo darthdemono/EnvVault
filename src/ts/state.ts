@@ -1,4 +1,5 @@
 import type { VaultData, AppSettings, VaultEntry, RemoteVaultConfig } from './types';
+import { dump as yamlDump } from 'js-yaml';
 import { hexAlpha, showToast } from './utils';
 
 // ── VaultStore ─────────────────────────────────────────────────────────────
@@ -12,27 +13,66 @@ export interface VaultStore {
 
 export class LocalVaultStore implements VaultStore {
   async load(): Promise<VaultData | null> {
-    const raw = sessionStorage.getItem('api-vault');
+    const raw = sessionStorage.getItem('envvault');
     return raw ? JSON.parse(raw) : null;
   }
   async save(data: VaultData): Promise<void> {
-    try { sessionStorage.setItem('api-vault', JSON.stringify(data)); }
+    try { sessionStorage.setItem('envvault', JSON.stringify(data)); }
     catch { showToast('Session storage full — export to save changes', 'err'); }
   }
   get isRemote() { return false; }
   get vaultId()  { return 'local'; }
 }
 
+/** Thrown when a write was refused because someone else wrote first. */
+export class VaultConflictError extends Error {
+  constructor() { super('The vault changed since you last loaded it'); this.name = 'VaultConflictError'; }
+}
+
 export class TauriVaultStore implements VaultStore {
   private invoke = (window as any).__TAURI__?.core?.invoke?.bind((window as any).__TAURI__.core);
+  /**
+   * Version of the vault as we last read it.
+   *
+   * Sent with every save as a compare-and-swap. Without it the desktop wrote the
+   * whole blob unconditionally, so while "Open to LAN" is running a peer's edit
+   * landing between our load and our next save was silently overwritten.
+   */
+  private lastVersion: string | null = null;
+
   async unlock(password: string): Promise<boolean>  { return this.invoke('unlock_vault', { password }); }
   async lock(): Promise<void>                       { return this.invoke('lock_vault'); }
   async isUnlocked(): Promise<boolean>              { return this.invoke('vault_is_unlocked'); }
   async exists(): Promise<boolean>                  { return this.invoke('vault_exists'); }
   async reset(): Promise<void>                      { return this.invoke('reset_vault'); }
-  async load(): Promise<VaultData | null>           { const d = await this.invoke('load_vault'); return d ?? null; }
-  async save(data: VaultData): Promise<void>        { await this.invoke('save_vault', { data }); }
   async vaultFilePath(): Promise<string>            { return this.invoke('get_vault_path').catch(() => ''); }
+
+  async load(): Promise<VaultData | null> {
+    const res = await this.invoke('load_vault') as { data: VaultData; version: string | null } | null;
+    this.lastVersion = res?.version ?? null;
+    return res?.data ?? null;
+  }
+
+  async save(data: VaultData): Promise<void> {
+    try {
+      this.lastVersion = await this.invoke('save_vault', {
+        data,
+        expectVersion: this.lastVersion,
+      });
+    } catch (e: any) {
+      if (String(e?.message ?? e).includes('VAULT_CONFLICT')) throw new VaultConflictError();
+      throw e;
+    }
+  }
+
+  /**
+   * Write regardless of what is currently stored, adopting the result as our
+   * new base. Only for a user explicitly choosing to overwrite after a conflict.
+   */
+  async forceSave(data: VaultData): Promise<void> {
+    this.lastVersion = await this.invoke('save_vault', { data, expectVersion: null });
+  }
+
   get isRemote() { return false; }
   get vaultId()  { return 'local-native'; }
 }
@@ -42,6 +82,8 @@ const _invoke = (window as any).__TAURI__?.core?.invoke?.bind((window as any).__
 
 export class RemoteVaultStore implements VaultStore {
   private token = '';
+  /** ETag (vault content version) from the last successful load — sent as If-Match to detect drift. */
+  private lastVersion = '';
   /** certFingerprint enables TOFU cert pinning when the server runs TLS with a self-signed cert. */
   constructor(public readonly baseUrl: string, public fingerprint?: string) {}
 
@@ -55,11 +97,12 @@ export class RemoteVaultStore implements VaultStore {
   private async _apiFetch(
     path: string,
     opts: { method?: string; headers?: Record<string, string>; body?: string } = {},
-  ): Promise<{ ok: boolean; status: number; json: () => Promise<any> }> {
+  ): Promise<{ ok: boolean; status: number; json: () => Promise<any>; etag: string | null }> {
     const url = `${this.baseUrl}${path}`;
     const useNative = inTauri && url.startsWith('https://');
 
     if (useNative && _invoke) {
+      // Tauri proxy does not surface response headers — ETag unavailable on this path.
       const result = await _invoke('remote_request', {
         url,
         method: opts.method ?? 'GET',
@@ -68,13 +111,34 @@ export class RemoteVaultStore implements VaultStore {
         fingerprint: this.fingerprint ?? null,
       }) as { status: number; body: string };
       const ok = result.status >= 200 && result.status < 300;
-      return { ok, status: result.status, json: async () => JSON.parse(result.body) };
+      return { ok, status: result.status, json: async () => JSON.parse(result.body), etag: null };
     }
 
     const headers: Record<string, string> = {};
     if (opts.headers) Object.assign(headers, opts.headers);
     const r = await fetch(url, { method: opts.method, headers, body: opts.body });
-    return { ok: r.ok, status: r.status, json: () => r.json() };
+    return { ok: r.ok, status: r.status, json: () => r.json(), etag: r.headers.get('etag') };
+  }
+
+  /**
+   * Authenticated REST call for the user/class management panel.
+   * Returns parsed JSON, or `null` for 204 No Content. Throws on non-2xx with the server error.
+   */
+  async api(path: string, method = 'GET', body?: any): Promise<any> {
+    if (!this.token) throw new Error('Not authenticated');
+    const headers: Record<string, string> = { Authorization: `Bearer ${this.token}` };
+    if (body !== undefined) headers['Content-Type'] = 'application/json';
+    const r = await this._apiFetch(path, {
+      method,
+      headers,
+      body: body !== undefined ? JSON.stringify(body) : undefined,
+    });
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({}));
+      throw new Error(err?.error ?? `Server error ${r.status}`);
+    }
+    if (r.status === 204) return null;
+    return r.json().catch(() => null);
   }
 
   async unlock(password: string): Promise<boolean> {
@@ -132,6 +196,7 @@ export class RemoteVaultStore implements VaultStore {
       const r = await this._apiFetch('/api/vault', {
         headers: { Authorization: `Bearer ${this.token}` },
       });
+      if (r.ok && r.etag) this.lastVersion = r.etag;
       return r.ok ? await r.json() : null;
     } catch { return null; }
   }
@@ -139,12 +204,24 @@ export class RemoteVaultStore implements VaultStore {
   async save(data: VaultData): Promise<void> {
     if (!this.token) return;
     try {
-      await this._apiFetch('/api/vault', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${this.token}` },
-        body: JSON.stringify(data),
-      });
-    } catch { /* ignore */ }
+      const headers: Record<string, string> = { 'Content-Type': 'application/json', Authorization: `Bearer ${this.token}` };
+      // Optimistic concurrency: prove we wrote against the version we last read.
+      if (this.lastVersion) headers['If-Match'] = this.lastVersion;
+      const r = await this._apiFetch('/api/vault', { method: 'PUT', headers, body: JSON.stringify(data) });
+      if (r.status === 409) {
+        showToast('Conflict: vault changed on server since you loaded it. Reconnect/reload before saving.', 'err', 6000);
+        return;
+      }
+      if (!r.ok) {
+        const body = await r.json().catch(() => ({}));
+        showToast(`Remote save failed (${r.status})${body?.error ? ': ' + body.error : ''}`, 'err', 4000);
+        return;
+      }
+      // Saved cleanly — drop the token so the next write is unconditional until the next load refreshes it.
+      this.lastVersion = '';
+    } catch (e: any) {
+      showToast(`Remote save failed: ${e?.message ?? 'network error'}`, 'err', 4000);
+    }
   }
 
   async getExpiring(days: number): Promise<any[]> {
@@ -165,6 +242,21 @@ export class RemoteVaultStore implements VaultStore {
       });
       return r.ok ? await r.json() : [];
     } catch { return []; }
+  }
+
+  /**
+   * Keep-alive. Every authenticated request slides the server-side session
+   * deadline; this exists so an idle-but-open client does not get expired.
+   * Returns false when the session is already gone.
+   */
+  async ping(): Promise<boolean> {
+    if (!this.token) return false;
+    try {
+      const r = await this._apiFetch('/api/ping', {
+        headers: { Authorization: `Bearer ${this.token}` },
+      });
+      return r.ok;
+    } catch { return false; }
   }
 
   /** Fetch server status including TLS cert fingerprint (no auth needed). */
@@ -193,10 +285,18 @@ export const st = {
   store: new LocalVaultStore() as VaultStore,
   filter: { type: 'all', value: '' },
   searchQ: '',
-  expanded: new Set<number>(),
+  /**
+   * Ids of entries currently expanded in the card grid.
+   *
+   * Keyed by entry id, never array index: deleting an entry used to shift every
+   * higher index by one, so expand/reveal state silently jumped to neighbouring
+   * cards after any delete or reorder.
+   */
+  expanded: new Set<string>(),
   allExpanded: false,
   lockTimer: null as ReturnType<typeof setTimeout> | null,
   undoStack: [] as Array<{ fn: () => void; t: ReturnType<typeof setTimeout> }>,
+  /** Reveal state keyed `"<field>-<entryId>"` — index-independent, see `expanded`. */
   revealed: {} as Record<string, boolean>,
   currentSelectedProjectIds: ['Universal'] as string[],
   currentSortBy: 'provider',
@@ -209,7 +309,152 @@ export const st = {
   activeRemoteId: null as string | null,
   /** Active tag filter — null means no tag filter applied. */
   activeTagFilter: null as string | null,
+  /** Active env-prefix filter — null means no prefix filter applied. */
+  activePrefixFilter: null as string | null,
+  /** True while the embedded "Open to LAN" server is serving this vault (Pass 3). */
+  lanServerRunning: false,
+  /** True after a successful finishInit(); false after lockVault(). Prevents visibility-change from stacking the relock overlay before the vault is ever opened. */
+  vaultOpen: false,
+  /** True while the card grid is in multi-select mode. */
+  bulkMode: false,
+  /**
+   * Entries ticked in bulk mode, keyed by entry id.
+   *
+   * Ids, never array indices — for the same reason as `expanded`. This held
+   * positions in `api_keys`, so anything that spliced the array between ticking
+   * a card and pressing Delete (a single-entry delete, a duplicate, an undo)
+   * shifted every higher selection onto its neighbour, and bulk delete then
+   * removed the wrong secrets.
+   */
+  bulkSelected: new Set<string>(),
 };
+
+/**
+ * Clears every view-scoped selection that can outlive the data it points at.
+ *
+ * Call this whenever `st.vault` is replaced wholesale — import, backup restore,
+ * switching vaults. A project id, tag or category selected against the previous
+ * vault will not exist in the new one, and `getFiltered()` then matches nothing:
+ * the user imports a backup and is shown an empty grid, with the data present
+ * but invisible. `revealed` matters for a second reason — it is keyed by entry
+ * id, so an imported entry that happens to reuse an id would render its secret
+ * unmasked without the user ever asking.
+ */
+export function resetViewState(): void {
+  st.filter = { type: 'all', value: '' };
+  st.searchQ = '';
+  st.currentSelectedProjectIds = ['Universal'];
+  st.currentEnvFilter = '';
+  st.activeTagFilter = null;
+  st.activePrefixFilter = null;
+  st.expanded.clear();
+  st.allExpanded = false;
+  st.revealed = {};
+  st.bulkMode = false;
+  st.bulkSelected.clear();
+
+  const searchEl = document.getElementById('search') as HTMLInputElement | null;
+  if (searchEl) searchEl.value = '';
+  document.getElementById('search-clear')?.classList.remove('visible');
+}
+
+// ── Entry identity ─────────────────────────────────────────────────────────
+
+/** Fresh entry identifier. */
+export function newEntryId(): string {
+  return crypto.randomUUID();
+}
+
+/**
+ * Guarantees every entry has a unique, stable `id`, in place.
+ *
+ * Backfills missing ids (vaults written before the field existed) and replaces
+ * duplicates — `duplicateKey` shallow-copies an entry, which would otherwise
+ * hand two entries the same identity and make the RBAC merge and
+ * `version_history` attribution alias them.
+ *
+ * @returns true when anything was assigned, so callers can persist the migration.
+ */
+export function ensureEntryIds(entries: VaultEntry[]): boolean {
+  const seen = new Set<string>();
+  let changed = false;
+  for (const e of entries) {
+    if (!e.id || seen.has(e.id)) {
+      e.id = newEntryId();
+      changed = true;
+    }
+    seen.add(e.id);
+  }
+  return changed;
+}
+
+/** Stable id for an entry, assigning one if somehow still absent. */
+export function entryId(entry: VaultEntry): string {
+  if (!entry.id) entry.id = newEntryId();
+  return entry.id;
+}
+
+/**
+ * The single vault write path.
+ *
+ * Normalises entry ids before handing the data to the store, so no code path —
+ * import, template, chunk link, manual add — can persist an entry without a
+ * stable identity. Always use this instead of calling `st.store.save` directly.
+ */
+export async function persist(): Promise<void> {
+  ensureEntryIds(st.vault.api_keys);
+  try {
+    await st.store.save(st.vault);
+  } catch (err: any) {
+    if (err instanceof VaultConflictError) {
+      await resolveSaveConflict();
+      return;
+    }
+    showToast(`Save failed: ${err?.message ?? err}`, 'err', 4000);
+  }
+}
+
+/**
+ * A concurrent writer — almost always a LAN peer — changed the vault between our
+ * last read and this save.
+ *
+ * There is no safe automatic answer: we do not know which change matters more,
+ * and silently picking one is how data goes missing. So ask, and make the cost
+ * of each option explicit.
+ */
+async function resolveSaveConflict(): Promise<void> {
+  const { showConfirm } = await import('./utils');
+  const overwrite = await showConfirm(
+    'Someone else changed this vault while you were editing — most likely a peer ' +
+    'connected to your LAN server.\n\n' +
+    'OK: keep your version and overwrite theirs.\n' +
+    'Cancel: discard your unsaved change and reload theirs.',
+  );
+
+  if (overwrite) {
+    const store = st.store as TauriVaultStore;
+    if (typeof store.forceSave === 'function') {
+      try {
+        await store.forceSave(st.vault);
+        showToast('Your version saved, overwriting the other change', 'ok', 3500);
+        return;
+      } catch (e: any) {
+        showToast(`Overwrite failed: ${e?.message ?? e}`, 'err', 4000);
+        return;
+      }
+    }
+  }
+
+  // Reload: adopt what is now stored, dropping our unsaved edit.
+  const fresh = await st.store.load();
+  if (fresh) {
+    st.vault.api_keys        = fresh.api_keys;
+    st.vault.user_categories = fresh.user_categories || [];
+    st.vault.projects        = fresh.projects || [{ id: 'Universal', name: 'Universal', description: '' }];
+    triggerRender();
+    showToast('Reloaded the other version — your unsaved change was discarded', 'err', 5000);
+  }
+}
 
 // ── Render callback (breaks potential circular deps) ───────────────────────
 
@@ -221,9 +466,9 @@ export function triggerRender(): void { _renderFn(); }
 
 const DEFAULT_SETTINGS: AppSettings = {
   theme: 'dark', accentColor: '#7364c9', cardSize: 'medium', gridColumns: 'auto',
-  defaultAccount: '', defaultExportFormat: 'dotenv', autoLockMinutes: 60,
+  defaultAccount: '', defaultExportFormat: 'dotenv', autoLockMinutes: 60, lockOnHide: false,
   maskKeysByDefault: true, showExpiryWarning: true, expiryWarningDays: 30,
-  customCss: '', sidebarSections: ['all', 'price', 'category', 'project'],
+  customCss: '', sidebarSections: ['all', 'price', 'env', 'category', 'project', 'tags', 'prefixes'],
   groupByType: false, activityBarPosition: 'left' as const, activityBarStyle: 'icon' as const,
   collapsedSections: [] as ('all' | 'price' | 'env' | 'category' | 'project')[],
   activePanel: 'secrets' as 'secrets' | 'tools' | 'users' | 'remote', activeTool: 'secret-gen',
@@ -238,10 +483,29 @@ export const Settings = {
   set<K extends keyof AppSettings>(k: K, v: AppSettings[K]) { this._data[k] = v; this._persist(); },
   setAll(o: Partial<AppSettings>) { Object.assign(this._data, o); this._persist(); },
   getAll(): AppSettings { return { ...this._data }; },
-  _persist() { localStorage.setItem('apivault-settings', JSON.stringify(this._data)); },
+  _persist() { localStorage.setItem('envvault-settings', JSON.stringify(this._data)); },
   async init() {
     try { const r = await fetch('./settings.json'); if (r.ok) Object.assign(this._data, await r.json()); } catch {}
-    try { const s = localStorage.getItem('apivault-settings'); if (s) Object.assign(this._data, JSON.parse(s)); } catch {}
+    try { const s = localStorage.getItem('envvault-settings'); if (s) Object.assign(this._data, JSON.parse(s)); } catch {}
+    // One-time migration: env/tags/prefixes became configurable sidebar sections.
+    // Earlier installs persisted a list without them — merge them in once so they
+    // don't silently vanish, while still honouring later user toggles.
+    try {
+      if (!localStorage.getItem('envvault-sb-migrated')) {
+        const secs = [...(this._data.sidebarSections || [])];
+        const insertAfter = (anchor: string, key: any) => {
+          if (secs.includes(key)) return;
+          const at = secs.indexOf(anchor as any);
+          if (at >= 0) secs.splice(at + 1, 0, key); else secs.push(key);
+        };
+        insertAfter('price', 'env');
+        if (!secs.includes('tags' as any))     secs.push('tags' as any);
+        if (!secs.includes('prefixes' as any)) secs.push('prefixes' as any);
+        this._data.sidebarSections = secs as any;
+        localStorage.setItem('envvault-sb-migrated', '1');
+        this._persist();
+      }
+    } catch {}
     this._apply();
   },
   _apply() {
@@ -269,12 +533,17 @@ window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () 
 // ── Lock on window hide / minimize (item 20) ──────────────────────────────
 // The Tauri/browser hides the window — visibilitychange fires.
 // We call the imported lockVault lazily to avoid circular deps.
+// Opt-in only. Previously any window hide locked the vault as long as auto-lock
+// was enabled at all, so alt-tabbing to read a doc threw away your session and
+// forced a master-password re-entry. Now the inactivity timer handles walking
+// away, and this fires only when the user explicitly asks for it.
 document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'hidden' && !st.store.isRemote) {
-    // Remote vaults: don't auto-lock — it destroys the session token and
-    // makes the vault appear wiped until the user re-authenticates.
-    import('./lock').then(m => m.lockVault()).catch(() => {});
-  }
+  if (document.visibilityState !== 'hidden') return;
+  if (st.store.isRemote || !st.vaultOpen) return;
+  // Serving the LAN: peers are mid-request, alt-tabbing must not cut them off.
+  if (st.lanServerRunning) return;
+  if (!Settings.get('lockOnHide')) return;
+  import('./lock').then(m => m.lockVault('visibility')).catch(() => {});
 });
 
 // ── Layout helpers ─────────────────────────────────────────────────────────
@@ -290,23 +559,35 @@ export function applyGridSettings() {
     : `repeat(${cols}, minmax(${minW}px, 1fr))`;
 }
 
+/** All toggleable/reorderable sidebar section keys, in default order. */
+export const ALL_SIDEBAR_SECTIONS = ['all', 'price', 'env', 'category', 'project', 'tags', 'prefixes'] as const;
+/** Sections whose visibility is also gated on having data (handled by render). */
+const DATA_GATED_SECTIONS = ['tags', 'prefixes'];
+
+export function isSidebarSectionEnabled(key: string): boolean {
+  const sections = Settings.get('sidebarSections') || [...ALL_SIDEBAR_SECTIONS];
+  return (sections as string[]).includes(key);
+}
+
 export function applySidebarOrder() {
-  const sections = Settings.get('sidebarSections') || ['all', 'price', 'category', 'project'];
-  ['all', 'price', 'category', 'project'].forEach(key => {
+  const sections = Settings.get('sidebarSections') || [...ALL_SIDEBAR_SECTIONS];
+  ALL_SIDEBAR_SECTIONS.forEach(key => {
     const el = document.getElementById(`sidebar-section-${key}`) as HTMLElement | null;
     if (!el) return;
-    const idx = sections.indexOf(key as any);
+    const idx = (sections as string[]).indexOf(key);
     if (idx >= 0) {
-      el.style.order = String(idx); el.style.display = '';
+      el.style.order = String(idx);
       el.style.borderTop  = idx === 0 ? '' : '1px solid var(--border)';
       el.style.marginTop  = idx === 0 ? '' : '6px';
       el.style.paddingTop = idx === 0 ? '' : '6px';
+      // Data-gated sections (tags/prefixes) are shown by render only when non-empty.
+      if (!DATA_GATED_SECTIONS.includes(key)) el.style.display = '';
     } else {
       el.style.display = 'none'; el.style.borderTop = ''; el.style.marginTop = ''; el.style.paddingTop = '';
     }
   });
   const collapsed = Settings.get('collapsedSections') || [];
-  (['all', 'price', 'env', 'category', 'project'] as const).forEach(key =>
+  (['all', 'price', 'env', 'category', 'project', 'tags', 'prefixes'] as const).forEach(key =>
     document.getElementById(`sidebar-section-${key}`)?.classList.toggle('collapsed', collapsed.includes(key)));
 }
 
@@ -316,6 +597,28 @@ export function applyActivityBar() {
   const layout = document.getElementById('layout')!;
   layout.classList.toggle('activity-bar-right',      pos   === 'right');
   layout.classList.toggle('activity-bar-icon-label', style === 'icon-label');
+}
+
+/**
+ * Users/RBAC only means something when this vault is actually being served to
+ * other people — either we're connected to a remote server, or we're serving
+ * our own vault over LAN.
+ *
+ * On a purely local vault the panel wrote users into the desktop's own
+ * `vault.db`, which `envv-server` never reads (it uses its own file). Accounts
+ * created there could never authenticate anywhere: it looked like it worked and
+ * silently did nothing.
+ */
+export function usersPanelAvailable(): boolean {
+  return st.store.isRemote || st.lanServerRunning;
+}
+
+/** Show or hide the Users entry in the activity bar, and bail out of it if open. */
+export function applyUsersPanelVisibility(): void {
+  const available = usersPanelAvailable();
+  const btn = document.querySelector<HTMLElement>('.activity-btn[data-panel="users"]');
+  if (btn) btn.style.display = available ? '' : 'none';
+  if (!available && Settings.get('activePanel') === 'users') switchPanel('secrets');
 }
 
 export function switchPanel(panel: string) {
@@ -367,16 +670,24 @@ export const Exporter = {
       return out;
     }).join('\n\n');
   },
+  /**
+   * YAML export.
+   *
+   * Delegates quoting to js-yaml. The previous implementation concatenated
+   * `KEY: "value"` by hand, which produced invalid YAML for any secret
+   * containing a double quote, backslash or newline — i.e. exactly the
+   * characters that show up in passwords and PEM blobs.
+   */
   yaml(keys: VaultEntry[]): string {
-    const lines = ['# API Vault Export', `# Generated: ${new Date().toISOString()}`, ''];
+    const doc: Record<string, string> = {};
     keys.forEach(k => {
       const b = dotenvKey(k);
-      lines.push(`# ${k.provider}`, `${b}: "${k.api_key}"`);
-      if (k.api_secret) lines.push(`${b}_SECRET: "${k.api_secret}"`);
-      if (k.api_url)    lines.push(`${b}_URL: "${k.api_url}"`);
-      lines.push('');
+      doc[b] = k.api_key;
+      if (k.api_secret) doc[`${b}_SECRET`] = k.api_secret;
+      if (k.api_url)    doc[`${b}_URL`]    = k.api_url;
     });
-    return lines.join('\n');
+    const header = `# EnvVault Export\n# Generated: ${new Date().toISOString()}\n\n`;
+    return header + yamlDump(doc, { indent: 2, lineWidth: -1, noRefs: true });
   },
   json(keys: VaultEntry[]): string { return JSON.stringify({ api_keys: keys }, null, 2); },
 };

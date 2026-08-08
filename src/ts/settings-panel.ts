@@ -3,8 +3,7 @@
  */
 
 import type { AppSettings } from './types';
-import { Settings, triggerRender, applyGridSettings, applySidebarOrder, applyActivityBar,
-         RemoteVaultStore, TauriVaultStore, LocalVaultStore, inTauri, st } from './state';
+import { Settings, triggerRender, applySidebarOrder, applyActivityBar, switchPanel, applyUsersPanelVisibility } from './state';
 import { showToast } from './utils';
 
 // ── Theme definitions ──────────────────────────────────────────────────────
@@ -39,25 +38,34 @@ export function buildThemeSwatches() {
 
 // ── Sidebar order editor ──────────────────────────────────────────────────
 
+const SIDEBAR_SECTION_DEFS = [
+  { key: 'all',      label: 'All Secrets' },
+  { key: 'price',    label: 'Price Types' },
+  { key: 'env',      label: 'Environment' },
+  { key: 'category', label: 'Categories' },
+  { key: 'project',  label: 'Projects' },
+  { key: 'tags',     label: 'Tags' },
+  { key: 'prefixes', label: 'Env Prefixes' },
+];
+const DEFAULT_SIDEBAR_SECTIONS = ['all', 'price', 'env', 'category', 'project', 'tags', 'prefixes'];
+
 export function buildSidebarOrderEditor() {
   const container = document.getElementById('s-sidebar-sections');
   if (!container) return;
-  const sections = [...(Settings.get('sidebarSections') || ['all', 'price', 'category', 'project'])];
-  const allDefs = [
-    { key: 'all',      label: 'All Secrets' },
-    { key: 'price',    label: 'Price Types' },
-    { key: 'category', label: 'Categories' },
-    { key: 'project',  label: 'Projects' },
-  ];
+  const sections = [...(Settings.get('sidebarSections') || DEFAULT_SIDEBAR_SECTIONS)] as string[];
   container.innerHTML = '';
+
   sections.forEach((sKey, i) => {
-    const def = allDefs.find(d => d.key === sKey);
+    const def = SIDEBAR_SECTION_DEFS.find(d => d.key === sKey);
     if (!def) return;
     const row = document.createElement('div');
     row.className = 'sidebar-order-row';
     row.dataset.key = sKey;
+    // 'all' is locked visible; everything else is draggable + hideable.
+    if (sKey !== 'all') row.draggable = true;
     const isFirst = i === 0, isLast = i === sections.length - 1;
     row.innerHTML = `
+      <span class="sidebar-order-grip" title="Drag to reorder">⠿</span>
       <span class="sidebar-order-label">${def.label}</span>
       <div class="sidebar-order-btns">
         <button class="btn-xs" data-action="up" ${isFirst ? 'disabled' : ''}>▲</button>
@@ -66,28 +74,74 @@ export function buildSidebarOrderEditor() {
       </div>`;
     container.appendChild(row);
   });
-  allDefs.filter(d => !sections.includes(d.key as any)).forEach(def => {
+
+  SIDEBAR_SECTION_DEFS.filter(d => !sections.includes(d.key)).forEach(def => {
     const row = document.createElement('div');
     row.className = 'sidebar-order-row sidebar-order-hidden';
     row.dataset.key = def.key;
     row.innerHTML = `<span class="sidebar-order-label sidebar-order-dim">${def.label}</span><button class="btn-xs" data-action="add">+ Show</button>`;
     container.appendChild(row);
   });
+
+  const commit = (secs: string[]) => {
+    Settings.set('sidebarSections', secs as any);
+    applySidebarOrder();
+    triggerRender();          // recompute data-gated tags/prefixes visibility
+    buildSidebarOrderEditor();
+  };
+
   container.onclick = (e) => {
     const btn = (e.target as HTMLElement).closest<HTMLElement>('[data-action]');
     if (!btn) return;
     const action = btn.dataset.action!;
     const rowEl  = btn.closest<HTMLElement>('[data-key]')!;
     const key    = rowEl.dataset.key!;
-    const secs   = [...(Settings.get('sidebarSections') || ['all', 'price', 'category', 'project'])];
-    const idx    = secs.indexOf(key as any);
-    if (action === 'up'     && idx > 0)               { [secs[idx-1], secs[idx]] = [secs[idx], secs[idx-1]]; }
+    const secs   = [...(Settings.get('sidebarSections') || DEFAULT_SIDEBAR_SECTIONS)] as string[];
+    const idx    = secs.indexOf(key);
+    if (action === 'up'        && idx > 0)             { [secs[idx-1], secs[idx]] = [secs[idx], secs[idx-1]]; }
     else if (action === 'down' && idx < secs.length-1) { [secs[idx], secs[idx+1]] = [secs[idx+1], secs[idx]]; }
     else if (action === 'remove' && key !== 'all')     { secs.splice(idx, 1); }
-    else if (action === 'add')                         { secs.push(key as any); }
-    Settings.set('sidebarSections', secs as any);
-    applySidebarOrder();
-    buildSidebarOrderEditor();
+    else if (action === 'add')                         { secs.push(key); }
+    else return;
+    commit(secs);
+  };
+
+  // ── Drag-and-drop reorder (VSCodium-style) ──
+  let dragKey: string | null = null;
+  container.ondragstart = (e) => {
+    const row = (e.target as HTMLElement).closest<HTMLElement>('.sidebar-order-row[draggable="true"]');
+    if (!row) return;
+    dragKey = row.dataset.key!;
+    row.classList.add('dragging');
+    e.dataTransfer!.effectAllowed = 'move';
+  };
+  container.ondragend = () => {
+    container.querySelectorAll('.sidebar-order-row').forEach(r => r.classList.remove('dragging', 'drag-over'));
+    dragKey = null;
+  };
+  container.ondragover = (e) => {
+    e.preventDefault();
+    const over = (e.target as HTMLElement).closest<HTMLElement>('.sidebar-order-row');
+    container.querySelectorAll('.drag-over').forEach(r => r.classList.remove('drag-over'));
+    // Can't drop onto the locked 'all' row or the hidden pool.
+    if (over && over.dataset.key !== 'all' && !over.classList.contains('sidebar-order-hidden')) {
+      over.classList.add('drag-over');
+    }
+  };
+  container.ondrop = (e) => {
+    e.preventDefault();
+    const over = (e.target as HTMLElement).closest<HTMLElement>('.sidebar-order-row');
+    if (!dragKey || !over) return;
+    const targetKey = over.dataset.key!;
+    if (targetKey === dragKey || targetKey === 'all' || over.classList.contains('sidebar-order-hidden')) return;
+    const secs = [...(Settings.get('sidebarSections') || DEFAULT_SIDEBAR_SECTIONS)] as string[];
+    const from = secs.indexOf(dragKey);
+    let to = secs.indexOf(targetKey);
+    if (from < 0 || to < 0) return;
+    secs.splice(from, 1);
+    to = secs.indexOf(targetKey);            // recompute after removal
+    secs.splice(to, 0, dragKey);             // insert before the drop target
+    commit(secs);
   };
 }
 
@@ -162,6 +216,9 @@ export function applyPanelOrder() {
       btn.style.display = 'none';
     }
   });
+  // Must run last: the loop above unconditionally re-shows every ordered panel,
+  // which would undo the Users gate.
+  applyUsersPanelVisibility();
 }
 
 // ── Settings tabs ─────────────────────────────────────────────────────────
@@ -181,73 +238,50 @@ function initSettingsTabs() {
 }
 
 // ── Remote vault section ──────────────────────────────────────────────────
-
-export function buildRemoteVaultSection() {
-  const enableEl = document.getElementById('s-remote-enable') as HTMLInputElement | null;
-  const urlEl    = document.getElementById('s-remote-url')    as HTMLInputElement | null;
-  const statusEl = document.getElementById('s-remote-status');
-  if (!enableEl || !urlEl) return;
-
-  const cfg = Settings.get('remote') ?? { enabled: false, serverUrl: '' };
-  enableEl.checked  = cfg.enabled ?? false;
-  urlEl.value       = cfg.serverUrl ?? '';
-  urlEl.disabled    = !enableEl.checked;
-  enableEl.onchange = () => { urlEl.disabled = !enableEl.checked; };
-
-  const testBtn = document.getElementById('s-remote-test');
-  if (testBtn) {
-    testBtn.onclick = async () => {
-      const url = urlEl.value.trim().replace(/\/$/, '');
-      if (!url) { showToast('Enter a server URL first', 'err'); return; }
-      if (statusEl) statusEl.textContent = 'Testing…';
-      try {
-        const r = await fetch(`${url}/api/status`);
-        const body = await r.json();
-        if (statusEl) statusEl.textContent = body.vault_exists
-          ? `✓ Connected — vault ${body.unlocked ? 'unlocked' : 'locked'}`
-          : '✓ Connected — no vault yet';
-        showToast('Server reachable', 'ok');
-      } catch {
-        if (statusEl) statusEl.textContent = '✗ Unreachable';
-        showToast('Cannot reach server', 'err');
-      }
-    };
-  }
-}
-
-function applyRemoteConfig() {
-  const enableEl = document.getElementById('s-remote-enable') as HTMLInputElement | null;
-  const urlEl    = document.getElementById('s-remote-url')    as HTMLInputElement | null;
-  if (!enableEl || !urlEl) return;
-  const enabled   = enableEl.checked;
-  const serverUrl = urlEl.value.trim().replace(/\/$/, '');
-  Settings.set('remote', { enabled, serverUrl });
-  if (enabled && serverUrl) {
-    st.store = new RemoteVaultStore(serverUrl);
-    showToast('Switched to remote vault — unlock to connect', 'ok');
-  } else {
-    st.store = inTauri ? new TauriVaultStore() : new LocalVaultStore();
-    if (enabled && !serverUrl) showToast('Enter server URL to enable remote mode', 'err');
-  }
-}
+//
+// The legacy "Quick Connect" single-server form used to live here. It carried a
+// nasty bug: `saveSettings()` unconditionally called an `applyRemoteConfig()`
+// that reassigned `st.store` from the state of its (unchecked) enable toggle.
+// So opening Settings while connected to a remote vault and closing it — which
+// saves — silently tore down the live connection and dropped you back to the
+// local vault, with no warning and no obvious cause.
+//
+// The Remote panel supersedes it entirely: named connections, per-server
+// credentials, TLS fingerprint pinning. Settings now only links to it, and
+// nothing in the settings save path touches `st.store`.
 
 // ── Open / save / close ───────────────────────────────────────────────────
 
 let _tabsInited = false;
+/**
+ * Settings as they were when the panel opened.
+ *
+ * Theme and accent apply live (you need to see them to choose them), which
+ * previously made "Cancel" a lie — the preview had already been committed.
+ * Cancel now restores this snapshot.
+ */
+let _settingsSnapshot: AppSettings | null = null;
 
 export function openSettings() {
   const s = Settings.getAll();
+  _settingsSnapshot = { ...s };
 
   if (!_tabsInited) { initSettingsTabs(); _tabsInited = true; }
 
   buildThemeSwatches();
   buildSidebarOrderEditor();
   buildPanelOrderEditor();
-  buildRemoteVaultSection();
+
+  // Assignment, not addEventListener: `{ once: true }` only detaches after the
+  // button is clicked, so every open that did not click it left another handler
+  // attached and they all fired together later.
+  const remoteLink = document.getElementById('s-open-remote-panel');
+  if (remoteLink) (remoteLink as HTMLElement).onclick = () => { closeSettings(); switchPanel('remote'); };
 
   (document.getElementById('s-accent')          as HTMLInputElement).value   = s.accentColor;
   document.getElementById('s-accent-val')!.textContent                       = s.accentColor;
   (document.getElementById('s-autolock')         as HTMLInputElement).value   = String(s.autoLockMinutes);
+  (document.getElementById('s-lock-on-hide')     as HTMLInputElement).checked = s.lockOnHide;
   (document.getElementById('s-mask')             as HTMLInputElement).checked = s.maskKeysByDefault;
   (document.getElementById('s-expiry-warn')      as HTMLInputElement).checked = s.showExpiryWarning;
   (document.getElementById('s-expiry-days')      as HTMLInputElement).value   = String(s.expiryWarningDays);
@@ -294,14 +328,50 @@ export function openSettings() {
   const saveBtn   = document.getElementById('settings-save');
   const cancelBtn = document.getElementById('settings-cancel');
   if (saveBtn)   saveBtn.onclick   = () => { saveSettings(); closeSettings(); };
-  if (cancelBtn) cancelBtn.onclick = closeSettings;
+  if (cancelBtn) cancelBtn.onclick = cancelSettings;
+}
+
+/** Discard edits made since the panel opened, including live previews. */
+export function cancelSettings() {
+  if (_settingsSnapshot) {
+    Settings.setAll(_settingsSnapshot);
+    Settings._apply();
+    applyActivityBar();
+    applyPanelOrder();
+    triggerRender();
+  }
+  closeSettings();
 }
 
 export function saveSettings() {
   const getSegVal = (id: string) => document.querySelector<HTMLButtonElement>(`#${id} button.active`)?.dataset.val;
+
+  // `parseInt(...) || 0` turned anything unreadable into 0, and 0 means
+  // auto-lock OFF. The field is <input type="number">, so the browser discards
+  // letters and hands back "" — meaning a typo silently switched off the
+  // vault's inactivity lock. Off is spelled `0` here (the label says so), so an
+  // empty box is a mistake: keep what was set. Range comes from min/max on the
+  // input, which nothing enforced on save.
+  const AUTOLOCK_MAX = 480;
+  const autoLockRaw = (document.getElementById('s-autolock') as HTMLInputElement).value.trim();
+  const autoLockParsed = parseInt(autoLockRaw, 10);
+  const prevAutoLock = Settings.get('autoLockMinutes');
+  const autoLockMinutes = Number.isFinite(autoLockParsed)
+    ? Math.min(Math.max(autoLockParsed, 0), AUTOLOCK_MAX)
+    : prevAutoLock;
+  if (autoLockMinutes !== autoLockParsed) {
+    showToast(
+      Number.isFinite(autoLockParsed)
+        ? `Auto-lock must be 0–${AUTOLOCK_MAX} min — using ${autoLockMinutes}`
+        : `Auto-lock interval left blank — keeping ${autoLockMinutes} min (enter 0 for never)`,
+      'err', 4000,
+    );
+  }
+
   Settings.setAll({
     accentColor:         (document.getElementById('s-accent')         as HTMLInputElement).value,
-    autoLockMinutes:     parseInt((document.getElementById('s-autolock') as HTMLInputElement).value) || 20,
+    autoLockMinutes,
+    lockOnHide:          (document.getElementById('s-lock-on-hide')  as HTMLInputElement).checked,
     maskKeysByDefault:   (document.getElementById('s-mask')           as HTMLInputElement).checked,
     showExpiryWarning:   (document.getElementById('s-expiry-warn')    as HTMLInputElement).checked,
     expiryWarningDays:   parseInt((document.getElementById('s-expiry-days') as HTMLInputElement).value) || 30,
@@ -316,8 +386,11 @@ export function saveSettings() {
   Settings._apply();
   applyActivityBar();
   applyPanelOrder();
-  applyRemoteConfig();
   triggerRender();
+  // Re-arm the auto-lock timer so a changed interval takes effect immediately
+  // instead of on the next unlock.
+  import('./lock').then(m => m.resetLock()).catch(() => {});
+  _settingsSnapshot = Settings.getAll();
   showToast('Settings saved', 'ok', 1500);
 }
 

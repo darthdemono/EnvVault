@@ -1,0 +1,66 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+  # Keep CI output focused on errors we can act on.
+  RUSTFLAGS: -D warnings
+
+jobs:
+  rust:
+    name: Rust (build + test)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # rusqlite's `sqlcipher` feature links against the system SQLCipher, and
+      # the Tauri crate needs the WebKitGTK stack even for `cargo check`.
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libsqlcipher-dev \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      # vault-core holds the crypto, storage and RBAC logic; envv-server holds the
+      # session and LAN-hosting logic. Regressions in either are security bugs
+      # rather than cosmetic ones.
+      - name: Test
+        run: cargo test --workspace --verbose
+
+      - name: Check the whole workspace
+        run: cargo check --workspace --all-targets
+
+  frontend:
+    name: Frontend (typecheck + test + build)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Type check
+        run: npx tsc --noEmit
+
+      - name: UI tests
+        run: npm test
+
+      - name: Build
+        run: npx vite build

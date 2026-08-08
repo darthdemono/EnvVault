@@ -3,7 +3,7 @@
  */
 
 import type { Project, ProjectType } from './types';
-import { st, triggerRender } from './state';
+import { st, triggerRender, persist } from './state';
 import { showToast, showConfirm, showPrompt } from './utils';
 import {
   makeWgStarterChunks,
@@ -28,11 +28,22 @@ export function doSetFilter(type: string, value: string) {
 // ── Category operations ───────────────────────────────────────────────────
 
 export async function deleteCategory(name: string) {
-  if (!await showConfirm(`Delete category "${name}"?`)) return;
-  st.vault.user_categories = st.vault.user_categories.filter(c => c !== name);
-  st.vault.api_keys.forEach(k => { if (k.categories) k.categories = k.categories.filter(c => c !== name); });
-  if (st.filter.type === 'category' && st.filter.value === name) st.filter = { type: 'all', value: '' };
-  st.store.save(st.vault);
+  // Categories nest by slash the same way projects do, and the sidebar filter
+  // matches on that prefix. Deleting only the exact name left "infra/db" behind
+  // with no "infra" above it — unreachable from the sidebar but still stamped
+  // on every entry that carried it.
+  const prefix = name + '/';
+  const doomed = (c: string) => c === name || c.startsWith(prefix);
+  const subCount = st.vault.user_categories.filter(c => c.startsWith(prefix)).length;
+
+  let msg = `Delete category "${name}"?`;
+  if (subCount) msg += ` ${subCount} sub-categor${subCount === 1 ? 'y' : 'ies'} will be deleted too.`;
+  if (!await showConfirm(msg)) return;
+
+  st.vault.user_categories = st.vault.user_categories.filter(c => !doomed(c));
+  st.vault.api_keys.forEach(k => { if (k.categories) k.categories = k.categories.filter(c => !doomed(c)); });
+  if (st.filter.type === 'category' && doomed(st.filter.value)) st.filter = { type: 'all', value: '' };
+  persist();
   triggerRender();
 }
 
@@ -40,29 +51,65 @@ export async function renameCategory(name: string) {
   const next = (await showPrompt('Rename category:', name))?.trim();
   if (!next || next === name) return;
   if (st.vault.user_categories.includes(next)) { showToast(`Category "${next}" already exists`, 'err'); return; }
-  st.vault.user_categories = st.vault.user_categories.map(c => c === name ? next : c);
-  st.vault.api_keys.forEach(k => { if (k.categories) k.categories = k.categories.map(c => c === name ? next : c); });
-  if (st.filter.type === 'category' && st.filter.value === name) st.filter = { type: 'category', value: next };
-  st.store.save(st.vault);
+
+  // Carry the sub-tree along, as deleteCategory now does.
+  const prefix = name + '/';
+  const remap = (c: string) => c === name ? next : (c.startsWith(prefix) ? next + c.slice(name.length) : c);
+
+  st.vault.user_categories = st.vault.user_categories.map(remap);
+  st.vault.api_keys.forEach(k => { if (k.categories) k.categories = k.categories.map(remap); });
+  if (st.filter.type === 'category' && (st.filter.value === name || st.filter.value.startsWith(prefix))) {
+    st.filter = { type: 'category', value: remap(st.filter.value) };
+  }
+  persist();
   triggerRender();
 }
 
 // ── Project operations ────────────────────────────────────────────────────
+
+/** Project name → id. Kept in one place so rename and delete agree on the shape. */
+function slugifyProjectName(name: string): string {
+  return name.toLowerCase().replace(/[^a-z0-9/]+/g, '-').replace(/^-|-$/g, '');
+}
 
 export async function renameProject(id: string) {
   const project = st.vault.projects.find(p => p.id === id);
   if (!project) return;
   const newName = (await showPrompt(`Rename "${project.name}" to:`, project.name))?.trim();
   if (!newName || newName === project.name) return;
-  const newId = newName.toLowerCase().replace(/[^a-z0-9/]+/g, '-').replace(/^-|-$/g, '');
+  const newId = slugifyProjectName(newName);
   if (newId !== id && st.vault.projects.find(p => p.id === newId)) { showToast('Project already exists', 'err'); return; }
+
+  const oldName = project.name;
+  // Sub-projects are just names sharing a `parent/` prefix, so renaming the
+  // parent has to carry them along. It used to rename only the parent, leaving
+  // "Acme/Web" behind after "Acme" became "Corp" — buildProjectTree then
+  // synthesised a phantom "Acme" node for a project that no longer existed.
+  const children = st.vault.projects.filter(p => p !== project && p.name.startsWith(oldName + '/'));
+
+  const idRemap = new Map<string, string>();
+  if (newId !== id) idRemap.set(id, newId);
   project.id = newId;
   project.name = newName;
-  st.vault.api_keys.forEach(k => {
-    if (k.projectIds?.includes(id)) k.projectIds = k.projectIds.map(pid => pid === id ? newId : pid);
-  });
-  if (st.currentSelectedProjectIds[0] === id) st.currentSelectedProjectIds = [newId];
-  st.store.save(st.vault);
+
+  for (const child of children) {
+    const childName = newName + child.name.slice(oldName.length);
+    const base = slugifyProjectName(childName);
+    let fid = base; let n = 1;
+    while (st.vault.projects.find(p => p !== child && p.id === fid)) fid = `${base}-${n++}`;
+    if (child.id !== fid) idRemap.set(child.id, fid);
+    child.id = fid; child.name = childName;
+  }
+
+  if (idRemap.size) {
+    st.vault.api_keys.forEach(k => {
+      if (k.projectIds) k.projectIds = k.projectIds.map(pid => idRemap.get(pid) ?? pid);
+    });
+    const selected = st.currentSelectedProjectIds[0];
+    if (selected && idRemap.has(selected)) st.currentSelectedProjectIds = [idRemap.get(selected)!];
+  }
+
+  persist();
   triggerRender();
   showToast(`Renamed to "${newName}"`, 'ok');
 }
@@ -71,32 +118,48 @@ export async function deleteProject(id: string) {
   if (id === 'Universal') return;
   const project = st.vault.projects.find(p => p.id === id);
   if (!project) return;
-  const children = st.vault.projects.filter(p => p.name.startsWith(project.name + '/'));
+  const children = st.vault.projects.filter(p => p !== project && p.name.startsWith(project.name + '/'));
   let msg = `Delete project "${project.name}"?`;
   if (children.length) msg += ` ${children.length} sub-project${children.length === 1 ? '' : 's'} will be promoted to top level.`;
   if (!await showConfirm(msg)) return;
+
   st.vault.api_keys.forEach(k => {
-    if (k.projectIds?.includes(id)) {
-      k.projectIds = k.projectIds.filter(pid => pid !== id);
-      if (!k.projectIds.length) k.projectIds = ['Universal'];
-    }
+    if (k.projectIds?.includes(id)) k.projectIds = k.projectIds.filter(pid => pid !== id);
   });
   st.vault.projects = st.vault.projects.filter(p => p.id !== id);
+
+  // Promoting a sub-project changes its id, so every entry that referenced the
+  // old id has to follow it. Without this remap the next prune pass saw those
+  // ids as dangling and stripped them: deleting a parent silently emptied every
+  // surviving sub-project, and the entries fell back to Universal.
+  const idRemap = new Map<string, string>();
   for (const child of children) {
     const newName = child.name.slice(project.name.length + 1);
-    const newId = newName.toLowerCase().replace(/[^a-z0-9/]+/g, '-').replace(/^-|-$/g, '');
+    const newId = slugifyProjectName(newName);
     let fid = newId; let n = 1;
-    while (st.vault.projects.find(p => p.id === fid)) fid = `${newId}-${n++}`;
+    while (st.vault.projects.find(p => p !== child && p.id === fid)) fid = `${newId}-${n++}`;
+    if (child.id !== fid) idRemap.set(child.id, fid);
     child.id = fid; child.name = newName;
   }
+  if (idRemap.size) {
+    st.vault.api_keys.forEach(k => {
+      if (k.projectIds) k.projectIds = k.projectIds.map(pid => idRemap.get(pid) ?? pid);
+    });
+  }
+
   st.vault.api_keys.forEach(k => {
-    if (k.projectIds) {
-      k.projectIds = k.projectIds.filter(pid => st.vault.projects.some(p => p.id === pid));
-      if (!k.projectIds.length) k.projectIds = ['Universal'];
-    }
+    k.projectIds = (k.projectIds ?? []).filter(pid => pid === 'Universal' || st.vault.projects.some(p => p.id === pid));
+    if (!k.projectIds.includes('Universal')) k.projectIds.push('Universal');
   });
-  if (st.currentSelectedProjectIds[0] === id) st.currentSelectedProjectIds = ['Universal'];
-  st.store.save(st.vault);
+
+  const selected = st.currentSelectedProjectIds[0];
+  if (selected === id) st.currentSelectedProjectIds = ['Universal'];
+  // The selection can also be a promoted child, whose id just changed. Leaving
+  // it stale pointed the sidebar at a project that no longer existed, and the
+  // grid rendered empty.
+  else if (selected && idRemap.has(selected)) st.currentSelectedProjectIds = [idRemap.get(selected)!];
+
+  persist();
   triggerRender();
   showToast(`Project "${project.name}" deleted`, 'ok');
 }
@@ -141,7 +204,7 @@ export function saveCategoryCreate() {
   if (!name) { showToast('Name is required', 'err'); return; }
   if (st.vault.user_categories.includes(name)) { showToast('Category already exists', 'err'); return; }
   st.vault.user_categories.push(name);
-  st.store.save(st.vault);
+  persist();
   closeCategoryCreateModal();
   triggerRender();
   showToast(`Created "${name}"`, 'ok');
@@ -193,7 +256,7 @@ export function saveProjectCreate() {
     }
   }
   st.vault.projects.push(newProject);
-  st.store.save(st.vault);
+  persist();
   closeProjectCreateModal();
   triggerRender();
   showToast(`Created "${trimmed}"`, 'ok');

@@ -1,340 +1,33 @@
 /**
- * @file Chunk operations — starter chunks, chunk card rendering,
- *       config exporters/parsers, chunk edit modal.
+ * @file Chunk operations — chunk card rendering, config exporters, cert linking.
+ *
+ * This module was ~2350 lines covering six unrelated concerns. The
+ * self-contained pieces now live under `./chunks/` and are re-exported below,
+ * so every existing `from './chunk-ops'` import keeps working unchanged:
+ *
+ * - `chunks/starters`   — starter chunk templates for new typed projects
+ * - `chunks/parsers`    — wg0.conf / compose / nginx / apache / haproxy / ssh parsers
+ * - `chunks/edit-modal` — the chunk field editor
+ * - `chunks/env-link`   — env-file field ↔ vault entry matching
+ *
+ * What remains here is the part that is genuinely interdependent: card
+ * rendering, the exporters and the nginx certificate auto-linking.
  */
 
 import type { Project, SecretChunk, ChunkField, ChunkFieldType, ChunkType, ProjectType, VaultEntry } from './types';
-import { st, Settings, triggerRender } from './state';
+import { st, Settings, triggerRender, persist } from './state';
 import { esc, escAttr, copySVG, editSVG, delSVG, showToast } from './utils';
 
-// ── Starter chunk factories ────────────────────────────────────────────────
+// ── Re-exports (barrel) ────────────────────────────────────────────────────
+export * from './chunks/starters';
+export * from './chunks/parsers';
+export * from './chunks/edit-modal';
+export * from './chunks/env-link';
 
-export function makeWgStarterChunks(): SecretChunk[] {
-  return [
-    {
-      id: crypto.randomUUID(),
-      name: 'Interface',
-      chunk_type: 'wg_interface',
-      fields: [
-        { key: 'PrivateKey', value: '', field_type: 'secret', secret: true },
-        { key: 'Address',    value: '', field_type: 'var' },
-        { key: 'MTU',        value: '', field_type: 'var' },
-        { key: 'Table',      value: '', field_type: 'var' },
-        { key: 'DNS',        value: '', field_type: 'var' },
-        { key: 'PostUp',     value: '', field_type: 'multiline' },
-        { key: 'PostDown',   value: '', field_type: 'multiline' },
-        { key: 'ListenPort', value: '', field_type: 'var' },
-      ],
-    },
-    {
-      id: crypto.randomUUID(),
-      name: 'Peer',
-      chunk_type: 'wg_peer',
-      fields: [
-        { key: 'PublicKey',            value: '', field_type: 'var' },
-        { key: 'AllowedIPs',           value: '', field_type: 'var' },
-        { key: 'Endpoint',             value: '', field_type: 'var' },
-        { key: 'PersistentKeepalive',  value: '', field_type: 'var' },
-        { key: 'PresharedKey',         value: '', field_type: 'secret', secret: true },
-      ],
-    },
-  ];
-}
-
-export function makeDockerStarterChunks(): SecretChunk[] {
-  return [
-    {
-      id: crypto.randomUUID(),
-      name: 'service-1',
-      chunk_type: 'docker_service',
-      fields: [],
-    },
-    {
-      id: crypto.randomUUID(),
-      name: 'networks',
-      chunk_type: 'docker_network',
-      fields: [],
-    },
-    {
-      id: crypto.randomUUID(),
-      name: 'volumes',
-      chunk_type: 'docker_volume',
-      fields: [],
-    },
-  ];
-}
-
-export function makeNginxStarterChunks(): SecretChunk[] {
-  return [
-    {
-      id: crypto.randomUUID(), name: 'HTTP :80 redirect', chunk_type: 'nginx_server',
-      fields: [
-        { key: 'listen',       value: '80',                                    field_type: 'port' },
-        { key: 'listen',       value: '[::]:80',                               field_type: 'port', description: 'ipv6' },
-        { key: 'server_name',  value: 'example.com www.example.com',           field_type: 'var' },
-        { key: 'return',       value: '301 https://example.com$request_uri',   field_type: 'var' },
-      ],
-    },
-    {
-      id: crypto.randomUUID(), name: 'HTTPS www redirect', chunk_type: 'nginx_server',
-      fields: [
-        { key: 'listen',              value: '443 ssl http2',                           field_type: 'port' },
-        { key: 'listen',              value: '[::]:443 ssl http2',                      field_type: 'port', description: 'ipv6' },
-        { key: 'server_name',         value: 'www.example.com',                         field_type: 'var' },
-        { key: 'ssl_certificate',     value: '${example_cert}',                         field_type: 'cert' },
-        { key: 'ssl_certificate_key', value: '${example_cert_key}',                     field_type: 'cert' },
-        { key: 'return',              value: '301 https://example.com$request_uri',     field_type: 'var' },
-      ],
-    },
-    {
-      id: crypto.randomUUID(), name: 'HTTPS :443 main', chunk_type: 'nginx_server',
-      fields: [
-        { key: 'listen',              value: '443 ssl http2',              field_type: 'port' },
-        { key: 'listen',              value: '[::]:443 ssl http2',         field_type: 'port', description: 'ipv6' },
-        { key: 'server_name',         value: 'example.com',                field_type: 'var' },
-        { key: 'ssl_certificate',     value: '${example_cert}',            field_type: 'cert' },
-        { key: 'ssl_certificate_key', value: '${example_cert_key}',        field_type: 'cert' },
-        { key: 'root',                value: '/var/www/html',               field_type: 'var' },
-        { key: 'index',               value: 'index.php index.html',        field_type: 'var' },
-        { key: 'access_log',          value: '/var/log/nginx/access.log',   field_type: 'var' },
-        { key: 'error_log',           value: '/var/log/nginx/error.log',    field_type: 'var' },
-        { key: 'add_header X-Frame-Options',            value: '"SAMEORIGIN" always',                 field_type: 'var' },
-        { key: 'add_header X-Content-Type-Options',     value: '"nosniff" always',                    field_type: 'var' },
-        { key: 'add_header Strict-Transport-Security',  value: '"max-age=31536000; includeSubDomains; preload" always', field_type: 'var' },
-        { key: 'gzip',                value: 'on',                          field_type: 'var' },
-        { key: 'gzip_types',          value: 'text/plain text/css text/javascript application/javascript application/json', field_type: 'var' },
-      ],
-    },
-    {
-      id: crypto.randomUUID(), name: 'location /', chunk_type: 'nginx_location',
-      fields: [
-        { key: 'path',      value: '/',                          field_type: 'var' },
-        { key: 'try_files', value: '$uri $uri/ $uri.php?$args',  field_type: 'var' },
-      ],
-    },
-    {
-      id: crypto.randomUUID(), name: 'location ~ .php', chunk_type: 'nginx_location',
-      fields: [
-        { key: 'path',         value: '~ \\.php$',                      field_type: 'var' },
-        { key: 'include',      value: 'snippets/fastcgi-php.conf',       field_type: 'var' },
-        { key: 'fastcgi_pass', value: 'unix:/run/php/php8.1-fpm.sock',   field_type: 'endpoint' },
-      ],
-    },
-    {
-      id: crypto.randomUUID(), name: 'location ~ assets', chunk_type: 'nginx_location',
-      fields: [
-        { key: 'path',          value: '~* \\.(jpg|jpeg|png|gif|webp|ico|css|js|svg|woff2)$', field_type: 'var' },
-        { key: 'expires',       value: '30d',                           field_type: 'var' },
-        { key: 'add_header Cache-Control', value: '"public, immutable"', field_type: 'var' },
-        { key: 'access_log',    value: 'off',                           field_type: 'var' },
-      ],
-    },
-  ];
-}
-
-export function makeK8sStarterChunks(): SecretChunk[] {
-  return [
-    {
-      id: crypto.randomUUID(), name: 'Deployment', chunk_type: 'k8s_deployment',
-      fields: [
-        { key: 'name',          value: 'my-app',       field_type: 'var' },
-        { key: 'namespace',     value: 'default',      field_type: 'var' },
-        { key: 'image',         value: 'nginx:latest', field_type: 'var' },
-        { key: 'replicas',      value: '1',            field_type: 'var' },
-        { key: 'containerPort', value: '80',           field_type: 'var' },
-      ],
-    },
-    {
-      id: crypto.randomUUID(), name: 'Service', chunk_type: 'k8s_service',
-      fields: [
-        { key: 'name',       value: 'my-app',    field_type: 'var' },
-        { key: 'namespace',  value: 'default',   field_type: 'var' },
-        { key: 'port',       value: '80',        field_type: 'var' },
-        { key: 'targetPort', value: '80',        field_type: 'var' },
-        { key: 'type',       value: 'ClusterIP', field_type: 'var' },
-      ],
-    },
-    {
-      id: crypto.randomUUID(), name: 'Ingress', chunk_type: 'k8s_ingress',
-      fields: [
-        { key: 'name',        value: 'my-ingress',  field_type: 'var' },
-        { key: 'namespace',   value: 'default',     field_type: 'var' },
-        { key: 'host',        value: 'example.com', field_type: 'var' },
-        { key: 'serviceName', value: 'my-app',      field_type: 'var' },
-        { key: 'servicePort', value: '80',          field_type: 'var' },
-      ],
-    },
-  ];
-}
-
-export function makeSshStarterChunks(): SecretChunk[] {
-  return [
-    {
-      id: crypto.randomUUID(), name: 'server', chunk_type: 'ssh_host',
-      fields: [
-        { key: 'HostName',            value: 'server.example.com', field_type: 'var' },
-        { key: 'User',                value: 'ubuntu',             field_type: 'var' },
-        { key: 'Port',                value: '22',                 field_type: 'var' },
-        { key: 'IdentityFile',        value: '~/.ssh/id_ed25519',  field_type: 'var' },
-        { key: 'ServerAliveInterval', value: '60',                 field_type: 'var' },
-        { key: 'ForwardAgent',        value: 'yes',                field_type: 'var' },
-      ],
-    },
-  ];
-}
-
-export function makeTraefikStarterChunks(): SecretChunk[] {
-  return [
-    {
-      id: crypto.randomUUID(), name: 'router-https', chunk_type: 'traefik_router',
-      fields: [
-        { key: 'entryPoints',  value: 'websecure',          field_type: 'list' },
-        { key: 'rule',         value: 'Host(`example.com`)', field_type: 'var' },
-        { key: 'service',      value: 'service-app',        field_type: 'var' },
-        { key: 'certResolver', value: 'letsencrypt',        field_type: 'var' },
-      ],
-    },
-    {
-      id: crypto.randomUUID(), name: 'service-app', chunk_type: 'traefik_service',
-      fields: [
-        { key: 'url',            value: 'http://app:8080', field_type: 'var' },
-        { key: 'passHostHeader', value: 'true',            field_type: 'var' },
-      ],
-    },
-    {
-      id: crypto.randomUUID(), name: 'redirect-to-https', chunk_type: 'traefik_middleware',
-      fields: [
-        { key: 'type',      value: 'redirectScheme', field_type: 'var' },
-        { key: 'scheme',    value: 'https',          field_type: 'var' },
-        { key: 'permanent', value: 'true',           field_type: 'var' },
-      ],
-    },
-  ];
-}
-
-export function makeApacheStarterChunks(): SecretChunk[] {
-  return [
-    {
-      id: crypto.randomUUID(), name: 'VirtualHost :80', chunk_type: 'apache_vhost',
-      fields: [
-        { key: 'ServerName',    value: 'example.com',         field_type: 'var' },
-        { key: 'ServerAlias',   value: 'www.example.com',     field_type: 'var' },
-        { key: 'DocumentRoot',  value: '/var/www/html',        field_type: 'var' },
-        { key: 'ErrorLog',      value: '${APACHE_LOG_DIR}/error.log', field_type: 'var' },
-        { key: 'CustomLog',     value: '${APACHE_LOG_DIR}/access.log combined', field_type: 'var' },
-        { key: 'Redirect',      value: 'permanent / https://example.com/', field_type: 'var' },
-      ],
-    },
-    {
-      id: crypto.randomUUID(), name: 'VirtualHost :443', chunk_type: 'apache_vhost',
-      fields: [
-        { key: 'ServerName',        value: 'example.com',         field_type: 'var' },
-        { key: 'DocumentRoot',      value: '/var/www/html',        field_type: 'var' },
-        { key: 'SSLEngine',         value: 'on',                   field_type: 'var' },
-        { key: 'SSLCertificateFile',    value: '/etc/letsencrypt/live/example.com/fullchain.pem', field_type: 'cert' },
-        { key: 'SSLCertificateKeyFile', value: '/etc/letsencrypt/live/example.com/privkey.pem',   field_type: 'cert' },
-        { key: 'Header',            value: 'always set Strict-Transport-Security "max-age=31536000"', field_type: 'var' },
-      ],
-    },
-    {
-      id: crypto.randomUUID(), name: '/var/www/html', chunk_type: 'apache_directory',
-      fields: [
-        { key: 'path',          value: '/var/www/html',       field_type: 'var' },
-        { key: 'Options',       value: '-Indexes +FollowSymLinks', field_type: 'var' },
-        { key: 'AllowOverride', value: 'All',                 field_type: 'var' },
-        { key: 'Require',       value: 'all granted',         field_type: 'var' },
-      ],
-    },
-  ];
-}
-
-export function makeHaproxyStarterChunks(): SecretChunk[] {
-  return [
-    {
-      id: crypto.randomUUID(), name: 'global', chunk_type: 'haproxy_global',
-      fields: [
-        { key: 'log',        value: '/dev/log local0',        field_type: 'var' },
-        { key: 'chroot',     value: '/var/lib/haproxy',       field_type: 'var' },
-        { key: 'stats',      value: 'socket /run/haproxy/admin.sock mode 660 level admin', field_type: 'var' },
-        { key: 'user',       value: 'haproxy',                field_type: 'var' },
-        { key: 'group',      value: 'haproxy',                field_type: 'var' },
-        { key: 'maxconn',    value: '4096',                   field_type: 'var' },
-      ],
-    },
-    {
-      id: crypto.randomUUID(), name: 'http-in', chunk_type: 'haproxy_frontend',
-      fields: [
-        { key: 'bind',       value: '*:80',                   field_type: 'port' },
-        { key: 'mode',       value: 'http',                   field_type: 'var' },
-        { key: 'option',     value: 'httplog',                field_type: 'var' },
-        { key: 'default_backend', value: 'app',              field_type: 'var' },
-      ],
-    },
-    {
-      id: crypto.randomUUID(), name: 'app', chunk_type: 'haproxy_backend',
-      fields: [
-        { key: 'mode',       value: 'http',                   field_type: 'var' },
-        { key: 'balance',    value: 'roundrobin',             field_type: 'var' },
-        { key: 'option',     value: 'httpchk GET /health',   field_type: 'var' },
-        { key: 'server',     value: 'app1 127.0.0.1:8080 check', field_type: 'endpoint' },
-      ],
-    },
-  ];
-}
-
-export function makeAnsibleStarterChunks(): SecretChunk[] {
-  return [
-    {
-      id: crypto.randomUUID(), name: 'vars', chunk_type: 'ansible_vars',
-      fields: [
-        { key: 'app_name',   value: 'myapp',                  field_type: 'var' },
-        { key: 'app_port',   value: '8080',                   field_type: 'port' },
-        { key: 'db_host',    value: 'localhost',              field_type: 'var' },
-        { key: 'db_name',    value: 'myapp_db',               field_type: 'var' },
-        { key: 'db_user',    value: 'myapp',                  field_type: 'var' },
-        { key: 'db_pass',    value: '${DB_PASSWORD}',         field_type: 'secret', secret: true },
-      ],
-    },
-    {
-      id: crypto.randomUUID(), name: 'Install packages', chunk_type: 'ansible_task',
-      fields: [
-        { key: 'name',       value: 'Install required packages', field_type: 'var' },
-        { key: 'module',     value: 'ansible.builtin.package',  field_type: 'var' },
-        { key: 'state',      value: 'present',                field_type: 'var' },
-        { key: 'pkg',        value: 'nginx, git, curl',       field_type: 'list' },
-      ],
-    },
-  ];
-}
-
-export function makePostgresStarterChunks(): SecretChunk[] {
-  return [
-    {
-      id: crypto.randomUUID(), name: 'primary', chunk_type: 'pg_connection',
-      fields: [
-        { key: 'host',       value: 'localhost',              field_type: 'var' },
-        { key: 'port',       value: '5432',                   field_type: 'port' },
-        { key: 'dbname',     value: 'myapp',                  field_type: 'var' },
-        { key: 'user',       value: 'myapp',                  field_type: 'var' },
-        { key: 'password',   value: '${DB_PASSWORD}',         field_type: 'secret', secret: true },
-        { key: 'sslmode',    value: 'require',                field_type: 'var' },
-      ],
-    },
-    {
-      id: crypto.randomUUID(), name: 'app_user', chunk_type: 'pg_role',
-      fields: [
-        { key: 'rolname',    value: 'myapp',                  field_type: 'var' },
-        { key: 'rolpassword', value: '${DB_PASSWORD}',        field_type: 'secret', secret: true },
-        { key: 'rolcanlogin', value: 'true',                  field_type: 'var' },
-        { key: 'rolcreatedb', value: 'false',                 field_type: 'var' },
-      ],
-    },
-  ];
-}
 
 export function exportApache(project: Project): string {
   const chunks = project.chunks || [];
-  const lines: string[] = ['# Generated by API Vault', ''];
+  const lines: string[] = ['# Generated by EnvVault', ''];
   for (const chunk of chunks) {
     if (chunk.disabled) continue;
     if (chunk.chunk_type === 'apache_vhost') {
@@ -358,7 +51,7 @@ export function exportApache(project: Project): string {
 
 export function exportHaproxy(project: Project): string {
   const chunks = project.chunks || [];
-  const lines: string[] = ['# Generated by API Vault', ''];
+  const lines: string[] = ['# Generated by EnvVault', ''];
   for (const chunk of chunks) {
     if (chunk.disabled) continue;
     if (chunk.chunk_type === 'haproxy_global') {
@@ -380,7 +73,7 @@ export function exportHaproxy(project: Project): string {
 
 export function exportAnsible(project: Project): string {
   const chunks = project.chunks || [];
-  const sections: string[] = ['# Generated by API Vault'];
+  const sections: string[] = ['# Generated by EnvVault'];
   for (const chunk of chunks) {
     if (chunk.disabled) continue;
     if (chunk.chunk_type === 'ansible_vars') {
@@ -400,7 +93,7 @@ export function exportAnsible(project: Project): string {
 
 export function exportPostgres(project: Project): string {
   const chunks = project.chunks || [];
-  const lines: string[] = ['# Generated by API Vault — .pgpass format: host:port:dbname:user:password'];
+  const lines: string[] = ['# Generated by EnvVault — .pgpass format: host:port:dbname:user:password'];
   for (const chunk of chunks) {
     if (chunk.disabled) continue;
     if (chunk.chunk_type === 'pg_connection') {
@@ -411,85 +104,85 @@ export function exportPostgres(project: Project): string {
   return lines.join('\n');
 }
 
-export function parseApacheConf(text: string): SecretChunk[] {
-  const chunks: SecretChunk[] = [];
-  const lines = text.split(/\r?\n/);
-  let cur: SecretChunk | null = null;
-  let depth = 0;
-  let blockType = '';
-  let blockArg = '';
-
-  for (const raw of lines) {
-    const line = raw.replace(/#.*$/, '').trim();
-    if (!line) continue;
-
-    const openM = line.match(/^<(\w+)\s*(.*)>$/);
-    const closeM = line.match(/^<\/(\w+)>$/);
-
-    if (openM) {
-      depth++;
-      blockType = openM[1].toLowerCase();
-      blockArg = openM[2].trim();
-      if (depth === 1) {
-        const chunkType: ChunkType = blockType === 'virtualhost' ? 'apache_vhost' : 'apache_directory';
-        const n = chunks.filter(c => c.chunk_type === chunkType).length + 1;
-        cur = { id: crypto.randomUUID(), name: `${blockType}-${n}`, chunk_type: chunkType, fields: [] };
-        if (blockType === 'directory') {
-          cur.fields.push({ key: 'path', value: blockArg, field_type: 'var' });
-        }
-        chunks.push(cur);
-      }
-    } else if (closeM) {
-      depth--;
-      if (depth === 0) { cur = null; blockType = ''; blockArg = ''; }
-    } else if (cur && depth === 1) {
-      const sp = line.split(/\s+/);
-      const key = sp[0];
-      const val = sp.slice(1).join(' ');
-      const ft: ChunkFieldType = /^(SSLCertificate|SSLCertificateKey)/i.test(key) ? 'cert' : 'var';
-      cur.fields.push({ key, value: val, field_type: ft });
-    }
-  }
-  return chunks;
-}
-
-export function parseHaproxyConf(text: string): SecretChunk[] {
-  const chunks: SecretChunk[] = [];
-  let cur: SecretChunk | null = null;
-
-  for (const raw of text.split(/\r?\n/)) {
-    const line = raw.replace(/#.*$/, '').trim();
-    if (!line) continue;
-
-    const sectionM = line.match(/^(global|defaults|frontend|backend|listen)\s*(.*)$/);
-    if (sectionM) {
-      const stype = sectionM[1];
-      const sname = sectionM[2].trim() || stype;
-      const chunkType: ChunkType = stype === 'frontend' ? 'haproxy_frontend'
-        : stype === 'backend' ? 'haproxy_backend' : 'haproxy_global';
-      cur = { id: crypto.randomUUID(), name: sname, chunk_type: chunkType, fields: [] };
-      chunks.push(cur);
-      continue;
-    }
-    if (cur) {
-      const sp = line.split(/\s+/);
-      const key = sp[0];
-      const val = sp.slice(1).join(' ');
-      const ft: ChunkFieldType = /^(bind|server)$/i.test(key) ? 'endpoint' : 'var';
-      cur.fields.push({ key, value: val, field_type: ft });
-    }
-  }
-  return chunks;
-}
 
 // ── Field resolution ───────────────────────────────────────────────────────
 
-export function resolveFieldRef(value: string, useEnvCopyField = false): { resolved: string | null; refName: string | null; unresolved: boolean; source: 'vault' | 'env_file' | null } {
+/** Canonical names for well-known field suffixes used in env var naming conventions. */
+const FIELD_ALIASES: Readonly<Record<string, string>> = {
+  APIKEY: 'key', API_KEY: 'key', KEY: 'key', TOKEN: 'key', ACCESS_TOKEN: 'key', BEARER: 'key', SECRET_KEY: 'key',
+  PASSWORD: 'key', PASS: 'key', PWD: 'key',
+  // ↑ a password entry stores its secret in api_key, so ${name/password} resolves there too
+  SECRET: 'secret', API_SECRET: 'secret', CLIENT_SECRET: 'secret', SHARED_SECRET: 'secret',
+  USERNAME: 'username', USER: 'username', LOGIN: 'username', USER_NAME: 'username',
+  URL: 'url', URI: 'url', ENDPOINT: 'url', API_URL: 'url', BASE_URL: 'url',
+  EMAIL: 'email', MAIL: 'email',
+  KEY_ID: 'key_id', KEYID: 'key_id', KID: 'key_id',
+};
+
+/** Resolve a named field from a vault entry. Supports built-in fields, aliases, and extra_vars keys. */
+function getEntryFieldValue(entry: VaultEntry, field: string): string | null | undefined {
+  const canonical = FIELD_ALIASES[field.toUpperCase()] ?? field;
+  switch (canonical) {
+    case 'key':      return entry.api_key;
+    case 'secret':   return entry.api_secret;
+    case 'username': return entry.username;
+    case 'url':      return entry.api_url;
+    case 'key_id':   return entry.key_id;
+    case 'email':    return entry.email;
+    default:         return entry.extra_vars?.find(v => v.key === field || v.key === canonical)?.value;
+  }
+}
+
+export function resolveFieldRef(value: string, useEnvCopyField = false, _depth = 0): { resolved: string | null; refName: string | null; unresolved: boolean; source: 'vault' | 'env_file' | 'chunk' | null } {
   const match = value.match(/^\$\{(.+)}$/);
   if (!match) return { resolved: value, refName: null, unresolved: false, source: null };
   const refName = match[1];
 
-  // Exact provider match, then compound PROVIDER_KEYID match
+  // Cross-chunk notation: ${chunk:ChunkName/FieldKey} — resolve any chunk field across all projects.
+  // Recursively resolves if the target is itself a ${ref} (depth-guarded against cycles).
+  if (refName.startsWith('chunk:')) {
+    const body = refName.slice(6);
+    const slash = body.indexOf('/');
+    if (slash < 0) return { resolved: null, refName, unresolved: true, source: null };
+    const chunkName = body.slice(0, slash);
+    const fieldKey  = body.slice(slash + 1);
+    for (const project of st.vault.projects) {
+      for (const chunk of project.chunks || []) {
+        if (chunk.name !== chunkName) continue;
+        const f = chunk.fields.find(ff => ff.key === fieldKey);
+        if (!f) continue;
+        if (_depth < 4 && /^\$\{.+}$/.test(f.value)) {
+          const nested = resolveFieldRef(f.value, useEnvCopyField, _depth + 1);
+          return { resolved: nested.resolved, refName, unresolved: nested.unresolved, source: nested.source ?? 'chunk' };
+        }
+        return { resolved: f.value, refName, unresolved: false, source: 'chunk' };
+      }
+    }
+    return { resolved: null, refName, unresolved: true, source: null };
+  }
+
+  // Slash notation: ${PROVIDER/field} or ${PROVIDER_LABEL/field} — direct field access.
+  const slashIdx = refName.indexOf('/');
+  if (slashIdx >= 0) {
+    const provPart = refName.slice(0, slashIdx);
+    const field = refName.slice(slashIdx + 1);
+    // Try exact provider match, then provider_keyid split (e.g. TMDB_v2 → provider=TMDB key_id=v2).
+    let entry = st.vault.api_keys.find(e => e.provider === provPart);
+    if (!entry && provPart.includes('_')) {
+      const lastUs = provPart.lastIndexOf('_');
+      const prov = provPart.slice(0, lastUs);
+      const kid  = provPart.slice(lastUs + 1);
+      entry = st.vault.api_keys.find(e => e.provider === prov && e.key_id === kid);
+    }
+    if (entry) {
+      const val = getEntryFieldValue(entry, field);
+      const resolved = (val != null && val !== '') ? String(val) : null;
+      return { resolved, refName, unresolved: !resolved, source: 'vault' };
+    }
+    return { resolved: null, refName, unresolved: true, source: null };
+  }
+
+  // Legacy: exact provider match, then compound PROVIDER_KEYID match.
   let entry = st.vault.api_keys.find(e => e.provider === refName);
   if (!entry && refName.includes('_')) {
     const lastUs = refName.lastIndexOf('_');
@@ -523,6 +216,57 @@ export function resolveFieldRef(value: string, useEnvCopyField = false): { resol
 // ── Field copy text formatter ──────────────────────────────────────────────
 
 /** Returns the field formatted in its native config syntax for clipboard. */
+/**
+ * Rewrites every `${PROVIDER…}` chunk reference after an entry is renamed.
+ *
+ * References resolve by provider name (see {@link resolveFieldRef}), so
+ * renaming an entry used to break every chunk field pointing at it — silently,
+ * with the field simply starting to render unresolved. The security audit could
+ * already *detect* the resulting stale refs; nothing prevented them. Projects
+ * and categories cascade their renames, and this brings entries in line.
+ *
+ * Handles all four reference spellings: `${Provider}`, `${Provider/field}`,
+ * `${Provider_KeyId}` and `${Provider_KeyId/field}`. Leaves `${chunk:…}` alone —
+ * those address a chunk, not an entry.
+ *
+ * @returns how many fields were rewritten.
+ */
+export function renameProviderRefs(
+  oldProvider: string,
+  oldKeyId: string | null | undefined,
+  newProvider: string,
+  newKeyId: string | null | undefined,
+): number {
+  const oldNames = new Set<string>([oldProvider]);
+  if (oldKeyId) oldNames.add(`${oldProvider}_${oldKeyId}`);
+  const newCompound = newKeyId ? `${newProvider}_${newKeyId}` : newProvider;
+
+  let changed = 0;
+  for (const project of st.vault.projects) {
+    for (const chunk of project.chunks || []) {
+      for (const field of chunk.fields || []) {
+        const match = typeof field.value === 'string' && field.value.match(/^\$\{(.+)}$/);
+        if (!match) continue;
+        const body = match[1];
+        if (body.startsWith('chunk:')) continue;
+
+        const slash = body.indexOf('/');
+        const head = slash >= 0 ? body.slice(0, slash) : body;
+        if (!oldNames.has(head)) continue;
+
+        // A bare `${Provider}` becomes the new compound name; a `${x/field}`
+        // keeps its field suffix.
+        const replacement = head === oldProvider && slash < 0 && !oldKeyId
+          ? newProvider
+          : newCompound;
+        field.value = slash >= 0 ? `\${${replacement}${body.slice(slash)}}` : `\${${replacement}}`;
+        changed++;
+      }
+    }
+  }
+  return changed;
+}
+
 function chunkFieldCopyText(key: string, value: string, chunkType: string): string {
   if (chunkType === 'env_file') return `${key}=${value}`;
   if (chunkType === 'wg_interface' || chunkType === 'wg_peer') return `${key} = ${value}`;
@@ -580,7 +324,6 @@ function renderCertPanel(entry: VaultEntry, isCertKey: boolean): string {
   return `
     <div class="cert-panel">
       <div class="cert-panel-row">
-        <span class="cert-panel-icon">🔒</span>
         <div class="cert-panel-meta">
           <span class="cert-panel-cn">${esc(cn)}</span>
           <span class="cert-panel-expiry" style="color:${expiryColor}">${expired ? '⚠ EXPIRED ' : soon ? '⚠ expires ' : 'exp '}${esc(expiryText)}</span>
@@ -592,6 +335,127 @@ function renderCertPanel(entry: VaultEntry, isCertKey: boolean): string {
       <pre class="cert-panel-pem">${esc(pemPreview)}</pre>
     </div>
   `;
+}
+
+// ── Nginx ↔ certificate auto-linking ───────────────────────────────────────
+
+const normDomain = (s: string): string => s.trim().toLowerCase().replace(/^\*?\./, '').replace(/^www\./, '');
+
+/** Extract a domain from a letsencrypt-style path, e.g. ".../live/darthdemono.com/fullchain.pem". */
+export function domainFromCertPath(path: string): string | null {
+  const m = path.match(/(?:^|\/)live\/([^/]+)\//i) || path.match(/(?:^|\/)([a-z0-9.-]+\.[a-z]{2,})\/(?:fullchain|privkey|cert|chain)\b/i);
+  return m ? normDomain(m[1]) : null;
+}
+
+/** All cert domains an nginx project references: project name, server_name values, ssl paths, nginx_key paths. */
+export function nginxCertDomains(project: Project): string[] {
+  const out = new Set<string>();
+  const add = (d: string | null | undefined) => {
+    if (!d) return;
+    const n = normDomain(d);
+    if (n && /^[a-z0-9.-]+\.[a-z]{2,}$/.test(n)) out.add(n);
+  };
+  add(project.name);
+  for (const chunk of project.chunks ?? []) {
+    for (const f of chunk.fields ?? []) {
+      if (/server_name/i.test(f.key)) f.value.split(/\s+/).forEach(add);
+      if (/^(ssl_certificate|ssl_certificate_key|ssl_trusted_certificate)$/i.test(f.key)) add(domainFromCertPath(f.value));
+      if (chunk.chunk_type === 'nginx_key' && (f.key === 'path' || f.key === 'name')) add(domainFromCertPath(f.value));
+    }
+    if (chunk.chunk_type === 'nginx_key') add(domainFromCertPath(chunk.name));
+  }
+  return [...out];
+}
+
+/** Find a `certificate` vault entry whose site (provider) matches the domain. */
+export function certEntryForDomain(domain: string): VaultEntry | null {
+  const d = normDomain(domain);
+  return st.vault.api_keys.find(e => e.secretType === 'certificate' && normDomain(e.provider) === d) || null;
+}
+
+/** Create (if missing) a stub `certificate` vault entry for a domain. Returns the entry. Does not save. */
+export function ensureCertForDomain(domain: string, projectId?: string): VaultEntry {
+  const existing = certEntryForDomain(domain);
+  if (existing) return existing;
+  const entry: VaultEntry = {
+    provider: normDomain(domain),
+    api_key: '',
+    secretType: 'certificate',
+    certificate_data: '',
+    cert_key_data: '',
+    price_type: 'free',
+    categories: [],
+    projectIds: ['Universal', ...(projectId && projectId !== 'Universal' ? [projectId] : [])],
+    scopes: [],
+    api_description: `TLS certificate for ${normDomain(domain)}`,
+  };
+  st.vault.api_keys.push(entry);
+  return entry;
+}
+
+/** IDs of nginx_key chunks whose PEM content duplicates a shown cert entry (fullchain/privkey). */
+export function redundantCertKeyChunkIds(project: Project): string[] {
+  const pems = new Set<string>();
+  for (const d of nginxCertDomains(project)) {
+    const e = certEntryForDomain(d);
+    if (e?.certificate_data) pems.add(e.certificate_data.trim());
+    if (e?.cert_key_data)    pems.add(e.cert_key_data.trim());
+  }
+  if (!pems.size) return [];
+  return (project.chunks ?? [])
+    .filter(c => {
+      if (c.chunk_type !== 'nginx_key') return false;
+      const content = (c.fields.find(f => f.key === 'content')?.value || '').trim();
+      return !!content && pems.has(content);
+    })
+    .map(c => c.id);
+}
+
+/** Big canonical card for a domain's certificate in the nginx view: full fullchain + privkey, or a create prompt. */
+export function renderNginxCertCard(domain: string): string {
+  const entry = certEntryForDomain(domain);
+  if (!entry) {
+    return `<div class="cert-link-card cert-link-card--missing">
+      <div class="cert-link-head"><span class="cert-link-domain">${esc(domain)}</span></div>
+      <div class="cert-link-empty">No certificate entry yet.</div>
+      <button class="btn btn-ghost btn-sm" data-action="create-cert-stub" data-domain="${escAttr(domain)}">+ Create cert entry</button>
+    </div>`;
+  }
+  const fc = entry.certificate_data || entry.api_key || '';
+  const pk = entry.cert_key_data || '';
+  const expiry = entry.expires_at ? new Date(entry.expires_at) : null;
+  const now = new Date();
+  const expired = expiry && expiry < now;
+  const soon = expiry && !expired && expiry.getTime() - now.getTime() < 30 * 86_400_000;
+  const expColor = expired ? 'var(--price-paid)' : soon ? '#f0ad4e' : 'var(--text3)';
+  const expText = expiry ? `${expired ? 'EXPIRED ' : soon ? 'expires ' : 'exp '}${expiry.toISOString().slice(0, 10)}` : 'no expiry';
+
+  const section = (label: string, pem: string) => {
+    const blocks = pem.split(/(?=-----BEGIN )/).map(s => s.trim()).filter(Boolean);
+    const certCount = blocks.filter(b => /-----BEGIN CERTIFICATE-----/.test(b)).length;
+    const sub = label === 'Fullchain' && certCount > 1 ? ` · ${certCount} certs` : '';
+    const body = blocks.length
+      ? blocks.map(b => `<pre class="cert-link-pem-full">${esc(b)}</pre>`).join('')
+      : `<pre class="cert-link-pem-full cert-link-pem-empty">— empty —</pre>`;
+    return `<div class="cert-link-section">
+      <div class="cert-link-section-head">
+        <span class="cert-link-section-label">${label}${sub}</span>
+        ${pem ? `<button class="btn btn-ghost btn-xs" data-action="chunk-copy" data-value="${escAttr(pem)}" title="Copy PEM">Copy</button>` : ''}
+      </div>
+      ${body}
+    </div>`;
+  };
+
+  return `<div class="cert-link-card cert-link-card--full">
+    <div class="cert-link-head">
+      <span class="cert-link-domain">${esc(entry.provider)}</span>
+      ${entry.cert_issuer ? `<span class="cert-link-issuer" title="Issuer">${esc(entry.cert_issuer)}</span>` : ''}
+      <span class="cert-link-expiry" style="color:${expColor}">${esc(expText)}</span>
+      <button class="btn btn-ghost btn-xs" data-action="edit-cert-entry" data-provider="${escAttr(entry.provider)}" title="Edit certificate entry">Edit</button>
+    </div>
+    ${section('Fullchain', fc)}
+    ${section('Privkey', pk)}
+  </div>`;
 }
 
 // ── Nginx display helpers ──────────────────────────────────────────────────
@@ -639,6 +503,20 @@ function renderReturnBadge(value: string): string {
   </span>`;
 }
 
+// ── PEM normalization ──────────────────────────────────────────────────────
+
+function normalizePem(raw: string): string {
+  if (!raw) return '';
+  // If already has newlines after header, it's fine
+  if (/-----BEGIN [^-]+-----\n/.test(raw)) return raw.trim();
+  // Re-wrap: split on -----BEGIN, reconstruct each block with 64-char lines
+  return raw.replace(/-----BEGIN ([^-]+)-----([\s\S]*?)-----END \1-----/g, (_m, type, body) => {
+    const b64 = body.replace(/\s+/g, '');
+    const lines = b64.match(/.{1,64}/g) ?? [];
+    return `-----BEGIN ${type}-----\n${lines.join('\n')}\n-----END ${type}-----`;
+  }).trim();
+}
+
 // ── Chunk card renderer ────────────────────────────────────────────────────
 
 export function renderChunkCard(chunk: SecretChunk, project: Project): HTMLElement {
@@ -650,7 +528,7 @@ export function renderChunkCard(chunk: SecretChunk, project: Project): HTMLEleme
   const isDockerSvc = chunk.chunk_type === 'docker_service';
   const isNginx    = ['nginx_server','nginx_location','nginx_upstream'].includes(chunk.chunk_type);
 
-  const chunkEnvFields = isDockerSvc ? chunk.fields.filter(f => f.description === 'env') : [];
+  const chunkEnvFields = isDockerSvc ? chunk.fields.filter(f => f.description === 'env' || f.field_type === 'env_var') : [];
   const hasChunkEnvFields = chunkEnvFields.length > 0;
   const hasChunkEnvRefs = chunkEnvFields.some(f => /^\$\{.+\}$/.test(f.value));
 
@@ -694,9 +572,12 @@ export function renderChunkCard(chunk: SecretChunk, project: Project): HTMLEleme
       } else if (refSource === 'env_file') {
         displayVal = '••••••••';
         badgeHtml = `<span class="chunk-ref-badge chunk-ref-env" title="Linked from .env chunk field '${esc(refName)}'">→ .env: ${esc(refName)}</span>`;
+      } else if (refSource === 'chunk') {
+        displayVal = '••••••••';
+        badgeHtml = `<span class="chunk-ref-badge chunk-ref-chunk" title="Linked from chunk '${esc(refName)}'">→ chunk: ${esc(refName.replace(/^chunk:/, ''))}</span>`;
       } else {
         displayVal = '••••••••';
-        badgeHtml = `<span class="chunk-ref-badge" title="Linked from vault entry '${esc(refName)}'">→ vault: ${esc(refName)}</span>`;
+        badgeHtml = `<span class="chunk-ref-badge chunk-ref-jump" data-action="jump-ref" data-ref="${escAttr(refName)}" style="cursor:pointer" title="Click to open vault entry '${esc(refName)}'">→ vault: ${esc(refName)}</span>`;
       }
     } else if (isSecret && field.value) {
       displayVal = '••••••••';
@@ -704,7 +585,7 @@ export function renderChunkCard(chunk: SecretChunk, project: Project): HTMLEleme
       displayVal = field.value || '';
     }
 
-    const isEnvField = chunk.chunk_type === 'env_file' || (isDockerSvc && field.description === 'env');
+    const isEnvField = chunk.chunk_type === 'env_file' || (isDockerSvc && (field.description === 'env' || field.field_type === 'env_var'));
     const envCopyResolved = (isEnvField && refName) ? resolveFieldRef(field.value, true).resolved : null;
     const valClass = `chunk-field-val${isSecret && field.value ? ' masked' : ''}`;
     // Copy format: KEY=VALUE for env, native config syntax for everything else.
@@ -918,30 +799,58 @@ export function renderChunkCard(chunk: SecretChunk, project: Project): HTMLEleme
 
   // nginx_key: PEM certificate/key file — special display
   if (chunk.chunk_type === 'nginx_key') {
+    const pid          = escAttr(project.id);
+    const cid          = escAttr(chunk.id);
     const pathField    = chunk.fields.find(f => f.key === 'path');
+    const keyTypeField = chunk.fields.find(f => f.key === 'key_type');
     const contentField = chunk.fields.find(f => f.key === 'content');
-    const pem = contentField?.value || '';
-    const pemCerts = pem.split(/(?=-----BEGIN )/).map(s => s.trim()).filter(Boolean);
+    const keyPath      = pathField?.value || '';
+
+    // Detect type: explicit field → path heuristic → default fullchain
+    const isPrivkey = keyTypeField?.value === 'privkey'
+      || (!keyTypeField && /privkey|private\.key/i.test(keyPath));
+    const keyTypeLabel = isPrivkey ? 'privkey' : 'fullchain';
+    const keyTypeCls   = isPrivkey ? 'pem-key-badge' : 'pem-cert-badge';
+
+    // Find nginx_server chunks that reference this path via ssl_certificate / ssl_certificate_key
+    const certFields = ['ssl_certificate', 'ssl_certificate_key', 'ssl_trusted_certificate'];
+    const usedBy = (project.chunks || []).filter(c =>
+      c.chunk_type === 'nginx_server' &&
+      c.fields.some(f => certFields.includes(f.key) && f.value === keyPath)
+    );
+
+    const usedByHtml = usedBy.length
+      ? usedBy.map(c => `<span class="nginx-key-usedby-badge" title="ssl_certificate path matches">${esc(c.name)}</span>`).join('')
+      : '';
+
+    const pem = normalizePem(contentField?.value || '');
+    const pemBlocks = pem.split(/(?=-----BEGIN )/).map(s => s.trim()).filter(Boolean);
     const renderPemBlock = (raw: string) => {
       const header = raw.match(/^-----BEGIN ([^-]+)-----/)?.[1] ?? '';
-      const cls = /CERTIFICATE/i.test(header) ? 'pem-cert' : /PRIVATE|RSA|EC/i.test(header) ? 'pem-key' : 'pem-other';
+      const cls = /CERTIFICATE/i.test(header) ? 'pem-cert' : /PRIVATE|RSA|EC|OPENSSH/i.test(header) ? 'pem-key' : 'pem-other';
       return `<div class="pem-block ${cls}"><div class="pem-label">${esc(header || 'PEM Block')}</div><pre class="pem-pre">${esc(raw)}</pre></div>`;
     };
-    const pemHtml = pemCerts.length ? pemCerts.map(renderPemBlock).join('') : '<div class="pem-empty">No PEM content — click Edit to paste certificate</div>';
-    const headBtns = `<div style="display:flex;gap:4px;margin-left:auto">
-      <button class="btn btn-ghost btn-sm" data-action="copy-chunk-full" data-project-id="${escAttr(project.id)}" data-chunk-id="${escAttr(chunk.id)}" title="Copy PEM content">Copy</button>
-      <button class="btn btn-ghost btn-sm" data-action="chunk-up"   data-project-id="${escAttr(project.id)}" data-chunk-id="${escAttr(chunk.id)}">↑</button>
-      <button class="btn btn-ghost btn-sm" data-action="chunk-down" data-project-id="${escAttr(project.id)}" data-chunk-id="${escAttr(chunk.id)}">↓</button>
-      <button class="btn btn-ghost btn-sm" data-action="edit-chunk" data-project-id="${escAttr(project.id)}" data-chunk-id="${escAttr(chunk.id)}">Edit</button>
-      <button class="btn btn-ghost btn-sm" data-action="delete-chunk" data-project-id="${escAttr(project.id)}" data-chunk-id="${escAttr(chunk.id)}" style="color:var(--price-paid)">Delete</button>
-    </div>`;
+    const certCount = pemBlocks.filter(b => /-----BEGIN CERTIFICATE-----/.test(b)).length;
+    const chainLabel = !isPrivkey && certCount > 1 ? ` · ${certCount} certs` : '';
+    const pemHtml = pemBlocks.length
+      ? pemBlocks.map(renderPemBlock).join('')
+      : `<div class="pem-empty">No PEM content — click Import or Edit to add</div>`;
+
     card.innerHTML = `
       <div class="chunk-card-head">
         <span class="chunk-card-title">${esc(chunk.name)}</span>
-        <span class="chunk-type-badge">key file</span>
-        ${headBtns}
+        <span class="chunk-type-badge ${keyTypeCls}">${keyTypeLabel}${chainLabel}</span>
+        ${usedByHtml ? `<span class="nginx-key-usedby">${usedByHtml}</span>` : ''}
+        <div style="display:flex;gap:4px;margin-left:auto;flex-shrink:0">
+          <button class="btn btn-ghost btn-sm" data-action="import-nginx-key-file" data-project-id="${pid}" data-chunk-id="${cid}">Import file</button>
+          <button class="btn btn-ghost btn-sm" data-action="copy-chunk-full"       data-project-id="${pid}" data-chunk-id="${cid}" title="Copy PEM">Copy</button>
+          <button class="btn btn-ghost btn-sm" data-action="chunk-up"              data-project-id="${pid}" data-chunk-id="${cid}">↑</button>
+          <button class="btn btn-ghost btn-sm" data-action="chunk-down"            data-project-id="${pid}" data-chunk-id="${cid}">↓</button>
+          <button class="btn btn-ghost btn-sm" data-action="edit-chunk"            data-project-id="${pid}" data-chunk-id="${cid}">Edit</button>
+          <button class="btn btn-ghost btn-sm" data-action="delete-chunk"          data-project-id="${pid}" data-chunk-id="${cid}" style="color:var(--price-paid)">Delete</button>
+        </div>
       </div>
-      ${pathField?.value ? `<div class="nginx-key-path">${esc(pathField.value)}</div>` : ''}
+      ${keyPath ? `<div class="nginx-key-path">${esc(keyPath)}</div>` : ''}
       <div class="nginx-key-body">${pemHtml}</div>
     `;
     return card;
@@ -954,6 +863,7 @@ export function renderChunkCard(chunk: SecretChunk, project: Project): HTMLEleme
       <div style="display:flex;gap:4px;margin-left:auto">
         <button class="btn btn-ghost btn-sm" data-action="copy-chunk-full" data-project-id="${escAttr(project.id)}" data-chunk-id="${escAttr(chunk.id)}" title="Copy entire chunk in native format">Copy</button>
         ${chunk.chunk_type === 'env_file' ? `<button class="btn btn-ghost btn-sm" data-action="export-env-chunk" data-project-id="${escAttr(project.id)}" data-chunk-id="${escAttr(chunk.id)}">Export .env</button>` : ''}
+        ${chunk.chunk_type === 'env_file' ? `<button class="btn btn-ghost btn-sm" data-action="link-env-chunk" data-project-id="${escAttr(project.id)}" data-chunk-id="${escAttr(chunk.id)}" title="Link fields to vault entries">Link</button>` : ''}
         ${hasChunkEnvRefs ? `<button class="btn btn-ghost btn-sm" data-action="copy-chunk-env" data-project-id="${escAttr(project.id)}" data-chunk-id="${escAttr(chunk.id)}" title="Copy env fields with resolved secret values">Copy (resolved)</button>` : ''}
         <button class="btn btn-ghost btn-sm" data-action="chunk-up" data-project-id="${escAttr(project.id)}" data-chunk-id="${escAttr(chunk.id)}" title="Move up">↑</button>
         <button class="btn btn-ghost btn-sm" data-action="chunk-down" data-project-id="${escAttr(project.id)}" data-chunk-id="${escAttr(chunk.id)}" title="Move down">↓</button>
@@ -1049,28 +959,41 @@ export function chunkToString(chunk: SecretChunk): string {
     const header = chunk.chunk_type === 'wg_interface' ? '[Interface]' : '[Peer]';
     const lines  = [header];
     for (const f of chunk.fields) {
-      // Keep ${REF} template — caller decides whether to resolve
-      lines.push(`${f.key} = ${f.value ?? ''}`);
+      // Resolve, like the env_file branch below and like exportWireGuard. The
+      // old comment here said the caller would decide, but the only caller is
+      // copy-to-clipboard and it does not resolve — so copying an Interface
+      // pasted `PrivateKey = ${MyKey}` into wg0.conf and the tunnel would not
+      // come up. A copied config has to be deployable.
+      lines.push(`${f.key} = ${resolveFieldRef(f.value ?? '', true).resolved ?? f.value ?? ''}`);
     }
     return lines.join('\n');
   }
 
   if (isEnv) {
+    // Resolve ${ref} values to actual secrets — a copied .env must be deployable.
     return chunk.fields
       .filter(f => f.key)
-      .map(f => `${f.key}=${f.value ?? ''}`)
+      .map(f => `${f.key}=${resolveFieldRef(f.value ?? '', true).resolved ?? f.value ?? ''}`)
       .join('\n');
   }
 
   if (isNginxBlock) {
-    const blockType = chunk.chunk_type === 'nginx_location' ? 'location' : 'server';
+    // `upstream` was folded in with `server`, so copying an upstream chunk
+    // produced `server { server 10.0.0.1; }` — the wrong directive, with the
+    // upstream's name dropped, which nginx rejects. exportNginx has always got
+    // this right; the two disagreed.
+    const blockType = chunk.chunk_type === 'nginx_location' ? 'location'
+      : chunk.chunk_type === 'nginx_upstream' ? 'upstream'
+      : 'server';
     const pathField = chunk.fields.find(f => f.key === 'path');
     const blockName = chunk.chunk_type === 'nginx_location'
       ? (pathField?.value ? ` ${pathField.value}` : '')
+      : chunk.chunk_type === 'nginx_upstream'
+      ? (chunk.name ? ` ${chunk.name}` : '')
       : '';  // server block has no inline name
     const inner = chunk.fields
-      .filter(f => f.key && f.key !== 'path' && f.value !== undefined)
-      .map(f => `    ${f.key} ${f.value};`)
+      .filter(f => f.key && f.key !== 'path' && f.value)
+      .map(f => `    ${f.key} ${resolveFieldRef(f.value, true).resolved ?? f.value};`)
       .join('\n');
     return `${blockType}${blockName} {\n${inner}\n}`;
   }
@@ -1078,7 +1001,7 @@ export function chunkToString(chunk: SecretChunk): string {
   if (isSsh) {
     const lines = [`Host ${chunk.name}`];
     for (const f of chunk.fields) {
-      if (f.key && f.value) lines.push(`    ${f.key} ${f.value}`);
+      if (f.key && f.value) lines.push(`    ${f.key} ${resolveFieldRef(f.value, true).resolved ?? f.value}`);
     }
     return lines.join('\n');
   }
@@ -1113,14 +1036,15 @@ export function exportWireGuard(project: Project): string {
       : `# ${chunk.name}`;
     const lines = [header];
     for (const field of chunk.fields) {
-      let val = field.value;
-      if (!val) continue;
-      const match = val.match(/^\$\{(.+)}$/);
-      if (match) {
-        const entry = st.vault.api_keys.find(e => e.provider === match[1]);
-        if (entry) val = entry.api_key;
-      }
-      lines.push(`${field.key} = ${val}`);
+      if (!field.value) continue;
+      // Use the shared resolver rather than matching `${PROVIDER}` by hand.
+      // The hand-rolled version understood only the bare legacy form, so
+      // `${Provider/field}`, `${Provider_KeyId}`, `${chunk:…}` and .env-backed
+      // references were all written out as literal `${…}` text — producing a
+      // wg0.conf with a placeholder where the private key should be, which
+      // WireGuard then rejects.
+      const { resolved } = resolveFieldRef(field.value, true);
+      lines.push(`${field.key} = ${resolved ?? field.value}`);
     }
     sections.push(lines.join('\n'));
   }
@@ -1133,7 +1057,7 @@ export function exportDockerCompose(project: Project): { yaml: string; envFile: 
   const networkChunks = chunks.filter(c => c.chunk_type === 'docker_network');
   const volumeChunks  = chunks.filter(c => c.chunk_type === 'docker_volume');
 
-  const out: string[] = ['# Generated by API Vault', ''];
+  const out: string[] = ['# Generated by EnvVault', ''];
   const envLines: string[] = [];
 
   const yamlStr = (v: string): string => {
@@ -1214,9 +1138,17 @@ export function exportDockerCompose(project: Project): { yaml: string; envFile: 
         for (const f of envFields) {
           const ref = f.ref_name || (f.value?.match(/^\$\{(.+)}$/) || [])[1];
           if (ref) {
-            out.push(`      - ${f.key}=\${${ref}}`);
-            const entry = st.vault.api_keys.find(e => e.provider === ref);
-            envLines.push(`${ref}=${entry ? entry.api_key : ''}`);
+            // Compose substitutes ${NAME} from the .env beside it, and NAME has
+            // to be a valid shell identifier — a reference like `Provider/field`
+            // is not one, so derive the variable name from the field key.
+            const varName = f.key.toUpperCase().replace(/[^A-Z0-9_]/g, '_');
+            out.push(`      - ${f.key}=\${${varName}}`);
+            // Resolve through the shared resolver: matching provider names by
+            // hand only understood the bare `${PROVIDER}` form, so every other
+            // reference shape wrote an empty value into the .env file and the
+            // container started with a blank secret.
+            const { resolved } = resolveFieldRef(f.value ?? '', true);
+            envLines.push(`${varName}=${resolved ?? ''}`);
           } else {
             out.push(`      - ${f.key}=${f.value ?? ''}`);
           }
@@ -1464,7 +1396,7 @@ export function exportNginx(project: Project): string {
   const upstreams = chunks.filter(c => c.chunk_type === 'nginx_upstream');
   const servers   = chunks.filter(c => c.chunk_type === 'nginx_server');
   const locations = chunks.filter(c => c.chunk_type === 'nginx_location');
-  const lines: string[] = ['# Generated by API Vault', ''];
+  const lines: string[] = ['# Generated by EnvVault', ''];
 
   for (const u of upstreams) {
     lines.push(`upstream ${u.name} {`);
@@ -1496,6 +1428,26 @@ export function exportNginx(project: Project): string {
   return lines.join('\n');
 }
 
+/**
+ * Base64 of a string's UTF-8 bytes, as Kubernetes `Secret.data` requires.
+ *
+ * `btoa` operates on Latin-1 code units, which broke this two ways: any
+ * character above U+00FF (an emoji, CJK, anything outside Latin-1) threw
+ * `InvalidCharacterError` and took the whole export down, and a character in
+ * U+0080–U+00FF — `é`, `£`, `ü` — encoded its Latin-1 byte instead of its UTF-8
+ * bytes, so the cluster silently decoded a *different* secret than the one
+ * stored. The quiet corruption is the worse of the two.
+ */
+function b64Utf8(s: string): string {
+  const bytes = new TextEncoder().encode(s);
+  const CHUNK = 0x8000;
+  let bin = '';
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    bin += String.fromCharCode(...bytes.subarray(i, i + CHUNK));
+  }
+  return btoa(bin);
+}
+
 export function exportK8s(project: Project): string {
   const manifests: string[] = [];
   for (const chunk of project.chunks || []) {
@@ -1520,7 +1472,10 @@ export function exportK8s(project: Project): string {
       manifests.push(`apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: ${name}\n  namespace: ${ns}\ndata:\n${dataFields.map(f => `  ${f.key}: ${JSON.stringify(f.value)}`).join('\n')}`);
     } else if (chunk.chunk_type === 'k8s_secret') {
       const dataFields = chunk.fields.filter(f => f.key !== 'name' && f.key !== 'namespace');
-      manifests.push(`apiVersion: v1\nkind: Secret\nmetadata:\n  name: ${name}\n  namespace: ${ns}\ntype: Opaque\ndata:\n${dataFields.map(f => `  ${f.key}: ${btoa(f.value)}`).join('\n')}`);
+      // Resolve references before encoding — a field holding `${DB_PASSWORD}`
+      // was base64'd literally, shipping the placeholder text to the cluster as
+      // if it were the secret.
+      manifests.push(`apiVersion: v1\nkind: Secret\nmetadata:\n  name: ${name}\n  namespace: ${ns}\ntype: Opaque\ndata:\n${dataFields.map(f => `  ${f.key}: ${b64Utf8(resolveFieldRef(f.value ?? '', true).resolved ?? f.value ?? '')}`).join('\n')}`);
     } else if (chunk.chunk_type === 'k8s_ingress') {
       const host = chunk.fields.find(f => f.key === 'host')?.value || 'example.com';
       const svcName = chunk.fields.find(f => f.key === 'serviceName')?.value || name;
@@ -1532,7 +1487,7 @@ export function exportK8s(project: Project): string {
 }
 
 export function exportSshConfig(project: Project): string {
-  const lines: string[] = ['# Generated by API Vault', ''];
+  const lines: string[] = ['# Generated by EnvVault', ''];
   for (const chunk of project.chunks || []) {
     if (chunk.chunk_type !== 'ssh_host') continue;
     lines.push(`Host ${chunk.name}`);
@@ -1547,7 +1502,7 @@ export function exportTraefik(project: Project): string {
   const routers     = chunks.filter(c => c.chunk_type === 'traefik_router');
   const services    = chunks.filter(c => c.chunk_type === 'traefik_service');
   const middlewares = chunks.filter(c => c.chunk_type === 'traefik_middleware');
-  const lines: string[] = ['# Generated by API Vault', 'http:'];
+  const lines: string[] = ['# Generated by EnvVault', 'http:'];
 
   if (routers.length) {
     lines.push('  routers:');
@@ -1587,308 +1542,6 @@ export function exportTraefik(project: Project): string {
   return lines.join('\n');
 }
 
-// ── Parsers ────────────────────────────────────────────────────────────────
-
-export function parseWgConf(text: string): SecretChunk[] {
-  const chunks: SecretChunk[] = [];
-  let cur: SecretChunk | null = null;
-  for (const raw of text.split(/\r?\n/)) {
-    const line = raw.trim();
-    if (!line || line.startsWith('#')) continue;
-    if (line === '[Interface]') {
-      cur = { id: crypto.randomUUID(), name: 'Interface', chunk_type: 'wg_interface', fields: [] };
-      chunks.push(cur);
-    } else if (line === '[Peer]') {
-      const n = chunks.filter(c => c.chunk_type === 'wg_peer').length + 1;
-      cur = { id: crypto.randomUUID(), name: `Peer ${n}`, chunk_type: 'wg_peer', fields: [] };
-      chunks.push(cur);
-    } else if (cur) {
-      const eq = line.indexOf('=');
-      if (eq < 0) continue;
-      const key = line.slice(0, eq).trim();
-      const val = line.slice(eq + 1).trim().replace(/\s+#.*$/, '');
-      const isSecret = key === 'PrivateKey' || key === 'PresharedKey';
-      const ft: ChunkFieldType = isSecret ? 'secret'
-        : /^(Address|AllowedIPs)$/i.test(key) ? 'subnet'
-        : /^DNS$/i.test(key) ? 'ip'
-        : /^Endpoint$/i.test(key) ? 'endpoint'
-        : /^ListenPort$/i.test(key) ? 'port'
-        : /^(PostUp|PostDown|PreUp|PreDown)$/i.test(key) ? 'multiline'
-        : 'var';
-      cur.fields.push({ key, value: val, field_type: ft, secret: isSecret || undefined });
-    }
-  }
-  return chunks;
-}
-
-export function parseDockerCompose(text: string): SecretChunk[] {
-  const chunks: SecretChunk[] = [];
-  const lines = text.split(/\r?\n/);
-
-  let baseIndent = 0;
-  for (const line of lines) {
-    if (!line.trim() || line.trim().startsWith('#')) continue;
-    const ind = line.length - line.trimStart().length;
-    if (ind > 0) { baseIndent = ind; break; }
-  }
-  if (baseIndent === 0) baseIndent = 2;
-
-  type Top = 'none' | 'services' | 'networks' | 'volumes';
-  type Ctx = 'none' | 'service' | 'env' | 'list';
-  let top: Top = 'none', ctx: Ctx = 'none';
-  let svc: SecretChunk | null = null;
-  let listKey = '', listVals: string[] = [];
-  let netChunk: SecretChunk | null = null;
-  let volChunk: SecretChunk | null = null;
-
-  const stripVal = (raw: string) =>
-    raw.replace(/\s+#.*$/, '').trim().replace(/^["']+|["']+$/g, '');
-
-  const flushList = () => {
-    if (svc && listKey && listVals.length) {
-      const ft: ChunkFieldType = listKey === 'ports' ? 'port' : listKey === 'volumes' ? 'volume_mount' : 'list';
-      svc.fields.push({ key: listKey, value: listVals.join('\n'), field_type: ft });
-    }
-    listKey = ''; listVals = [];
-  };
-
-  const detectSvcFieldType = (key: string): ChunkFieldType => {
-    if (/^user(_?id)?$/i.test(key)) return 'user_id';
-    return 'var';
-  };
-
-  for (const raw of lines) {
-    const trimmed = raw.trim();
-    if (!trimmed || trimmed.startsWith('#')) continue;
-    const ind   = raw.length - raw.trimStart().length;
-    const level = Math.round(ind / baseIndent);
-
-    if (level === 0) {
-      flushList(); svc = null; ctx = 'none';
-      const stripped = trimmed.split(/\s+#/)[0].trimEnd();
-      top = stripped === 'services:' ? 'services'
-          : stripped === 'networks:' ? 'networks'
-          : stripped === 'volumes:'  ? 'volumes'
-          : 'none';
-    } else if (level === 1) {
-      flushList(); ctx = 'none';
-      const name = trimmed.split(':')[0].trim();
-      if (!name) continue;
-      if (top === 'services') {
-        svc = { id: crypto.randomUUID(), name, chunk_type: 'docker_service', fields: [] };
-        chunks.push(svc); ctx = 'service';
-      } else if (top === 'networks') {
-        if (!netChunk) {
-          netChunk = { id: crypto.randomUUID(), name: 'networks', chunk_type: 'docker_network', fields: [] };
-          chunks.push(netChunk);
-        }
-        netChunk.fields.push({ key: name, value: '', field_type: 'var' });
-      } else if (top === 'volumes') {
-        if (!volChunk) {
-          volChunk = { id: crypto.randomUUID(), name: 'volumes', chunk_type: 'docker_volume', fields: [] };
-          chunks.push(volChunk);
-        }
-        volChunk.fields.push({ key: name, value: '', field_type: 'var' });
-      }
-    } else if (level === 2 && svc) {
-      flushList();
-      if (trimmed === 'environment:') { ctx = 'env'; }
-      else if (trimmed.endsWith(':') && !trimmed.includes(': ')) {
-        listKey = trimmed.slice(0, -1); listVals = []; ctx = 'list';
-      } else {
-        ctx = 'service';
-        const ci = trimmed.indexOf(': ');
-        if (ci > 0) {
-          const key = trimmed.slice(0, ci).trim();
-          const val = stripVal(trimmed.slice(ci + 2));
-          svc.fields.push({ key, value: val, field_type: detectSvcFieldType(key) });
-        }
-      }
-    } else if (level >= 3 && svc) {
-      if (ctx === 'env') {
-        const envLine = trimmed.startsWith('- ') ? trimmed.slice(2) : trimmed;
-        const ei  = envLine.indexOf('=');
-        const ci2 = envLine.indexOf(': ');
-        let key = '', val = '';
-        if (ei > 0)       { key = envLine.slice(0, ei).trim();  val = stripVal(envLine.slice(ei + 1)); }
-        else if (ci2 > 0) { key = envLine.slice(0, ci2).trim(); val = stripVal(envLine.slice(ci2 + 2)); }
-        if (key) {
-          const isRef = /^\$\{.+\}$/.test(val);
-          const isSecret = !isRef && /pass(word)?|secret|key|token|cred/i.test(key) && val !== '';
-          const ft: ChunkFieldType = isRef ? 'env_var' : (isSecret ? 'secret' : 'var');
-          svc.fields.push({ key, value: val, field_type: ft, secret: isSecret || undefined, description: 'env' });
-        }
-      } else if (ctx === 'list' && trimmed.startsWith('- ')) {
-        listVals.push(stripVal(trimmed.slice(2)));
-      }
-    }
-  }
-  flushList();
-  return chunks;
-}
-
-export function parseSshConfig(text: string): SecretChunk[] {
-  const chunks: SecretChunk[] = [];
-  let cur: SecretChunk | null = null;
-  for (const raw of text.split(/\r?\n/)) {
-    const line = raw.trim();
-    if (!line || line.startsWith('#')) continue;
-    const m = line.match(/^(\S+)\s+(.+)$/);
-    if (!m) continue;
-    const [, key, val] = m;
-    if (key.toLowerCase() === 'host') {
-      cur = { id: crypto.randomUUID(), name: val.trim(), chunk_type: 'ssh_host', fields: [] };
-      chunks.push(cur);
-    } else if (cur) {
-      cur.fields.push({ key, value: val.trim(), field_type: 'var' });
-    }
-  }
-  return chunks;
-}
-
-export function parseNginxConf(text: string): SecretChunk[] {
-  const chunks: SecretChunk[] = [];
-  const toks: string[] = [];
-
-  // Tokenize: strip # comments, split at ; { } respecting quoted strings
-  {
-    let buf = '', inSQ = false, inDQ = false;
-    for (let i = 0; i < text.length; i++) {
-      const c = text[i];
-      if (!inSQ && !inDQ && c === '#') { while (i < text.length && text[i] !== '\n') i++; continue; }
-      if (c === "'" && !inDQ) { inSQ = !inSQ; buf += c; continue; }
-      if (c === '"' && !inSQ) { inDQ = !inDQ; buf += c; continue; }
-      if (!inSQ && !inDQ && (c === '{' || c === '}' || c === ';')) {
-        if (buf.trim()) toks.push(buf.trim());
-        toks.push(c);
-        buf = '';
-      } else if (!inSQ && !inDQ && /\s/.test(c)) {
-        if (buf.length && !buf.endsWith(' ')) buf += ' ';
-      } else {
-        buf += c;
-      }
-    }
-    if (buf.trim()) toks.push(buf.trim());
-  }
-
-  let pos = 0;
-  const MULTI_ARG = /^(add_header|proxy_set_header|more_set_headers|fastcgi_param)$/i;
-
-  function ftype(key: string): ChunkFieldType {
-    const base = key.split(/\s+/)[0];
-    if (/^listen$/i.test(base)) return 'port';
-    if (/^(ssl_certificate|ssl_certificate_key|ssl_trusted_certificate)$/i.test(base)) return 'cert';
-    if (/^(proxy_pass|fastcgi_pass|uwsgi_pass|grpc_pass)$/i.test(base)) return 'endpoint';
-    if (MULTI_ARG.test(base)) return 'multiline';
-    return 'var';
-  }
-
-  function parseToken(tok: string): { key: string; val: string } {
-    const sp = tok.split(/\s+/);
-    if (MULTI_ARG.test(sp[0]) && sp.length >= 3) {
-      return { key: `${sp[0]} ${sp[1]}`, val: sp.slice(2).join(' ') };
-    }
-    return { key: sp[0], val: sp.slice(1).join(' ') };
-  }
-
-  function skipBlock() {
-    let d = 1;
-    while (pos < toks.length && d > 0) {
-      if (toks[pos] === '{') d++;
-      else if (toks[pos] === '}') d--;
-      pos++;
-    }
-  }
-
-  function parseDirectives(chunk: SecretChunk, locs?: SecretChunk[]) {
-    while (pos < toks.length) {
-      const tok = toks[pos];
-      if (tok === '}') { pos++; return; }
-      if (tok === ';') { pos++; continue; }
-      pos++;
-      const next = toks[pos] ?? '';
-      if (next === '{') {
-        pos++;
-        const parts = tok.split(/\s+/);
-        const bt = parts[0].toLowerCase();
-        const ba = parts.slice(1).join(' ');
-        if (bt === 'location' && locs) {
-          const loc: SecretChunk = {
-            id: crypto.randomUUID(),
-            name: `location ${ba}`,
-            chunk_type: 'nginx_location',
-            fields: [{ key: 'path', value: ba, field_type: 'var' }],
-          };
-          parseDirectives(loc);
-          locs.push(loc);
-        } else {
-          skipBlock();
-        }
-      } else if (next === ';') {
-        pos++;
-        const { key, val } = parseToken(tok);
-        if (key) chunk.fields.push({ key, value: val, field_type: ftype(key) });
-      }
-    }
-  }
-
-  function nameServer(c: SecretChunk, n: number): string {
-    const listen = c.fields.find(f => f.key === 'listen');
-    const sname  = c.fields.find(f => f.key === 'server_name');
-    const port   = listen?.value.match(/(\d+)/)?.[1] ?? '80';
-    const domain = sname?.value.split(/\s+/).find(s => !s.startsWith('www.'))
-      ?? sname?.value.split(/\s+/)[0];
-    return domain ? `${domain}:${port}` : `server-${n}`;
-  }
-
-  function parseContainer() {
-    while (pos < toks.length) {
-      const tok = toks[pos];
-      if (tok === '}') { pos++; return; }
-      if (tok === ';') { pos++; continue; }
-      pos++;
-      const next = toks[pos] ?? '';
-      if (next === '{') {
-        pos++;
-        const parts = tok.split(/\s+/);
-        const bt = parts[0].toLowerCase();
-        const ba = parts.slice(1).join(' ');
-        if (bt === 'server') {
-          const n = chunks.filter(c => c.chunk_type === 'nginx_server').length + 1;
-          const sv: SecretChunk = {
-            id: crypto.randomUUID(),
-            name: `server-${n}`,
-            chunk_type: 'nginx_server',
-            fields: [],
-          };
-          const locs: SecretChunk[] = [];
-          parseDirectives(sv, locs);
-          sv.name = nameServer(sv, n);
-          chunks.push(sv, ...locs);
-        } else if (bt === 'upstream') {
-          const up: SecretChunk = {
-            id: crypto.randomUUID(),
-            name: ba || 'upstream',
-            chunk_type: 'nginx_upstream',
-            fields: [],
-          };
-          parseDirectives(up);
-          chunks.push(up);
-        } else if (bt === 'http' || bt === 'stream') {
-          parseContainer();
-        } else {
-          skipBlock();
-        }
-      } else if (next === ';') {
-        pos++;
-      }
-    }
-  }
-
-  parseContainer();
-  return chunks;
-}
-
 export function pickFileText(accept: string, cb: (text: string, name: string) => void | Promise<void>): void {
   const inp = document.createElement('input');
   inp.type = 'file';
@@ -1909,88 +1562,3 @@ export function pickFileText(accept: string, cb: (text: string, name: string) =>
   setTimeout(() => window.addEventListener('focus', cleanup, { once: true }), 300);
 }
 
-// ── Chunk edit modal ───────────────────────────────────────────────────────
-
-export function openChunkEditModal(project: Project, chunk: SecretChunk) {
-  const overlay = document.getElementById('chunk-edit-overlay')!;
-  (document.getElementById('chunk-edit-name') as HTMLInputElement).value = chunk.name;
-  (document.getElementById('chunk-edit-notes') as HTMLInputElement).value = chunk.notes || '';
-  (document.getElementById('chunk-edit-disabled') as HTMLInputElement).checked = !!chunk.disabled;
-  (document.getElementById('chunk-edit-project-id') as HTMLInputElement).value = project.id;
-  (document.getElementById('chunk-edit-chunk-id') as HTMLInputElement).value = chunk.id;
-  renderChunkEditFields(chunk.fields);
-  overlay.classList.add('open');
-}
-
-export function closeChunkEditModal() {
-  document.getElementById('chunk-edit-overlay')!.classList.remove('open');
-}
-
-export function renderChunkEditFields(fields: ChunkField[]) {
-  const container = document.getElementById('chunk-edit-fields')!;
-  container.innerHTML = '';
-  fields.forEach((field, i) => {
-    const row = document.createElement('div');
-    row.className = 'chunk-edit-row';
-    row.dataset.idx = String(i);
-    row.innerHTML = `
-      <input class="form-input mono chunk-field-key-input" placeholder="Key" value="${escAttr(field.key)}" style="flex:0 0 140px">
-      <input class="form-input mono chunk-field-val-input" placeholder="Value or \${REF}" value="${escAttr(field.value)}" style="flex:1">
-      <select class="form-input chunk-field-type-select" style="flex:0 0 110px">
-        <option value="var"${field.field_type === 'var' ? ' selected' : ''}>var</option>
-        <option value="env_var"${field.field_type === 'env_var' ? ' selected' : ''}>env_var</option>
-        <option value="secret"${field.field_type === 'secret' ? ' selected' : ''}>secret</option>
-        <option value="list"${field.field_type === 'list' ? ' selected' : ''}>list</option>
-        <option value="multiline"${field.field_type === 'multiline' ? ' selected' : ''}>multiline</option>
-        <option value="port"${field.field_type === 'port' ? ' selected' : ''}>port</option>
-        <option value="user_id"${field.field_type === 'user_id' ? ' selected' : ''}>user_id</option>
-        <option value="subnet"${field.field_type === 'subnet' ? ' selected' : ''}>subnet</option>
-        <option value="ip"${field.field_type === 'ip' ? ' selected' : ''}>ip</option>
-        <option value="endpoint"${field.field_type === 'endpoint' ? ' selected' : ''}>endpoint</option>
-        <option value="volume_mount"${field.field_type === 'volume_mount' ? ' selected' : ''}>volume_mount</option>
-        <option value="cert"${field.field_type === 'cert' ? ' selected' : ''}>cert</option>
-      </select>
-      <button class="icon-btn sm danger chunk-field-delete" data-idx="${i}" title="Remove field">${delSVG}</button>
-    `;
-    container.appendChild(row);
-  });
-
-  container.querySelectorAll<HTMLButtonElement>('.chunk-field-delete').forEach(btn => {
-    btn.addEventListener('click', (e) => {
-      e.stopPropagation();
-      const idx = parseInt(btn.dataset.idx!);
-      const currentFields = readChunkEditFields();
-      currentFields.splice(idx, 1);
-      renderChunkEditFields(currentFields);
-    });
-  });
-}
-
-export function readChunkEditFields(): ChunkField[] {
-  const rows = document.querySelectorAll<HTMLElement>('#chunk-edit-fields .chunk-edit-row');
-  return Array.from(rows).map(row => ({
-    key: (row.querySelector('.chunk-field-key-input') as HTMLInputElement).value.trim(),
-    value: (row.querySelector('.chunk-field-val-input') as HTMLInputElement).value,
-    field_type: (row.querySelector('.chunk-field-type-select') as HTMLSelectElement).value as ChunkFieldType,
-    secret: (row.querySelector('.chunk-field-type-select') as HTMLSelectElement).value === 'secret',
-  }));
-}
-
-export function saveChunkEdit() {
-  const projId = (document.getElementById('chunk-edit-project-id') as HTMLInputElement).value;
-  const chunkId = (document.getElementById('chunk-edit-chunk-id') as HTMLInputElement).value;
-  const name = (document.getElementById('chunk-edit-name') as HTMLInputElement).value.trim();
-  if (!name) { showToast('Chunk name is required', 'err'); return; }
-  const project = st.vault.projects.find(p => p.id === projId);
-  if (!project || !project.chunks) return;
-  const chunk = project.chunks.find(c => c.id === chunkId);
-  if (!chunk) return;
-  chunk.name = name;
-  chunk.notes = (document.getElementById('chunk-edit-notes') as HTMLInputElement).value.trim() || undefined;
-  chunk.disabled = (document.getElementById('chunk-edit-disabled') as HTMLInputElement).checked || undefined;
-  chunk.fields = readChunkEditFields();
-  st.store.save(st.vault);
-  closeChunkEditModal();
-  triggerRender();
-  showToast('Chunk saved', 'ok');
-}
