@@ -352,6 +352,11 @@
   display: flex; flex-direction: column; gap: 10px;
 }
 .lan-card.running { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent-dim); }
+/* Shown while a remote vault is connected: the LAN server would publish the
+   local vault, not the remote on screen, so the control is replaced by an
+   explanation rather than left live. */
+.lan-card.lan-card-muted { opacity: .7; }
+.lan-card.lan-card-muted .lan-title { color: var(--text3); }
 
 .lan-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .lan-title { font-size: 13px; font-weight: 600; color: var(--text1); }

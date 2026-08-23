@@ -5,7 +5,7 @@
 import type { VaultEntry, SecretType } from './types';
 import { st, Settings, triggerRender, Exporter, dotenvKey, persist, entryId, newEntryId } from './state';
 import { esc, escAttr, maskKey, showToast, showConfirm, clipboardWrite, eyeSVG, copySVG, dupSVG, editSVG, delSVG } from './utils';
-import { iconHTML, openIconPicker, iconPicker } from './icons';
+import { iconHTML, openIconPicker, iconPicker, setIconField, readIconField } from './icons';
 import { renameProviderRefs } from './chunk-ops';
 
 // ── Schema tooltips & category chips ──────────────────────────────────────
@@ -135,7 +135,7 @@ export function formToEntry(): VaultEntry {
     api_description: getVal('f-apidesc') || undefined,
     description: getVal('f-desc') || undefined,
     details: getVal('f-details') || undefined,
-    custom_icon: getVal('f-icon') || undefined,
+    custom_icon: readIconField(document.getElementById('f-icon') as HTMLInputElement | null),
     categories: cats,
     tags: getVal('f-tags-input').split(/\s+/).filter(Boolean).length
       ? getVal('f-tags-input').split(/\s+/).filter(Boolean)
@@ -195,7 +195,7 @@ export function fillForm(entry: Partial<VaultEntry>) {
   (document.getElementById('f-apidesc') as HTMLInputElement).value = entry.api_description || '';
   (document.getElementById('f-desc') as HTMLInputElement).value = entry.description || '';
   (document.getElementById('f-details') as HTMLInputElement).value = entry.details || '';
-  (document.getElementById('f-icon') as HTMLInputElement).value = entry.custom_icon || '';
+  setIconField(document.getElementById('f-icon') as HTMLInputElement | null, entry.custom_icon);
   const tagsInput = document.getElementById('f-tags-input') as HTMLInputElement | null;
   if (tagsInput) tagsInput.value = (entry.tags || []).join(' ');
   (document.getElementById('f-icon-preview')!).innerHTML = entry.custom_icon ? iconHTML('', entry.custom_icon) : '';

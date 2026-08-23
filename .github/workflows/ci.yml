@@ -12,14 +12,23 @@ env:
 
 jobs:
   rust:
-    name: Rust (build + test)
-    runs-on: ubuntu-latest
+    name: Rust (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      # One platform failing should still report the other, or a Windows-only
+      # break hides behind a green Linux run and vice versa.
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
     steps:
       - uses: actions/checkout@v4
 
       # rusqlite's `sqlcipher` feature links against the system SQLCipher, and
       # the Tauri crate needs the WebKitGTK stack even for `cargo check`.
+      # Windows needs none of this: it vendors SQLCipher and OpenSSL (see
+      # vault-core/Cargo.toml) and WebView2 ships with the runner image.
       - name: Install system dependencies
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
@@ -42,6 +51,13 @@ jobs:
 
       - name: Check the whole workspace
         run: cargo check --workspace --all-targets
+
+      # The portable build path — SQLCipher and OpenSSL compiled in — is what
+      # release artefacts use, so it has to be exercised somewhere. Checking it
+      # on Linux catches a broken feature union without paying for it on both.
+      - name: Check the bundled (distro-independent) build
+        if: runner.os == 'Linux'
+        run: cargo check -p vault-core --features bundled
 
   frontend:
     name: Frontend (typecheck + test + build)

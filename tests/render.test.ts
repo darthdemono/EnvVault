@@ -6,6 +6,8 @@
  * is attacker-influenced data the moment a shared/remote vault is in play.
  */
 import { describe, it, expect, beforeEach } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { renderGrid, render, updateCopyAllBtn } from '../src/ts/render';
 import { st, Settings } from '../src/ts/state';
 import { loadRealIndexHtml, makeEntry, makeProject, makeVault, resetState } from './helpers';
@@ -309,5 +311,92 @@ describe('updateCopyAllBtn', () => {
     st.vault.api_keys = [makeEntry()];
     updateCopyAllBtn();
     expect(document.getElementById('copy-all-wrap')!.style.display).toBe('flex');
+  });
+});
+
+describe('card size', () => {
+  // The card-size setting used to move only the grid's column width; card
+  // height was whatever the content came to, so a three-line description or a
+  // row of tags pushed the footer — and the copy button in it — to a different
+  // offset on every card. Height and every internal dimension are now CSS
+  // tokens selected by #card-grid[data-card-size], which jsdom will not compute
+  // — so the tests split: the DOM contract here, the token block below.
+  const sizes = ['compact', 'medium', 'large'] as const;
+
+  it('stamps the chosen size onto the grid for CSS to select on', () => {
+    st.vault.api_keys = [makeEntry()];
+    sizes.forEach(size => {
+      Settings.set('cardSize', size);
+      renderGrid();
+      expect(grid().dataset.cardSize).toBe(size);
+    });
+  });
+
+  it('still sets the column width from the same setting', () => {
+    st.vault.api_keys = [makeEntry()];
+    Settings.set('cardSize', 'large');
+    Settings.set('gridColumns', 'auto');
+    renderGrid();
+    expect(grid().style.gridTemplateColumns).toContain('460px');
+  });
+
+  it('wraps the provider name so it can be ellipsised apart from its badges', () => {
+    // Bare text in .card-provider cannot take text-overflow, so a long name
+    // widened the flex row and clipped the badges beside it instead.
+    st.vault.api_keys = [makeEntry({ provider: 'A'.repeat(120) })];
+    renderGrid();
+    const name = cards()[0].querySelector('.card-provider-name')!;
+    expect(name).not.toBeNull();
+    expect(name.textContent).toBe('A'.repeat(120));
+    expect(name.getAttribute('title')).toBe('A'.repeat(120));
+  });
+
+  it('leaves the project row to the stylesheet so it can be clamped by size', () => {
+    // It carried an inline `display:flex` that beat any max-height rule.
+    st.vault.api_keys = [makeEntry()];
+    renderGrid();
+    expect(cards()[0].querySelector('.card-projects')!.getAttribute('style')).toBeNull();
+  });
+});
+
+describe('card-size stylesheet tokens', () => {
+  // jsdom applies no stylesheet, so the sizing contract is asserted against the
+  // CSS source: each size must redefine the height token, or the "resizer also
+  // changes height" behaviour silently degrades to width-only.
+  // process.cwd() is the vitest root; import.meta.url is not a file: URL under
+  // the jsdom environment.
+  const css = readFileSync(resolve(process.cwd(), 'src/css/cards.css'), 'utf8');
+
+  it('gives every card size its own height', () => {
+    const heights = [...css.matchAll(/--cs-card-h:\s*(\d+)px/g)].map(m => Number(m[1]));
+    // Declared medium (the default block), then compact, then large.
+    expect(heights).toHaveLength(3);
+    const [medium, compact, large] = heights;
+    expect(compact).toBeLessThan(medium);
+    expect(medium).toBeLessThan(large);
+  });
+
+  it('defines a token block per size selector', () => {
+    ['compact', 'large'].forEach(size =>
+      expect(css).toContain(`#card-grid[data-card-size="${size}"]`));
+  });
+
+  it('pins the footer to a fixed height at the bottom of a collapsed card', () => {
+    // Without both of these the copy-button row drifted with the content above
+    // it and grew a second line whenever the dotenv key was long.
+    expect(css).toMatch(/\.card-foot\s*\{[^}]*flex:\s*0 0 var\(--cs-foot-h\)/);
+    expect(css).toMatch(/\.card-foot\s*\{[^}]*margin-top:\s*auto/);
+  });
+
+  it('lets the copy button shrink below its text', () => {
+    // min-width defaults to auto on a flex item: the button's own text was its
+    // floor, so a long key pushed the icon buttons past the card edge.
+    expect(css).toMatch(/\.env-copy-btn\s*\{[^}]*min-width:\s*0/);
+    expect(css).toMatch(/\.env-copy-btn\s*\{[^}]*white-space:\s*nowrap/);
+  });
+
+  it('clamps the description to a per-size line count with an ellipsis', () => {
+    expect(css).toMatch(/-webkit-line-clamp:\s*var\(--cs-desc-lines\)/);
+    expect([...css.matchAll(/--cs-desc-lines:\s*(\d+)/g)]).toHaveLength(3);
   });
 });

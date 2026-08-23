@@ -3,7 +3,19 @@ name    = "vault-core"
 version = "0.6.0"
 edition = "2021"
 
+[features]
+default = []
+# Compile SQLCipher and OpenSSL into the binary instead of linking the system's.
+#
+# Use it for any artefact that has to run on a machine other than the one that
+# built it: an AppImage linked against Fedora's libsqlcipher0 will not start on a
+# Debian box shipping a different soname, and "works on my distro" is the whole
+# problem a portable bundle exists to solve.
+bundled = ["rusqlite/bundled-sqlcipher-vendored-openssl"]
+
 [dependencies]
+# Unix links the system SQLCipher by default: it builds in seconds instead of
+# minutes, which matters far more during development than portability does.
 rusqlite   = { version = "=0.31.0", features = ["sqlcipher"] }
 argon2     = "=0.5.3"
 rand       = "=0.8.5"
@@ -15,3 +27,10 @@ time       = "=0.3.37"
 sha2       = "0.10"
 serde      = { version = "1", features = ["derive"] }
 serde_json = "1"
+
+# Windows has no system SQLCipher to link against, so it always vendors —
+# otherwise the first thing a Windows contributor meets is a linker error about
+# a library their platform does not package. Cargo unions target features, so
+# this simply adds bundling on top of the `sqlcipher` feature above.
+[target.'cfg(windows)'.dependencies]
+rusqlite = { version = "=0.31.0", features = ["bundled-sqlcipher-vendored-openssl"] }

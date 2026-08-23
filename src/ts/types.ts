@@ -234,6 +234,21 @@ export interface SecretChunk {
 export type ProjectType = 'generic' | 'wireguard' | 'docker' | 'nginx' | 'kubernetes' | 'ssh_config' | 'traefik' | 'apache' | 'haproxy' | 'ansible' | 'postgres';
 
 /**
+ * Project types that have actually been exercised end to end.
+ *
+ * Everything else in `ProjectType` is reachable only with the "experimental
+ * project types" setting switched on: the config views, starter chunks and
+ * exporters exist but have never been run against a real deployment, and a
+ * config this app writes wrong is a broken deploy rather than a cosmetic bug.
+ */
+export const STABLE_PROJECT_TYPES: readonly ProjectType[] = ['generic', 'wireguard', 'docker', 'nginx'];
+
+/** Whether a project type is gated behind the experimental setting. */
+export function isExperimentalProjectType(t: ProjectType | undefined | null): boolean {
+  return !!t && !STABLE_PROJECT_TYPES.includes(t);
+}
+
+/**
  * Root data structure persisted to the encrypted SQLCipher database.
  * Serialised as JSON in the single-row `vault` table.
  */
@@ -442,4 +457,14 @@ export interface AppSettings {
   rememberFilters: boolean;
   /** Last grid view, restored at launch when `rememberFilters` is set. */
   lastView: PersistedView | null;
+
+  /**
+   * Offer the untested project types (Kubernetes, SSH config, Traefik, Apache,
+   * HAProxy, Ansible, PostgreSQL) in the create-project picker.
+   *
+   * Off by default. Gates *creation only* — a project already using one of
+   * these keeps its config view and chunks regardless, since hiding the view
+   * would leave that data in the vault with no way to reach it.
+   */
+  experimentalProjectTypes: boolean;
 }

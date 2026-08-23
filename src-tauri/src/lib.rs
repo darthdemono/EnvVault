@@ -815,16 +815,48 @@ mod commands {
     }
 }
 
+// ── Linux display-stack workarounds ───────────────────────────────────────────
+
+/// Apply the WebKitGTK workarounds this app needs, without dictating a backend.
+///
+/// These were unconditional, which is wrong in two directions. Forcing
+/// `GDK_BACKEND=x11` on a Wayland session pushes the whole window through
+/// XWayland: blurry on fractional scaling, wrong cursor size on HiDPI, and
+/// broken on the distros now shipping without XWayland at all. Meanwhile the
+/// compositing and DMABUF flags are genuinely needed — WebKitGTK's DMABUF
+/// renderer is a reliable source of blank windows on Nvidia and on older Mesa —
+/// but a user with working hardware acceleration should be able to turn them
+/// back on.
+///
+/// So: every variable is a default, not an override. Anything already set in the
+/// environment wins, which makes `WEBKIT_DISABLE_COMPOSITING_MODE=0 envvault` a
+/// working escape hatch instead of a no-op.
+#[cfg(target_os = "linux")]
+fn configure_linux_webkit() {
+    fn default_env(key: &str, value: &str) {
+        if std::env::var_os(key).is_none() {
+            std::env::set_var(key, value);
+        }
+    }
+
+    // Native Wayland is the better path where it exists; X11 stays the default
+    // only when the session is not Wayland to begin with.
+    let wayland = std::env::var_os("WAYLAND_DISPLAY").is_some()
+        || std::env::var("XDG_SESSION_TYPE").map(|v| v == "wayland").unwrap_or(false);
+    if !wayland {
+        default_env("GDK_BACKEND", "x11");
+    }
+
+    default_env("WEBKIT_DISABLE_COMPOSITING_MODE", "1");
+    default_env("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
+}
+
 // ── App entry ─────────────────────────────────────────────────────────────────
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     #[cfg(target_os = "linux")]
-    {
-        std::env::set_var("GDK_BACKEND", "x11");
-        std::env::set_var("WEBKIT_DISABLE_COMPOSITING_MODE", "1");
-        std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
-    }
+    configure_linux_webkit();
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())

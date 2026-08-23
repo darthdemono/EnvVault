@@ -9,7 +9,7 @@
  * so the master password never crosses the network.
  */
 
-import { st, Settings, applyUsersPanelVisibility, switchPanel } from './state';
+import { st, Settings, applyUsersPanelVisibility, switchPanel, inTauri } from './state';
 import { esc, showToast, showConfirm, clipboardWrite } from './utils';
 
 const invoke = (cmd: string, args?: Record<string, unknown>) =>
@@ -62,6 +62,22 @@ function stopPolling() {
 }
 
 export async function startLan(): Promise<void> {
+  // Second gate, not a redundant one. The render gate can be stale — the card
+  // is painted once and only repainted on the events we remembered to hook, so
+  // a switch to a remote that missed a repaint would leave a live button behind.
+  // The consequence of getting this wrong is publishing the wrong vault, which
+  // is worth checking at the point of action rather than only at paint time.
+  if (!lanAvailable()) {
+    showToast(
+      st.store.isRemote
+        ? 'Open to LAN serves the vault on this machine — switch to the local vault first'
+        : 'Open to LAN is only available in the desktop app',
+      'err', 5000,
+    );
+    render();
+    return;
+  }
+
   try {
     _status = await invoke('lan_start', { port: null, tls: true });
     st.lanServerRunning = true;
@@ -115,9 +131,45 @@ export async function confirmStopForLock(): Promise<boolean> {
   return true;
 }
 
+/**
+ * Whether "Open to LAN" can serve anything from here.
+ *
+ * `lan_start` reads the key out of Rust's `VaultState` and opens **this
+ * machine's** `vault.db` — it has no idea a remote vault is on screen. Nothing
+ * locks the local vault when you connect to a remote (`lockVault` only calls
+ * `.lock()` on the *current* store), so after unlock-local → connect-remote the
+ * local key is still resident and `lan_start` succeeds. The card sits in
+ * `#remote-workspace`, the very panel you are looking at while connected, so
+ * pressing it published the local vault while the screen showed the remote's
+ * data — the user would reasonably believe they had just shared what they could
+ * see.
+ *
+ * Non-Tauri is excluded too: `invoke` is undefined there, so the button was
+ * simply inert.
+ */
+export function lanAvailable(): boolean {
+  return inTauri && !st.store.isRemote;
+}
+
 function render(): void {
   const host = document.getElementById('lan-card');
   if (!host) return;
+
+  // A running server stays visible and stoppable regardless — hiding the only
+  // "Stop serving" control while the vault is still being published would be
+  // strictly worse than showing it in the wrong panel.
+  if (!lanAvailable() && !_status.running) {
+    host.innerHTML = st.store.isRemote
+      ? `<div class="lan-card lan-card-muted">
+           <div class="lan-head"><span class="lan-title">Open to LAN</span></div>
+           <p class="lan-help">
+             Serving shares the vault stored on <strong>this machine</strong>, not the
+             remote you are connected to. Switch to the local vault to use it.
+           </p>
+         </div>`
+      : '';
+    return;
+  }
 
   if (!_status.running) {
     host.innerHTML = `
@@ -191,4 +243,16 @@ export function initLanPanel(): void {
   render();
   // Pick up a server left running from before a UI reload.
   refresh().then(() => { if (_status.running) startPolling(); });
+}
+
+/**
+ * Repaint the LAN card after the active vault changes.
+ *
+ * `initLanPanel()` runs once from `finishInit()`, and `render()` otherwise only
+ * fires on start/stop/poll — none of which a vault switch triggers. So the card
+ * kept whatever it was showing when the panel was first built, which is how a
+ * live "Open to LAN" button survived a switch to a remote vault.
+ */
+export function refreshLanPanel(): void {
+  render();
 }

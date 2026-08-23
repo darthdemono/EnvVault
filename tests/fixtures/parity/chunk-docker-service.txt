@@ -1,0 +1,16 @@
+web_app:
+  image: "nginx:alpine"
+  container_name: web
+  ports:
+    - "8080:80"
+    - "8443:443"
+  environment:
+    - DATABASE_URL=${Postgres/url}
+    - STATIC_VALUE=plain
+  volumes:
+    - ./site:/usr/share/nginx/html
+    - ./conf:/etc/nginx/conf.d
+  networks:
+    - frontend
+    - backend
+  restart: always

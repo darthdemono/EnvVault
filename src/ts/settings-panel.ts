@@ -3,7 +3,7 @@
  */
 
 import type { AppSettings } from './types';
-import { Settings, triggerRender, applySidebarOrder, applyActivityBar, switchPanel, applyUsersPanelVisibility } from './state';
+import { Settings, triggerRender, applySidebarOrder, applyActivityBar, applyUsersPanelVisibility } from './state';
 import { showToast } from './utils';
 
 // ── Theme definitions ──────────────────────────────────────────────────────
@@ -272,12 +272,6 @@ export function openSettings() {
   buildSidebarOrderEditor();
   buildPanelOrderEditor();
 
-  // Assignment, not addEventListener: `{ once: true }` only detaches after the
-  // button is clicked, so every open that did not click it left another handler
-  // attached and they all fired together later.
-  const remoteLink = document.getElementById('s-open-remote-panel');
-  if (remoteLink) (remoteLink as HTMLElement).onclick = () => { closeSettings(); switchPanel('remote'); };
-
   (document.getElementById('s-accent')          as HTMLInputElement).value   = s.accentColor;
   document.getElementById('s-accent-val')!.textContent                       = s.accentColor;
   (document.getElementById('s-autolock')         as HTMLInputElement).value   = String(s.autoLockMinutes);
@@ -291,9 +285,11 @@ export function openSettings() {
   (document.getElementById('s-custom-css')       as HTMLTextAreaElement).value = s.customCss || '';
   (document.getElementById('s-group-by-type')    as HTMLInputElement).checked = s.groupByType;
   (document.getElementById('s-remember-filters') as HTMLInputElement).checked = s.rememberFilters !== false;
+  (document.getElementById('s-experimental-ptypes') as HTMLInputElement).checked = !!s.experimentalProjectTypes;
 
-  // Assignment for the same reason as s-open-remote-panel above: the settings
-  // pane is opened repeatedly and addEventListener would stack handlers.
+  // Assignment, not addEventListener: the settings pane is opened repeatedly and
+  // `{ once: true }` only detaches after a click, so every open that did not
+  // click left another handler attached and they all fired together later.
   const clearRecent = document.getElementById('s-clear-recent');
   if (clearRecent) (clearRecent as HTMLElement).onclick = () => {
     Settings.set('recentSearches', []);
@@ -390,6 +386,7 @@ export function saveSettings() {
     customCss:           (document.getElementById('s-custom-css')     as HTMLTextAreaElement).value,
     groupByType:         (document.getElementById('s-group-by-type')  as HTMLInputElement).checked,
     rememberFilters:     (document.getElementById('s-remember-filters') as HTMLInputElement).checked,
+    experimentalProjectTypes: (document.getElementById('s-experimental-ptypes') as HTMLInputElement).checked,
     activityBarPosition: (getSegVal('s-activity-bar-position') || 'left') as 'left' | 'right',
     activityBarStyle:    (getSegVal('s-activity-bar-style')    || 'icon') as 'icon' | 'icon-label',
   });

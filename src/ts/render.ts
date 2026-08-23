@@ -422,13 +422,13 @@ function buildCard(entry: VaultEntry, idx: number, animIdx: number): HTMLElement
       </div>
       <div class="card-meta">
         <div class="card-provider">
-          ${esc(entry.provider)}
+          <span class="card-provider-name" title="${escAttr(entry.provider)}">${esc(entry.provider)}</span>
           ${entry.pinned ? `<span class="pin-badge" title="Pinned"><svg width="9" height="9" viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24Z"/></svg></span>` : ''}
           <span class="badge badge-price" data-price="${escAttr(pt)}">${esc(pt)}</span>
           ${envBadge}${keyIdBadge}${typeBadge}${expiry}${compromisedBadge}${rotBadge}${(entry.env_prefixes?.length) ? entry.env_prefixes.map(p => `<span class="badge badge-prefix" title="Env prefix">${esc(p)}_</span>`).join('') : ''}
         </div>
         <div class="card-account">${esc(entry.account_name || entry.username || entry.email || '')}</div>
-        <div class="card-projects" style="margin-top: 4px; display: flex; gap: 4px; flex-wrap: wrap;">${projectBadges}</div>
+        <div class="card-projects">${projectBadges}</div>
       </div>
       <button class="card-chevron" data-action="toggle" data-idx="${idx}"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg></button>
     </div>

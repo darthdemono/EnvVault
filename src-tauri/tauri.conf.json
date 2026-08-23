@@ -28,7 +28,10 @@
   "bundle": {
     "active": true,
     "targets": [
-      "appimage"
+      "appimage",
+      "deb",
+      "rpm",
+      "nsis"
     ],
     "icon": [
       "icons/32x32.png",
@@ -46,11 +49,26 @@
           "libwebkit2gtk-4.1-0",
           "libgtk-3-0"
         ]
+      },
+      "rpm": {
+        "depends": [
+          "webkit2gtk4.1",
+          "gtk3"
+        ]
       }
     },
     "windows": {
       "wix": {
         "language": "en-US"
+      },
+      "webviewInstallMode": {
+        "type": "downloadBootstrapper"
+      },
+      "nsis": {
+        "installMode": "perMachine",
+        "languages": [
+          "English"
+        ]
       }
     }
   }

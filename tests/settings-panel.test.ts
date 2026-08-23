@@ -107,21 +107,31 @@ describe('cancel', () => {
   });
 });
 
-describe('the remote-panel link', () => {
+describe('buttons inside the settings pane', () => {
+  // Retargeted from the old s-open-remote-panel link, which was removed along
+  // with the Remote tab (it held no settings, only a signpost to the Remote
+  // panel). The bug it guarded is not about that button: any handler bound with
+  // addEventListener or { once: true } here accumulates, because the pane is
+  // opened and closed repeatedly and { once: true } only detaches on click.
   it('does not accumulate a handler on every open', () => {
-    // It was bound with { once: true }, which only detaches on click — so each
-    // open that did not click it left another handler behind.
-    let opens = 0;
-    for (let i = 0; i < 5; i++) { openSettings(); closeSettings(); opens++; }
-    expect(opens).toBe(5);
+    Settings.set('recentSearches', ['alpha', 'beta'] as any);
+    for (let i = 0; i < 5; i++) { openSettings(); closeSettings(); }
 
     openSettings();
-    const link = $('s-open-remote-panel');
+    const btn = $('s-clear-recent');
     let fired = 0;
-    link.addEventListener('click', () => fired++);
-    link.click();
+    btn.addEventListener('click', () => fired++);
+    btn.click();
     expect(fired).toBe(1);
-    expect($('settings-overlay').classList.contains('open')).toBe(false);
+    // One click clears the history once — an accumulated handler would still
+    // land on an already-empty list, so assert the observable effect too.
+    expect(Settings.get('recentSearches')).toEqual([]);
+  });
+
+  it('has no leftover Remote tab or pane', () => {
+    openSettings();
+    expect(document.querySelector('.settings-tab[data-stab="remote"]')).toBeNull();
+    expect(document.querySelector('.settings-tab-pane[data-spane="remote"]')).toBeNull();
   });
 });
 

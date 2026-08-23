@@ -6,6 +6,7 @@ import type { RemoteVaultConfig } from './types';
 import { st, Settings, RemoteVaultStore, TauriVaultStore, LocalVaultStore, inTauri, applyUsersPanelVisibility, resetViewState, triggerRender } from './state';
 import { esc, escAttr, showToast, showConfirm, showPasswordPrompt } from './utils';
 import { relativeTime } from './ui-qol';
+import { refreshLanPanel } from './lan';
 
 let _finishInitFn: () => Promise<void> = async () => {};
 export function setRemoteFinishInitFn(fn: () => Promise<void>) { _finishInitFn = fn; }
@@ -318,6 +319,9 @@ async function connectRemote(cfg: RemoteVaultConfig) {
 
     showToast(`Connected to ${cfg.name}`, 'ok');
     applyUsersPanelVisibility();
+    // The LAN card lives in this very panel and serves the *local* vault, so it
+    // must stop offering to publish the moment a remote takes over.
+    refreshLanPanel();
     startPing();
     renderRemotePanel();
     await _finishInitFn();
@@ -372,6 +376,7 @@ export async function switchToLocalVault(): Promise<void> {
 
   showToast('Switched to local vault', 'ok');
   applyUsersPanelVisibility();
+  refreshLanPanel();
   renderRemotePanel();
 
   if (st.store instanceof TauriVaultStore) {

@@ -76,6 +76,11 @@ pre.chunk-field-val.code-block { background: var(--surface3); border: 1px solid 
 .project-type-btn { display: flex; align-items: center; gap: 6px; padding: 8px 12px; border-radius: 8px; border: 1px solid var(--border2); background: var(--surface2); color: var(--text2); font-size: 12px; font-family: 'Syne', sans-serif; font-weight: 600; cursor: pointer; transition: all .12s; }
 .project-type-btn:hover { border-color: var(--accent); color: var(--accent); }
 .project-type-btn.active { border-color: var(--accent); background: var(--accent-dim); color: var(--accent); }
+/* Untested types, shown only with the experimental setting on. The dashed edge
+   is the signal that these generate config nobody has verified against a real
+   deployment. */
+.project-type-btn.experimental { border-style: dashed; }
+.project-type-btn.experimental::after { content: 'beta'; font-size: 8px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; opacity: .6; margin-left: 2px; }
 
 /* ── Nginx listen badges ──────────────────────────────────────────────────── */
 .listen-badge { display: inline-flex; align-items: center; gap: 4px; font-family: 'JetBrains Mono', monospace; }

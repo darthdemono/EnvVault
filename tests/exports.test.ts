@@ -268,3 +268,75 @@ describe('exportNginx', () => {
     expect(field(server, 'root').value).toBe('/var/www/html');
   });
 });
+
+describe('disabled chunks are excluded from exports', () => {
+  // A disabled chunk is greyed out in the config view and documented as
+  // "excluded from exports". Only the four later exporters (apache, haproxy,
+  // ansible, postgres) actually checked the flag, so the four people deploy
+  // shipped disabled chunks anyway: turning a WireGuard peer off left the
+  // tunnel trusting a peer the user believed they had removed, and a disabled
+  // Compose service still came up.
+  const withDisabled = (type: any, chunkType: string, fields: any[]) =>
+    makeProject({
+      id: 'p1', name: 'P', project_type: type,
+      chunks: [
+        chunk({ name: 'live', chunk_type: chunkType, fields }),
+        chunk({ name: 'off', chunk_type: chunkType, disabled: true, fields: [
+          { key: fields[0].key, value: 'NEVER_EXPORTED', field_type: 'var' },
+        ] }),
+      ],
+    } as any);
+
+  it('exportWireGuard skips them', () => {
+    const proj = withDisabled('wireguard', 'wg_peer', [
+      { key: 'PublicKey', value: 'LIVE_KEY', field_type: 'var' },
+    ]);
+    const out = exportWireGuard(proj);
+    expect(out).toContain('LIVE_KEY');
+    expect(out).not.toContain('NEVER_EXPORTED');
+  });
+
+  it('exportDockerCompose skips them', () => {
+    const proj = withDisabled('docker', 'docker_service', [
+      { key: 'image', value: 'nginx:alpine', field_type: 'var' },
+    ]);
+    const { yaml } = exportDockerCompose(proj);
+    expect(yaml).toContain('nginx:alpine');
+    expect(yaml).not.toContain('NEVER_EXPORTED');
+  });
+
+  it('exportNginx skips them', () => {
+    const proj = withDisabled('nginx', 'nginx_server', [
+      { key: 'server_name', value: 'live.example.com', field_type: 'var' },
+    ]);
+    const out = exportNginx(proj);
+    expect(out).toContain('live.example.com');
+    expect(out).not.toContain('NEVER_EXPORTED');
+  });
+});
+
+describe('exportNginx resolves references', () => {
+  it('writes the certificate path, not the ${…} placeholder', () => {
+    // This exporter interpolated the raw field value while every other one
+    // resolved. The nginx starter template ships `ssl_certificate ${…}` fields,
+    // so the generated config reached nginx with literal placeholder text and
+    // the server refused to start — while copying the same chunk from its card
+    // resolved correctly, so the two disagreed about what the config said.
+    st.vault = makeVault({
+      api_keys: [makeEntry({ provider: 'TLS', api_key: '/etc/ssl/fullchain.pem' })],
+    });
+    const proj = makeProject({
+      id: 'p1', name: 'Web', project_type: 'nginx',
+      chunks: [chunk({
+        name: 'HTTPS', chunk_type: 'nginx_server',
+        fields: [
+          { key: 'listen', value: '443 ssl', field_type: 'port' },
+          { key: 'ssl_certificate', value: '${TLS}', field_type: 'cert' },
+        ],
+      })],
+    } as any);
+    const out = exportNginx(proj);
+    expect(out).toContain('ssl_certificate /etc/ssl/fullchain.pem;');
+    expect(out).not.toContain('${');
+  });
+});

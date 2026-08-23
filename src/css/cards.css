@@ -1,13 +1,75 @@
 /* ── GRID ──────────────────────────────────────────── */
+/* Grid columns are set entirely by JS applyGridSettings() — no CSS repeat(var()).
+   applyGridSettings() also stamps data-card-size, which selects the token block
+   below; every card dimension derives from those tokens so one setting moves
+   width AND height together. align-items:start keeps a collapsed card at its
+   declared height instead of being stretched by an expanded neighbour. */
 #card-grid {
   display: grid;
-  gap: 10px
+  gap: 10px;
+  align-items: start;
+
+  --cs-icon: 40px;
+  --cs-gap: 11px;
+  --cs-pad-x: 15px;
+  --cs-head-pt: 14px;
+  --cs-head-pb: 10px;
+  --cs-chev: 26px;
+  --cs-name: 13.5px;
+  --cs-acct: 10px;
+  --cs-desc: 11.5px;
+  --cs-desc-lh: 1.55;
+  --cs-desc-lines: 3;
+  --cs-badge-rows: 2;
+  --cs-row-h: 19px;
+  --cs-row-gap: 6px;
+  --cs-foot-h: 40px;
+  --cs-btn-h: 26px;
+  --cs-card-h: 236px;
 }
 
-/* Grid columns are set entirely by JS applyGridSettings() — no CSS repeat(var()) */
+#card-grid[data-card-size="compact"] {
+  --cs-icon: 32px;
+  --cs-gap: 9px;
+  --cs-pad-x: 12px;
+  --cs-head-pt: 10px;
+  --cs-head-pb: 8px;
+  --cs-chev: 22px;
+  --cs-name: 12.5px;
+  --cs-acct: 9.5px;
+  --cs-desc: 11px;
+  --cs-desc-lh: 1.5;
+  --cs-desc-lines: 2;
+  --cs-foot-h: 34px;
+  --cs-btn-h: 22px;
+  --cs-card-h: 200px;
+}
+
+#card-grid[data-card-size="large"] {
+  --cs-icon: 48px;
+  --cs-gap: 13px;
+  --cs-pad-x: 18px;
+  --cs-head-pt: 16px;
+  --cs-head-pb: 12px;
+  --cs-chev: 28px;
+  --cs-name: 15px;
+  --cs-acct: 11px;
+  --cs-desc: 12.5px;
+  --cs-desc-lh: 1.55;
+  --cs-desc-lines: 4;
+  --cs-row-h: 21px;
+  --cs-foot-h: 44px;
+  --cs-btn-h: 28px;
+  --cs-card-h: 280px;
+}
+
+/* Rows of wrapped badges/chips, clamped to an exact multiple of the row height
+   so a clamp never slices a badge in half. */
 #card-grid {
-  display: grid;
-  gap: 10px
+  --cs-clamp-rows: calc(
+    var(--cs-badge-rows) * var(--cs-row-h) +
+    (var(--cs-badge-rows) - 1) * var(--cs-row-gap)
+  );
 }
 
 /* ── CARD ──────────────────────────────────────────── */
@@ -20,6 +82,19 @@
   flex-direction: column;
   transition: border-color .12s, box-shadow .12s;
   animation: cardIn .2s ease both
+}
+
+/* A collapsed card is exactly --cs-card-h tall at every card size. That is what
+   pins .card-foot to a constant offset from the card's bottom edge: without it
+   the footer floated up and down with however many description lines, badges or
+   tags the entry happened to have. The head absorbs the slack (flex:1) while
+   every variable-length region below clamps, so nothing can push past the edge. */
+.card:not(.expanded) {
+  height: var(--cs-card-h, 236px)
+}
+
+.card.expanded {
+  height: auto
 }
 
 .card:hover {
@@ -44,18 +119,27 @@
 }
 
 .card-head {
-  padding: 14px 15px 10px;
+  padding: var(--cs-head-pt) var(--cs-pad-x) var(--cs-head-pb);
   display: flex;
   align-items: flex-start;
-  gap: 11px;
+  gap: var(--cs-gap);
   cursor: pointer;
   user-select: none;
-  flex-shrink: 0
+  flex: 0 0 auto;
+  min-width: 0;
+  overflow: hidden
+}
+
+/* Collapsed only: the head takes the leftover height so the footer sits on the
+   bottom edge. align-items:flex-start keeps its content at the top. */
+.card:not(.expanded) .card-head {
+  flex: 1 1 auto;
+  min-height: 0
 }
 
 .provider-icon-wrap {
-  width: 40px;
-  height: 40px;
+  width: var(--cs-icon);
+  height: var(--cs-icon);
   border-radius: 9px;
   background: var(--surface2);
   border: 1px solid var(--border2);
@@ -72,14 +156,14 @@
 }
 
 .si-icon {
-  width: 22px;
-  height: 22px;
+  width: calc(var(--cs-icon) * .55);
+  height: calc(var(--cs-icon) * .55);
   object-fit: contain
 }
 
 .si-fallback {
   font-family: 'JetBrains Mono', monospace;
-  font-size: 15px;
+  font-size: calc(var(--cs-icon) * .38);
   font-weight: 700;
   color: var(--accent);
   display: flex;
@@ -90,29 +174,78 @@
 }
 
 .card-meta {
-  flex: 1;
-  min-width: 0
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden
 }
 
 .card-provider {
-  font-size: 13.5px;
+  font-size: var(--cs-name);
   font-weight: 700;
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--cs-row-gap);
+  row-gap: var(--cs-row-gap);
   flex-wrap: wrap;
-  margin-bottom: 2px
+  margin-bottom: 2px;
+  min-width: 0;
+  /* Clamped to whole rows — an entry with a dozen badges stops at the clamp
+     instead of growing the head until the footer is pushed out of the card. */
+  max-height: var(--cs-clamp-rows);
+  overflow: hidden
+}
+
+.card.expanded .card-provider {
+  max-height: none;
+  overflow: visible
+}
+
+/* The provider name is the one free-text item in the badge row, so it is the
+   one that has to ellipsise; every badge beside it is flex-shrink:0. */
+.card-provider-name {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  line-height: var(--cs-row-h)
 }
 
 .card-account {
   font-family: 'JetBrains Mono', monospace;
-  font-size: 10px;
-  color: var(--text2)
+  font-size: var(--cs-acct);
+  color: var(--text2);
+  line-height: 1.4;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap
+}
+
+.card-account:empty {
+  display: none
+}
+
+.card-projects {
+  margin-top: 4px;
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+  max-height: var(--cs-row-h);
+  overflow: hidden
+}
+
+.card-projects:empty {
+  display: none
+}
+
+.card.expanded .card-projects {
+  max-height: none
 }
 
 .card-chevron {
-  width: 26px;
-  height: 26px;
+  width: var(--cs-chev);
+  height: var(--cs-chev);
   background: transparent;
   border: 1px solid var(--border);
   border-radius: 6px;
@@ -142,12 +275,17 @@
 .badge {
   font-family: 'JetBrains Mono', monospace;
   font-size: 9px;
+  line-height: 1.4;
   letter-spacing: .03em;
   text-transform: uppercase;
   border-radius: 4px;
   padding: 2px 5px;
   font-weight: 600;
   flex-shrink: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   border: 1px solid transparent
 }
 
@@ -226,15 +364,18 @@
 }
 
 .card-apidesc {
-  font-size: 11.5px;
+  font-size: var(--cs-desc);
   color: var(--text2);
-  line-height: 1.55;
-  padding: 0 15px 11px 66px;
+  line-height: var(--cs-desc-lh);
+  /* Left inset lines the text up under the header text, past the icon. */
+  padding: 0 var(--cs-pad-x) calc(var(--cs-head-pb) + 1px)
+           calc(var(--cs-pad-x) + var(--cs-icon) + var(--cs-gap));
   display: -webkit-box;
   -webkit-box-orient: vertical;
   overflow: hidden;
-  line-clamp: 3;
-  -webkit-line-clamp: 3;
+  flex: 0 0 auto;
+  line-clamp: var(--cs-desc-lines);
+  -webkit-line-clamp: var(--cs-desc-lines);
 }
 
 .card.expanded .card-apidesc {
@@ -243,22 +384,39 @@
   overflow: visible;
 }
 
-/* Card footer — always visible, prominent copy .env */
+/* Card footer — always visible, prominent copy .env.
+   Fixed height and a bottom-pinned position: the row used to grow whenever the
+   dotenv key was long enough to wrap the button onto a second line, and it slid
+   up and down the card as description/tag content changed above it. Height is a
+   token, the button is the only flexible item, and every control is
+   flex-shrink:0 — so the footer is identical on every card at a given size. */
 .card-foot {
-  padding: 9px 15px;
+  height: var(--cs-foot-h);
+  flex: 0 0 var(--cs-foot-h);
+  margin-top: auto;
+  padding: 0 var(--cs-pad-x);
   border-top: 1px solid var(--border);
   display: flex;
   align-items: center;
   gap: 6px;
-  flex-shrink: 0
+  min-width: 0;
+  overflow: hidden
+}
+
+.card-foot > .icon-btn {
+  flex: 0 0 auto
 }
 
 .env-copy-btn {
-  flex: 1;
+  /* The zero floor below is load-bearing: a flex item's intrinsic floor is its
+     own text, so a long key pushed the icon buttons past the card's edge. */
+  flex: 1 1 0;
+  min-width: 0;
+  height: var(--cs-btn-h);
   background: var(--accent-dim);
   border: 1px solid var(--accent-mid);
   border-radius: 6px;
-  padding: 5px 10px;
+  padding: 0 8px;
   display: flex;
   align-items: center;
   gap: 6px;
@@ -267,8 +425,20 @@
   font-family: 'JetBrains Mono', monospace;
   font-size: 10px;
   font-weight: 600;
-  transition: all .12s;
+  line-height: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  transition: background .12s, border-color .12s, color .12s;
   text-align: left
+}
+
+/* The dotenv key — the only variable-width part of the button. */
+.env-copy-btn > span:last-child {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap
 }
 
 .env-copy-btn:hover {
@@ -285,6 +455,7 @@
 }
 
 .env-format-badge {
+  flex: 0 0 auto;
   font-family: 'JetBrains Mono', monospace;
   font-size: 9px;
   color: var(--text3);

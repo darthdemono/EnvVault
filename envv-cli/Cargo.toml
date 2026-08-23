@@ -3,6 +3,10 @@ name    = "envv-cli"
 version = "0.6.0"
 edition = "2021"
 
+[lib]
+name = "envv_cli"
+path = "src/lib.rs"
+
 [[bin]]
 name = "envv"
 path = "src/main.rs"
@@ -18,3 +22,13 @@ dirs       = "5"
 reqwest       = { version = "0.12", features = ["json", "blocking"] }
 clap_complete = "4"
 notify        = "6"
+uuid          = { version = "1", features = ["v4"] }
+# Encrypted backup envelope (.vaultbak) — must match the WebCrypto format the
+# desktop app writes: PBKDF2-SHA256 → AES-256-GCM.
+aes-gcm    = "0.10"
+pbkdf2     = { version = "0.12", default-features = false, features = ["hmac"] }
+sha2       = "0.10"
+hmac       = "0.12"
+base64     = "0.22"
+rand       = "=0.8.5"
+time       = { version = "=0.3.37", features = ["parsing"] }

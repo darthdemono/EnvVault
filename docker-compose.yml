@@ -12,7 +12,33 @@ services:
     environment:
       # Set ENVV_PASSWORD in a .env file to auto-unlock on startup.
       # Leave unset to require manual POST /api/unlock instead.
+      #
+      # The same .env drives the CLI: `envv --env-file .env enrich --online`
+      # reads the password from here rather than keeping a second copy.
       - ENVV_PASSWORD=${ENVV_PASSWORD:-}
+      # Raise if you actually serve concurrent clients; 2 is right for a vault.
+      - ENVV_WORKER_THREADS=${ENVV_WORKER_THREADS:-2}
+      - MALLOC_ARENA_MAX=2
     restart: unless-stopped
+
+    # A hard ceiling, not a target. Steady state is a few MB; the spikes are
+    # Argon2id, which is configured at m=65536 — 64 MB per unlock, by design,
+    # because that cost is what makes the master password expensive to guess.
+    # 256 MB leaves room for two concurrent unlocks without the OOM killer
+    # turning a login into a container restart.
+    mem_limit: 256m
+    memswap_limit: 256m
+    # Tiny stack of its own; the default 64 MB /dev/shm is unused here.
+    shm_size: 16m
+
+    healthcheck:
+      # Actually open the port rather than asking the binary its version — a
+      # process that started and then wedged still answers --version. bash's
+      # /dev/tcp avoids adding curl to the image for one check.
+      test: ["CMD-SHELL", "timeout 2 bash -c '</dev/tcp/127.0.0.1/8743' || exit 1"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
     # Pass --port here to override default 8743
     # command: ["--port", "9000"]

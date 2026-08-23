@@ -46,6 +46,26 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
+# ── Memory ────────────────────────────────────────────────────────────────────
+#
+# Two settings do most of the work in a container this small.
+#
+# MALLOC_ARENA_MAX: glibc gives each thread its own arena, up to 8 per core, and
+# each arena reserves a 64 MB heap it never fully returns. On a many-core host
+# that alone accounts for most of the resident memory of an otherwise idle
+# server. Two arenas is plenty for two worker threads.
+#
+# ENVV_WORKER_THREADS: tokio would otherwise start one worker per host CPU —
+# threads this workload has no use for, each carrying a stack and an arena.
+# MALLOC_TRIM/MMAP_THRESHOLD_ return freed memory to the OS more eagerly. The
+# server allocates in bursts (a vault decrypt, a JSON round trip) and then sits
+# idle; without these the peak stays resident for the life of the process.
+# (A comment cannot live inside a continued ENV line — Docker does not allow it.)
+ENV MALLOC_ARENA_MAX=2 \
+    ENVV_WORKER_THREADS=2 \
+    MALLOC_TRIM_THRESHOLD_=131072 \
+    MALLOC_MMAP_THRESHOLD_=131072
+
 # Non-root user
 RUN useradd -r -u 1001 -s /bin/false envv
 RUN mkdir /data && chown envv:envv /data

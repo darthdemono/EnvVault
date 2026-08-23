@@ -30,8 +30,33 @@ struct Args {
     #[arg(long, default_value_t = 480)] session_ttl_mins: u64,
 }
 
-#[tokio::main]
-async fn main() {
+fn main() {
+    // Tokio defaults to one worker thread per CPU. On a 16-core host that is 16
+    // threads for a server whose entire job is a handful of small JSON requests,
+    // and each one brings its own stack and its own glibc malloc arena — which
+    // is what actually shows up as resident memory in a container.
+    //
+    // Two workers is ample: the work here is IO-bound, and the one CPU-heavy
+    // step (Argon2id at 64 MB per unlock) is rare and deliberately serialised by
+    // its own cost. `ENVV_WORKER_THREADS` raises it for anyone who needs more.
+    let workers = std::env::var("ENVV_WORKER_THREADS")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .filter(|n| *n > 0)
+        .unwrap_or(2);
+
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(workers)
+        // 1 MB rather than the 2 MB default: nothing here recurses deeply, and
+        // the saving is per thread.
+        .thread_stack_size(1024 * 1024)
+        .enable_all()
+        .build()
+        .expect("build tokio runtime");
+    runtime.block_on(async_main());
+}
+
+async fn async_main() {
     let args = Args::parse();
     let data_dir = dirs::data_dir()
         .unwrap_or_else(|| PathBuf::from("/var/lib"))

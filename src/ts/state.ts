@@ -503,6 +503,7 @@ const DEFAULT_SETTINGS: AppSettings = {
   envCopyField: 'api_key' as const,
   sidebarWidth: 0, sidebarCollapsed: false, lastSortBy: 'provider',
   recentSearches: [] as string[], rememberFilters: true, lastView: null as PersistedView | null,
+  experimentalProjectTypes: false,
 };
 
 export const Settings = {
@@ -580,6 +581,10 @@ export function applyGridSettings() {
   const grid = document.getElementById('card-grid');
   if (!grid) return;
   const size = Settings.get('cardSize');
+  // Column width AND card height come from this one setting. The width is set
+  // here (CSS cannot repeat(var())); the height and every internal dimension
+  // come from the token block cards.css selects on this attribute.
+  grid.dataset.cardSize = size;
   const minW = { compact: 280, medium: 360, large: 460 }[size];
   const cols = Settings.get('gridColumns');
   grid.style.gridTemplateColumns = cols === 'auto'

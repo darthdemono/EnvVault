@@ -4,7 +4,7 @@
  *              and an interactive icon-picker overlay for custom icon assignment.
  */
 
-import { esc, escAttr } from './utils';
+import { esc, escAttr, showToast } from './utils';
 
 /**
  * Master registry of supported Simple Icons entries.
@@ -470,6 +470,49 @@ export function getIconSlug(provider: string, customIcon?: string | null): strin
  * @param slug - A valid Simple Icons identifier (e.g. `"github"`).
  * @returns Absolute CDN URL string.
  */
+/**
+ * Largest embedded icon accepted, as data-URI characters.
+ *
+ * The vault is a single JSON blob that is decrypted, parsed and re-serialised on
+ * every save, so an icon is not free: a handful of 1 MB PNGs would show up as
+ * lag on every write. 96 KB of base64 is roughly a 70 KB file — comfortably more
+ * than any favicon, and small enough that a hundred of them do not matter.
+ */
+export const MAX_ICON_CHARS = 96 * 1024;
+
+/** Raster image types accepted as an embedded icon. */
+const ICON_MIME_RE =
+  /^data:image\/(png|jpeg|gif|webp|bmp|x-icon|vnd\.microsoft\.icon);base64,([A-Za-z0-9+/]+=*)$/;
+
+/**
+ * Whether `custom_icon` holds an embedded image rather than a Simple Icons slug.
+ *
+ * Both live in the same field on purpose: everything that already renders,
+ * stores, copies or exports `custom_icon` keeps working, and an entry cannot end
+ * up with a slug and a file disagreeing about which icon it has.
+ */
+export function isEmbeddedIcon(value?: string | null): boolean {
+  return !!value && value.startsWith('data:image/');
+}
+
+/**
+ * Validate an embedded icon, returning an error message or `null`.
+ *
+ * A vault is untrusted input (invariant 4) — it may come from a remote server or
+ * an imported backup — so this runs on *read*, not only when the user picks a
+ * file. SVG is deliberately excluded: it is a script-bearing format, and the one
+ * thing worth avoiding is a stored image that is also a program.
+ */
+export function validateEmbeddedIcon(value: string): string | null {
+  if (!ICON_MIME_RE.test(value)) {
+    return 'Icon must be a PNG, JPEG, GIF, WebP, BMP or ICO file';
+  }
+  if (value.length > MAX_ICON_CHARS) {
+    return `Icon is too large (max ${Math.floor(MAX_ICON_CHARS / 1024)} KB of encoded data)`;
+  }
+  return null;
+}
+
 function iconImgURL(slug: string): string {
   // encodeURIComponent prevents a user-controlled custom_icon slug from breaking
   // out of the src="" attribute (e.g. `x" onerror=...`) — a stored XSS vector.
@@ -488,8 +531,18 @@ function iconImgURL(slug: string): string {
  * @returns HTML string safe for insertion into `innerHTML`.
  */
 export function iconHTML(provider: string, customIcon?: string | null): string {
-  const slug = getIconSlug(provider, customIcon);
   const letter = (provider || '?')[0].toUpperCase();
+  // An embedded file is used as the src directly — but only after validating it
+  // here rather than trusting the vault, because this string goes into an
+  // attribute and the vault may have come from someone else's server.
+  if (isEmbeddedIcon(customIcon)) {
+    if (validateEmbeddedIcon(customIcon!)) {
+      return `<span class="si-fallback">${esc(letter)}</span>`;
+    }
+    return `<img class="si-icon si-icon-custom" src="${escAttr(customIcon!)}"
+          alt="${escAttr(provider || '')}" loading="lazy">`;
+  }
+  const slug = getIconSlug(provider, customIcon);
   if (slug) {
     return `<img class="si-icon" src="${escAttr(iconImgURL(slug))}"
           alt="${escAttr(provider || '')}" loading="lazy">`;
@@ -621,6 +674,76 @@ export function closeIconPicker() {
  * - Global `error` capture to replace broken `<img class="si-icon">` with letter fallbacks.
  * - Clear button (`#icon-clear`) to remove the current icon assignment.
  */
+/**
+ * Put an icon value into the form's icon field.
+ *
+ * An embedded file is 20–90 KB of base64, which is unusable as the visible value
+ * of a text input — it scrolls forever and hides the slug case entirely. The
+ * data URI therefore lives in `dataset.iconData` and the input shows a label.
+ * {@link readIconField} is the matching reader; the two must always be used as a
+ * pair, or a saved entry loses its icon on the next edit.
+ */
+export function setIconField(field: HTMLInputElement | null, value?: string | null): void {
+  if (!field) return;
+  if (isEmbeddedIcon(value)) {
+    field.dataset.iconData = value!;
+    field.value = '';
+    const kb = Math.max(1, Math.round(value!.length / 1024));
+    field.placeholder = `Custom file (~${kb} KB) — type a slug to replace it`;
+    return;
+  }
+  delete field.dataset.iconData;
+  field.value = value || '';
+  field.placeholder = 'Simple Icons slug, e.g. github';
+}
+
+/** Read the icon field, preferring a typed slug over a previously chosen file. */
+export function readIconField(field: HTMLInputElement | null): string | undefined {
+  if (!field) return undefined;
+  const typed = field.value.trim();
+  // Typing a slug is an explicit replacement of whatever file was there.
+  if (typed) return typed;
+  return field.dataset.iconData || undefined;
+}
+
+/**
+ * Open a file chooser and hand back a validated data URI.
+ *
+ * The input is created and removed per use: WebKitGTK renders a native file
+ * widget for any `<input type="file">` present in the DOM regardless of
+ * `display:none`, so a static one leaves a ghost control on the page.
+ */
+export function pickIconFile(onPicked: (dataUri: string) => void, onError: (msg: string) => void): void {
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = '.ico,.png,.jpg,.jpeg,.gif,.webp,.bmp,image/*';
+  input.style.cssText = 'position:fixed;left:-9999px;top:-9999px';
+  let done = false;
+  const cleanup = () => {
+    if (done) return;
+    done = true;
+    input.remove();
+  };
+  input.addEventListener('change', () => {
+    const file = input.files?.[0];
+    if (!file) { cleanup(); return; }
+    const reader = new FileReader();
+    reader.onload = () => {
+      const uri = String(reader.result || '');
+      const problem = validateEmbeddedIcon(uri);
+      if (problem) onError(problem);
+      else onPicked(uri);
+      cleanup();
+    };
+    reader.onerror = () => { onError('Could not read that file'); cleanup(); };
+    reader.readAsDataURL(file);
+  });
+  input.addEventListener('cancel', cleanup);
+  window.addEventListener('focus', () => setTimeout(cleanup, 300), { once: true });
+  document.body.appendChild(input);
+  input.click();
+}
+
 export function initIconPicker() {
   // Delegated listener on the icon grid
   document.getElementById('icon-grid')!.addEventListener('click', e => {
@@ -644,6 +767,15 @@ export function initIconPicker() {
   document.getElementById('icon-manual-apply')!.addEventListener('click', () => {
     const v = (document.getElementById('icon-manual') as HTMLInputElement).value.trim();
     if (v) { selectIcon(v); closeIconPicker(); }
+  });
+  // An uploaded file becomes the selection like any slug would, so it flows
+  // through the same onClose callback the picker already has — the card path and
+  // the add/edit form both store it without either knowing about files.
+  document.getElementById('icon-upload')?.addEventListener('click', () => {
+    pickIconFile(
+      (uri) => { selectIcon(uri); closeIconPicker(); },
+      (msg) => showToast(msg, 'err', 4000),
+    );
   });
   document.addEventListener('error', (e) => {
     const img = e.target as HTMLImageElement;

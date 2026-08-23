@@ -1,0 +1,202 @@
+//! Password sources and cached remote sessions.
+//!
+//! An orchestrator should never hold the vault password. Three ways out of that,
+//! in priority order:
+//!
+//! 1. `--password-command` — the password comes from a keyring helper (`pass`,
+//!    `secret-tool`, 1Password's CLI). It never appears in argv, in the
+//!    environment, or in an agent's transcript.
+//! 2. `--password-file` — a 0600 file the human placed there.
+//! 3. `envv login` — a human authenticates once; the session token lands in a
+//!    0600 file and every later command reuses it. The agent runs commands, not
+//!    logins.
+//!
+//! `ENVV_PASSWORD` still works and is still the wrong default for anything an
+//! agent can read.
+
+use crate::error::{CliError, CliResult};
+use serde_json::{json, Value};
+use std::path::PathBuf;
+
+/// Where cached sessions live.
+///
+/// `$XDG_STATE_HOME/envv/` on Unix, `%LOCALAPPDATA%\envv\` on Windows. The
+/// Windows path matters beyond tidiness: `LOCALAPPDATA` is per-user and excluded
+/// from roaming profiles, so a session token cannot be synced onto another
+/// machine by a domain profile the user never thinks about.
+pub fn session_path() -> PathBuf {
+    if let Some(explicit) = std::env::var_os("ENVV_SESSION_FILE") {
+        return PathBuf::from(explicit);
+    }
+    #[cfg(windows)]
+    {
+        if let Some(dir) = dirs::data_local_dir() {
+            return dir.join("envv").join("sessions.json");
+        }
+    }
+    if let Some(dir) = std::env::var_os("XDG_STATE_HOME") {
+        return PathBuf::from(dir).join("envv").join("sessions.json");
+    }
+    dirs::home_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(".local")
+        .join("state")
+        .join("envv")
+        .join("sessions.json")
+}
+
+fn read_all() -> Value {
+    std::fs::read_to_string(session_path())
+        .ok()
+        .and_then(|raw| serde_json::from_str(&raw).ok())
+        .unwrap_or_else(|| json!({}))
+}
+
+fn write_all(v: &Value) -> CliResult {
+    let path = session_path();
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| CliError::from(e.to_string()))?;
+    }
+    std::fs::write(&path, serde_json::to_string_pretty(v).unwrap_or_default())
+        .map_err(|e| CliError::from(format!("Cannot write {}: {e}", path.display())))?;
+    restrict(&path)
+}
+
+/// Restrict the session file to its owner.
+///
+/// A session token is a bearer credential; a world-readable one is the same
+/// mistake as a world-readable private key. On Unix that is a 0600 chmod. On
+/// Windows there is no equivalent one-liner — the file inherits the directory
+/// ACL — which is why the path above is `%LOCALAPPDATA%`, a directory that is
+/// already user-scoped.
+fn restrict(path: &std::path::Path) -> CliResult {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = std::fs::metadata(path)
+            .map_err(|e| CliError::from(e.to_string()))?
+            .permissions();
+        perms.set_mode(0o600);
+        std::fs::set_permissions(path, perms).map_err(|e| CliError::from(e.to_string()))?;
+    }
+    Ok(())
+}
+
+/// The stored session token for a server URL, if any.
+pub fn load(url: &str) -> Option<String> {
+    read_all()
+        .get(url)
+        .and_then(|s| s.get("token"))
+        .and_then(|t| t.as_str())
+        .map(String::from)
+}
+
+pub fn describe(url: &str) -> Option<Value> {
+    read_all().get(url).cloned()
+}
+
+pub fn save(url: &str, token: &str, subject: &str) -> CliResult {
+    let mut all = read_all();
+    all[url] = json!({
+        "token": token,
+        "subject": subject,
+        "created_at": vault_core::iso_now(),
+    });
+    write_all(&all)
+}
+
+pub fn clear(url: &str) -> CliResult {
+    let mut all = read_all();
+    if let Some(obj) = all.as_object_mut() {
+        obj.remove(url);
+    }
+    write_all(&all)
+}
+
+pub fn clear_all() -> CliResult {
+    write_all(&json!({}))
+}
+
+// ── Password sources ──────────────────────────────────────────────────────────
+
+/// Read `KEY=VALUE` pairs out of a Docker-style `.env` file.
+///
+/// This is the file `docker compose` already reads to start `envv-server`, so
+/// pointing the CLI at the same one means there is exactly one copy of the
+/// password on the machine, owned by the compose stack. Nothing is exported into
+/// the environment — the values are read, used, and dropped.
+pub fn read_dotenv(path: &std::path::Path) -> CliResult<Vec<(String, String)>> {
+    let raw = std::fs::read_to_string(path)
+        .map_err(|e| CliError::not_found(format!("Cannot read {}: {e}", path.display())))?;
+    let mut out = Vec::new();
+    for line in raw.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let line = line.strip_prefix("export ").unwrap_or(line);
+        let Some((k, v)) = line.split_once('=') else { continue };
+        let mut value = v.trim().to_string();
+        // compose keeps the quotes out of the value; so do we.
+        if value.len() >= 2
+            && ((value.starts_with('"') && value.ends_with('"'))
+                || (value.starts_with('\'') && value.ends_with('\'')))
+        {
+            value = value[1..value.len() - 1].to_string();
+        }
+        out.push((k.trim().to_string(), value));
+    }
+    Ok(out)
+}
+
+/// Pull one variable out of a `.env` file.
+pub fn dotenv_var(path: &std::path::Path, key: &str) -> CliResult<Option<String>> {
+    Ok(read_dotenv(path)?.into_iter().find(|(k, _)| k == key).map(|(_, v)| v))
+}
+
+/// Resolve the password without ever putting it in argv.
+///
+/// Returns `None` when no source was configured, leaving the caller to prompt —
+/// which is right for a human and correctly fails for a non-interactive agent.
+pub fn resolve_password(
+    inline: Option<&str>,
+    file: Option<&std::path::Path>,
+    command: Option<&str>,
+) -> CliResult<Option<String>> {
+    if let Some(p) = inline {
+        return Ok(Some(p.to_string()));
+    }
+    if let Some(path) = file {
+        let raw = std::fs::read_to_string(path)
+            .map_err(|e| CliError::not_found(format!("Cannot read {}: {e}", path.display())))?;
+        let first = raw.lines().next().unwrap_or("").to_string();
+        if first.is_empty() {
+            return Err(CliError::invalid(format!("{} is empty", path.display())));
+        }
+        return Ok(Some(first));
+    }
+    if let Some(cmd) = command {
+        // Run through the platform shell so the documented form
+        // ("pass show envv") works without the caller splitting arguments —
+        // and so the same flag works on Windows, where there is no `sh`.
+        let (shell, flag) = if cfg!(windows) { ("cmd", "/C") } else { ("sh", "-c") };
+        let out = std::process::Command::new(shell)
+            .arg(flag)
+            .arg(cmd)
+            .output()
+            .map_err(|e| CliError::from(format!("password command failed to start: {e}")))?;
+        if !out.status.success() {
+            let err = String::from_utf8_lossy(&out.stderr).trim().to_string();
+            return Err(CliError::denied(format!(
+                "password command exited {}: {err}",
+                out.status.code().unwrap_or(-1)
+            )));
+        }
+        let pw = String::from_utf8_lossy(&out.stdout).lines().next().unwrap_or("").to_string();
+        if pw.is_empty() {
+            return Err(CliError::invalid("password command produced no output"));
+        }
+        return Ok(Some(pw));
+    }
+    Ok(None)
+}

@@ -823,6 +823,7 @@
           <span style="font-size:11px;color:var(--text3)">Can't find it?</span>
           <input id="icon-manual" class="form-input mono" style="width:160px" placeholder="Enter slug manually">
           <button id="icon-manual-apply" class="btn btn-ghost btn-sm">Apply</button>
+          <button id="icon-upload" class="btn btn-ghost btn-sm">Upload file…</button>
           <button id="icon-clear" class="btn btn-ghost btn-sm">No Icon</button>
         </div>
       </div>
@@ -843,7 +844,6 @@
         <button class="settings-tab" data-stab="layout">Layout</button>
         <button class="settings-tab" data-stab="security">Security</button>
         <button class="settings-tab" data-stab="data">Data</button>
-        <button class="settings-tab" data-stab="remote">Remote</button>
         <button class="settings-tab" data-stab="advanced">Advanced</button>
       </div>
 
@@ -1032,28 +1032,27 @@
           </div>
         </div>
 
-        <!-- ── Remote ── -->
-        <div class="settings-tab-pane" data-spane="remote">
-          <div class="settings-section">
-            <div class="settings-section-title">Remote Vaults</div>
-            <div class="settings-hint">
-              Remote connections are managed in the <strong>Remote</strong> panel on the activity bar,
-              where each server gets a name, its own credentials and a pinned TLS fingerprint.
-            </div>
-            <div class="settings-row">
-              <div class="settings-label">Manage connections</div>
-              <button id="s-open-remote-panel" class="btn btn-ghost btn-sm">Open Remote panel</button>
-            </div>
-            <p class="settings-note">
-              Run <code>envv-server</code> on any machine, then add it in the Remote panel.
-              "Reachable — no vault yet" means the server is up but needs an initial unlock
-              (run any <code>envv --server URL list</code> command to trigger it).
-            </p>
-          </div>
-        </div>
+        <!-- Remote tab removed: it held no settings, only a link to the Remote
+             panel on the activity bar, which is where connections are managed. -->
 
         <!-- ── Advanced ── -->
         <div class="settings-tab-pane" data-spane="advanced">
+          <div class="settings-section">
+            <div class="settings-section-title">Experimental</div>
+            <div class="settings-row">
+              <div class="settings-label">
+                Experimental project types
+                <div class="settings-hint">
+                  Adds Kubernetes, SSH config, Traefik, Apache, HAProxy, Ansible and PostgreSQL to
+                  the project type picker. Only Generic, WireGuard, Docker and Nginx have been
+                  tested end to end — the rest generate config this app has never had verified
+                  against a real deployment.
+                  <br>Projects you already created keep working either way.
+                </div>
+              </div>
+              <label class="toggle"><input type="checkbox" id="s-experimental-ptypes"><span class="toggle-track"></span></label>
+            </div>
+          </div>
           <div class="settings-section">
             <div class="settings-section-title">Custom CSS</div>
             <div class="settings-hint">Injected after all built-in styles. Affects this session; reload to fully apply.</div>
@@ -1157,6 +1156,13 @@
           <label class="form-label">Name <span class="req">*</span></label>
           <input class="form-input" id="project-create-name" type="text" placeholder="e.g. wg0-home or my-app">
           <small style="color:var(--text3);font-size:10px">Use / for hierarchy — ancestor projects auto-created</small>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Slug <span class="opt">optional</span></label>
+          <input class="form-input mono" id="project-create-slug" type="text" placeholder="derived from the name">
+          <small id="project-create-slug-hint" style="color:var(--text3);font-size:10px">
+            The stable id entries and permission rules point at. A slug you set here survives renames.
+          </small>
         </div>
         <div class="form-group">
           <label class="form-label">Project Type</label>

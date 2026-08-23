@@ -3,7 +3,8 @@
  */
 
 import type { Project, ProjectType } from './types';
-import { st, triggerRender, persist } from './state';
+import { isExperimentalProjectType } from './types';
+import { st, triggerRender, persist, Settings } from './state';
 import { showToast, showConfirm, showPrompt } from './utils';
 import {
   makeWgStarterChunks,
@@ -68,8 +69,43 @@ export async function renameCategory(name: string) {
 // ── Project operations ────────────────────────────────────────────────────
 
 /** Project name → id. Kept in one place so rename and delete agree on the shape. */
-function slugifyProjectName(name: string): string {
+export function slugifyProjectName(name: string): string {
   return name.toLowerCase().replace(/[^a-z0-9/]+/g, '-').replace(/^-|-$/g, '');
+}
+
+/**
+ * Whether this project's id was chosen by hand rather than derived from its name.
+ *
+ * Derived rather than stored: a project whose id is not what `slugifyProjectName`
+ * would produce for its current name must have been given one deliberately. That
+ * keeps custom slugs working for vaults written before they existed, and means
+ * there is no flag that can disagree with the data it describes.
+ */
+export function hasCustomSlug(project: Project): boolean {
+  return project.id !== slugifyProjectName(project.name);
+}
+
+/** Characters a project id may contain. Mirrors what `slugifyProjectName` emits. */
+const SLUG_RE = /^[a-z0-9]+(?:[-/][a-z0-9]+)*$/;
+
+/**
+ * Validate a hand-written slug, returning an error message or `null`.
+ *
+ * A project id ends up in `entry.projectIds`, in RBAC scope values and in
+ * exported filenames, so the shape has to stay predictable — an id with a space
+ * or an uppercase letter would round-trip through `slugifyProjectName` into a
+ * *different* id the next time anything derived one.
+ */
+export function validateSlug(raw: string, existing: Project[], selfId?: string): string | null {
+  const slug = raw.trim();
+  if (!slug) return 'Slug cannot be empty';
+  if (slug.length > 64) return 'Slug must be 64 characters or fewer';
+  if (slug.toLowerCase() === 'universal') return '"Universal" is reserved';
+  if (!SLUG_RE.test(slug)) {
+    return 'Slug may use lowercase letters, digits, - and / (no leading, trailing or repeated separators)';
+  }
+  if (existing.some(p => p.id === slug && p.id !== selfId)) return `Slug "${slug}" is already taken`;
+  return null;
 }
 
 export async function renameProject(id: string) {
@@ -77,7 +113,11 @@ export async function renameProject(id: string) {
   if (!project) return;
   const newName = (await showPrompt(`Rename "${project.name}" to:`, project.name))?.trim();
   if (!newName || newName === project.name) return;
-  const newId = slugifyProjectName(newName);
+  // A hand-chosen slug survives a rename. The id is what every entry, every
+  // permission rule and every `${…}` scope points at, so re-deriving it from a
+  // new display name would silently retarget all of them — which is exactly why
+  // someone pinned it in the first place.
+  const newId = hasCustomSlug(project) ? project.id : slugifyProjectName(newName);
   if (newId !== id && st.vault.projects.find(p => p.id === newId)) { showToast('Project already exists', 'err'); return; }
 
   const oldName = project.name;
@@ -94,6 +134,8 @@ export async function renameProject(id: string) {
 
   for (const child of children) {
     const childName = newName + child.name.slice(oldName.length);
+    // Same rule per child: a sub-project with its own pinned slug keeps it.
+    if (hasCustomSlug(child)) { child.name = childName; continue; }
     const base = slugifyProjectName(childName);
     let fid = base; let n = 1;
     while (st.vault.projects.find(p => p !== child && p.id === fid)) fid = `${base}-${n++}`;
@@ -135,6 +177,9 @@ export async function deleteProject(id: string) {
   const idRemap = new Map<string, string>();
   for (const child of children) {
     const newName = child.name.slice(project.name.length + 1);
+    // A promoted sub-project with a pinned slug keeps it — promotion changes
+    // where it sits in the tree, not what points at it.
+    if (hasCustomSlug(child)) { child.name = newName; continue; }
     const newId = slugifyProjectName(newName);
     let fid = newId; let n = 1;
     while (st.vault.projects.find(p => p !== child && p.id === fid)) fid = `${newId}-${n++}`;
@@ -168,13 +213,42 @@ export async function deleteProject(id: string) {
 
 let _projectCreateType: ProjectType = 'generic';
 
+/**
+ * Shows or hides the untested project types in the create picker.
+ *
+ * Applied on every open rather than once at boot: the setting can be toggled
+ * while the app is running, and the picker lives in static markup that nothing
+ * else repaints.
+ */
+export function applyExperimentalTypeVisibility(): void {
+  const show = !!Settings.get('experimentalProjectTypes');
+  document.querySelectorAll<HTMLButtonElement>('.project-type-btn').forEach(btn => {
+    const type = btn.dataset.ptype as ProjectType | undefined;
+    if (!isExperimentalProjectType(type)) return;
+    btn.style.display = show ? '' : 'none';
+    btn.classList.toggle('experimental', show);
+  });
+}
+
 export function openProjectCreateModal() {
   _projectCreateType = 'generic';
   const overlay = document.getElementById('project-create-overlay')!;
   const nameEl = document.getElementById('project-create-name') as HTMLInputElement;
   const descEl = document.getElementById('project-create-desc') as HTMLInputElement;
+  const slugEl = document.getElementById('project-create-slug') as HTMLInputElement | null;
   nameEl.value = '';
   descEl.value = '';
+  if (slugEl) {
+    slugEl.value = '';
+    // Show what an empty slug field will produce, so the id is never a surprise.
+    // Assigned, not added: this modal is opened repeatedly and addEventListener
+    // would stack a handler per open (invariant 9).
+    slugEl.placeholder = 'derived from the name';
+    nameEl.oninput = () => {
+      slugEl.placeholder = slugifyProjectName(nameEl.value.trim()) || 'derived from the name';
+    };
+  }
+  applyExperimentalTypeVisibility();
   document.querySelectorAll<HTMLButtonElement>('.project-type-btn').forEach(btn => {
     btn.classList.toggle('active', btn.dataset.ptype === 'generic');
   });
@@ -213,9 +287,18 @@ export function saveCategoryCreate() {
 export function saveProjectCreate() {
   const nameEl = document.getElementById('project-create-name') as HTMLInputElement;
   const descEl = document.getElementById('project-create-desc') as HTMLInputElement;
+  const slugEl = document.getElementById('project-create-slug') as HTMLInputElement | null;
   const trimmed = nameEl.value.trim();
   if (!trimmed) { showToast('Name is required', 'err'); return; }
-  const leafId = trimmed.toLowerCase().replace(/[^a-z0-9/]+/g, '-').replace(/^-|-$/g, '');
+
+  const customSlug = slugEl?.value.trim() ?? '';
+  if (customSlug) {
+    const problem = validateSlug(customSlug, st.vault.projects);
+    if (problem) { showToast(problem, 'err', 4000); return; }
+  }
+  // One place decides the id, and it is the same rule the CLI applies.
+  const leafId = customSlug || slugifyProjectName(trimmed);
+  if (!leafId) { showToast('Name produces an empty slug — set one explicitly', 'err', 4000); return; }
   if (st.vault.projects.find(p => p.id === leafId)) { showToast('Project already exists', 'err'); return; }
 
   const newProject: Project = {
@@ -263,5 +346,15 @@ export function saveProjectCreate() {
 }
 
 export function setProjectCreateType(type: ProjectType) {
+  // `display:none` on the button is a paint-time gate, and the picker is static
+  // markup driven by a delegated click handler — so a stale DOM, a keyboard
+  // activation, or the setting being switched off with the modal already open
+  // could still land here with a gated type. Creating a project is what writes
+  // `project_type` into the vault, so refuse at the write, not just the paint.
+  if (isExperimentalProjectType(type) && !Settings.get('experimentalProjectTypes')) {
+    _projectCreateType = 'generic';
+    applyExperimentalTypeVisibility();
+    return;
+  }
   _projectCreateType = type;
 }
