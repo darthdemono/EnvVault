@@ -2,6 +2,7 @@
 name    = "envv-server"
 version = "0.6.0"
 edition = "2021"
+license = "MIT"
 
 # Library first: the desktop app embeds this router for "Open to LAN", so the
 # binary is only a CLI wrapper around it.

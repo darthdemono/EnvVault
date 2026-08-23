@@ -1,0 +1,402 @@
+name: Build & Release
+
+# Compilation and packaging. Deliberately separate from ci.yml: that one is the
+# fast gate every push pays for (check + test + typecheck, ~3 min), this one is
+# the expensive one (a full Tauri bundle is 15+ min per platform) and only runs
+# when there is something to ship.
+#
+# Releases happen on a `v*` tag and nowhere else. The version is hand-edited in
+# tauri.conf.json rather than derived from git history, so a release-per-push
+# would try to publish `v0.6.0` again on every commit.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: "Publish a GitHub Release (off = build artifacts only)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  # Never cancel a tag build half-way through: a partially-uploaded release is
+  # worse than a slow one. Branch/dispatch runs are cheap to redo.
+  group: build-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Version is stated in five files. This job is the only thing that stops them
+  # from drifting, because nothing else in the build reads more than one of them
+  # and a mismatch is invisible until a user downloads `EnvVault_0.6.0.AppImage`
+  # from a release labelled 0.7.0.
+  # ---------------------------------------------------------------------------
+  meta:
+    name: Resolve version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      publish: ${{ steps.v.outputs.publish }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Read and cross-check the version
+        id: v
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # tauri.conf.json is the source of truth: Tauri stamps this string
+          # into every bundle filename and into the Windows installer metadata.
+          VERSION=$(jq -r .version src-tauri/tauri.conf.json)
+          echo "tauri.conf.json: ${VERSION}"
+
+          fail=0
+          check() {  # check <file> <actual>
+            if [ "$2" != "$VERSION" ]; then
+              echo "::error file=$1::version is '$2', tauri.conf.json says '$VERSION'"
+              fail=1
+            else
+              echo "  ok  $1 = $2"
+            fi
+          }
+
+          check package.json          "$(jq -r .version package.json)"
+          for c in src-tauri vault-core envv-server envv-cli; do
+            check "$c/Cargo.toml" \
+              "$(sed -n 's/^version *= *"\(.*\)"/\1/p' "$c/Cargo.toml" | head -n1)"
+          done
+
+          # On a tag, the tag itself is a sixth copy of the number.
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            TAG="${GITHUB_REF#refs/tags/v}"
+            if [ "$TAG" != "$VERSION" ]; then
+              echo "::error::tag v${TAG} does not match tauri.conf.json ${VERSION}"
+              fail=1
+            fi
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "publish=${{ inputs.publish || false }}" >> "$GITHUB_OUTPUT"
+          fi
+
+          [ "$fail" -eq 0 ] || exit 1
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+
+  # ---------------------------------------------------------------------------
+  # The desktop app. `tauri build` runs `npm run build:frontend` itself via
+  # beforeBuildCommand, so the frontend is compiled inside this job.
+  # ---------------------------------------------------------------------------
+  desktop:
+    name: Desktop (${{ matrix.label }})
+    needs: meta
+    runs-on: ${{ matrix.os }}
+    strategy:
+      # A Windows-only break must not hide behind a green Linux run.
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            label: linux-x86_64
+          - os: windows-latest
+            label: windows-x86_64
+    steps:
+      - uses: actions/checkout@v4
+
+      # ubuntu-22.04, not -latest: the AppImage and .deb link against the
+      # runner's glibc, and a bundle built on 24.04 refuses to start on
+      # anything older. Building on the oldest supported base is the only way
+      # a "portable" Linux artefact is actually portable.
+      - name: Install Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            mold
+          # `.cargo/config.toml` passes -fuse-ld=mold for this target. ci.yml
+          # gets away without it because its RUSTFLAGS env var overrides the
+          # config file entirely; this job sets no RUSTFLAGS, so the flag
+          # applies and the link fails without the linker installed.
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.label }}
+
+      - run: npm ci
+
+      - name: Build bundles
+        shell: bash
+        env:
+          # linuxdeploy shells out to `strip`; NO_STRIP works around versions
+          # too old for .relr.dyn sections. EXTRACT_AND_RUN is required because
+          # GitHub runners have no FUSE for the AppImage tooling to mount with.
+          NO_STRIP: "1"
+          APPIMAGE_EXTRACT_AND_RUN: "1"
+        run: |
+          # vault-core/bundled compiles SQLCipher and OpenSSL in. Without it an
+          # AppImage built here links the runner's libsqlcipher0 and dies on any
+          # distro shipping a different soname — the exact failure a portable
+          # bundle exists to prevent.
+          npx tauri build --features vault-core/bundled
+
+      - name: Collect bundles
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p staging
+          # Globs, not literal filenames: Tauri derives each name from the
+          # version and per-format arch conventions (_amd64.deb vs .x86_64.rpm).
+          shopt -s nullglob
+          for f in target/release/bundle/appimage/*.AppImage \
+                   target/release/bundle/deb/*.deb \
+                   target/release/bundle/rpm/*.rpm \
+                   target/release/bundle/nsis/*-setup.exe \
+                   target/release/bundle/msi/*.msi; do
+            cp "$f" staging/
+          done
+          ls -lh staging/
+          # An empty staging dir means the bundle step "succeeded" while
+          # producing nothing shippable. Fail here rather than at release time.
+          [ -n "$(ls -A staging)" ] || { echo "::error::no bundles produced"; exit 1; }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: desktop-${{ matrix.label }}
+          path: staging/
+          if-no-files-found: error
+
+  # ---------------------------------------------------------------------------
+  # `envv` and `envv-server` — the headless half. Shipped as their own archive
+  # because the server runs on machines that will never have a GUI toolkit, and
+  # the CLI is what agents and CI call.
+  # ---------------------------------------------------------------------------
+  headless:
+    name: CLI + server (${{ matrix.label }})
+    needs: meta
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            label: linux-x86_64
+            archive: tar.gz
+          - os: windows-latest
+            label: windows-x86_64
+            archive: zip
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install mold
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y mold
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: headless-${{ matrix.label }}
+
+      # --locked: the workspace Cargo.lock is committed on purpose (rand 0.10
+      # and rusqlite 0.39 have both broken this build via semver-compatible
+      # updates). A release must compile the pinned graph, not today's.
+      # Built one package at a time so a failure names the crate.
+      - name: Build envv
+        run: cargo build --release --locked -p envv-cli --features vault-core/bundled
+
+      - name: Build envv-server
+        run: cargo build --release --locked -p envv-server --features vault-core/bundled
+
+      - name: Smoke test the binaries
+        shell: bash
+        run: |
+          set -euo pipefail
+          # `[ … ] && EXE=…` would make this line the script's exit status
+          # under `set -e`, so a Linux run would abort here reporting nothing.
+          EXE=""
+          if [ "${RUNNER_OS}" = "Windows" ]; then EXE=".exe"; fi
+          "target/release/envv${EXE}" --version
+          "target/release/envv-server${EXE}" --version
+          # `describe` is the CLI's machine-readable contract, generated from the
+          # clap tree. If it stops emitting valid JSON, every agent integration
+          # breaks silently — so a release must not ship a binary that fails here.
+          # The version inside it comes from CARGO_PKG_VERSION, which is a sixth
+          # copy of the number the meta job checked; assert it agrees.
+          "target/release/envv${EXE}" describe \
+            | jq -e --arg v "${{ needs.meta.outputs.version }}" \
+                 '.version == $v and (.command.subcommands | length) > 0' > /dev/null
+
+      - name: Stage
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p staging
+          EXE=""
+          if [ "${RUNNER_OS}" = "Windows" ]; then EXE=".exe"; fi
+          cp "target/release/envv${EXE}" "target/release/envv-server${EXE}" staging/
+          cp README.md staging/
+          ls -lh staging/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: headless-${{ matrix.label }}
+          path: staging/
+          if-no-files-found: error
+
+  # ---------------------------------------------------------------------------
+  release:
+    name: Publish release
+    needs: [meta, desktop, headless]
+    if: needs.meta.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # create the release
+      id-token: write   # cosign keyless (Sigstore OIDC)
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts/
+
+      - name: Assemble release assets
+        id: assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${{ needs.meta.outputs.version }}"
+          mkdir -p release-assets
+
+          # Desktop bundles ship as-is: a .deb renamed is a .deb that apt still
+          # installs, but the installer filename is what users read, and Tauri's
+          # own naming already carries version and arch.
+          cp artifacts/desktop-*/* release-assets/
+
+          # Headless binaries get archived per platform, with a flat layout so
+          # `tar xzf … && ./envv` works with no path juggling.
+          ( cd artifacts/headless-linux-x86_64 && chmod +x envv envv-server \
+            && tar czf "$GITHUB_WORKSPACE/release-assets/envv-${VERSION}-linux-x86_64.tar.gz" . )
+          ( cd artifacts/headless-windows-x86_64 \
+            && zip -qr "$GITHUB_WORKSPACE/release-assets/envv-${VERSION}-windows-x86_64.zip" . )
+
+          # `--` so an asset whose name begins with a dash is read as a file
+          # rather than an option, and the sums file keeps plain names.
+          ( cd release-assets && sha256sum -- * > SHA256SUMS )
+          ls -lh release-assets/
+
+      - name: Changelog since the previous tag
+        id: changelog
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The tag being released is already at HEAD, so ask for the one before it.
+          PREV=$(git describe --tags --abbrev=0 --exclude="${GITHUB_REF_NAME}" 2>/dev/null || echo "")
+          if [ -n "$PREV" ]; then
+            RANGE="${PREV}..HEAD"; echo "range: ${RANGE}"
+          else
+            RANGE="HEAD"; echo "no previous tag; using full history"
+          fi
+          {
+            echo "commits<<ENDOFCHANGELOG"
+            git log --no-merges --pretty=format:"- %s (%an)" "$RANGE"
+            echo ""
+            echo "ENDOFCHANGELOG"
+          } >> "$GITHUB_OUTPUT"
+
+      - uses: sigstore/cosign-installer@v3
+
+      - name: Sign every asset (cosign keyless)
+        shell: bash
+        env:
+          COSIGN_YES: "true"
+        run: |
+          set -euo pipefail
+          # Keyless Sigstore signing off the job's OIDC token — no secret to
+          # rotate, and the certificate binds each signature to this workflow
+          # identity. For a secrets manager, "this binary came from that repo's
+          # CI" is the claim that matters; a self-signed Authenticode cert makes
+          # no such claim (and still trips SmartScreen), so it is not used here.
+          shopt -s nullglob
+          # The glob is expanded once, so the .sig/.pem files written inside
+          # the loop are not themselves picked up as inputs.
+          for f in release-assets/*; do
+            echo "signing $f"
+            cosign sign-blob --output-signature "${f}.sig" \
+                             --output-certificate "${f}.pem" "$f"
+          done
+          ls -lh release-assets/
+
+      - name: Create GitHub Release
+        uses: ncipollo/release-action@v1
+        with:
+          tag: v${{ needs.meta.outputs.version }}
+          name: EnvVault ${{ needs.meta.outputs.version }}
+          artifacts: "release-assets/*"
+          token: ${{ secrets.GITHUB_TOKEN }}
+          allowUpdates: true
+          replacesArtifacts: true
+          draft: false
+          prerelease: false
+          body: |
+            # EnvVault ${{ needs.meta.outputs.version }}
+
+            ## Desktop
+
+            | File | Platform |
+            | ---- | -------- |
+            | `*.AppImage` | Linux, any distro — SQLCipher and OpenSSL are compiled in |
+            | `*.deb` | Debian / Ubuntu |
+            | `*.rpm` | Fedora / RHEL |
+            | `*-setup.exe` | Windows (NSIS; WebView2 is fetched by the installer if absent) |
+
+            Linux bundles are built on Ubuntu 22.04, so they run on that glibc and newer.
+
+            ## CLI and server
+
+            | File | Contains |
+            | ---- | -------- |
+            | `envv-${{ needs.meta.outputs.version }}-linux-x86_64.tar.gz` | `envv`, `envv-server` |
+            | `envv-${{ needs.meta.outputs.version }}-windows-x86_64.zip` | `envv.exe`, `envv-server.exe` |
+
+            `envv describe` prints the full command tree, exit codes and redaction
+            rules as JSON — read that rather than guessing from error messages.
+
+            ## Verifying a download
+
+            Checksums are in `SHA256SUMS`. Every asset also carries a keyless
+            Sigstore signature (`.sig`) and certificate (`.pem`):
+
+            ```
+            cosign verify-blob \
+              --certificate <asset>.pem \
+              --signature   <asset>.sig \
+              --certificate-identity-regexp 'https://github.com/${{ github.repository }}/.*' \
+              --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+              <asset>
+            ```
+
+            ## Changes
+
+            ${{ steps.changelog.outputs.commits }}

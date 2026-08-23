@@ -4,10 +4,26 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
+
+# Least privilege: nothing here writes to the repo. Build & Release asks for
+# more, in the one job that needs it.
+permissions:
+  contents: read
+
+concurrency:
+  # A superseded push has nothing to tell us; cancel it and free the runner.
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
   CARGO_TERM_COLOR: always
   # Keep CI output focused on errors we can act on.
+  # Also load-bearing beyond warnings: setting RUSTFLAGS as an env var makes
+  # cargo ignore the rustflags in `.cargo/config.toml`, which pass
+  # `-fuse-ld=mold` for the Linux target. Drop this line and every Linux job
+  # here fails to link, because the runner has no mold. Build & Release sets no
+  # RUSTFLAGS and therefore installs mold instead.
   RUSTFLAGS: -D warnings
 
 jobs:
@@ -43,21 +59,27 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
+      # `--locked` below refuses to build if a Cargo.toml edit was committed
+      # without the matching Cargo.lock. Saying so here beats a resolver error
+      # buried in the test job's output.
+      - name: Cargo.lock is up to date
+        run: cargo metadata --locked --format-version 1 > /dev/null
+
       # vault-core holds the crypto, storage and RBAC logic; envv-server holds the
       # session and LAN-hosting logic. Regressions in either are security bugs
       # rather than cosmetic ones.
       - name: Test
-        run: cargo test --workspace --verbose
+        run: cargo test --workspace --locked --verbose
 
       - name: Check the whole workspace
-        run: cargo check --workspace --all-targets
+        run: cargo check --workspace --locked --all-targets
 
       # The portable build path — SQLCipher and OpenSSL compiled in — is what
       # release artefacts use, so it has to be exercised somewhere. Checking it
       # on Linux catches a broken feature union without paying for it on both.
       - name: Check the bundled (distro-independent) build
         if: runner.os == 'Linux'
-        run: cargo check -p vault-core --features bundled
+        run: cargo check -p vault-core --locked --features bundled
 
   frontend:
     name: Frontend (typecheck + test + build)
