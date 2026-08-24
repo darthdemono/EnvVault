@@ -59,11 +59,24 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
+      # `cargo check`/`cargo test` reach the Tauri app crate, whose build script
+      # fails outright when `frontendDist` ("../dist") is missing — and dist/ is
+      # gitignored. Build it here so the Rust jobs have something to point at.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Build the frontend (tauri-build needs ../dist to exist)
+        run: |
+          npm ci
+          npx vite build
+
       # `--locked` below refuses to build if a Cargo.toml edit was committed
       # without the matching Cargo.lock. Saying so here beats a resolver error
       # buried in the test job's output.
       - name: Cargo.lock is up to date
-        run: cargo metadata --locked --format-version 1 > /dev/null
+        run: cargo metadata --locked --format-version 1
 
       # vault-core holds the crypto, storage and RBAC logic; envv-server holds the
       # session and LAN-hosting logic. Regressions in either are security bugs

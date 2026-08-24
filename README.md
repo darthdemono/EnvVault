@@ -10,21 +10,113 @@ It ships as three things that share one storage engine:
 | **`envv`** | A CLI built so that an automated caller can drive the whole vault without a single secret value entering its output. |
 | **`envv-server`** | An optional HTTP/HTTPS server, so the desktop app and the CLI on other machines can reach one vault. |
 
+Current version **0.6.0**. The version in `src-tauri/tauri.conf.json` is the authoritative one; `package.json`, the four `Cargo.toml` files and the git tag are all checked against it by the `meta` job in `.github/workflows/build.yml`.
+
 ---
 
 ## Contents
 
+- [What it does](#what-it-does)
 - [Install](#install)
 - [First run](#first-run)
 - [The desktop app](#the-desktop-app)
+- [Secrets](#secrets)
+- [Projects, chunks and exports](#projects-chunks-and-exports)
+- [Tools](#tools)
+- [Settings, shortcuts and auto-lock](#settings-shortcuts-and-auto-lock)
 - [The CLI](#the-cli)
 - [The server](#the-server)
+- [Open to LAN](#open-to-lan)
+- [Concurrent writes](#concurrent-writes)
 - [Docker](#docker)
 - [Multiple users](#multiple-users)
+- [Permission expressions](#permission-expressions)
+- [The security model](#the-security-model)
 - [Where your files live](#where-your-files-live)
 - [Building from source](#building-from-source)
+- [Continuous integration](#continuous-integration)
 - [What is not finished](#what-is-not-finished)
+- [How it got here](#how-it-got-here)
 - [License](#license)
+
+---
+
+## What it does
+
+Everything below is implemented and in the shipping build. The sections after this one explain each in full.
+
+### Storage and crypto
+
+- **SQLCipher (AES-256-CBC) database**, keyed by Argon2id (m=65536, t=3, p=1) over your master password and a 16-byte random salt. The 32-byte key lives in a `Mutex<Option<[u8;32]>>` in Rust and is zeroized on lock. It is never written to disk.
+- **Encrypted `.vaultbak` backups** — PBKDF2-SHA256 → AES-256-GCM, written and read by both the desktop app and the CLI.
+- **Per-entry version history**, appended automatically whenever a secret's value changes, capped at 50 revisions, restorable from the UI or `envv entry restore`.
+- **Append-only audit log** in the same database, bound into a **hash chain** (`entry_hash`/`prev_hash`), so a row cannot be altered or removed without the chain failing verification. `envv audit --verify` and Tools → Audit Log both check it. The chain has two formats — v2 includes the acting user, v1 predates that column — and the verifier tries v2 then falls back, so old logs still verify.
+- **Compare-and-swap on every write.** The version the caller last read travels with the save and is compared inside the same `BEGIN IMMEDIATE` transaction as the write, so a concurrent edit cannot be silently clobbered.
+
+### Secrets
+
+- Seven secret types: **API key, password, certificate, SSH key, environment variable, connection string, file reference**.
+- Certificates carry their private key alongside them (`cert_key_data`); PEM blocks are re-wrapped to 64 columns on import so a single-line paste is still valid PEM.
+- Environment-variable entries carry a display subtype — string, multiline, secret, boolean, number, IP, CIDR, port, URL, date, JSON.
+- Metadata per entry: account, description, URL, scopes, environment (dev/staging/prod), expiry, price/plan type, tags, pinned flag, compromised flag, `last_rotated_at`, custom icon.
+- **Custom icons**: either a [Simple Icons](https://simpleicons.org) slug from a ~300-entry registry, or an uploaded image file. One field holds both, so nothing can end up with a slug and a file that disagree.
+- **Generators** built in: 32/64-byte hex secrets, passwords, self-signed X.509 pairs (`rcgen`), Ed25519 SSH keypairs (`ssh-key`).
+- **Search** across provider, account, description, tags and URL, with regular expressions when you wrap the query in slashes.
+- **Filters** by project, category, tag, environment and name prefix, all stackable, all clearable with one key.
+- **Bulk mode** for multi-select delete and multi-select `.env` export.
+- **Five-second undo** on delete, with a `beforeunload` guard so quitting mid-undo warns you.
+
+### Projects and configuration
+
+- **Projects hold typed chunks** — 29 chunk types across 11 project types — that render back into real config files: `wg0.conf`, `docker-compose.yaml` + `.env`, nginx sites, Kubernetes manifests, SSH config, Traefik, Apache, HAProxy, Ansible vars and PostgreSQL connection blocks.
+- **`${ref}` interpolation.** Any chunk field can point at a vault entry (`${GitHub}`, `${GitHub/account}`, `${chunk:name}`). References are stored unresolved and resolved at copy/export time, so the config stays a template and the secret stays in one place.
+- **Chunks can be disabled** — greyed out in the UI and excluded from every export.
+- **Importers** that turn an existing file into chunks: nginx site configs (including nested `location {}` and multi-word directives) and `docker-compose.yaml`.
+- **Custom project slugs** that survive a rename or a sub-project promotion.
+- Slash-nested hierarchy for both projects and categories, with cascading renames and deletes.
+
+### The CLI
+
+- **Redacted by default.** Every stdout path masks values as `sha256:<12 hex>`; fingerprints are stable per value, so equal fingerprints mean equal secrets and you can detect drift without reading anything.
+- **Materialisation paths that skip stdout**: `--out FILE`, `envv exec -- cmd`, `envv render tpl --out FILE`.
+- **Secrets that are never seen at all**: `entry add --generate`, `entry rotate --generate`, `user token new --out FILE`.
+- **A JSON envelope and eleven stable exit codes**, so a script can branch on the failure rather than grep the message.
+- **`envv describe`** — the entire command tree, flags, exit codes and redaction rules as one JSON document, generated from the same `clap` definition the binary runs on.
+- **`envv enrich`** — fills the metadata an imported `.env` never has, from entry names and public issuer prefixes; `--online` asks the issuer itself.
+- **Password input that never touches argv**: `--password-file`, `--password-command`, `--env-file`, `ENVV_PASSWORD`.
+- **Cached sessions** (`envv login`), so a human authenticates once and automation runs unattended.
+- **Idempotent provisioning**: `--if-missing`, `--create`, `--dry-run` enforced at the single write point.
+- Shell completions for bash, zsh, fish, elvish and PowerShell.
+- **`envv watch`** — keeps a `.env` on disk and the vault in sync, upserting by provider instead of appending a duplicate copy on every save.
+
+### The server, and sharing
+
+- **HTTP or HTTPS**, with a self-signed certificate generated on demand or your own via `--cert`/`--key`.
+- **Real certificate pinning** in the desktop app — SHA-256 of the leaf compared *during the handshake*, before the master password goes over the wire — with a trust-on-first-use bootstrap that sends no credentials.
+- **Session tokens with a sliding idle expiry** (`--session-ttl-mins`, default 480).
+- **Rate limiting on failures only**, counted from the real socket address rather than `X-Forwarded-For`.
+- **CORS restricted to an explicit allow-list**, not `permissive()`.
+- **Open to LAN** — the desktop app hosts the vault it already has open, in-process, on the same router `envv-server` runs. Self-signed TLS on by default, peers sign in as users, and the master password never crosses the network.
+- **A public `/api/stats`** for dashboard widgets (Homepage, Homarr) that needs no auth and returns no secrets.
+- **An OpenAPI document** at `/api/openapi.json`.
+
+### Multi-user
+
+- Users, API tokens, and **classes** as named permission templates.
+- **Boolean permission expressions** over entry fields — `project:Alpha AND NOT category:secret` — with a live editor, a predicate builder that offers the values actually in your vault, and a "matches N of M entries" preview.
+- Argon2id password hashing for sub-users, with transparent upgrade of legacy SHA-256 hashes on next login.
+- The vault owner is a real user row with `password_hash = NULL`, so ownership is proven only by deriving the key.
+
+### The application itself
+
+- **Seven themes** — dark, midnight, dracula, nord, catppuccin, light, and system (follows your OS) — plus a custom CSS box.
+- **Layout that persists**: sidebar width and collapsed state, activity-bar side, card size, column count, sort order, recent searches, last view. Every persisted id is validated against the loaded vault on read, so a deleted project cannot leave you staring at an empty grid under a filter you have no memory of setting.
+- **Window size, position and maximized state persist** across restarts — but visibility deliberately does not, or hiding to the tray and quitting would restore an invisible window.
+- **Auto-lock** on idle, with a warning toast, and opt-in lock on window hide.
+- **A dedicated re-lock screen** that tells you why it locked and asks only for the password.
+- **Offline by construction**: Syne and JetBrains Mono are vendored via `@fontsource` and bundled, so the app renders correctly with no network and CSP can stay at `font-src 'self'`.
+- Ten prefilled entry templates — GitHub PAT, AWS access key, Stripe, PostgreSQL DSN, OpenAI and so on.
+- Import from `.env`, Bitwarden JSON, 1Password JSON and raw vault JSON.
 
 ---
 
@@ -70,7 +162,7 @@ That password is never stored anywhere. It goes through Argon2id (m=65536, t=3, 
 
 So what happens if you forget it? Nothing good. There is no recovery, no reset link, no support address that can help you. The only thing you can do is delete `vault.db` and `vault.salt` and start an empty vault. Write the password down somewhere real.
 
-**N.B.** The salt is as load-bearing as the database. A `vault.db` paired with the wrong `vault.salt` derives the wrong key and reports "wrong password" for a password that is perfectly correct. When you back up one, back up both.
+**N.B.** The salt is as load-bearing as the database. A `vault.db` paired with the wrong `vault.salt` derives the wrong key and reports "wrong password" for a password that is perfectly correct. When you back up one, back up both. The CLI's `--db-path` infers the salt beside it for exactly this reason.
 
 ---
 
@@ -95,6 +187,8 @@ So what happens if you forget it? Nothing good. There is no recovery, no reset l
 - **Sidebar** filters. Click a project, category, tag or environment to scope the grid; click it again to clear. Drag its edge to resize between 140 and 420 px, double-click the edge to reset. `B` toggles it.
 - **Header** searches, sorts, expands and adds.
 
+Sidebar width, collapsed state, sort mode, the last view and your recent searches all survive a restart. Every one of those is validated against the vault that actually loads — a filter pointing at a project you deleted is dropped rather than applied, because the alternative is opening the app to an empty grid with every secret present, invisible, behind a filter you did not set. `Shift+Esc` clears every filter at once if you ever get there anyway.
+
 ### Adding a secret
 
 1. Press `Ctrl+N`, or click **+**.
@@ -117,6 +211,8 @@ The form autosaves a draft to `sessionStorage` on every keystroke, so closing th
 | Edit / Duplicate | Pencil / two-page icon in the footer |
 | Mark as rotated | The `↺` icon — stamps `last_rotated_at` |
 | Pin | The pin icon. Pinned entries sort first in every view. |
+| Mark compromised | Flags the entry and surfaces it in the health scan |
+| View history | Previous values with timestamps, restorable |
 | Delete | Trash icon, with a five-second undo toast |
 | Everything at once | Right-click for the context menu |
 
@@ -126,11 +222,41 @@ The coloured left border tracks expiry: red for expired or within seven days, am
 
 Type in the search bar and it matches provider, account, description, tags and URL. For anything more precise, wrap a regular expression in slashes — `/^AWS_/i` works, flags included.
 
-### Projects
+---
+
+## Secrets
+
+### Types
+
+| Type | Holds |
+| --- | --- |
+| `api_key` | A token, with scopes, plan/price type and expiry |
+| `password` | A credential with a strength meter and a reveal toggle |
+| `certificate` | A PEM certificate plus its private key in `cert_key_data` |
+| `ssh_key` | An OpenSSH keypair |
+| `env_var` | A variable, with a subtype hint that drives display and validation |
+| `connection_string` | A DSN or URI |
+| `file_blob` | A reference to a file on disk |
+
+`env_var` subtypes: string, multiline, secret, boolean, number, IP, CIDR, port, URL, date, JSON.
+
+### Identity
+
+Every entry carries a stable `id`, and that id is what version history, audit attribution and write scoping all key on. Nothing in this app identifies a secret by its position in an array — a splice between capturing an index and using it retargets the operation onto a neighbour, which is how a bulk delete destroys the wrong secrets.
+
+### Icons
+
+The icon picker offers a ~300-entry Simple Icons registry, a letter-avatar fallback, and **Upload file…** for your own image. PNG, JPEG, GIF, WebP, BMP and ICO are accepted up to 96 KB encoded; the file is typed by its **magic bytes**, not its extension, and validated again when the vault is read rather than only when you pick it. SVG is refused, permanently, because it is a script container and a vault is untrusted input.
+
+Agent-facing CLI output never dumps an embedded icon; it collapses to `{embedded, mime, bytes, fingerprint}`.
+
+---
+
+## Projects, chunks and exports
 
 A project is a container for structured configuration, and it is a different thing from a category. Categories are flat labels you attach to secrets. Projects hold **chunks**: typed fragments of a config file that EnvVault knows how to render back into that file.
 
-Create one with **+** in the Projects section. Use `/` in the name for hierarchy (`infra/k8s` creates `infra` as a parent if it does not exist).
+Create one with **+** in the Projects section. Use `/` in the name for hierarchy (`infra/k8s` creates `infra` as a parent if it does not exist). A project whose id differs from the slug of its name has a **pinned slug**, and renaming it or promoting it out of a parent preserves that slug.
 
 Four project types are tested end to end and available by default:
 
@@ -145,19 +271,45 @@ Seven more exist — Kubernetes, SSH config, Traefik, Apache, HAProxy, Ansible a
 
 Turning the flag back off hides those types from the *creation* menu and nothing else. Projects you already made keep working, keep exporting, and stay reachable. Hiding the config view of an existing project would strand its chunks in the vault with no way to reach them, which is worse than an untested exporter.
 
-### Chunks and `${refs}`
+The 29 chunk types in full:
 
-Any chunk field can reference a vault entry by name. Write `${GitHub}` to pull in that entry's key, or `${GitHub/account}` for a specific field. The card shows a green badge when the reference resolves and an amber one when it does not.
+```
+wg_interface     wg_peer
+docker_service   docker_network   docker_volume   env_file
+nginx_server     nginx_upstream   nginx_location  nginx_key
+k8s_deployment   k8s_service      k8s_configmap   k8s_secret   k8s_ingress
+ssh_host
+traefik_router   traefik_service  traefik_middleware
+apache_vhost     apache_directory
+haproxy_global   haproxy_frontend haproxy_backend
+ansible_vars     ansible_task
+pg_connection    pg_role
+generic
+```
 
-References are resolved at **copy and export time**, not stored resolved. That is the point: the config in the project stays a template, and the secret stays in one place.
+### `${refs}`
+
+Any chunk field can reference a vault entry by name. Write `${GitHub}` to pull in that entry's key, `${GitHub/account}` for a specific field, `${GitHub_KeyId}` to disambiguate, or `${chunk:name}` to point at another chunk. The card shows a green badge when the reference resolves and an amber one when it does not, and the security-audit tool lists every reference that has gone stale.
+
+References are resolved at **copy and export time**, not stored resolved. That is the point: the config in the project stays a template, and the secret stays in one place. Renaming an entry rewrites every reference that pointed at it.
+
+One deliberate exception: `docker_service` keeps `${VAR}` literal, because Compose substitutes it from the `.env` written beside it.
 
 Chunks also take freetext notes, and can be **disabled**. A disabled chunk is greyed out in the UI and excluded from every export.
 
 > This one was a real bug and worth stating plainly. Before Phase 13, four of the exporters checked the disabled flag and four did not. Disabling a WireGuard peer greyed out its card and still wrote the peer into `wg0.conf` — so the tunnel kept trusting a peer the user believed they had removed. If you disabled a peer or a Compose service before 0.6.0 and exported, re-export. The fix corrects the next export; it cannot reach the file already on your server.
 
+The same fixture that caught it caught a second one: the nginx exporter never resolved `${…}` at all, so a starter template's `ssl_certificate ${example_cert}` reached nginx as literal text and the server refused to start — while copying the identical chunk from its card resolved correctly.
+
 **Importing:** nginx projects take a pasted or loaded site config and parse `server {}`, nested `location {}` and multi-word directives. Docker projects take a `docker-compose.yaml`. In both cases the result is chunks you can edit.
 
-### Tools
+### Two implementations, one golden file
+
+Every exporter exists twice — `src/ts/chunk-ops.ts` for the app, `envv-cli/src/exporters.rs` for the CLI. Two implementations of one file format drift silently, so both assert against the same golden files in `tests/fixtures/parity/`, from both sides. Reviewing two implementations for agreement does not work; the fixture found the two live bugs above the first time it ran.
+
+---
+
+## Tools
 
 Switch to Tools in the activity bar.
 
@@ -167,6 +319,7 @@ Switch to Tools in the activity bar.
 | Certificate generator | Self-signed X.509, via `rcgen` |
 | SSH keypair | Ed25519, via `ssh-key` |
 | Health dashboard | Finds weak (under 12 characters), expired, expiring within 30 days, never-rotated and undescribed secrets |
+| Security audit | Duplicate values, compromised entries, stale `${refs}` |
 | Secret diff | Field-by-field comparison of two entries, values masked |
 | Expiry calendar | A month grid with colour-coded dots |
 | Audit log | The append-only log, with hash-chain verification |
@@ -176,10 +329,23 @@ Switch to Tools in the activity bar.
 | Import | `.env`, Bitwarden JSON, 1Password JSON, raw vault JSON |
 | Templates | Ten prefilled shapes — GitHub PAT, AWS access key, Stripe, PostgreSQL DSN, OpenAI, and so on |
 | Bulk operations | Select mode, then bulk delete or bulk `.env` export |
+| Backup | Encrypted `.vaultbak` export and restore |
+
+---
+
+## Settings, shortcuts and auto-lock
 
 ### Settings
 
-Press `S` or click the gear. Five tabs: **Appearance** (seven themes — dark, midnight, dracula, nord, catppuccin, light, and system, which follows your OS), **Layout** (card size, columns, activity bar placement), **Security** (auto-lock timeout, lock on window hide, mask keys by default), **Data** (export format, expiry warning window, custom CSS) and **Advanced** (vault path, experimental project types).
+Press `S` or click the gear. Five tabs:
+
+| Tab | Holds |
+| --- | --- |
+| **Appearance** | Seven themes — dark, midnight, dracula, nord, catppuccin, light, and system, which follows your OS |
+| **Layout** | Card size, column count, activity bar placement and icon style |
+| **Security** | Auto-lock timeout, lock on window hide, mask keys by default |
+| **Data** | Export format, expiry warning window, custom CSS |
+| **Advanced** | Vault path, experimental project types |
 
 ### Keyboard shortcuts
 
@@ -197,9 +363,15 @@ Press `S` or click the gear. Five tabs: **Appearance** (seven themes — dark, m
 
 The vault locks itself after 60 idle minutes by default; set the timeout to 0 in Settings → Security to disable it. Mouse and keyboard activity resets the clock, and a dismissible toast warns you a minute out.
 
-Locking mid-session brings up a dedicated re-lock screen rather than the startup one — it tells you *why* it locked (idle, manual, or the window was hidden) and asks for the password only. You do not re-enter a server URL to get back into a session you never left.
+Locking mid-session brings up a dedicated re-lock screen rather than the startup one — it tells you *why* it locked (idle, manual, or the window was hidden) and asks for the password only. You do not re-enter a server URL to get back into a session you never left. Locking also clears any pending undo, since a pending undo closes over a deleted entry including its secret.
 
 Locking when the window is hidden is **opt-in**, in Settings → Security. It used to fire on every alt-tab, which is not security, it is an annoyance with a security-shaped excuse.
+
+Auto-lock and lock-on-hide are both suspended while you are [serving to the LAN](#open-to-lan).
+
+### Window state
+
+Size, position and maximized state persist across restarts. Visibility deliberately does not: the tray handler hides the window, so saving visibility would mean hide-to-tray plus quit restores an *invisible* window on next launch, and the app appears to start and do nothing with only the tray icon as a way back. The plugin also skips restoring a position no connected monitor intersects, so unplugging a second display cannot strand the window off-screen.
 
 ---
 
@@ -217,7 +389,10 @@ Every stdout path masks stored values as `sha256:<12 hex>`. In JSON it is `{"red
 
 The fingerprint is what makes this useful rather than merely safe. It is stable per value, so **equal fingerprints mean equal secrets**. You can detect that staging and production drifted apart, or that two entries hold the same key, without reading either one. An empty value fingerprints as the literal string `empty`, never as a hash, because "unset" and "set to something" must not look alike.
 
-A `${ref}` is never masked. It is a pointer, not a secret, and leaving it readable is exactly what lets a script wire configs together blind.
+Two rules that are easy to get wrong, and are therefore enforced rather than documented:
+
+- **`env_file` chunks are masked whole**, with per-field type flags ignored. `chunk set` writes `field_type: var` by default, so a real password added that way carries no secret flag at all. Trusting the flag inside a `.env` means the first unflagged password is the one that leaks.
+- **A `${ref}` is never masked.** It is a pointer, not a secret, and leaving it readable is exactly what lets a script wire configs together blind.
 
 ### 2. Ways to get the real value out
 
@@ -227,9 +402,11 @@ envv exec -- terraform apply           # secrets enter the child's environment
 envv render deploy.tpl --out app.conf  # substitutes ${refs} into a template
 ```
 
-None of those three print a value.
+None of those three print a value. This is enforced by construction, not by discipline: `Resolver::for_output` redacts, `Resolver::materialising` does not, and an exporter cannot obtain a real value without being handed the latter.
 
 A vault-wide `envv export` to stdout is **refused**, with exit code 9. Not masked — refused. A masked `.env` file looks deployable and is not, and handing someone a file that fails silently at 3 a.m. is worse than handing them an error now. Give it `--out` and it writes real values to the file. Project-scoped exports mask instead of refusing, since their structure is worth reading.
+
+`envv exec --clean` starts the child with only the vault's variables. On Windows it keeps `SYSTEMROOT`, `COMSPEC` and `PATHEXT`, because without `SYSTEMROOT` anything touching the CRT or winsock fails with errors that name none of this.
 
 ### 3. Secrets that are never seen at all
 
@@ -239,7 +416,7 @@ envv entry rotate Stripe --generate
 envv user token new deploy --out .token
 ```
 
-You get a fingerprint back. The value never existed anywhere you could read it.
+You get a fingerprint back. The value never existed anywhere you could read it. `user token new` checks the output policy **before** minting, because the first version minted the token and then refused to print it, leaving a live credential in the database that nobody could read.
 
 ### 4. A machine-readable envelope
 
@@ -277,6 +454,8 @@ envv describe | jq
 
 The whole command tree, every flag, the exit codes, the envelope and the redaction rules, as one JSON document generated from the same `clap` definition the binary runs on. It cannot describe a flag that does not exist. If you are writing an integration, read this instead of guessing from error messages.
 
+`envv-cli/examples/envv.py` is a wrapper showing the three rules of a correct integration: always `--json`, never read a value (use `exec`/`render`), branch on `error.code`. It is an example, deliberately not a package.
+
 ### Commands
 
 ```
@@ -284,22 +463,24 @@ list          List entries as a table
 get           Full details of one entry
 export        Export entries (--out for real values)
 rotate-check  Entries expiring within N days
-import        Import a .env file
+import        Import a .env file (upserts by provider; --allow-duplicates to append)
 audit         The audit log, or --verify its hash chain
 completions   bash | zsh | fish | elvish | powershell
 watch         Watch a .env and sync changes into the vault
 env           Resolve a project's env_file chunks into a deployable .env
 entry         ls get add set rename rm tag pin compromise rotate history restore
 project       ls show add rename rm export chunk
-category      Categories — the flat, slash-nested sidebar tags
+project chunk ls show add rm rename set unset disable enable
+category      ls add rename rm
 tags          Every tag with its entry count
 gen           secret | password | cert | ssh
-backup        Encrypted .vaultbak export/import, readable by the desktop app
-scan          Weak, expiring, duplicated and stale-reference secrets
+backup        export | import — encrypted .vaultbak, readable by the desktop app
+scan          Weak, expiring, duplicated and stale-reference secrets; --verify the audit chain
 status        Where this CLI is pointed and what the vault holds
 user          ls add rm rename passwd class token
-class         User classes
-perm          Permission expressions
+user token    ls new revoke
+class         ls add set rm
+perm          show set check
 exec          Run a command with secrets in its environment
 render        Substitute ${refs} in a template file (`-` for stdin)
 enrich        Fill entry metadata from names and public key prefixes
@@ -307,6 +488,8 @@ describe      The machine-readable contract
 login         Authenticate once and cache the session
 logout        Forget cached sessions
 ```
+
+Global flags: `--json`, `--reveal`, `--yes`, `--dry-run`, `--db-path`, `--salt-path`, `--init`, `--server`, `--user`, `--token`, `--password-file`, `--password-command`, `--env-file`.
 
 ### Getting the password in without putting it in argv
 
@@ -321,6 +504,8 @@ envv --env-file /srv/envv/.env list             # the .env compose already reads
 
 `--env-file` is the one to use with a containerised server. It reads `ENVV_PASSWORD` and `ENVV_SERVER_URL` out of the same file `docker compose` uses to start `envv-server`, so exactly one copy of the password exists and the compose stack owns it.
 
+`--password-command` runs through `sh -c` on Unix and `cmd /C` on Windows.
+
 For a remote server, authenticate once and let everything after that run unattended:
 
 ```bash
@@ -328,7 +513,7 @@ envv login --server https://vault.example.com
 envv list                                       # uses the cached session
 ```
 
-The session token goes in `sessions.json`, mode 0600, under `$XDG_STATE_HOME/envv/` (or `%LOCALAPPDATA%` on Windows). A rejected session is cleared rather than retried, and the error tells you to log in again — otherwise every later command fails identically with an unhelpful 401 and you spend twenty minutes debugging the wrong thing.
+The session token goes in `sessions.json`, mode 0600, under `$XDG_STATE_HOME/envv/` (or `%LOCALAPPDATA%` on Windows — per-user, not roamed, since a cached session token should not follow you onto another machine). A rejected session is cleared rather than retried, and the error tells you to log in again — otherwise every later command fails identically with an unhelpful 401 and you spend twenty minutes debugging the wrong thing.
 
 ### Idempotency
 
@@ -353,7 +538,7 @@ envv enrich --apply --force    # also overwrite fields that already have values
 envv enrich --online --apply   # ask the issuers
 ```
 
-`--online` sends the secret over TLS to the service that issued it, and nowhere else, then fills `account_name`, `scopes`, `expires_at` and `rate_limit` from the real answer. It is opt-in for exactly that reason.
+`--online` sends the secret over TLS to the service that issued it, and nowhere else, then fills `account_name`, `scopes`, `expires_at` and `rate_limit` from the real answer. Live answers overwrite inferred ones for the same field. It is opt-in for exactly that reason.
 
 It also tells you something nothing offline can. A credential that was revoked last month looks identical to a working one in storage. **An issuer answering 401 is the only reliable way to find out.**
 
@@ -379,36 +564,36 @@ envv-server --tls --cert cert.pem --key key.pem   # bring your own
 | `--tls` | off | Generates a 3-year self-signed cert for `localhost` and `127.0.0.1` if `--cert`/`--key` are absent |
 | `--session-ttl-mins` | `480` | Idle minutes before a token expires; any authenticated request resets it. 0 disables expiry. |
 
-Auth is a bearer token. Failed attempts are rate-limited to 10 per IP per 60 seconds, counted from the real socket address rather than `X-Forwarded-For` — a header the client controls is not an identity.
+Auth is a bearer token. Failed attempts are rate-limited to 10 per IP per 60 seconds, counted from the real socket address rather than `X-Forwarded-For` — a header the client controls is not an identity. Only *failures* count, so a busy legitimate client never rate-limits itself.
+
+Locking is asymmetric on purpose. `DELETE /api/unlock` from the owner is **global**: every session is dropped and every key zeroized. From a non-owner it is a personal logout. The earlier behaviour — remove only the caller's session, while every user session held its own copy of the vault key — meant an owner "locking" left everyone else reading and writing indefinitely.
 
 ### Self-signed certificates, and the chicken-and-egg problem
 
-The desktop app pins the server's certificate. When you save a remote vault it compares the SHA-256 of the leaf certificate **during the handshake**, before it sends anything, so a machine-in-the-middle is rejected before your master password goes over the wire.
+The desktop app pins the server's certificate. When you save a remote vault it compares the SHA-256 of the leaf certificate **during the handshake**, before it sends anything, so a machine-in-the-middle is rejected before your master password goes over the wire. There is no `danger_accept_invalid_certs` anywhere in the codebase.
 
 That creates an obvious problem for a self-signed server: connecting requires a fingerprint you can only get by connecting. The bootstrap is a separate trust-on-first-use step — an unauthenticated `GET /api/status` with a capturing verifier that **sends no credentials** and returns the fingerprint for you to confirm. Everything after that first contact is pinned, and the app warns you if the fingerprint later changes.
 
-### Open to LAN
-
-The desktop app can host the vault it already has open, from the Remote panel, so another machine on the network can reach it without a second server process or a second copy of the database.
-
-It refuses while you are connected to a remote vault. `lan_start` opens *this* machine's `vault.db`, so pressing it during a remote session published the local vault under the remote's UI — a confusing bug with a genuinely bad outcome. The gate is enforced at the button and again at the call.
+Fingerprints are parsed with `rustls-pemfile`. A hand-rolled base64 decoder that maps invalid characters to zero produces a plausible but wrong fingerprint, which clients then pin to — which is worse than no pinning, because it looks like it works.
 
 ### API
 
 | Method | Path | Auth | What |
 | --- | --- | --- | --- |
 | POST | `/api/unlock` | — | `{password}` → `{token}` |
-| DELETE | `/api/unlock` | token | Lock, invalidate the token |
+| DELETE | `/api/unlock` | token | Lock (global for the owner, personal otherwise) |
 | GET | `/api/status` | — | `{unlocked, vault_exists, cert_fingerprint}` |
 | POST | `/api/auth` | — | `{username, password}` or `{token}` → `{token}` |
 | GET | `/api/ping` | token | Keep-alive, resets the idle clock |
-| GET / PUT | `/api/vault` | token | Read / write the whole `VaultData` |
+| GET / PUT | `/api/vault` | token | Read / write the whole `VaultData`; ETag + `If-Match` |
 | GET | `/api/vault/expiring?days=30` | token | Expiring entries |
 | GET | `/api/audit` | token | The audit log |
 | GET/POST/DELETE | `/api/users`, `/api/users/{id}/…` | owner | Users, passwords, classes, tokens, permissions |
 | GET/POST/DELETE | `/api/classes`, `/api/classes/{id}/…` | owner | Classes and their permissions |
 | GET | `/api/stats` | — | Public counts, 0 while locked |
 | GET | `/api/openapi.json` | — | The spec |
+
+Read events are deliberately **not** audited. Every `GET /api/vault` used to write a row, so a polling client grew the table without bound — and pruning it would have broken the very chain that makes the log tamper-evident.
 
 ### Dashboard widgets
 
@@ -437,6 +622,40 @@ Homarr wants a Custom API tile pointed at the same URL, with three fields mapped
 
 ---
 
+## Open to LAN
+
+The desktop app can host the vault it already has open, from the Remote panel, so another machine on the network can reach it without a second server process or a second copy of the database. Minecraft-style: it exists while the app does, and closes when you lock or quit. Docker remains the option for something always-on.
+
+`envv-server` is a library, and the binary is a thin CLI wrapper around it. The desktop hosts **the same router in-process** — one vault file, one master password, no subprocess to supervise, and no possibility of the two drifting apart in what they expose.
+
+**Peers sign in as users.** `POST /api/unlock` is refused while hosting, so the master password never crosses the network and no peer can arrive as owner. The host's key is adopted directly into an owner session in memory, which is why nobody re-enters a password. Starting is refused outright when no password-capable user exists yet — the app sends you to the Users panel rather than advertising a server nobody can log into.
+
+**Defaults.** Binds `0.0.0.0` on port **8744**, stepping forward if it is taken, so a Docker `envv-server` on 8743 can coexist. Self-signed TLS is on. The certificate is persisted and reused, because regenerating it per launch would change the fingerprint every time and break every peer's pin. The fingerprint is shown in the UI for peers to pin through the normal path.
+
+**Locking is suspended while serving.** Peers are mid-request, and the host not touching the keyboard is no reason to cut them off. Because that would otherwise leave the vault decrypted indefinitely on an unattended machine, the server closes itself after **8 hours with no peer traffic**, which re-arms normal auto-lock. An explicit lock stops the server and disconnects everyone, behind a confirmation naming how many peers are connected. Every teardown path zeroizes the keys held by peer sessions.
+
+**It refuses while you are connected to a remote vault.** `lan_start` opens *this* machine's `vault.db`, so pressing it during a remote session published the local vault under the remote's UI. The gate is enforced at the button and again at the call, because a control that is merely hidden is not a control that is prevented. A server that is already running stays visible and stoppable regardless.
+
+The Users panel appears whenever you are hosting or connected to a remote, and is hidden on a purely local vault — local accounts written into the desktop's own `vault.db` are never read by `envv-server`, so they could never authenticate anywhere.
+
+---
+
+## Concurrent writes
+
+Opening the vault to the LAN makes the desktop and its peers concurrent writers on the same database. The desktop used to write the whole blob unconditionally, so a peer's edit landing between the desktop's last load and its next save was silently overwritten. No error, no warning, the change simply gone.
+
+The check now lives **inside `save_vault`**. `SaveCtx { actor, expect_version }` carries the version the caller last read, and the comparison happens inside the same `BEGIN IMMEDIATE` transaction as the write. Putting it there rather than in each caller fixes two problems at once: a caller that reads, compares and then writes has a race between the compare and the write, and a caller that simply forgets is silently unprotected.
+
+`SaveCtx` is a struct rather than two positional `Option<&str>` arguments, because swapping an actor id for a version hash would disable the concurrency check while still compiling and still passing every test.
+
+Audit rows are written **inside** that transaction too. They previously ran before it, so a rejected or failed write still appended audit rows describing changes that never happened.
+
+The version identity is the `data_hash` `save_vault` already stores, so it is by construction the hash of exactly the bytes on disk, and the GET ETag reads that stored value rather than re-hashing parsed JSON. Where a handler needs both the version and the data it describes, the version is read first: mis-pairing that way can only pin an *older* version than the data, which fails the compare-and-swap and retries. The other order passes the check while merging against a stale base — which is the clobber itself.
+
+**On conflict the desktop asks.** There is no safe automatic answer; silently picking a winner is how data goes missing. You get the choice between keeping your version (an explicit unconditional overwrite) and reloading theirs, with the cost of each spelled out.
+
+---
+
 ## Docker
 
 ```bash
@@ -453,9 +672,13 @@ curl -X POST http://localhost:8743/api/unlock \
 
 The compose file sets `mem_limit: 256m`. That is not arbitrary. Argon2id allocates a 64 MB buffer per unlock by design — that cost is the entire point of a memory-hard KDF — and the limit leaves room for two concurrent unlocks without the OOM killer turning a login into a restart.
 
-Idle memory is about 1.3 MiB, down from 4 MiB, from three changes worth knowing if you tune this yourself: tokio runs 2 workers instead of one per CPU (`ENVV_WORKER_THREADS`), `MALLOC_ARENA_MAX=2` stops glibc from reserving up to eight 64 MB arenas per core, and `MALLOC_TRIM_THRESHOLD_` returns the Argon2id buffer to the OS instead of letting it sit resident for the life of the process. The arena saving scales with your host's core count, so a big server benefits more than a small one.
+Idle memory is about 1.3 MiB, down from 4 MiB, from three changes worth knowing if you tune this yourself:
 
-The healthcheck opens the port rather than running `--version`, because a wedged process answers `--version` perfectly well.
+- tokio runs **2 workers** with 1 MB stacks instead of one per CPU (`ENVV_WORKER_THREADS` overrides it);
+- `MALLOC_ARENA_MAX=2` stops glibc reserving up to eight 64 MB arenas per core, each of which it never fully returns — **the saving scales with your host's core count**, so a big server benefits far more than a small one;
+- `MALLOC_TRIM_THRESHOLD_` returns the Argon2id buffer to the OS at once instead of letting it sit resident for the life of the process.
+
+`shm_size` is 16m. The healthcheck opens the port rather than running `--version`, because a wedged process answers `--version` perfectly well.
 
 ---
 
@@ -463,9 +686,17 @@ The healthcheck opens the port rather than running `--version`, because a wedged
 
 The vault owner is whoever can derive the key from the master password. Beyond that you can create users, give them passwords or API tokens, and constrain what they can see.
 
+The owner is a **real user row** with `is_owner = 1` and, deliberately, **`password_hash = NULL`**. Storing a hash of the master password there would be an offline oracle for the vault key. Ownership is still proven by deriving the SQLCipher key, and the row can never be logged into through `/api/auth`. It exists so that the owner can be named in an audit entry and listed with everyone else, which the previous magic string `"owner"` could not do.
+
 Users get capabilities (`manage_users`, `manage_classes`, `delete_projects`) and two permission expressions: one for read, one for write. **Classes** are named templates — Admin, Moderator, Viewer, or your own — holding the same thing, so you set the rule once and assign it.
 
-### Permission expressions
+Sub-user passwords are Argon2id in PHC format. Legacy SHA-256 hashes are upgraded transparently on the user's next successful login, so there is nothing for you to migrate.
+
+The desktop app does **not** seed an `admin` sub-user whose password hash is the master password. That turned the sub-user login into an oracle for the vault password. Create users explicitly.
+
+---
+
+## Permission expressions
 
 A boolean expression over entry fields:
 
@@ -475,16 +706,68 @@ project:Alpha AND NOT category:secret
 tag:shared OR type:certificate
 ```
 
-Terms are `field:glob`, where field is one of `vault`, `project`, `category`, `tag`, `env` or `type`. `field:*` means no constraint on that field.
+Terms are `field:glob`, where field is one of `vault`, `project` (id or display name), `category`, `tag`, `env` or `type`. `field:*` means no constraint on that field.
 
-Four rules govern how they combine, and all four fail towards *less* access:
+Precedence is `NOT` > `AND` > `OR`; parentheses override. `&&`, `||` and `!` are accepted as aliases and operators are case-insensitive. Adjacency is **not** implicit AND — an operator is always required, so an expression can never quietly mean something other than it reads.
 
-1. Effective permission is the class expression **AND** the individual one. A class exclusion cannot be undone by an individual grant.
-2. Write implies read.
-3. A specific `project:` term is never satisfied by the `Universal` catch-all project.
-4. A malformed expression **denies**. It is rejected when you save it, and if one somehow reaches evaluation it evaluates to no access rather than to full access.
+Five rules govern how they combine, and all of them fail towards *less* access:
 
-Sub-user passwords are Argon2id in PHC format. Old SHA-256 hashes from before Phase 5.1 are upgraded transparently on the user's next successful login, so there is nothing for you to migrate.
+1. Effective permission is the class expression **AND** the individual one. A class-level exclusion is a real boundary, not a suggestion.
+2. **Write implies read**, so the effective read rule is `read OR write`.
+3. **No expression is not "no restriction".** With AND, that would give a user holding no permissions at all full access. No expression means no grant.
+4. A specific `project:` term is never satisfied by the `Universal` catch-all project.
+5. A malformed expression **denies**. `set_permission_expr` parses before storing, so a bad rule is rejected at the API with a 400 rather than saved as something that silently denies everything; stored text is re-parsed on every evaluation rather than trusted, so a row edited outside the app also fails closed.
+
+Write scoping is ANY-match: one matching category or project is enough, the same rule reads already used. Requiring *every* scope an entry declared made project-scoped grants unusable, since almost every entry also carries a category. A `scope_value` of `*` is an unconditional match for its type, so wildcards reach unfiled entries and `project:*` and `category:*` behave identically. Note the consequence: for scoped users, "can see it" and "can edit it" are close to the same thing. **Vault scope remains the real privilege boundary.**
+
+Existing flat `(scope_type, scope_value, permission)` rows are compiled once into equivalent OR-chains, reproducing the previous read behaviour exactly. The migration is guarded by a marker in `vault_meta`, so deliberately clearing every expression does not resurrect the old rules on the next start, and it runs after class seeding so the built-in classes are compiled too.
+
+**The editor.** The Users and Classes panels show a read box and a write box with live syntax validation, a predicate builder that inserts terms from the values actually present in your vault, and a "matches N of M entries" preview. The preview is advisory — `vault-core` re-parses and re-evaluates everything, and is the only thing that decides real access.
+
+---
+
+## The security model
+
+Collected in one place, because the reasoning matters more than the list.
+
+| Layer | What holds |
+| --- | --- |
+| At rest | SQLCipher AES-256-CBC. The key is derived per-session and never written. |
+| Key derivation | Argon2id m=65536, t=3, p=1, 16-byte random salt in a separate file. |
+| In memory | `Mutex<Option<[u8;32]>>`, zeroized on lock, on quit, and on every LAN teardown path. |
+| Backups | PBKDF2-SHA256 → AES-256-GCM `.vaultbak`. |
+| In transit | TLS with leaf-certificate pinning verified during the handshake; TOFU bootstrap sends no credentials. |
+| Sub-user auth | Argon2id PHC, sliding-expiry bearer tokens, failure-only rate limiting from the real socket address. |
+| Authorization | Boolean expressions, composed with AND, failing closed at every ambiguity. |
+| Integrity | Hash-chained append-only audit log, verified on demand. |
+| Concurrency | Compare-and-swap inside the write transaction. |
+| Output | Redaction by default in the CLI; refusal rather than masking where a masked file would look deployable. |
+| Rendering | Every vault field is HTML-escaped. A vault is JSON from a remote someone else runs; TypeScript unions are erased at runtime and prove nothing. Only `http(s):` URLs become links. |
+| Assets | Fonts vendored, CSP `font-src 'self'`, no CDN request at runtime. |
+| Icons | Typed by magic bytes, size-capped, re-validated on read, SVG refused. |
+
+### Things deliberately removed
+
+- **TOTP/2FA.** It had no UI and was never reachable. A half-wired second factor is worse than none, because people believe in it.
+- **The Settings "Quick Connect" pane.** Saving settings ran `applyRemoteConfig()`, which reassigned the vault store from an unchecked toggle — so opening and closing Settings while connected to a remote *silently disconnected it*. Remote connections are managed only in the Remote panel.
+- **The Google Fonts CDN.** Syne and JetBrains Mono are vendored and bundled.
+- **The `chunk` secret type.** It was in the dropdown but could never be saved: `dynamicSecretFields` hid its key input while `saveModal` still required `api_key`. Its content lived in `extra_vars`, which ordinary cards render anyway, so existing entries are relabelled `env_var` on load with nothing lost. Project `SecretChunk`s are a different concept and untouched.
+
+### Closed oracles
+
+- **Username enumeration.** `verify_user_password` returned `Err` for a user with no password (→ HTTP 500) but `Ok(None)` for a nonexistent user (→ 401), and only the 401 path incremented the rate limiter. The 500-vs-401 difference revealed which usernames existed, unthrottled. Both are now ordinary credential failures.
+- **The owner password hash.** See above: `NULL`, on purpose.
+- **Indefinite sessions.** They used to live until process restart, so a leaked token was valid forever.
+
+### Correctness bugs that were security bugs
+
+- `escAttr()` did not escape `&`, so any secret containing an entity-like sequence (`&amp;`, `&lt;`) was HTML-decoded on read-back and **copy-to-clipboard returned the wrong value**.
+- Entries had no stable id. `save_vault` keyed on `provider|account_name` while the RBAC merge keyed on `provider|account_name|key_id`, so the two disagreed and history could be attributed to the wrong entry. Existing vaults are backfilled on first load.
+- Expand and reveal state was keyed by array index, so it jumped to neighbouring cards after any delete, and revealed secrets silently re-masked on re-render.
+- Keep-alive pings read a non-existent `_token` field and went out as `Bearer `, so the keep-alive never kept anything alive.
+- Remote status checks used bare `fetch()`, bypassing the TLS-pinning proxy and reporting "Unreachable" for any HTTPS server with a self-signed certificate.
+- `envv import` appended unconditionally, so `envv watch` added a full copy of the file to the vault on every save. It upserts by provider now.
+- Switching between local and remote vaults carried the previous vault's filters, expanded entries and bulk selection across, so the new vault loaded into an empty-looking grid with all its data present and invisible.
 
 ---
 
@@ -539,16 +822,41 @@ npx tauri build --features vault-core/bundled
 cargo build --release -p envv-cli -p envv-server --features vault-core/bundled
 ```
 
-`vault-core/bundled` compiles SQLCipher and OpenSSL into the binary instead of linking your system's. Use it for anything that has to run on a machine other than the one that built it. An AppImage linked against Fedora's `libsqlcipher0` will not start on a Debian box shipping a different soname, and "works on my distro" is the whole problem a portable bundle exists to solve. For local development, leave it off — it builds in seconds instead of minutes.
+`vault-core/bundled` compiles SQLCipher and OpenSSL into the binary instead of linking your system's. Use it for anything that has to run on a machine other than the one that built it. An AppImage linked against Fedora's `libsqlcipher0` will not start on a Debian box shipping a different soname, and "works on my distro" is the whole problem a portable bundle exists to solve. For local development, leave it off — it builds in seconds instead of minutes. Windows vendors both unconditionally, since it packages neither.
 
-Checks:
+Bundle targets are `appimage`, `deb`, `rpm` and `nsis`, with rpm dependencies declared and a WebView2 `downloadBootstrapper` for the installer.
+
+### Linux display flags
+
+`configure_linux_webkit()` sets the WebKitGTK environment as **defaults, not overrides**. `GDK_BACKEND=x11` is set only when the session is not Wayland — forcing XWayland breaks fractional scaling and fails outright where XWayland is absent — and anything already in your environment wins, so `WEBKIT_DISABLE_COMPOSITING_MODE=0` is a real escape hatch. The compositing and DMABUF flags stay on by default because they fix blank windows on Nvidia and older Mesa.
+
+### Checks
 
 ```bash
-npm test               # 671 tests
-npm run typecheck
+npm test               # 671 Vitest tests across 27 files
+npm run typecheck      # tsc --noEmit, covering src/ and tests/
+npm run test:coverage
 cargo test --workspace
 cargo test -p envv-cli # exporter parity + the agent-safety guarantees
+cargo check -p vault-core --features bundled
 ```
+
+The frontend tests load the real `index.html` rather than a fixture, deliberately: a recurring failure in this project is JavaScript reaching for an element id that a formatter silently dropped, and a hand-written fixture keeps passing after that happens.
+
+---
+
+## Continuous integration
+
+`.github/workflows/ci.yml` runs two jobs on every push to `main`, every pull request, and on demand.
+
+| Job | Runs on | Does |
+| --- | --- | --- |
+| **Rust** | `ubuntu-latest` and `windows-latest`, `fail-fast: false` | Builds the frontend (the Tauri crate's build script needs `dist/` to exist), checks `Cargo.lock` is current with `--locked`, then `cargo test --workspace` and `cargo check --workspace --all-targets`. Linux additionally checks the bundled, distro-independent build. |
+| **Frontend** | `ubuntu-latest` | `npm ci`, `tsc --noEmit`, `npm test`, `vite build`. |
+
+Two things in there look like noise and are not. `RUSTFLAGS: -D warnings` is set as an environment variable, which makes cargo ignore `.cargo/config.toml` — where this repo passes `-fuse-ld=mold`. Remove that line and every Linux job fails to link, because the runners have no mold. And the matrix runs both platforms without `fail-fast`, so a Windows-only break cannot hide behind a green Linux run.
+
+`.github/workflows/build.yml` handles releases: it checks the version is consistent across `tauri.conf.json`, `package.json` and the four `Cargo.toml` files, builds every bundle target, and signs each artefact with keyless Sigstore.
 
 ---
 
@@ -559,8 +867,35 @@ Every project has a list like this. Most do not publish it.
 - **Seven of the eleven project types are experimental** and off by default: Kubernetes, SSH config, Traefik, Apache, HAProxy, Ansible, PostgreSQL. Their exporters work in the UI but have not been exercised end to end against the real software.
 - **`envv` cannot pin a certificate.** There is no `--ca-cert` and no custom verifier in the CLI's HTTP path, so a self-signed `envv-server` is reachable from the desktop app but not from the CLI. Use a real certificate, or HTTP over a trusted network.
 - **Connecting to a remote leaves the local vault's key resident** in memory for the whole session, with nothing on screen to say so. The LAN gate closes the one path that exploited this. Locking the local vault on switch is the deeper fix and it has not been made, because it would mean re-entering the master password every time you switch back.
-- **`chunks/env-link.ts` and `chunks/edit-modal.ts` have no test coverage.**
-- **SVG is refused as a custom icon**, permanently and on purpose. It is a script container, and a vault is untrusted input. Icon files are typed by magic bytes rather than by their extension for the same reason.
+- **`chunks/env-link.ts` and `chunks/edit-modal.ts` have no test coverage**, and parts of `render.ts` and `tools.ts` — config-view click handlers, the generator and calculator panes — are untested too.
+- **For scoped users, read and write are nearly the same privilege**, following the ANY-match relaxation. Vault scope is the boundary that actually holds.
+- **SVG is refused as a custom icon**, permanently and on purpose. It is a script container, and a vault is untrusted input. This one is not going to change.
+
+---
+
+## How it got here
+
+The feature sections above are the current state. This is the order it arrived in, for anyone reading the git history.
+
+| Phase | Delivered |
+| --- | --- |
+| 1 | Tauri wrapper, static frontend |
+| 2 | SQLCipher + Argon2id encrypted storage, unlock flow |
+| 3 | TypeScript + Vite, inline-handler elimination, structured project types, audit table, version history |
+| 4 | Remote vault server and the first CLI |
+| 5 | Multi-user RBAC, user classes, remote panel, health dashboard |
+| 5.1 | Security hardening: Argon2id for sub-users, failure-only rate limiting, restricted CORS |
+| 6 | TLS on the server, certificate pinning, tag sidebar filter, YAML formatter, re-lock overlay |
+| 7 | Correctness pass: stable entry ids, audit log viewer, offline fonts, session expiry, tests and CI |
+| 8 | Owner as a real user row, audit attribution, permission scoping, enumeration oracle closed |
+| 9 | Permission expression language (AND / OR / NOT) with a live editor |
+| 10 | Open to LAN — hosting the vault from the desktop app |
+| 10.1 | Lost-update fix: compare-and-swap on every vault write |
+| 11 | Frontend test suite and a module-by-module audit; 66 bugs fixed |
+| 12 | UX persistence, window state, the LAN wrong-vault gate, experimental project types |
+| 13 | CLI parity, exporter golden fixtures — which found the disabled-chunk and nginx-`${ref}` export bugs |
+| 14 | The agent-safe CLI: redaction, JSON envelope, exit codes, `describe` |
+| 15 | Custom icons, live enrichment, Windows and cross-distro portability, Docker memory |
 
 ---
 
