@@ -55,12 +55,14 @@ Everything below is implemented and in the shipping build. The sections after th
 
 ### Secrets
 
-- Seven secret types: **API key, password, certificate, SSH key, environment variable, connection string, file reference**.
+- Seven secret types: **API key, password, certificate, SSH key, environment variable, connection string, file reference** — each with its own form, its own required fields and its own type-aware generator. Full breakdown under [Secrets](#secrets).
 - Certificates carry their private key alongside them (`cert_key_data`); PEM blocks are re-wrapped to 64 columns on import so a single-line paste is still valid PEM.
 - Environment-variable entries carry a display subtype — string, multiline, secret, boolean, number, IP, CIDR, port, URL, date, JSON.
 - Metadata per entry: account, description, URL, scopes, environment (dev/staging/prod), expiry, price/plan type, tags, pinned flag, compromised flag, `last_rotated_at`, custom icon.
 - **Custom icons**: either a [Simple Icons](https://simpleicons.org) slug from a ~300-entry registry, or an uploaded image file. One field holds both, so nothing can end up with a slug and a file that disagree.
 - **Generators** built in: 32/64-byte hex secrets, passwords, self-signed X.509 pairs (`rcgen`), Ed25519 SSH keypairs (`ssh-key`).
+- **Forty issuer signatures recognised on sight** — `ghp_`, `sk-ant-`, `AKIA`, `xoxb-`, `sk_live_` and the rest — plus structural typing for PEM blocks, JWTs and eleven database URI schemes.
+- **Ten prefilled templates** and importers for `.env`, Bitwarden, 1Password and raw vault JSON.
 - **Search** across provider, account, description, tags and URL, with regular expressions when you wrap the query in slashes.
 - **Filters** by project, category, tag, environment and name prefix, all stackable, all clearable with one key.
 - **Bulk mode** for multi-select delete and multi-select `.env` export.
@@ -226,29 +228,146 @@ Type in the search bar and it matches provider, account, description, tags and U
 
 ## Secrets
 
-### Types
+### The seven types
 
-| Type | Holds |
+Pick the type at the top of the add form and the rest of the form changes with it. The type is not cosmetic — it decides which fields exist, what **Generate** produces, how the card renders, and how the `.env` export names the value.
+
+| Type | Identified by | The secret field | Extra fields | Generate produces |
+| --- | --- | --- | --- | --- |
+| **API key** | Provider (`GitHub`) | API Key | Account, a second *secret*/client-secret field, scopes, plan type, rate limit | 32 bytes of hex |
+| **Password** | Service or app (`Gmail`) | Password | Username, strength meter | A random password |
+| **Certificate** | Site or domain (`example.com`) | Fullchain PEM | Private key (`cert_key_data`), issuer, expiry | A self-signed X.509 pair via `rcgen` |
+| **SSH key** | Host or service (`github.com`) | Private key, OpenSSH format | Username, account | An Ed25519 keypair via `ssh-key` |
+| **Environment variable** | Variable name (`DATABASE_URL`) | Value | Subtype (see below) | 32 bytes of hex |
+| **Connection string** | Service (`PostgreSQL`) | DSN or URI | — | 32 bytes of hex |
+| **File reference** | Name (`config.yaml`) | — | Path or reference on disk (`blob_ref`) | — |
+
+Notes on the ones with sharp edges:
+
+- **Certificate** and **file reference** have no `api_key` at all. The form hides the field and the save path validates `certificate_data` / `blob_ref` instead, so neither can be saved half-formed.
+- **Certificates keep their private key in the same entry.** A cert without its key is not deployable, and storing them apart is how they get separated. PEM pasted as a single line is re-wrapped to 64 columns on read, because a single-line PEM is not valid PEM and most tools reject it silently.
+- **A file reference stores a path, not the file.** It is a pointer for things too large or too machine-specific to live in a vault — a kubeconfig, a keytab, a service-account JSON on a build agent.
+
+There was an eighth, `chunk`, and it is gone. It appeared in the dropdown but could never be saved: the form hid its key input while the save path still required `api_key`. Its content lived in `extra_vars`, which ordinary cards render anyway, so existing entries are relabelled `env_var` on load with nothing lost. Project chunks are a different concept and untouched.
+
+### Environment-variable subtypes
+
+An `env_var` entry carries a subtype that drives display and validation:
+
+```
+string   multiline   secret   boolean   number
+ip       cidr        port     url       date      json
+```
+
+`secret` is the one that matters operationally — it masks by default and marks the value for redaction. The rest are display hints: `multiline` gets a textarea rather than an input, `json` gets the formatter, `cidr` and `ip` render alongside the CIDR calculator.
+
+### What every entry carries, regardless of type
+
+| Field | For |
 | --- | --- |
-| `api_key` | A token, with scopes, plan/price type and expiry |
-| `password` | A credential with a strength meter and a reveal toggle |
-| `certificate` | A PEM certificate plus its private key in `cert_key_data` |
-| `ssh_key` | An OpenSSH keypair |
-| `env_var` | A variable, with a subtype hint that drives display and validation |
-| `connection_string` | A DSN or URI |
-| `file_blob` | A reference to a file on disk |
+| `id` | Stable identity. Version history, audit attribution and write scoping all key on it — never on a position in an array. |
+| `provider` | The only required field |
+| `account_name` | Which account the credential belongs to |
+| `api_description`, `api_url` | Free text, and a link (only ever rendered as one for `http(s):`) |
+| `projectIds` | Which projects it belongs to; always includes `Universal` |
+| `categories`, `tags` | Flat labels and chips, both sidebar-filterable |
+| `environment` | `development` / `staging` / `testing` / `production` |
+| `expires_at` | Drives the card's colour band, the expiry calendar and `rotate-check` |
+| `last_rotated_at` | Stamped by the ↺ button and by `entry rotate` |
+| `rotation_days` | A rotation cadence. Set it and the health scan flags the entry once it is overdue. |
+| `price_type` | `free` / `paid` / `local` / `conditional` |
+| `scopes`, `rate_limit` | Filled by hand, or by `envv enrich --online` from the issuer |
+| `pinned` | Sorts first in every view |
+| `compromised` | Flags the entry and surfaces it in the security audit |
+| `custom_icon` | A Simple Icons slug **or** a `data:` image URI |
+| `version_history` | Up to 50 previous values with timestamps, restorable |
+| `extra_vars` | Arbitrary key/value pairs the card renders |
 
-`env_var` subtypes: string, multiline, secret, boolean, number, IP, CIDR, port, URL, date, JSON.
+### Templates
 
-### Identity
+Ten prefilled shapes, in Tools → Templates. Each one sets the type, the icon, sensible defaults and per-field hints, so a GitHub PAT does not need you to remember that the API base is `api.github.com`.
 
-Every entry carries a stable `id`, and that id is what version history, audit attribution and write scoping all key on. Nothing in this app identifies a secret by its position in an array — a splice between capturing an index and using it retargets the operation onto a neighbour, which is how a bulk delete destroys the wrong secrets.
+| Template | Type | Category |
+| --- | --- | --- |
+| GitHub PAT | API key | Dev Tools |
+| AWS Access Key | API key | Cloud |
+| Cloudflare API Token | API key | Cloud |
+| Stripe API Key | API key | Payments |
+| OpenAI API Key | API key | AI |
+| Docker Registry | API key | Dev Tools |
+| PostgreSQL DSN | Connection string | Database |
+| SSH Key Pair | SSH key | Infrastructure |
+| TLS Certificate | Certificate | Security |
+| `.env` Variable | Environment variable | Config |
+
+### Secrets EnvVault recognises on sight
+
+`envv enrich` types a secret from the **public** prefix its issuer stamps on it, with no network call. Forty signatures, matched longest-first so `sk-ant-` cannot be swallowed by `sk-`:
+
+| Issuer | Prefixes |
+| --- | --- |
+| GitHub | `ghp_`, `gho_`, `ghs_`, `github_pat_` |
+| GitLab | `glpat-` |
+| OpenAI | `sk-proj-`, `sk-` |
+| Anthropic | `sk-ant-` |
+| xAI | `xai-` |
+| Groq | `gsk_` |
+| NVIDIA | `nvapi-` |
+| Replicate | `r8_` |
+| Pinecone | `pcsk_` |
+| HuggingFace | `hf_` |
+| Tavily | `tvly-` |
+| AWS | `AKIA`, `ASIA` |
+| Google | `AIza`, `ya29.` |
+| DigitalOcean | `dop_v1_`, `doo_v1_` |
+| Slack | `xoxb-`, `xoxp-`, `xapp-` |
+| Stripe | `sk_live_`, `sk_test_`, `pk_live_`, `pk_test_`, `rk_live_` |
+| Shopify | `shpat_` |
+| Docker Hub | `dckr_pat_` |
+| npm | `npm_` |
+| PyPI | `pypi-` |
+| SendGrid | `SG.` |
+| Mailgun | `key-` |
+| Figma | `fig_` |
+| MongoDB Atlas | `atlasv1.` |
+| Linear | `lin_api_` |
+| Notion | `ntn_`, `secret_` |
+
+Stripe's prefixes carry more than an issuer: `sk_live_` *proves* the key is production and `sk_test_` proves it is not, so `enrich` fills `environment` from the prefix rather than guessing from the entry's name.
+
+It also types secrets structurally, with no issuer involved:
+
+| Shape | Becomes |
+| --- | --- |
+| `-----BEGIN CERTIFICATE` | `certificate` |
+| `-----BEGIN … PRIVATE KEY` | `ssh_key` or a certificate key |
+| `ssh-rsa `, `ssh-ed25519 `, `ecdsa-sha2-` | `ssh_key` |
+| `eyJ` with exactly two dots | A JWT |
+| `postgres://` `postgresql://` `mysql://` `mongodb://` `mongodb+srv://` `redis://` `rediss://` `amqp://` `amqps://` `mssql://` `clickhouse://` | `connection_string` |
+
+That last row exists because **`secretType` is `api_key` on every entry ever written**, including every variable imported from a `.env`. Without the structural pass, an imported `postgres://` URL stays classified as an API key forever.
+
+Eight of those issuers will also answer questions about their own credentials when you pass `--online` — GitHub, GitLab, Slack, Stripe, DigitalOcean, npm, OpenAI and Anthropic — filling the account, scopes, expiry and rate limit from the real response. See [`envv enrich`](#envv-enrich).
+
+### Importing existing secrets
+
+| Source | Via |
+| --- | --- |
+| `.env` files | Tools → Import, or `envv import`, or `envv watch` to keep one in sync |
+| Bitwarden JSON export | Tools → Import |
+| 1Password JSON export | Tools → Import |
+| Raw vault JSON | Tools → Import |
+| Encrypted `.vaultbak` | Tools → Backup, or `envv backup import` |
+| `docker-compose.yaml` | A Docker project's config view — becomes chunks, not entries |
+| An nginx site config | An nginx project's config view — likewise |
+
+`.env` import upserts by provider. It used to append unconditionally, which meant `envv watch` added a complete copy of the file to the vault on every save; `--allow-duplicates` restores the old behaviour if you actually wanted it.
 
 ### Icons
 
 The icon picker offers a ~300-entry Simple Icons registry, a letter-avatar fallback, and **Upload file…** for your own image. PNG, JPEG, GIF, WebP, BMP and ICO are accepted up to 96 KB encoded; the file is typed by its **magic bytes**, not its extension, and validated again when the vault is read rather than only when you pick it. SVG is refused, permanently, because it is a script container and a vault is untrusted input.
 
-Agent-facing CLI output never dumps an embedded icon; it collapses to `{embedded, mime, bytes, fingerprint}`.
+One field holds either a slug or a `data:` URI, so an entry can never carry a slug and a file that disagree. Agent-facing CLI output never dumps an embedded icon; it collapses to `{embedded, mime, bytes, fingerprint}`.
 
 ---
 
@@ -529,7 +648,7 @@ Re-running a provisioning script is not an error, and does not overwrite a secre
 
 ### `envv enrich`
 
-An imported `.env` has no metadata. No scopes, no expiry, no account, no idea which of those forty variables is a Stripe key and which is a database URL. `enrich` infers it from the entry name and from the **public** prefix the issuer puts on its credentials — `ghp_`, `sk-ant-`, `AKIA`, `sk_live_`, about forty of them — plus structural shapes like PEM blocks, JWTs and `postgres://` URLs.
+An imported `.env` has no metadata. No scopes, no expiry, no account, no idea which of those forty variables is a Stripe key and which is a database URL. `enrich` infers it from the entry name and from the **public** prefix the issuer puts on its credentials — `ghp_`, `sk-ant-`, `AKIA`, `sk_live_`, forty of them — plus structural shapes like PEM blocks, JWTs and database URI schemes. The full signature table is under [Secrets](#secrets-envvault-recognises-on-sight).
 
 ```bash
 envv enrich                    # preview; changes nothing

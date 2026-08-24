@@ -8,8 +8,9 @@ build/
 
 # Tauri generated & bundled resources
 src-tauri/gen/
-src-tauri/icons/
 src-tauri/target/
+# NOT src-tauri/icons/ — tauri::generate_context!() reads them at compile time,
+# so ignoring them means the crate does not build from a clean checkout.
 
 # Rust build (same as src-tauri/target/ but kept for any Cargo workspace root)
 target/
