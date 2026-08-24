@@ -69,6 +69,12 @@ fn write_all(v: &Value) -> CliResult {
 /// Windows there is no equivalent one-liner — the file inherits the directory
 /// ACL — which is why the path above is `%LOCALAPPDATA%`, a directory that is
 /// already user-scoped.
+///
+/// The whole body is `#[cfg(unix)]`, so on Windows `path` genuinely is unused —
+/// and CI builds with `-D warnings`. Silenced only on the target where that is
+/// true, rather than for the function, so a real unused binding added here later
+/// still fails the Linux build.
+#[cfg_attr(not(unix), allow(unused_variables))]
 fn restrict(path: &std::path::Path) -> CliResult {
     #[cfg(unix)]
     {
