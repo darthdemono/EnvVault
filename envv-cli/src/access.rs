@@ -33,17 +33,45 @@ pub fn set_paths(db: Option<PathBuf>, salt: Option<PathBuf>) {
     }
 }
 
-/// Returns the vault.db path: `--db-path`, else `~/.local/share/io.envvault/vault.db`.
+/// The platform's application-data directory, or a clear failure.
+///
+/// Deliberately without a fallback path. The previous one was
+/// `PathBuf::from("~/.local/share")`, and nothing in `std::fs` expands `~`: it
+/// created a directory literally *named* `~` under the current working
+/// directory, so the vault was written somewhere the next invocation would not
+/// look — which presents to the user as having lost every secret. On Windows it
+/// was worse still, resolving against whichever drive the shell happened to be
+/// on.
+///
+/// Reported through the normal envelope so a `--json` caller still gets
+/// something it can parse, and exits `unavailable` (7) like any other
+/// "the vault cannot be reached" condition.
+fn data_dir_or_exit() -> PathBuf {
+    match dirs::data_dir() {
+        Some(dir) => dir,
+        None => {
+            let e = CliError::unavailable(
+                "Cannot determine this platform's data directory (no $XDG_DATA_HOME \
+                 or $HOME on Unix, no %APPDATA% on Windows). \
+                 Pass --db-path and --salt-path explicitly.",
+            );
+            if crate::out::is_json() {
+                println!("{}", serde_json::to_string_pretty(&e.to_json()).unwrap_or_default());
+            } else {
+                eprintln!("Error: {}", e.message);
+            }
+            std::process::exit(e.code as i32);
+        }
+    }
+}
+
+/// Returns the vault.db path: `--db-path`, else `io.envvault/vault.db` under the
+/// platform data directory (`~/.local/share` on Linux, `%APPDATA%` on Windows).
 pub fn default_db_path() -> PathBuf {
     DB_PATH
         .get()
         .cloned()
-        .unwrap_or_else(|| {
-            dirs::data_dir()
-                .unwrap_or_else(|| PathBuf::from("~/.local/share"))
-                .join("io.envvault")
-                .join("vault.db")
-        })
+        .unwrap_or_else(|| data_dir_or_exit().join("io.envvault").join("vault.db"))
 }
 
 /// Returns the vault.salt path: `--salt-path`, else the one beside vault.db.
@@ -51,12 +79,7 @@ pub fn default_salt_path() -> PathBuf {
     SALT_PATH
         .get()
         .cloned()
-        .unwrap_or_else(|| {
-            dirs::data_dir()
-                .unwrap_or_else(|| PathBuf::from("~/.local/share"))
-                .join("io.envvault")
-                .join("vault.salt")
-        })
+        .unwrap_or_else(|| data_dir_or_exit().join("io.envvault").join("vault.salt"))
 }
 
 // ── Password helper ───────────────────────────────────────────────────────────

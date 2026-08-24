@@ -58,12 +58,30 @@ fn main() {
 
 async fn async_main() {
     let args = Args::parse();
-    let data_dir = dirs::data_dir()
-        .unwrap_or_else(|| PathBuf::from("/var/lib"))
-        .join("envv-server");
+    // Where the vault lives when the operator has not said. There is no
+    // hardcoded fallback path on purpose: `/var/lib` is meaningless on Windows,
+    // where it resolves to `\var\lib` on whatever the current drive happens to
+    // be — and a server that quietly creates an empty vault in an unexpected
+    // directory looks exactly like one that lost every secret. If the platform
+    // cannot say where application data belongs, say so and stop.
+    //
+    // Resolved lazily so that passing both --db-path and --salt-path works even
+    // on a machine where it cannot be resolved at all.
+    let resolve_data_dir = || -> PathBuf {
+        dirs::data_dir()
+            .unwrap_or_else(|| {
+                eprintln!(
+                    "envv-server: cannot determine this platform's data directory \
+                     (no $XDG_DATA_HOME or $HOME on Unix, no %APPDATA% on Windows).\n\
+                     Pass --db-path and --salt-path explicitly."
+                );
+                std::process::exit(2);
+            })
+            .join("envv-server")
+    };
 
-    let db_path   = args.db_path.unwrap_or_else(|| data_dir.join("vault.db"));
-    let salt_path = args.salt_path.unwrap_or_else(|| data_dir.join("vault.salt"));
+    let db_path   = args.db_path.unwrap_or_else(|| resolve_data_dir().join("vault.db"));
+    let salt_path = args.salt_path.unwrap_or_else(|| resolve_data_dir().join("vault.salt"));
 
     if let Some(parent) = db_path.parent() {
         std::fs::create_dir_all(parent).expect("create data dir");
@@ -79,7 +97,7 @@ async fn async_main() {
                 (Some(TlsFiles { cert, key }), Some(fp))
             }
             (None, None) => {
-                let (files, fp) = ensure_self_signed_cert(&data_dir).unwrap_or_else(|e| {
+                let (files, fp) = ensure_self_signed_cert(&resolve_data_dir()).unwrap_or_else(|e| {
                     eprintln!("TLS cert generation failed: {e}");
                     std::process::exit(1);
                 });

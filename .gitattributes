@@ -1,0 +1,16 @@
+# Default to LF in the working tree on every platform. Without this, git on
+# Windows checks out CRLF (core.autocrlf=true is the GitHub runner default),
+# which is how the parity fixtures below started failing on windows-latest.
+* text=auto eol=lf
+
+# Golden parity fixtures pin the *bytes* of a config format that exists twice —
+# src/ts/chunk-ops.ts for the app, envv-cli/src/exporters.rs for the CLI — and
+# both implementations assert against these same files. A wg0.conf or an nginx
+# site config with CRLF is a different file from one with LF, so git must not
+# translate them on checkout or on commit, on any platform.
+tests/fixtures/parity/** -text
+
+# Binary, so git never tries to diff or translate them.
+*.png  binary
+*.ico  binary
+*.icns binary

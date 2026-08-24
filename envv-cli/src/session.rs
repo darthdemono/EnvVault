@@ -37,12 +37,20 @@ pub fn session_path() -> PathBuf {
     if let Some(dir) = std::env::var_os("XDG_STATE_HOME") {
         return PathBuf::from(dir).join("envv").join("sessions.json");
     }
-    dirs::home_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(".local")
-        .join("state")
-        .join("envv")
-        .join("sessions.json")
+    // No `.` fallback. This file holds a live bearer token at 0600, and writing
+    // it to the current working directory means dropping a credential into
+    // whatever the caller happened to `cd` into — a checked-out repository, a
+    // shared build directory — where the mode protects it and nothing else does.
+    // Refusing is the safer half of the choice.
+    let Some(home) = dirs::home_dir() else {
+        eprintln!(
+            "envv: cannot determine a home directory to cache the session in \
+             (no $HOME on Unix, no %USERPROFILE% on Windows).\n\
+             Set ENVV_SESSION_FILE to choose the location explicitly."
+        );
+        std::process::exit(crate::error::Code::Unavailable as i32);
+    };
+    home.join(".local").join("state").join("envv").join("sessions.json")
 }
 
 fn read_all() -> Value {

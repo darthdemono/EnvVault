@@ -35,3 +35,7 @@ serde_json = "1"
 # this simply adds bundling on top of the `sqlcipher` feature above.
 [target.'cfg(windows)'.dependencies]
 rusqlite = { version = "=0.31.0", features = ["bundled-sqlcipher-vendored-openssl"] }
+
+# Deny warnings, per [workspace.lints.rust] at the repo root.
+[lints]
+workspace = true

@@ -18,13 +18,16 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
-  # Keep CI output focused on errors we can act on.
-  # Also load-bearing beyond warnings: setting RUSTFLAGS as an env var makes
-  # cargo ignore the rustflags in `.cargo/config.toml`, which pass
-  # `-fuse-ld=mold` for the Linux target. Drop this line and every Linux job
-  # here fails to link, because the runner has no mold. Build & Release sets no
-  # RUSTFLAGS and therefore installs mold instead.
-  RUSTFLAGS: -D warnings
+
+# Warnings are denied via `[workspace.lints.rust]` in the root Cargo.toml, not
+# via RUSTFLAGS here. RUSTFLAGS would apply to dependencies too, so a warning in
+# a platform-specific crate like `windows-sys` or `openssl-src` would fail this
+# job with nothing in the repository to fix. It also means `cargo check` locally
+# enforces exactly what CI enforces.
+#
+# Consequence: with no RUSTFLAGS set, `.cargo/config.toml` is no longer
+# overridden, so its `-fuse-ld=mold` applies on Linux and mold has to be
+# installed below — the same thing Build & Release already does.
 
 jobs:
   rust:
@@ -40,7 +43,8 @@ jobs:
       - uses: actions/checkout@v4
 
       # rusqlite's `sqlcipher` feature links against the system SQLCipher, and
-      # the Tauri crate needs the WebKitGTK stack even for `cargo check`.
+      # the Tauri crate needs the WebKitGTK stack even for `cargo check`. mold is
+      # here because `.cargo/config.toml` passes `-fuse-ld=mold` for this target.
       # Windows needs none of this: it vendors SQLCipher and OpenSSL (see
       # vault-core/Cargo.toml) and WebView2 ships with the runner image.
       - name: Install system dependencies
@@ -53,7 +57,28 @@ jobs:
             libgtk-3-dev \
             libayatana-appindicator3-dev \
             librsvg2-dev \
-            patchelf
+            patchelf \
+            mold
+
+      # Windows has no system SQLCipher, so vault-core's cfg(windows) dependency
+      # vendors SQLCipher *and* OpenSSL — and building OpenSSL from source needs
+      # Perl and NASM. Both ship in the windows-latest image, but if that ever
+      # changes the failure surfaces as an opaque openssl-src build error a
+      # thousand lines into the log. Fail here instead, naming the cause.
+      - name: Verify the vendored-OpenSSL toolchain
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          missing=""
+          command -v perl >/dev/null || missing="$missing perl"
+          command -v nasm >/dev/null || missing="$missing nasm"
+          if [ -n "$missing" ]; then
+            echo "::error::openssl-src needs$missing on PATH to vendor OpenSSL for Windows."
+            exit 1
+          fi
+          perl --version | head -2
+          nasm -v
 
       - uses: dtolnay/rust-toolchain@stable
 

@@ -33,3 +33,7 @@ hmac       = "0.12"
 base64     = "0.22"
 rand       = "=0.8.5"
 time       = { version = "=0.3.37", features = ["parsing"] }
+
+# Deny warnings, per [workspace.lints.rust] at the repo root.
+[lints]
+workspace = true

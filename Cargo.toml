@@ -2,6 +2,19 @@
 members  = ["src-tauri", "vault-core", "envv-server", "envv-cli"]
 resolver = "2"
 
+# Warnings are errors — but only for the four crates in this workspace.
+#
+# This lives here rather than in CI's RUSTFLAGS because RUSTFLAGS applies to
+# every unit cargo compiles, dependencies included: a warning inside
+# `windows-sys` or `openssl-src` would fail the build with nothing in this
+# repository to fix. `[lints]` is inherited only by packages that opt in with
+# `lints.workspace = true`, so third-party code is free to warn.
+#
+# It also means the rule is the same locally as in CI, instead of a flag one
+# environment sets and the other does not.
+[workspace.lints.rust]
+warnings = "deny"
+
 [profile.release]
 panic         = "abort"
 codegen-units = 1
