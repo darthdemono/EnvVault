@@ -28,32 +28,45 @@ pub fn session_path() -> PathBuf {
     if let Some(explicit) = std::env::var_os("ENVV_SESSION_FILE") {
         return PathBuf::from(explicit);
     }
+    state_file("sessions.json")
+}
+
+/// Path to a named file in the CLI's per-user state directory.
+///
+/// Shared by [`session_path`] and `pool::pool_path`, so the reasoning about
+/// *where* — and the Windows roaming-profile decision documented above — exists
+/// once rather than being re-derived by each caller.
+///
+/// `ENVV_SESSION_FILE` is deliberately NOT consulted here: it names one file,
+/// not a directory, and honouring it would send `pools.json` to the same path
+/// as the session and have each overwrite the other.
+pub fn state_file(name: &str) -> PathBuf {
     #[cfg(windows)]
     {
         if let Some(dir) = dirs::data_local_dir() {
-            return dir.join("envv").join("sessions.json");
+            return dir.join("envv").join(name);
         }
     }
     if let Some(dir) = std::env::var_os("XDG_STATE_HOME") {
-        return PathBuf::from(dir).join("envv").join("sessions.json");
+        return PathBuf::from(dir).join("envv").join(name);
     }
-    // No `.` fallback. This file holds a live bearer token at 0600, and writing
-    // it to the current working directory means dropping a credential into
-    // whatever the caller happened to `cd` into — a checked-out repository, a
-    // shared build directory — where the mode protects it and nothing else does.
-    // Refusing is the safer half of the choice.
+    // No `.` fallback. `sessions.json` holds a live bearer token at 0600, and
+    // writing it to the current working directory means dropping a credential
+    // into whatever the caller happened to `cd` into — a checked-out
+    // repository, a shared build directory — where the mode protects it and
+    // nothing else does. `pools.json` holds no secret, but a per-directory
+    // rotation cursor is its own quiet bug: the same pool would restart at the
+    // first key every time you changed directory. Refusing is the safer half of
+    // the choice for both.
     let Some(home) = dirs::home_dir() else {
         eprintln!(
-            "envv: cannot determine a home directory to cache the session in \
+            "envv: cannot determine a home directory for per-user state \
              (no $HOME on Unix, no %USERPROFILE% on Windows).\n\
              Set ENVV_SESSION_FILE to choose the location explicitly."
         );
         std::process::exit(crate::error::Code::Unavailable as i32);
     };
-    home.join(".local")
-        .join("state")
-        .join("envv")
-        .join("sessions.json")
+    home.join(".local").join("state").join("envv").join(name)
 }
 
 fn read_all() -> Value {
@@ -86,7 +99,7 @@ fn write_all(v: &Value) -> CliResult {
 /// true, rather than for the function, so a real unused binding added here later
 /// still fails the Linux build.
 #[cfg_attr(not(unix), allow(unused_variables))]
-fn restrict(path: &std::path::Path) -> CliResult {
+pub fn restrict(path: &std::path::Path) -> CliResult {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;

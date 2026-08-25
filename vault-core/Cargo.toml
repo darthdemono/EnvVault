@@ -1,6 +1,6 @@
 [package]
 name    = "vault-core"
-version = "0.7.0"
+version = "0.7.1"
 edition = "2021"
 license = "MIT"
 
@@ -28,6 +28,10 @@ time       = "=0.3.37"
 sha2       = "0.10"
 serde      = { version = "1", features = ["derive"] }
 serde_json = "1"
+# Locating the per-user state directory for pools.json ($XDG_STATE_HOME on Unix,
+# %LOCALAPPDATA% on Windows). The CLI already depended on this; the path lives
+# here now because the desktop app reads the same file.
+dirs       = "5"
 
 # Windows has no system SQLCipher to link against, so it always vendors —
 # otherwise the first thing a Windows contributor meets is a linker error about

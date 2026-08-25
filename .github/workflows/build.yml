@@ -224,6 +224,54 @@ jobs:
           node-version: 22
           cache: npm
 
+      # openssl-src builds OpenSSL from source, and OpenSSL's Configure is a Perl
+      # program that needs a full Perl — Locale::Maketext::Simple among others.
+      #
+      # windows-latest ships Strawberry Perl, which has those modules. It also
+      # ships Git for Windows, whose bundled MSYS Perl does NOT — and the build
+      # steps below run under `shell: bash`, where Git's `/usr/bin/perl` comes
+      # first on PATH. So `perl` resolves, `perl --version` prints happily, and
+      # the build dies a thousand lines later with:
+      #
+      #   Can't locate Locale/Maketext/Simple.pm in @INC
+      #
+      # Putting Strawberry ahead of it on PATH is the whole fix. `C:\Strawberry\c\bin`
+      # is included because Configure also wants the toolchain that ships with it.
+      - name: Put Strawberry Perl ahead of Git's Perl on PATH
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          if (-not (Test-Path 'C:\Strawberry\perl\bin\perl.exe')) {
+            choco install strawberryperl -y --no-progress
+          }
+          'C:\Strawberry\c\bin', 'C:\Strawberry\perl\site\bin', 'C:\Strawberry\perl\bin' |
+            ForEach-Object { Add-Content -Path $env:GITHUB_PATH -Value $_ }
+
+      # Assert the toolchain can actually do the job, not merely that the
+      # binaries exist. `command -v perl` passed for the whole life of the
+      # earlier version of this check while the Perl it found was the one that
+      # cannot build OpenSSL — presence was never the property that mattered.
+      - name: Verify the vendored-OpenSSL toolchain
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          missing=""
+          command -v perl >/dev/null || missing="$missing perl"
+          command -v nasm >/dev/null || missing="$missing nasm"
+          if [ -n "$missing" ]; then
+            echo "::error::openssl-src needs$missing on PATH to vendor OpenSSL for Windows."
+            exit 1
+          fi
+          echo "perl: $(command -v perl)"
+          perl --version | sed -n '2p'
+          nasm -v
+          if ! perl -MLocale::Maketext::Simple -e 1 2>/dev/null; then
+            echo "::error::The perl on PATH cannot load Locale::Maketext::Simple, so OpenSSL's Configure will fail. This is usually Git for Windows' MSYS perl shadowing Strawberry Perl."
+            exit 1
+          fi
+          echo "Locale::Maketext::Simple loads — OpenSSL's Configure will run."
+
       - uses: dtolnay/rust-toolchain@stable
 
       - uses: Swatinem/rust-cache@v2
@@ -299,6 +347,54 @@ jobs:
       - name: Install mold
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y mold
+
+      # openssl-src builds OpenSSL from source, and OpenSSL's Configure is a Perl
+      # program that needs a full Perl — Locale::Maketext::Simple among others.
+      #
+      # windows-latest ships Strawberry Perl, which has those modules. It also
+      # ships Git for Windows, whose bundled MSYS Perl does NOT — and the build
+      # steps below run under `shell: bash`, where Git's `/usr/bin/perl` comes
+      # first on PATH. So `perl` resolves, `perl --version` prints happily, and
+      # the build dies a thousand lines later with:
+      #
+      #   Can't locate Locale/Maketext/Simple.pm in @INC
+      #
+      # Putting Strawberry ahead of it on PATH is the whole fix. `C:\Strawberry\c\bin`
+      # is included because Configure also wants the toolchain that ships with it.
+      - name: Put Strawberry Perl ahead of Git's Perl on PATH
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          if (-not (Test-Path 'C:\Strawberry\perl\bin\perl.exe')) {
+            choco install strawberryperl -y --no-progress
+          }
+          'C:\Strawberry\c\bin', 'C:\Strawberry\perl\site\bin', 'C:\Strawberry\perl\bin' |
+            ForEach-Object { Add-Content -Path $env:GITHUB_PATH -Value $_ }
+
+      # Assert the toolchain can actually do the job, not merely that the
+      # binaries exist. `command -v perl` passed for the whole life of the
+      # earlier version of this check while the Perl it found was the one that
+      # cannot build OpenSSL — presence was never the property that mattered.
+      - name: Verify the vendored-OpenSSL toolchain
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          missing=""
+          command -v perl >/dev/null || missing="$missing perl"
+          command -v nasm >/dev/null || missing="$missing nasm"
+          if [ -n "$missing" ]; then
+            echo "::error::openssl-src needs$missing on PATH to vendor OpenSSL for Windows."
+            exit 1
+          fi
+          echo "perl: $(command -v perl)"
+          perl --version | sed -n '2p'
+          nasm -v
+          if ! perl -MLocale::Maketext::Simple -e 1 2>/dev/null; then
+            echo "::error::The perl on PATH cannot load Locale::Maketext::Simple, so OpenSSL's Configure will fail. This is usually Git for Windows' MSYS perl shadowing Strawberry Perl."
+            exit 1
+          fi
+          echo "Locale::Maketext::Simple loads — OpenSSL's Configure will run."
 
       - uses: dtolnay/rust-toolchain@stable
 

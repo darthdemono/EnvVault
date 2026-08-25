@@ -23,6 +23,14 @@ pub struct ExecOpts<'a> {
     pub project: Option<&'a str>,
     /// `PROVIDER` or `PROVIDER=VAR_NAME`, repeatable.
     pub entries: &'a [String],
+    /// `POOL` or `POOL=VAR_NAME`, repeatable.
+    ///
+    /// Each takes the next usable key from that pool and advances its cursor, so
+    /// two runs of the same command use two different credentials. This is the
+    /// materialising path for a pool: the value reaches the child process and
+    /// never stdout, which is the only way to use a pooled key without anyone —
+    /// including an orchestrating agent — reading it.
+    pub pools: &'a [String],
     /// Prefix applied to every variable name.
     pub prefix: Option<&'a str>,
     /// Start from an empty environment instead of inheriting this process's.
@@ -83,9 +91,32 @@ pub fn build_env(access: &Access, opts: &ExecOpts<'_>) -> CliResult<BTreeMap<Str
         env.insert(var, value);
     }
 
+    for spec in opts.pools {
+        let (name, var) = match spec.split_once('=') {
+            Some((n, v)) => (n, v.to_string()),
+            // No explicit variable name: derive one from the pool name the same
+            // way a bare --entry derives one from the provider, so
+            // `--pool github-ci` becomes GITHUB_CI.
+            None => (spec.as_str(), data::env_key(spec)),
+        };
+        let (var, field) = match var.split_once(':') {
+            Some((v, f)) => (v.to_string(), f.to_string()),
+            None => (var, "api_key".to_string()),
+        };
+        let picked = crate::pool::select(access, &vault, name)?;
+        let entry = &data::entries(&vault)[picked.idx];
+        let value = crate::refs::entry_field(entry, &field).ok_or_else(|| {
+            CliError::not_found(format!(
+                "'{}' from pool '{name}' has no value in field '{field}'",
+                picked.label()
+            ))
+        })?;
+        env.insert(var, value);
+    }
+
     if env.is_empty() {
         return Err(CliError::invalid(
-            "Nothing to load — pass --project and/or --entry",
+            "Nothing to load — pass --project, --entry and/or --pool",
         ));
     }
 

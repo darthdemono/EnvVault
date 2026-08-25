@@ -48,8 +48,35 @@ pub struct EntryFields {
     pub callback_url: Option<String>,
     #[arg(long)]
     pub version: Option<String>,
+    /// Rate limit as free text, e.g. "100/min" or "5000 requests per hour".
+    ///
+    /// Parsed into the structured count/period pair where it can be; kept
+    /// verbatim as a note where it cannot ("varies by endpoint"). Pass an empty
+    /// string to clear the limit entirely.
     #[arg(long)]
     pub rate_limit: Option<String>,
+    /// Rate limit as a plain number. Needs --rate-limit-period to mean anything.
+    #[arg(long, conflicts_with = "rate_limit")]
+    pub rate_limit_count: Option<u64>,
+    /// The window --rate-limit-count applies to.
+    #[arg(
+        long,
+        conflicts_with = "rate_limit",
+        value_parser = ["second", "minute", "hour", "day", "week", "month", "year"]
+    )]
+    pub rate_limit_period: Option<String>,
+    /// Why this credential was requested — the justification given to the issuer.
+    ///
+    /// Distinct from --desc (what it is) and --notes (notes to self). This is
+    /// the sentence you will be held to if the issuer asks why you have the key.
+    #[arg(long)]
+    pub purpose: Option<String>,
+    /// Key pool this entry joins, so `envv get --pool <name>` can swap onto it.
+    ///
+    /// Membership is explicit: two keys for the same provider do not pool
+    /// automatically. Pass an empty string to leave the pool.
+    #[arg(long)]
+    pub pool: Option<String>,
     /// ISO date (YYYY-MM-DD).
     #[arg(long)]
     pub expires: Option<String>,
@@ -273,8 +300,40 @@ impl EntryFields {
         if let Some(v) = &self.version {
             set_str(entry, "version", v);
         }
-        if let Some(v) = &self.rate_limit {
-            set_str(entry, "rate_limit", v);
+        // The rate limit is three fields that must agree, so it is applied as a
+        // unit rather than field by field. `--rate-limit` sets the free text and
+        // lets the parser derive the pair; `--rate-limit-count`/`--period` set
+        // the pair and let the formatter derive the text. Clearing either way
+        // removes all three, so an entry with no limit looks like one that never
+        // had one.
+        if self.rate_limit.is_some()
+            || self.rate_limit_count.is_some()
+            || self.rate_limit_period.is_some()
+        {
+            if let Some(v) = &self.rate_limit {
+                set_str(entry, "rate_limit", v);
+                if v.trim().is_empty() {
+                    if let Some(o) = entry.as_object_mut() {
+                        o.remove("rate_limit_count");
+                        o.remove("rate_limit_period");
+                        o.remove("rate_limit_note");
+                    }
+                }
+            }
+            if let Some(v) = self.rate_limit_count {
+                entry["rate_limit_count"] = json!(v);
+            }
+            if let Some(v) = &self.rate_limit_period {
+                entry["rate_limit_period"] = json!(v);
+            }
+            let normalized = crate::ratelimit::normalize(entry);
+            crate::ratelimit::apply(entry, &normalized);
+        }
+        if let Some(v) = &self.purpose {
+            set_str(entry, "purpose", v);
+        }
+        if let Some(v) = &self.pool {
+            set_str(entry, "pool", v.trim());
         }
         if let Some(v) = &self.expires {
             set_str(entry, "expires_at", v);
@@ -978,7 +1037,11 @@ pub fn cmd_get(access: &Access, query: &str, field: Option<&str>) -> CliResult {
 }
 
 /// Entry fields whose contents are secret material.
-const SECRET_FIELD_NAMES: [&str; 4] =
+///
+/// Public because `pool::cmd_next` applies the same redaction rule: any path
+/// that can print one of these must mask it unless `--reveal` was given, and a
+/// second private copy of the list is a second thing to forget to update.
+pub const SECRET_FIELD_NAMES: [&str; 4] =
     ["api_key", "api_secret", "certificate_data", "cert_key_data"];
 
 /// Every tag in the vault with its entry count — the sidebar's tag section.

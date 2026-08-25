@@ -95,6 +95,22 @@
   gap: 5px;
 }
 
+/* Shown under the rate-limit inputs when an entry carries text the structured
+   count/period pair cannot express ("varies by endpoint"). It is the only place
+   that text is visible once the field itself became a number, so hiding it
+   would silently lose what the user originally wrote. */
+.form-hint {
+  margin-top: 5px;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 10.5px;
+  line-height: 1.5;
+  color: var(--text2);
+  opacity: 0.85;
+}
+.form-hint[hidden] {
+  display: none;
+}
+
 .form-row-2 {
   display: grid;
   grid-template-columns: 1fr 1fr;

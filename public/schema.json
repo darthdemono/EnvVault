@@ -119,7 +119,34 @@
           },
           "rate_limit": {
             "type": ["string", "null"],
-            "description": "Human-readable rate limit description (e.g. '1000 req/hr', '60 req/min per IP').",
+            "description": "Legacy human-readable rate limit, regenerated from rate_limit_count and rate_limit_period on save. Kept so a vault edited by a current build still means something to an older one. Never parse this directly \u2014 read the structured pair.",
+            "default": null
+          },
+          "rate_limit_count": {
+            "type": ["integer", "null"],
+            "description": "The rate limit as a number, paired with rate_limit_period. null means 'not known', which is not the same as 0.",
+            "minimum": 0,
+            "default": null
+          },
+          "rate_limit_period": {
+            "type": ["string", "null"],
+            "description": "The window rate_limit_count applies to.",
+            "enum": ["second", "minute", "hour", "day", "week", "month", "year", null],
+            "default": null
+          },
+          "rate_limit_note": {
+            "type": ["string", "null"],
+            "description": "Rate-limit text that could not be read as a number and a window (e.g. 'varies by endpoint'). Derived, never authored: setting a readable limit clears it.",
+            "default": null
+          },
+          "purpose": {
+            "type": ["string", "null"],
+            "description": "What this credential was requested for \u2014 the justification submitted to the issuer on the application form. Distinct from api_description (what it is) and details (notes to self).",
+            "default": null
+          },
+          "pool": {
+            "type": ["string", "null"],
+            "description": "Key pool this entry belongs to. Entries sharing a pool name are interchangeable credentials swapped between by `envv get --pool` and `envv exec --pool` when one is rate limited. Membership is explicit; two keys for the same provider do not pool automatically.",
             "default": null
           },
           "version": {

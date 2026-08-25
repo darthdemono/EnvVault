@@ -40,6 +40,10 @@ describe('form element contract with index.html', () => {
   // shipped markup — this is the check that catches silent id drift.
   const REQUIRED_IDS = [
     'f-provider',
+    'f-purpose',
+    'f-pool',
+    'f-ratelimit-period',
+    'f-ratelimit-note',
     'f-account',
     'f-username',
     'f-email',
@@ -258,6 +262,76 @@ describe('formToEntry', () => {
     const entry = formToEntry();
     expect(entry.provider).toBe('GitHub');
     expect(entry.api_key).toBe('sk-123');
+  });
+
+  it('reads purpose and pool', () => {
+    setVal('f-provider', 'GitHub');
+    setVal('f-purpose', 'CI builds for the EnvVault repo');
+    setVal('f-pool', 'github-ci');
+    const entry = formToEntry();
+    expect(entry.purpose).toBe('CI builds for the EnvVault repo');
+    expect(entry.pool).toBe('github-ci');
+  });
+
+  it('reads the rate limit as a count and a period, and regenerates the legacy string', () => {
+    // The legacy `rate_limit` string is still written so a vault edited here
+    // stays readable to an older build that only knows that field.
+    setVal('f-provider', 'GitHub');
+    setVal('f-ratelimit', '5000');
+    setVal('f-ratelimit-period', 'hour');
+    const entry = formToEntry();
+    expect(entry.rate_limit_count).toBe(5000);
+    expect(entry.rate_limit_period).toBe('hour');
+    expect(entry.rate_limit).toBe('5000/hour');
+  });
+
+  it('drops a count with no period rather than storing half a limit', () => {
+    setVal('f-provider', 'GitHub');
+    setVal('f-ratelimit', '5000');
+    setVal('f-ratelimit-period', '');
+    const entry = formToEntry();
+    expect(entry.rate_limit_count).toBeUndefined();
+    expect(entry.rate_limit_period).toBeUndefined();
+    expect(entry.rate_limit).toBeUndefined();
+  });
+
+  it('round-trips a legacy free-text limit through the form', () => {
+    // The migration path: an entry written before the field became a number is
+    // filled into the two inputs, and saving it back keeps the same meaning.
+    fillForm({ provider: 'GitHub', rate_limit: '100 req/min' } as any);
+    expect(($('f-ratelimit') as HTMLInputElement).value).toBe('100');
+    expect(($('f-ratelimit-period') as HTMLSelectElement).value).toBe('minute');
+    const entry = formToEntry();
+    expect(entry.rate_limit_count).toBe(100);
+    expect(entry.rate_limit_period).toBe('minute');
+  });
+
+  it('carries unparseable rate-limit text through an edit instead of losing it', () => {
+    // Regression: the field became a number, so text like "varies by endpoint"
+    // had nowhere to go. Opening such an entry and pressing Save wiped the only
+    // description of its limit that existed.
+    fillForm({ provider: 'GitHub', rate_limit: 'varies by endpoint' } as any);
+    expect(($('f-ratelimit') as HTMLInputElement).value).toBe('');
+    const hint = $('f-ratelimit-note');
+    expect(hint.hidden, 'the text must stay visible somewhere').toBe(false);
+    expect(hint.textContent).toContain('varies by endpoint');
+    const entry = formToEntry();
+    expect(entry.rate_limit_note).toBe('varies by endpoint');
+    expect(entry.rate_limit).toBe('varies by endpoint');
+  });
+
+  it("does not carry one entry's rate-limit note onto the next entry edited", () => {
+    // The invariant-3 shape: module state pointing at the entry in the form.
+    // `fillForm` is the single hook that clears it, and every path into the form
+    // goes through it — including `fillForm({})` for a brand-new entry.
+    fillForm({ provider: 'A', rate_limit: 'varies by endpoint' } as any);
+    fillForm({ provider: 'B', rate_limit: '10/minute' } as any);
+    expect(formToEntry().rate_limit_note).toBeUndefined();
+
+    fillForm({ provider: 'A', rate_limit: 'varies by endpoint' } as any);
+    fillForm({});
+    expect(formToEntry().rate_limit_note).toBeUndefined();
+    expect($('f-ratelimit-note').hidden).toBe(true);
   });
 
   it('always includes Universal in projectIds, even when specific projects are picked', () => {

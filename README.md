@@ -25,6 +25,7 @@ Current version **0.6.0**. The version in `src-tauri/tauri.conf.json` is the aut
 - [Tools](#tools)
 - [Settings, shortcuts and auto-lock](#settings-shortcuts-and-auto-lock)
 - [The CLI](#the-cli)
+- [Key pools](#key-pools)
 - [The server](#the-server)
 - [Open to LAN](#open-to-lan)
 - [Concurrent writes](#concurrent-writes)
@@ -264,25 +265,29 @@ ip       cidr        port     url       date      json
 
 ### What every entry carries, regardless of type
 
-| Field                        | For                                                                                                                    |
-| ---------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
-| `id`                         | Stable identity. Version history, audit attribution and write scoping all key on it — never on a position in an array. |
-| `provider`                   | The only required field                                                                                                |
-| `account_name`               | Which account the credential belongs to                                                                                |
-| `api_description`, `api_url` | Free text, and a link (only ever rendered as one for `http(s):`)                                                       |
-| `projectIds`                 | Which projects it belongs to; always includes `Universal`                                                              |
-| `categories`, `tags`         | Flat labels and chips, both sidebar-filterable                                                                         |
-| `environment`                | `development` / `staging` / `testing` / `production`                                                                   |
-| `expires_at`                 | Drives the card's colour band, the expiry calendar and `rotate-check`                                                  |
-| `last_rotated_at`            | Stamped by the ↺ button and by `entry rotate`                                                                          |
-| `rotation_days`              | A rotation cadence. Set it and the health scan flags the entry once it is overdue.                                     |
-| `price_type`                 | `free` / `paid` / `local` / `conditional`                                                                              |
-| `scopes`, `rate_limit`       | Filled by hand, or by `envv enrich --online` from the issuer                                                           |
-| `pinned`                     | Sorts first in every view                                                                                              |
-| `compromised`                | Flags the entry and surfaces it in the security audit                                                                  |
-| `custom_icon`                | A Simple Icons slug **or** a `data:` image URI                                                                         |
-| `version_history`            | Up to 50 previous values with timestamps, restorable                                                                   |
-| `extra_vars`                 | Arbitrary key/value pairs the card renders                                                                             |
+| Field                                    | For                                                                                                                                                       |
+| ---------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `id`                                     | Stable identity. Version history, audit attribution and write scoping all key on it — never on a position in an array.                                    |
+| `provider`                               | The only required field                                                                                                                                   |
+| `account_name`                           | Which account the credential belongs to                                                                                                                   |
+| `api_description`, `api_url`             | Free text, and a link (only ever rendered as one for `http(s):`)                                                                                          |
+| `projectIds`                             | Which projects it belongs to; always includes `Universal`                                                                                                 |
+| `categories`, `tags`                     | Flat labels and chips, both sidebar-filterable                                                                                                            |
+| `environment`                            | `development` / `staging` / `testing` / `production`                                                                                                      |
+| `expires_at`                             | Drives the card's colour band, the expiry calendar and `rotate-check`                                                                                     |
+| `last_rotated_at`                        | Stamped by the ↺ button and by `entry rotate`                                                                                                             |
+| `rotation_days`                          | A rotation cadence. Set it and the health scan flags the entry once it is overdue.                                                                        |
+| `price_type`                             | `free` / `paid` / `local` / `conditional`                                                                                                                 |
+| `scopes`                                 | Filled by hand, or by `envv enrich --online` from the issuer                                                                                              |
+| `rate_limit_count` + `rate_limit_period` | The published limit as a number and a window (`second` … `year`). A human `rate_limit` string is still written beside them so an older build can read it. |
+| `rate_limit_note`                        | Limit text that is not `<n> per <period>` — "varies by endpoint". Derived, never typed: setting a readable limit clears it.                               |
+| `purpose`                                | Why you asked the issuer for the key — the justification on the application form. Distinct from `api_description` (what it is).                           |
+| `pool`                                   | Key pool this entry joins, so the CLI can swap onto it when another is rate limited. See [Key pools](#key-pools).                                         |
+| `pinned`                                 | Sorts first in every view                                                                                                                                 |
+| `compromised`                            | Flags the entry and surfaces it in the security audit                                                                                                     |
+| `custom_icon`                            | A Simple Icons slug **or** a `data:` image URI                                                                                                            |
+| `version_history`                        | Up to 50 previous values with timestamps, restorable                                                                                                      |
+| `extra_vars`                             | Arbitrary key/value pairs the card renders                                                                                                                |
 
 ### Templates
 
@@ -575,6 +580,66 @@ envv describe | jq
 The whole command tree, every flag, the exit codes, the envelope and the redaction rules, as one JSON document generated from the same `clap` definition the binary runs on. It cannot describe a flag that does not exist. If you are writing an integration, read this instead of guessing from error messages.
 
 `envv-cli/examples/envv.py` is a wrapper showing the three rules of a correct integration: always `--json`, never read a value (use `exec`/`render`), branch on `error.code`. It is an example, deliberately not a package.
+
+### Key pools
+
+Several keys for one service, swapped between so a rate limit on one does not stop
+the work.
+
+Membership is **explicit** — an entry joins a pool by name:
+
+```bash
+envv entry add GitHub --key-id ci-1 --pool github-ci --generate
+envv entry add GitHub --key-id ci-2 --pool github-ci --generate
+envv entry add GitHub --key-id personal --generate      # not in the pool
+```
+
+Two keys for the same provider do not pool automatically, and that is deliberate.
+`envv get GitHub` refusing an ambiguous match is what stops a command acting on a
+credential you did not mean; turning that refusal into "pick one" would change it
+everywhere, `entry rm` included.
+
+Then take keys from the pool instead of naming one:
+
+```bash
+envv get --pool github-ci                       # redacted, like every stdout path
+envv exec --pool github-ci -- gh pr list        # value reaches the child, not stdout
+envv exec --pool github-ci=GH_TOKEN -- ./ci.sh  # name the variable yourself
+```
+
+Each call takes the next key and advances a cursor, so consecutive runs use
+different credentials.
+
+When a key gets rate limited, say so. `envv exec` hands the secret to a child
+process and never sees the child's HTTP responses, so the CLI cannot detect a 429
+on its own — the caller, which did see it, reports it:
+
+```bash
+./deploy.sh || envv pool report github-ci --limited --for 15m
+```
+
+With no member named, that cools down whichever key this machine took most
+recently. Selection skips cooling members. When every key is cooling, the command
+exits **7 (`unavailable`)** and the message names the one that frees up first, so a
+script can sleep for a known interval rather than retrying blind:
+
+```
+Every key in pool 'github-ci' is rate limited — 'GitHub:ci-1' frees up in 297s
+```
+
+`envv pool ls`, `envv pool show <name>` and `envv pool reset <name>` cover the rest.
+
+**Pool state is not in the vault.** Cursor, cooldowns and use counts live in
+`pools.json` in the CLI's state directory, beside `sessions.json` and with the same
+`0600`. Three reasons, worst failure first: `save_vault` appends an audit row on
+every update, so a CI loop would grow the hash-chained log without bound — the same
+reason read events stopped being audited; `save_vault` is a compare-and-swap, so
+concurrent `envv get` calls would start returning conflicts for _reads_; and a
+vault is shared while a rotation cursor is not.
+
+The cost is that the cursor is per-machine — two CI runners each start at the first
+key. For spreading load across N keys that is fine, and it is the honest trade
+rather than an oversight.
 
 ### Commands
 

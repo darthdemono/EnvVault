@@ -262,6 +262,145 @@ mod commands {
         vault_core::load_audit(&conn)
     }
 
+    // ── Key pools ────────────────────────────────────────────────────────────
+    //
+    // Pool state (cursor, cooldowns, use counts) lives in `pools.json` in the
+    // per-user state directory, NOT in the vault — see `vault_core::pool` for
+    // why. The CLI writes the same file, and the app's `app_data_dir` resolves
+    // to the same `io.envvault` directory the CLI defaults to, so a key reported
+    // rate limited from CI shows as cooling here.
+    //
+    // Note what does NOT cross this boundary: the frontend sends only the
+    // identity fields needed to compute `entry_ck` (id, provider, account_name,
+    // key_id) and the pool name. No secret is passed in either direction, so
+    // these commands cannot leak one however they are called.
+
+    /// Identity of one entry, as the frontend knows it.
+    ///
+    /// Deliberately not `VaultEntry`: `entry_ck` needs exactly these four
+    /// fields, and accepting the whole entry would mean secrets crossing the IPC
+    /// boundary for a feature that has no use for them.
+    #[derive(serde::Deserialize)]
+    pub struct PoolMemberRef {
+        #[serde(default)]
+        pub id: Option<String>,
+        #[serde(default)]
+        pub provider: Option<String>,
+        #[serde(default)]
+        pub account_name: Option<String>,
+        #[serde(default)]
+        pub key_id: Option<String>,
+    }
+
+    impl PoolMemberRef {
+        /// The stable key this member's state is filed under.
+        ///
+        /// Computed by `vault_core::entry_ck`, the same function version history
+        /// and audit attribution use — reimplementing it in TypeScript would be
+        /// a second identity scheme that agrees until it does not.
+        fn ck(&self) -> String {
+            vault_core::entry_ck(&serde_json::json!({
+                "id": self.id.clone().unwrap_or_default(),
+                "provider": self.provider.clone().unwrap_or_default(),
+                "account_name": self.account_name.clone().unwrap_or_default(),
+                "key_id": self.key_id.clone().unwrap_or_default(),
+            }))
+        }
+    }
+
+    /// What the panel shows for one member.
+    #[derive(serde::Serialize)]
+    pub struct PoolMemberState {
+        pub ck: String,
+        pub uses: u64,
+        pub cooling: bool,
+        pub cooling_until: Option<String>,
+        pub last_used_at: Option<String>,
+    }
+
+    /// Which vault's state to read.
+    ///
+    /// `remote_base` is passed by the frontend when it is connected to a remote
+    /// vault, so the panel does not show the local vault's cursors under the
+    /// remote's data — the same class of mistake the LAN gate exists to prevent.
+    fn pool_vault_key(app: &AppHandle, remote_base: Option<String>) -> Result<String, String> {
+        Ok(match remote_base.filter(|b| !b.trim().is_empty()) {
+            Some(base) => vault_core::pool::remote_vault_key(base.trim()),
+            None => vault_core::pool::local_vault_key(&db_path(app)?),
+        })
+    }
+
+    /// Per-member pool state for the given entries.
+    #[tauri::command]
+    pub fn pool_state(
+        app: AppHandle,
+        pool: String,
+        members: Vec<PoolMemberRef>,
+        remote_base: Option<String>,
+    ) -> Result<Vec<PoolMemberState>, String> {
+        let vk = pool_vault_key(&app, remote_base)?;
+        let st = vault_core::pool::load();
+        let now = vault_core::pool::now_ts();
+        Ok(members
+            .into_iter()
+            .map(|m| {
+                let ck = m.ck();
+                let s = vault_core::pool::member_state(&st, &vk, &pool, &ck);
+                PoolMemberState {
+                    cooling: vault_core::pool::is_cooling(s.cooling_until.as_deref(), now),
+                    uses: s.uses,
+                    cooling_until: s.cooling_until,
+                    last_used_at: s.last_used_at,
+                    ck,
+                }
+            })
+            .collect())
+    }
+
+    /// Put one member on cooldown, or clear it with `seconds: None`.
+    #[tauri::command]
+    pub fn pool_set_cooldown(
+        app: AppHandle,
+        pool: String,
+        member: PoolMemberRef,
+        seconds: Option<i64>,
+        remote_base: Option<String>,
+    ) -> Result<(), String> {
+        let vk = pool_vault_key(&app, remote_base)?;
+        let mut st = vault_core::pool::load();
+        // A negative or zero cooldown is a cleared cooldown, not one that
+        // expired in the past: writing a stale timestamp would leave the panel
+        // showing a "cooling until" that already passed.
+        let until = seconds
+            .filter(|s| *s > 0)
+            .map(|s| vault_core::pool::now_ts() + s);
+        vault_core::pool::set_cooldown(&mut st, &vk, &pool, &member.ck(), until);
+        vault_core::pool::save(&st)
+    }
+
+    /// Forget a pool's cursor, cooldowns and counts on this machine.
+    #[tauri::command]
+    pub fn pool_reset(
+        app: AppHandle,
+        pool: String,
+        remote_base: Option<String>,
+    ) -> Result<(), String> {
+        let vk = pool_vault_key(&app, remote_base)?;
+        let mut st = vault_core::pool::load();
+        vault_core::pool::forget(&mut st, &vk, &pool);
+        vault_core::pool::save(&st)
+    }
+
+    /// Where `pools.json` is, for the panel's footer.
+    ///
+    /// Worth showing: the file is outside the vault and outside the backup, so
+    /// someone looking for "where did my cursor go" has nothing to search for
+    /// unless the UI says.
+    #[tauri::command]
+    pub fn pool_state_path() -> Option<String> {
+        vault_core::pool::state_path().map(|p| p.display().to_string())
+    }
+
     #[tauri::command]
     pub fn generate_certificate(
         common_name: String,
@@ -1022,6 +1161,10 @@ pub fn run() {
             commands::load_vault,
             commands::save_vault,
             commands::get_vault_path,
+            commands::pool_state,
+            commands::pool_set_cooldown,
+            commands::pool_reset,
+            commands::pool_state_path,
             commands::load_settings,
             commands::save_settings,
             commands::get_expiring,

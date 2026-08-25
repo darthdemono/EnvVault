@@ -1956,3 +1956,108 @@ mark.search-hl {
   white-space: nowrap;
   cursor: help;
 }
+
+/* ── Key Pools pane ───────────────────────────────────────────────────────────
+   A pool is several interchangeable credentials for one service. The table is
+   dense on purpose: the question it answers is "which of these can I use right
+   now", and that is read at a glance, not studied. */
+
+.tool-note {
+  margin-top: 12px;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 10.5px;
+  line-height: 1.65;
+  color: var(--text3);
+}
+.tool-note code {
+  font-size: 10.5px;
+  color: var(--text2);
+}
+
+.pool-card {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  margin-bottom: 14px;
+  overflow: hidden;
+  background: var(--bg2);
+}
+
+.pool-card-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg3, var(--bg2));
+}
+.pool-card-header h4 {
+  margin: 0;
+  font-size: 12.5px;
+  font-weight: 600;
+  letter-spacing: 0;
+}
+.pool-summary {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 10.5px;
+  color: var(--text3);
+  /* Pushes the Reset button to the right edge without a spacer element. */
+  margin-right: auto;
+}
+.pool-cooling-count {
+  color: var(--warn, #d98a3a);
+}
+
+.pool-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11.5px;
+}
+.pool-table th {
+  text-align: left;
+  padding: 6px 12px;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 9.5px;
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text3);
+  border-bottom: 1px solid var(--border);
+}
+.pool-table td {
+  padding: 7px 12px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: middle;
+}
+.pool-table tbody tr:last-child td {
+  border-bottom: none;
+}
+.pool-member {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  color: var(--text);
+}
+.pool-uses,
+.pool-last {
+  color: var(--text3);
+  font-size: 10.5px;
+  white-space: nowrap;
+}
+.pool-actions {
+  text-align: right;
+  white-space: nowrap;
+}
+.pool-ok {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 10.5px;
+  color: var(--text3);
+}
+
+/* A cooling key is skipped by `envv get --pool`, so it needs to read as
+   temporarily out of service rather than as an error. */
+.pool-row-cooling .pool-member {
+  opacity: 0.6;
+}
+.badge-cooling {
+  background: color-mix(in srgb, var(--warn, #d98a3a) 18%, transparent);
+  color: var(--warn, #d98a3a);
+  border: 1px solid color-mix(in srgb, var(--warn, #d98a3a) 35%, transparent);
+}

@@ -277,6 +277,19 @@ export const TOOLS_PANES_HTML = String.raw`
           </div>
         </div>
 
+        <div id="tool-pools" class="tool-pane" style="display:none">
+          <div class="tool-header">
+            <h3>Key Pools</h3>
+            <p>Interchangeable credentials for one service, swapped when one is rate limited.</p>
+          </div>
+          <div class="tool-body" style="max-width:820px">
+            <div class="tool-actions" style="margin-bottom:12px">
+              <button id="pools-refresh-btn" class="btn btn-accent btn-sm">Refresh</button>
+            </div>
+            <div id="pools-body"></div>
+          </div>
+        </div>
+
         <!-- Tool: Import (item 9) -->
         <div id="tool-import-export" class="tool-pane" style="display:none">
           <div class="tool-header">

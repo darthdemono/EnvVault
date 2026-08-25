@@ -8,6 +8,7 @@
 import * as yaml from 'js-yaml';
 import type { VaultEntry } from './types';
 import { Settings, switchPanel, switchTool, st, persist, entryId, ensureEntryIds } from './state';
+import { initPoolsPane, renderPoolsPane } from './pools';
 import { showToast, clipboardWrite, generateULID, showConfirm, esc } from './utils';
 import {
   showDropdown,
@@ -176,8 +177,20 @@ export function initTools() {
       if (btn.dataset.tool === 'expiry-calendar') setTimeout(renderCalendar, 50);
       if (btn.dataset.tool === 'diff') refreshDiffSelects();
       if (btn.dataset.tool === 'audit') document.getElementById('audit-refresh')?.click();
+      // Rendered on entry rather than at init: pool state lives in a file the
+      // CLI also writes, so a pane painted once at startup would show counts
+      // that stopped being true the moment CI ran.
+      if (btn.dataset.tool === 'pools') void renderPoolsPane();
     });
   });
+
+  initPoolsPane();
+  document.getElementById('pools-refresh-btn')?.addEventListener('click', () => {
+    void renderPoolsPane();
+  });
+  // Paint now if the pane is the one being restored, since the nav handler
+  // above only fires on a click.
+  if ((Settings.get('activeTool') || '') === 'pools') void renderPoolsPane();
 
   initAuditPanel();
 
@@ -1049,6 +1062,8 @@ export function initTools() {
       ['api_url', 'API URL'],
       ['expires_at', 'Expires'],
       ['rate_limit', 'Rate Limit'],
+      ['purpose', 'Purpose'],
+      ['pool', 'Key Pool'],
       ['version', 'Version'],
       ['api_description', 'Description'],
     ];

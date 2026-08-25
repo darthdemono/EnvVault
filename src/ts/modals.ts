@@ -29,6 +29,20 @@ import {
 } from './utils';
 import { iconHTML, openIconPicker, iconPicker, setIconField, readIconField } from './icons';
 import { renameProviderRefs } from './chunk-ops';
+import { normalizeRateLimit } from './ratelimit';
+
+/**
+ * Rate-limit text the structured count/period pair cannot express, carried from
+ * the entry being edited through to the next save.
+ *
+ * Module-level state that points at the entry currently in the form, so it has
+ * the problem CLAUDE.md's invariants are about: something holds a reference and
+ * the thing it points at changes. What clears it is `fillForm`, which every path
+ * into the form goes through — `fillForm({})` for a new entry normalises to no
+ * note and blanks it. Do not read this without having gone through `fillForm`
+ * first, or a note from the last entry edited lands on a different one.
+ */
+let pendingRateLimitNote = '';
 
 // ── Schema tooltips & category chips ──────────────────────────────────────
 
@@ -199,7 +213,28 @@ export function formToEntry(): VaultEntry {
     api_url: getVal('f-apiurl') || undefined,
     callback_url: getVal('f-cburl') || undefined,
     version: getVal('f-version') || undefined,
-    rate_limit: getVal('f-ratelimit') || undefined,
+    // The rate limit is three fields that must agree, so it is read as a unit
+    // and normalised rather than field by field. `normalizeRateLimit` also
+    // regenerates the legacy `rate_limit` string from the pair, which is what
+    // keeps a vault edited here readable to an older build.
+    ...(() => {
+      const rl = normalizeRateLimit({
+        rate_limit_count: getVal('f-ratelimit') ? Number(getVal('f-ratelimit')) : undefined,
+        rate_limit_period: getVal('f-ratelimit-period') || undefined,
+        // The note is only ever carried, never typed: it holds whatever the old
+        // free-text field said when it could not be read as a number and a
+        // period, and the form has no input for it.
+        rate_limit: pendingRateLimitNote,
+      });
+      return {
+        rate_limit: rl.rate_limit || undefined,
+        rate_limit_count: rl.rate_limit_count ?? undefined,
+        rate_limit_period: rl.rate_limit_period ?? undefined,
+        rate_limit_note: rl.rate_limit_note || undefined,
+      };
+    })(),
+    purpose: getVal('f-purpose') || undefined,
+    pool: getVal('f-pool') || undefined,
     expires_at: getVal('f-expires') || undefined,
     rotation_days: getVal('f-rotation-days')
       ? parseInt(getVal('f-rotation-days')) || undefined
@@ -269,7 +304,25 @@ export function fillForm(entry: Partial<VaultEntry>) {
   (document.getElementById('f-apiurl') as HTMLInputElement).value = entry.api_url || '';
   (document.getElementById('f-cburl') as HTMLInputElement).value = entry.callback_url || '';
   (document.getElementById('f-version') as HTMLInputElement).value = entry.version || '';
-  (document.getElementById('f-ratelimit') as HTMLInputElement).value = entry.rate_limit || '';
+  // Normalised on read, not trusted: this entry may have been written by an
+  // older build that only had the free-text field, by a remote server, or by an
+  // imported backup. `normalizeRateLimit` is the one reader (CLAUDE.md
+  // invariant 4 — vault data is untrusted input and the TS union is erased).
+  const rl = normalizeRateLimit(entry);
+  (document.getElementById('f-ratelimit') as HTMLInputElement).value =
+    rl.rate_limit_count == null ? '' : String(rl.rate_limit_count);
+  const rlPeriod = document.getElementById('f-ratelimit-period') as HTMLSelectElement | null;
+  if (rlPeriod) rlPeriod.value = rl.rate_limit_period || '';
+  // Text the number/period pair cannot express is shown beneath the inputs and
+  // carried through the next save. Dropping it would lose what the user wrote.
+  pendingRateLimitNote = rl.rate_limit_note || '';
+  const rlNote = document.getElementById('f-ratelimit-note');
+  if (rlNote) {
+    rlNote.textContent = pendingRateLimitNote ? `was: ${pendingRateLimitNote}` : '';
+    rlNote.hidden = !pendingRateLimitNote;
+  }
+  (document.getElementById('f-purpose') as HTMLInputElement).value = entry.purpose || '';
+  (document.getElementById('f-pool') as HTMLInputElement).value = entry.pool || '';
   (document.getElementById('f-expires') as HTMLInputElement).value = entry.expires_at || '';
   const rotEl = document.getElementById('f-rotation-days') as HTMLInputElement | null;
   if (rotEl) rotEl.value = entry.rotation_days ? String(entry.rotation_days) : '';

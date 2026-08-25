@@ -36,6 +36,16 @@ export type SecretType =
  * Fields irrelevant to a given type are `null` / `undefined` and hidden in the UI.
  * Every entry always belongs to at least the "Universal" category (`projectIds`).
  */
+/**
+ * The window a {@link VaultEntry.rate_limit_count} applies to.
+ *
+ * `second` and `minute` are here even though most published limits are hourly
+ * or daily, because the ones that bite in practice are per-second burst caps —
+ * and because the free-text values already in vaults are overwhelmingly
+ * `"n/min"`, which has to survive migration as something.
+ */
+export type RateLimitPeriod = 'second' | 'minute' | 'hour' | 'day' | 'week' | 'month' | 'year';
+
 export interface VaultEntry {
   /**
    * Stable unique identifier, assigned once on creation and never mutated.
@@ -84,8 +94,64 @@ export interface VaultEntry {
   expires_at?: string | null;
   /** OAuth scopes or permission strings granted to this credential. */
   scopes: string[];
-  /** Human-readable rate-limit description (e.g. `"100 req/min"`). */
+  /**
+   * Human-readable rate-limit description (e.g. `"100 req/min"`).
+   *
+   * **Legacy, and kept deliberately.** The structured pair below
+   * (`rate_limit_count` + `rate_limit_period`) is what the UI and the health
+   * scan read. This string is still written on save, rendered from the pair
+   * when the pair is set, so a vault edited by a current build stays readable
+   * to an older one — and so an entry whose limit was never expressible as
+   * `<n> per <period>` ("varies by endpoint") keeps the text the user wrote.
+   *
+   * Never parse this field directly. `parseRateLimit()` in `utils.ts` is the
+   * one reader, and `envv-cli/src/ratelimit.rs` is its twin.
+   */
   rate_limit?: string | null;
+  /**
+   * The rate limit as a number, paired with {@link rate_limit_period}.
+   *
+   * `null` means "not known", which is not the same as `0` — a limit of zero
+   * would mean the credential is useless, and some services really do issue
+   * suspended keys. Both halves must be set for the limit to be considered
+   * structured; a count without a period is meaningless and is dropped on read.
+   */
+  rate_limit_count?: number | null;
+  /** The window {@link rate_limit_count} applies to. */
+  rate_limit_period?: RateLimitPeriod | null;
+  /**
+   * Whatever the old free-text `rate_limit` said when it could not be parsed
+   * into a count and a period ("varies by endpoint", "see contract").
+   *
+   * Kept rather than discarded: the text was written by a human who knew
+   * something the schema does not express, and silently dropping it on the
+   * first save under a new version is data loss the user never asked for.
+   */
+  rate_limit_note?: string | null;
+  /**
+   * What this credential was requested for — the justification submitted to the
+   * issuer on the application form.
+   *
+   * Distinct from `api_description` (what it is) and `details` (notes to self).
+   * This is the sentence you will be held to if the issuer asks why you have
+   * the key, and it is worth recording at the moment you write it, because six
+   * months later nobody remembers.
+   */
+  purpose?: string | null;
+  /**
+   * Name of the key pool this entry belongs to, or `null` for a standalone key.
+   *
+   * Several entries sharing a pool name are interchangeable credentials for the
+   * same service, held so that a caller can swap between them when one is rate
+   * limited. Membership is **explicit**: two keys for the same provider do not
+   * pool automatically, because `envv get GitHub` refusing an ambiguous match
+   * is the behaviour that stops a command from silently acting on a credential
+   * the caller did not mean (see the invariants in CLAUDE.md).
+   *
+   * Swap state — cursor, cooldowns, use counts — is deliberately NOT stored
+   * here. It lives in a per-machine sidecar; see `envv-cli/src/pool.rs`.
+   */
+  pool?: string | null;
   /** API or SDK version this key was issued for. */
   version?: string | null;
   /** Simple Icons slug for a custom provider icon, or `null` to use auto-detection. */

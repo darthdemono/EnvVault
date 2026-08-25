@@ -1,0 +1,53 @@
+{
+  "_comment": [
+    "Golden table for the rate-limit parser, which exists twice:",
+    "src/ts/ratelimit.ts (app) and envv-cli/src/ratelimit.rs (CLI).",
+    "",
+    "Both assert against this file. tests/ratelimit.test.ts pins the TypeScript",
+    "side; envv-cli/tests/ratelimit.rs pins the Rust side against the identical",
+    "cases. Change one parser and the other fails.",
+    "",
+    "`parse` cases: input string -> {count, period}, or null when the string says",
+    "more than <n> per <period> can hold. `format` cases go the other way and must",
+    "round-trip back through parse."
+  ],
+  "parse": [
+    { "in": "100/min", "out": { "count": 100, "period": "minute" } },
+    { "in": "100 req/min", "out": { "count": 100, "period": "minute" } },
+    { "in": "5000/hour", "out": { "count": 5000, "period": "hour" } },
+    { "in": "5000 requests per hour", "out": { "count": 5000, "period": "hour" } },
+    { "in": "60 calls/minute", "out": { "count": 60, "period": "minute" } },
+    { "in": "1,000/day", "out": { "count": 1000, "period": "day" } },
+    { "in": "1_000_000/month", "out": { "count": 1000000, "period": "month" } },
+    { "in": "10/s", "out": { "count": 10, "period": "second" } },
+    { "in": "30/sec", "out": { "count": 30, "period": "second" } },
+    { "in": "5000/hr", "out": { "count": 5000, "period": "hour" } },
+    { "in": "500 per hr", "out": { "count": 500, "period": "hour" } },
+    { "in": "2/wk", "out": { "count": 2, "period": "week" } },
+    { "in": "12/mo", "out": { "count": 12, "period": "month" } },
+    { "in": "1/yr", "out": { "count": 1, "period": "year" } },
+    { "in": "  40 / DAY  ", "out": { "count": 40, "period": "day" } },
+    { "in": "200 a day", "out": { "count": 200, "period": "day" } },
+    { "in": "3 every second", "out": { "count": 3, "period": "second" } },
+    { "in": "5000 api calls per day", "out": { "count": 5000, "period": "day" } },
+    { "in": "0/minute", "out": { "count": 0, "period": "minute" } },
+
+    { "in": "", "out": null },
+    { "in": "   ", "out": null },
+    { "in": "unlimited", "out": null },
+    { "in": "varies by endpoint", "out": null },
+    { "in": "100", "out": null },
+    { "in": "per minute", "out": null },
+    { "in": "1.5k/min", "out": null },
+    { "in": "40000 tokens/min", "out": null },
+    { "in": "60 per user per minute", "out": null },
+    { "in": "-5/min", "out": null },
+    { "in": "100/fortnight", "out": null }
+  ],
+  "format": [
+    { "count": 100, "period": "minute", "out": "100/minute" },
+    { "count": 5000, "period": "hour", "out": "5000/hour" },
+    { "count": 1, "period": "year", "out": "1/year" },
+    { "count": 0, "period": "second", "out": "0/second" }
+  ]
+}

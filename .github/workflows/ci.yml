@@ -62,9 +62,35 @@ jobs:
 
       # Windows has no system SQLCipher, so vault-core's cfg(windows) dependency
       # vendors SQLCipher *and* OpenSSL — and building OpenSSL from source needs
-      # Perl and NASM. Both ship in the windows-latest image, but if that ever
-      # changes the failure surfaces as an opaque openssl-src build error a
-      # thousand lines into the log. Fail here instead, naming the cause.
+      # a real Perl and NASM. Failing here, naming the cause, beats an opaque
+      # openssl-src error a thousand lines into a build log.
+      # openssl-src builds OpenSSL from source, and OpenSSL's Configure is a Perl
+      # program that needs a full Perl — Locale::Maketext::Simple among others.
+      #
+      # windows-latest ships Strawberry Perl, which has those modules. It also
+      # ships Git for Windows, whose bundled MSYS Perl does NOT — and the build
+      # steps below run under `shell: bash`, where Git's `/usr/bin/perl` comes
+      # first on PATH. So `perl` resolves, `perl --version` prints happily, and
+      # the build dies a thousand lines later with:
+      #
+      #   Can't locate Locale/Maketext/Simple.pm in @INC
+      #
+      # Putting Strawberry ahead of it on PATH is the whole fix. `C:\Strawberry\c\bin`
+      # is included because Configure also wants the toolchain that ships with it.
+      - name: Put Strawberry Perl ahead of Git's Perl on PATH
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          if (-not (Test-Path 'C:\Strawberry\perl\bin\perl.exe')) {
+            choco install strawberryperl -y --no-progress
+          }
+          'C:\Strawberry\c\bin', 'C:\Strawberry\perl\site\bin', 'C:\Strawberry\perl\bin' |
+            ForEach-Object { Add-Content -Path $env:GITHUB_PATH -Value $_ }
+
+      # Assert the toolchain can actually do the job, not merely that the
+      # binaries exist. `command -v perl` passed for the whole life of the
+      # earlier version of this check while the Perl it found was the one that
+      # cannot build OpenSSL — presence was never the property that mattered.
       - name: Verify the vendored-OpenSSL toolchain
         if: runner.os == 'Windows'
         shell: bash
@@ -77,8 +103,14 @@ jobs:
             echo "::error::openssl-src needs$missing on PATH to vendor OpenSSL for Windows."
             exit 1
           fi
-          perl --version | head -2
+          echo "perl: $(command -v perl)"
+          perl --version | sed -n '2p'
           nasm -v
+          if ! perl -MLocale::Maketext::Simple -e 1 2>/dev/null; then
+            echo "::error::The perl on PATH cannot load Locale::Maketext::Simple, so OpenSSL's Configure will fail. This is usually Git for Windows' MSYS perl shadowing Strawberry Perl."
+            exit 1
+          fi
+          echo "Locale::Maketext::Simple loads — OpenSSL's Configure will run."
 
       - uses: dtolnay/rust-toolchain@stable
         with:

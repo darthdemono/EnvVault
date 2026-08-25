@@ -25,6 +25,7 @@ import {
 } from './state';
 import { getFiltered, sorted, buildProjectTree, getDescendantProjectIds } from './filters';
 import { iconHTML } from './icons';
+import { normalizeRateLimit } from './ratelimit';
 import {
   esc,
   escAttr,
@@ -496,7 +497,24 @@ function buildCard(entry: VaultEntry, idx: number, animIdx: number): HTMLElement
 
   const metaRows: [string, string][] = [];
   if (entry.version) metaRows.push(['Version', esc(entry.version)]);
-  if (entry.rate_limit) metaRows.push(['Rate Limit', esc(entry.rate_limit)]);
+  // Normalised rather than read straight off the entry: this card may be
+  // rendering data written by an older build that only had the free-text field,
+  // by a remote server, or by a restored backup. Every branch below escapes —
+  // vault data is untrusted input and the TypeScript types are erased at
+  // runtime (CLAUDE.md invariant 4).
+  const rl = normalizeRateLimit(entry);
+  if (rl.rate_limit_count != null && rl.rate_limit_period) {
+    metaRows.push([
+      'Rate Limit',
+      `${esc(rl.rate_limit_count)} <span class="meta-unit">per ${esc(rl.rate_limit_period)}</span>`,
+    ]);
+  } else if (rl.rate_limit_note) {
+    // A limit nobody could express as a number and a window. Shown as the user
+    // wrote it, because that text is the only description of it that exists.
+    metaRows.push(['Rate Limit', esc(rl.rate_limit_note)]);
+  }
+  if (entry.purpose) metaRows.push(['Purpose', esc(entry.purpose)]);
+  if (entry.pool) metaRows.push(['Key Pool', esc(entry.pool)]);
   if (entry.expires_at) metaRows.push(['Expires', esc(entry.expires_at)]);
   if (entry.api_url) metaRows.push(['API URL', safeUrl(entry.api_url)]);
   if (entry.callback_url) metaRows.push(['Callback', safeUrl(entry.callback_url)]);

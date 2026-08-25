@@ -189,3 +189,64 @@ describe('a fully hostile entry', () => {
     expect(document.querySelector('a[href^="javascript:"]')).toBeNull();
   });
 });
+
+describe('purpose, pool and the rate-limit fields', () => {
+  // These arrived with the key-pool feature and are rendered into the expanded
+  // card's meta rows. They are plain strings with no union to lull anyone into
+  // trusting them, but they come from the same untrusted vault JSON as
+  // everything else — an imported backup or a remote server can put markup in
+  // any of them.
+  const expand = (entry: Record<string, unknown>) => {
+    st.vault = makeVault({
+      projects: [makeProject({ id: 'p1', name: 'Acme' })],
+      api_keys: [
+        makeEntry({
+          id: 'evil',
+          provider: 'Evil',
+          projectIds: ['Universal', 'p1'],
+          ...entry,
+        } as any),
+      ],
+    });
+    st.expanded = new Set(['evil']);
+    render();
+  };
+
+  it('escapes purpose', () => {
+    expand({ purpose: TAG_INJECTION });
+    assertNoInjection(document.body);
+    expect(document.body.textContent).toContain(TAG_INJECTION);
+  });
+
+  it('escapes the pool name', () => {
+    expand({ pool: TAG_INJECTION });
+    assertNoInjection(document.body);
+  });
+
+  it('escapes a rate-limit note', () => {
+    expand({ rate_limit: TAG_INJECTION });
+    assertNoInjection(document.body);
+  });
+
+  it('escapes a rate-limit period that is not one of the seven', () => {
+    // `RateLimitPeriod` is a union and unions are erased at runtime. This one
+    // is filtered by `normalizeRateLimit` before it reaches the DOM, which is
+    // the defence — but if that filter is ever relaxed, this catches it.
+    expand({ rate_limit_count: 10, rate_limit_period: ATTR_BREAKOUT });
+    assertNoInjection(document.body);
+  });
+
+  it('renders a structured limit as a count and a window', () => {
+    expand({ rate_limit_count: 5000, rate_limit_period: 'hour' });
+    const text = document.body.textContent ?? '';
+    expect(text).toContain('5000');
+    expect(text).toContain('per hour');
+  });
+
+  it('shows unparseable limit text rather than dropping it', () => {
+    // The text is the only description of the limit that exists; a card that
+    // shows nothing is worse than one that shows what the user wrote.
+    expand({ rate_limit: 'varies by endpoint' });
+    expect(document.body.textContent).toContain('varies by endpoint');
+  });
+});

@@ -17,8 +17,8 @@
 
 use envv_cli::error::{CliError, CliResult};
 use envv_cli::{
-    access, agentio, backup, chunks, data, enrich, entries, envfile, exec, fmt, gen, out, projects,
-    render, scan, session, users_cmd,
+    access, agentio, backup, chunks, data, enrich, entries, envfile, exec, fmt, gen, out, pool,
+    projects, render, scan, session, users_cmd,
 };
 
 use access::{open_access, Access, AuthOpts};
@@ -163,10 +163,19 @@ enum Commands {
     /// Print full details of a single entry.
     Get {
         /// Provider name (case-insensitive substring match), or provider:key_id.
-        provider: String,
+        ///
+        /// Optional only because --pool names the entry instead; one of the two
+        /// is required.
+        provider: Option<String>,
         /// Print just this field (api_key, username, url, … or an extra_vars key).
         #[arg(long)]
         field: Option<String>,
+        /// Take the next key from this pool instead of naming an entry.
+        ///
+        /// Advances the pool's cursor, so two calls hand back two different
+        /// keys. Skips members that `envv pool report --limited` put on cooldown.
+        #[arg(long, conflicts_with = "provider")]
+        pool: Option<String>,
     },
     /// Export vault entries.
     Export {
@@ -244,6 +253,15 @@ enum Commands {
         out: Option<PathBuf>,
     },
     /// Create, edit and delete secret entries.
+    /// Key pools — several interchangeable credentials for one service.
+    ///
+    /// Membership is explicit: an entry joins with `entry set <p> --pool <name>`.
+    /// Cursor, cooldowns and use counts are per-machine and live outside the
+    /// vault, so a pool read never writes to it.
+    Pool {
+        #[command(subcommand)]
+        cmd: PoolCmd,
+    },
     Entry {
         #[command(subcommand)]
         cmd: EntryCmd,
@@ -304,6 +322,13 @@ enum Commands {
         /// PROVIDER, PROVIDER=VAR, or PROVIDER=VAR:field. Repeatable.
         #[arg(long = "entry")]
         entries: Vec<String>,
+        /// POOL, POOL=VAR, or POOL=VAR:field. Repeatable.
+        ///
+        /// Takes the next usable key from the pool and advances its cursor, so
+        /// consecutive runs use different credentials. The value reaches the
+        /// child's environment and never stdout.
+        #[arg(long = "pool")]
+        pools: Vec<String>,
         /// Prefix every variable name.
         #[arg(long)]
         prefix: Option<String>,
@@ -459,6 +484,46 @@ enum EntryCmd {
     History { provider: String },
     /// Restore a previous value by its position in `entry history`.
     Restore { provider: String, version: usize },
+}
+
+#[derive(Subcommand)]
+enum PoolCmd {
+    /// List every pool in the vault with member counts and cooldowns.
+    Ls,
+    /// Show each member of one pool: use count and whether it is cooling.
+    Show { pool: String },
+    /// Take the next usable key and advance the cursor.
+    ///
+    /// Redacted like every other stdout path — `--reveal` opts in, and
+    /// `envv exec --pool` uses the value without anyone reading it.
+    Next {
+        pool: String,
+        /// Print a field other than the secret.
+        #[arg(long)]
+        field: Option<String>,
+    },
+    /// Report a key as rate limited (or recovered).
+    ///
+    /// `envv exec` hands the secret to a child process and never sees the
+    /// child's HTTP responses, so the CLI cannot detect a 429 by itself. The
+    /// caller — which did see it — reports it.
+    Report {
+        pool: String,
+        /// Which member, as `provider:key_id` or a key id. Defaults to the one
+        /// this machine took most recently.
+        member: Option<String>,
+        /// Put the member on cooldown (the default action).
+        #[arg(long, conflicts_with = "ok")]
+        limited: bool,
+        /// Clear the member's cooldown instead.
+        #[arg(long)]
+        ok: bool,
+        /// How long to cool down: 30s, 15m, 2h, 1d. Default 15m.
+        #[arg(long = "for")]
+        for_dur: Option<String>,
+    },
+    /// Forget a pool's cursor, cooldowns and counts on this machine.
+    Reset { pool: String },
 }
 
 #[derive(Subcommand)]
@@ -1277,7 +1342,20 @@ fn dispatch(cli: &Cli, a: &Access) -> CliResult {
             search.as_deref(),
             *json,
         ),
-        Commands::Get { provider, field } => entries::cmd_get(a, provider, field.as_deref()),
+        Commands::Get {
+            provider,
+            field,
+            pool: pool_name,
+        } => match (provider, pool_name) {
+            (_, Some(name)) => pool::cmd_next(a, name, field.as_deref()),
+            (Some(p), None) => entries::cmd_get(a, p, field.as_deref()),
+            // clap cannot express "exactly one of a positional and a flag", so
+            // the check lives here. `invalid` rather than a usage error: the
+            // command was well-formed, it just did not say which entry.
+            (None, None) => Err(CliError::invalid(
+                "Name an entry, or pass --pool <name> to take the next key from a pool",
+            )),
+        },
         Commands::Export {
             format,
             project,
@@ -1353,6 +1431,7 @@ fn dispatch(cli: &Cli, a: &Access) -> CliResult {
         Commands::Exec {
             project,
             entries: entry_specs,
+            pools: pool_specs,
             prefix,
             clean,
             argv,
@@ -1360,6 +1439,7 @@ fn dispatch(cli: &Cli, a: &Access) -> CliResult {
             let opts = exec::ExecOpts {
                 project: project.as_deref(),
                 entries: entry_specs,
+                pools: pool_specs,
                 prefix: prefix.as_deref(),
                 clean: *clean,
             };
@@ -1374,6 +1454,29 @@ fn dispatch(cli: &Cli, a: &Access) -> CliResult {
             out,
             strict,
         } => render::cmd_render(a, template.as_deref(), out.as_deref(), *strict),
+
+        Commands::Pool { cmd } => match cmd {
+            PoolCmd::Ls => pool::cmd_ls(a),
+            PoolCmd::Show { pool: name } => pool::cmd_show(a, name),
+            PoolCmd::Next { pool: name, field } => pool::cmd_next(a, name, field.as_deref()),
+            PoolCmd::Report {
+                pool: name,
+                member,
+                limited,
+                ok,
+                for_dur,
+            } => pool::cmd_report(
+                a,
+                name,
+                member.as_deref(),
+                // `--limited` is the default action: reporting a key and saying
+                // nothing else means it just failed. `--ok` is the only way to
+                // clear a cooldown, so silence can never accidentally do that.
+                !*ok || *limited,
+                for_dur.as_deref(),
+            ),
+            PoolCmd::Reset { pool: name } => pool::cmd_reset(a, name),
+        },
 
         Commands::Entry { cmd } => match cmd {
             EntryCmd::Ls {

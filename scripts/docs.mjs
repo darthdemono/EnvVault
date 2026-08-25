@@ -13,6 +13,7 @@
  */
 
 import { execFileSync, spawnSync } from 'node:child_process';
+import { mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -21,6 +22,21 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const version = execFileSync(process.execPath, [join(ROOT, 'scripts', 'version.mjs')], {
   encoding: 'utf8',
 }).trim();
+
+// Doxygen creates OUTPUT_DIRECTORY, but only ONE level of it. The Doxyfile
+// points at `docs/ts`, and `docs/` is gitignored — so on a fresh checkout the
+// parent does not exist and Doxygen dies with:
+//
+//   error: tag OUTPUT_DIRECTORY: Output directory 'docs/ts' does not exist
+//          and cannot be created
+//
+// This was invisible locally because the directory happened to already be
+// there, and only appeared in CI. WARN_LOGFILE lives in the same place and has
+// the same requirement, so both are covered by creating it here rather than in
+// the workflow: `npm run docs` then works on a fresh clone, on any OS, without
+// the caller having to know.
+const OUT = join(ROOT, 'docs', 'ts');
+mkdirSync(OUT, { recursive: true });
 
 const r = spawnSync('doxygen', ['Doxyfile'], {
   cwd: ROOT,

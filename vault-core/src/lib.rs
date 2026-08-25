@@ -15,6 +15,7 @@ pub mod generators;
 pub use generators::{generate_certificate, generate_ssh_keypair};
 
 pub mod permex;
+pub mod pool;
 pub use permex::{
     eval as eval_perm_expr, parse as parse_perm_expr, EntryView, Expr as PermExpr,
     Field as PermField,
