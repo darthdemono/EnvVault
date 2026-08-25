@@ -17,10 +17,13 @@ pub use generators::{generate_certificate, generate_ssh_keypair};
 pub mod permex;
 pub mod pool;
 
-/// Entropy sources for secret generation — OS, or a device mixed on top of it.
+// Both modules carry their own `//!` docs. Adding an outer `///` here as well
+// makes rustdoc merge the two and resolve the *combined* text in this file's
+// scope, so every intra-doc link written inside the module — `[`Source::Os`]`,
+// `[`TlsPolicy::Pin`]` — fails with "no item named … in scope" and
+// `-D warnings` turns that into a failed docs build.
 pub mod entropy;
 
-/// Shared TLS client policy. Behind the `tls` feature — see `Cargo.toml`.
 #[cfg(feature = "tls")]
 pub mod tls;
 pub use permex::{

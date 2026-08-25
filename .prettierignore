@@ -26,11 +26,11 @@ tests/fixtures/
 index.html
 
 # Session logs and LLM scratch documents; gitignored, so formatting them only
-# produces local churn.
+# produces local churn. `handoff/` replaced the root Handoff-*.md files in
+# Phase 17; the bare pattern stays for any stray left at the top level.
 CLAUDE.md
-CLAUDE.original.md
+handoff/
 Handoff-*.md
-*.original.md
 repomix-output.md
 .claude/
 

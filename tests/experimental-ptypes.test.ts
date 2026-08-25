@@ -68,9 +68,7 @@ describe('type classification', () => {
     // Traefik, httpd, haproxy, ansible-playbook, a live Postgres. A type may be
     // added here only with that kind of evidence — a golden fixture proves we
     // agree with ourselves, nothing more.
-    expect([...STABLE_PROJECT_TYPES].sort()).toEqual(
-      [...ALL_TYPES].sort(),
-    );
+    expect([...STABLE_PROJECT_TYPES].sort()).toEqual([...ALL_TYPES].sort());
   });
 
   it('leaves nothing classified as experimental', () => {
@@ -105,9 +103,7 @@ describe('create picker', () => {
   it('marks nothing as unproven', () => {
     Settings.set('experimentalProjectTypes', true);
     openProjectCreateModal();
-    ALL_TYPES.forEach((t) =>
-      expect(typeBtn(t)?.classList.contains('experimental'), t).toBe(false),
-    );
+    ALL_TYPES.forEach((t) => expect(typeBtn(t)?.classList.contains('experimental'), t).toBe(false));
   });
 
   it('still hides a type the list does not contain', () => {

@@ -383,8 +383,9 @@ async function connectRemote(cfg: RemoteVaultConfig) {
     // silently.
     if (!Settings.get('keepLocalUnlocked')) {
       try {
-        const tauri = (window as { __TAURI__?: { core?: { invoke?: (c: string) => Promise<unknown> } } })
-          .__TAURI__;
+        const tauri = (
+          window as { __TAURI__?: { core?: { invoke?: (c: string) => Promise<unknown> } } }
+        ).__TAURI__;
         await tauri?.core?.invoke?.('lock_vault');
       } catch {
         // A vault that was never unlocked locally (connected straight from the

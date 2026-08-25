@@ -8,7 +8,8 @@
       "description": "",
       "items": [
         {
-          "itemId": "p1", "state": 1,
+          "itemId": "p1",
+          "state": 1,
           "data": {
             "type": "login",
             "metadata": { "name": "DigitalOcean", "note": "droplet fleet", "itemUuid": "p1" },
@@ -22,7 +23,8 @@
           }
         },
         {
-          "itemId": "p2", "state": 2,
+          "itemId": "p2",
+          "state": 2,
           "data": {
             "type": "login",
             "metadata": { "name": "Deleted thing", "note": "" },
@@ -30,15 +32,20 @@
           }
         },
         {
-          "itemId": "p3", "state": 1,
+          "itemId": "p3",
+          "state": 1,
           "data": {
             "type": "note",
-            "metadata": { "name": "Root CA", "note": "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----" },
+            "metadata": {
+              "name": "Root CA",
+              "note": "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----"
+            },
             "content": {}
           }
         },
         {
-          "itemId": "p4", "state": 1,
+          "itemId": "p4",
+          "state": 1,
           "data": { "type": "creditCard", "metadata": { "name": "Amex" }, "content": {} }
         }
       ]

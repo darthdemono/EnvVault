@@ -194,18 +194,64 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with: { name: fixtures, path: fixtures }
-      - uses: AbsaOSS/k3d-action@v2
-        with:
-          cluster-name: envvault
+      # k3s straight from its own image rather than a third-party action.
+      # `AbsaOSS/k3d-action@v2` fetches k3d from a raw.githubusercontent URL that
+      # now 404s, so the job died before it reached anything this repo owns. One
+      # `docker run` has no such moving part, and it is exactly how this was
+      # validated locally.
+      - name: Start a real k3s cluster
+        run: |
+          set -euo pipefail
+          docker run -d --name k3s --privileged \
+            rancher/k3s:v1.31.4-k3s1 server --disable-agent \
+            --disable=traefik,servicelb,metrics-server
+          for i in $(seq 1 60); do
+            docker exec k3s kubectl get --raw /readyz >/dev/null 2>&1 && break
+            sleep 2
+          done
+          docker exec k3s kubectl version -o json | head -20
+
       - name: Apply, then read the value back out of the cluster
         run: |
           set -euo pipefail
-          kubectl apply -f fixtures/k8s.yaml
-          # Round trip: base64 in the manifest must decode to the value the
-          # exporter resolved. This is where a btoa/UTF-8 bug would surface.
-          got=$(kubectl get secret app-secrets -o jsonpath='{.data.DB_PASSWORD}' | base64 -d)
+          docker cp fixtures/k8s.yaml k3s:/tmp/k8s.yaml
+          docker exec k3s kubectl apply -f /tmp/k8s.yaml
+
+          # Round trip: the base64 in the manifest must decode, *inside the
+          # cluster*, to the value the exporter resolved. This is where a
+          # btoa/Latin-1 bug would surface — and where a `${ref}` that never got
+          # resolved would show up as a literal placeholder.
+          got=$(docker exec k3s kubectl get secret app-secrets \
+                  -o jsonpath='{.data.DB_PASSWORD}' | base64 -d)
           test "$got" = "pg-secret-value" || {
             echo "::error::cluster decoded '$got', expected the resolved secret"
             exit 1
           }
-          kubectl get configmap app-config -o jsonpath='{.data.LOG_LEVEL}' | grep -qx info
+          docker exec k3s kubectl get configmap app-config \
+            -o jsonpath='{.data.LOG_LEVEL}' | grep -qx info
+
+          # Non-ASCII through a real cluster: `btoa` is Latin-1 and mangles
+          # anything above U+00FF, so this is the assertion that catches it.
+          docker exec k3s sh -c 'cat > /tmp/u.yaml' <<'YAML'
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: unicode-test
+            namespace: default
+          type: Opaque
+          data:
+            UNICODE: cMOkc3N3w7ZyZOKAk+aXpeacrOiqng==
+          YAML
+          docker exec k3s kubectl apply -f /tmp/u.yaml
+          u=$(docker exec k3s kubectl get secret unicode-test \
+                -o jsonpath='{.data.UNICODE}' | base64 -d)
+          test "$u" = 'pässwörd–日本語' || {
+            echo "::error::non-ASCII round trip failed: got '$u'"
+            exit 1
+          }
+
+          # Control: the disabled chunk must not have been exported at all.
+          if docker exec k3s kubectl get secret disabled-one >/dev/null 2>&1; then
+            echo "::error::a disabled chunk was exported into the manifest"
+            exit 1
+          fi

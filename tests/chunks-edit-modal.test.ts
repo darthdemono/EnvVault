@@ -8,7 +8,7 @@
  * and used after the array can have changed — so the tests below hammer delete
  * ordering rather than the happy path.
  */
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach } from 'vitest';
 import { loadRealIndexHtml } from './helpers';
 import {
   openChunkEditModal,
@@ -76,7 +76,11 @@ describe('opening and closing', () => {
 
 describe('render / read round trip', () => {
   it('reads back exactly what it rendered', () => {
-    const f = fields(['HOST', 'db.internal'], ['PASS', 'hunter2', 'secret'], ['PORT', '5432', 'port']);
+    const f = fields(
+      ['HOST', 'db.internal'],
+      ['PASS', 'hunter2', 'secret'],
+      ['PORT', '5432', 'port'],
+    );
     renderChunkEditFields(f);
     expect(readChunkEditFields()).toEqual(f);
   });
@@ -91,7 +95,9 @@ describe('render / read round trip', () => {
   it('trims the key but never the value', () => {
     // Leading whitespace in a key is a typo; in a value it can be significant —
     // a PEM block or an indented YAML fragment.
-    renderChunkEditFields([{ key: '  K  ', value: '  spaced  ', field_type: 'var', secret: false }]);
+    renderChunkEditFields([
+      { key: '  K  ', value: '  spaced  ', field_type: 'var', secret: false },
+    ]);
     const [f] = readChunkEditFields();
     expect(f.key).toBe('K');
     expect(f.value).toBe('  spaced  ');
@@ -118,10 +124,22 @@ describe('render / read round trip', () => {
     // from it silently becomes the first option on the next save, retyping a
     // field the user never touched.
     const types = [
-      'var', 'env_var', 'secret', 'list', 'multiline', 'port',
-      'user_id', 'subnet', 'ip', 'endpoint', 'volume_mount', 'cert',
+      'var',
+      'env_var',
+      'secret',
+      'list',
+      'multiline',
+      'port',
+      'user_id',
+      'subnet',
+      'ip',
+      'endpoint',
+      'volume_mount',
+      'cert',
     ] as const;
-    renderChunkEditFields(types.map((t) => ({ key: t, value: 'v', field_type: t, secret: t === 'secret' })));
+    renderChunkEditFields(
+      types.map((t) => ({ key: t, value: 'v', field_type: t, secret: t === 'secret' })),
+    );
     expect(readChunkEditFields().map((f) => f.field_type)).toEqual([...types]);
   });
 

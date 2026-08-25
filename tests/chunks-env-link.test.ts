@@ -90,9 +90,7 @@ describe('exact-name matching', () => {
 
 describe('prefix-aware matching', () => {
   it('strips a declared env_prefix and matches the remainder', () => {
-    st.vault.api_keys = [
-      entry({ provider: 'LASTFM', env_prefixes: ['APP_'], api_key: 'k' }),
-    ];
+    st.vault.api_keys = [entry({ provider: 'LASTFM', env_prefixes: ['APP_'], api_key: 'k' })];
     const [m] = buildEnvLinkMatches(chunk([{ key: 'APP_LASTFM_APIKEY', value: 'k' }]));
     expect(m.match?.confidence).toBe(92);
     expect(m.match?.ref).toBe('LASTFM/APIKEY');

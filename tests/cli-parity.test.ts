@@ -134,14 +134,11 @@ describe('exporter parity fixtures', () => {
       ['k8s', () => exportK8s(project('k8s') as any), 'must-not-appear'],
       ['ssh', () => exportSshConfig(project('ssh') as any), 'gone.example.com'],
       ['postgres', () => exportPostgres(project('pg') as any), 'old.internal'],
-    ] as [string, () => string, string][])(
-      '%s excludes disabled chunks',
-      (_name, run, needle) => {
-        // Disabling a chunk greys the card out. Exporting it anyway means the
-        // deployed file still lists something the user believes they removed.
-        expect(run()).not.toContain(needle);
-      },
-    );
+    ] as [string, () => string, string][])('%s excludes disabled chunks', (_name, run, needle) => {
+      // Disabling a chunk greys the card out. Exporting it anyway means the
+      // deployed file still lists something the user believes they removed.
+      expect(run()).not.toContain(needle);
+    });
   });
 
   it('env_file chunk', () => {
