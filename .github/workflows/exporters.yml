@@ -232,7 +232,13 @@ jobs:
 
           # Non-ASCII through a real cluster: `btoa` is Latin-1 and mangles
           # anything above U+00FF, so this is the assertion that catches it.
-          docker exec k3s sh -c 'cat > /tmp/u.yaml' <<'YAML'
+          #
+          # Written on the runner and copied in, rather than piped through
+          # `docker exec`. Piping needs `-i`: without it docker never attaches
+          # stdin, `cat` sees EOF immediately, and the file lands *empty* — which
+          # surfaces as `error: no objects passed to apply` from kubectl, naming
+          # neither docker nor stdin.
+          cat > unicode.yaml <<'YAML'
           apiVersion: v1
           kind: Secret
           metadata:
@@ -242,6 +248,8 @@ jobs:
           data:
             UNICODE: cMOkc3N3w7ZyZOKAk+aXpeacrOiqng==
           YAML
+          test -s unicode.yaml || { echo "::error::heredoc wrote nothing"; exit 1; }
+          docker cp unicode.yaml k3s:/tmp/u.yaml
           docker exec k3s kubectl apply -f /tmp/u.yaml
           u=$(docker exec k3s kubectl get secret unicode-test \
                 -o jsonpath='{.data.UNICODE}' | base64 -d)
