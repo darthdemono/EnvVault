@@ -54,6 +54,18 @@ pub fn dry_run() -> bool {
 
 // ── Fingerprints ──────────────────────────────────────────────────────────────
 
+/// Full lower-case hex SHA-256 of arbitrary bytes.
+///
+/// Distinct from [`fingerprint`], which truncates to 12 characters for display.
+/// A manifest checksum must be the whole hash: it exists to prove two files
+/// belong together, and 48 bits is not a proof.
+pub fn raw_sha256_hex(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    let mut h = Sha256::new();
+    h.update(bytes);
+    format!("{:x}", h.finalize())
+}
+
 /// `sha256:` + the first 12 hex characters of the SHA-256 of `value`.
 ///
 /// Twelve characters is 48 bits — enough that two different secrets colliding is

@@ -208,6 +208,31 @@ pub fn save(url: &str, token: &str, subject: &str) -> CliResult {
     write_all(&all)
 }
 
+/// Remember a server's pinned certificate fingerprint.
+///
+/// Stored per server rather than per identity: the certificate identifies the
+/// *server*, and two users logging into the same box must not be able to
+/// disagree about which certificate it presents.
+pub fn save_fingerprint(url: &str, fingerprint: &str) -> CliResult {
+    let mut all = read_all();
+    let mut entry = all
+        .get(url)
+        .map(migrate)
+        .unwrap_or_else(|| json!({ "subjects": {} }));
+    entry["fingerprint"] = json!(fingerprint);
+    all[url] = entry;
+    write_all(&all)
+}
+
+/// The pin remembered for this server, if `envv login --tofu` ever ran.
+pub fn fingerprint(url: &str) -> Option<String> {
+    read_all()
+        .get(url)
+        .and_then(|e| e.get("fingerprint"))
+        .and_then(|v| v.as_str())
+        .map(str::to_string)
+}
+
 /// Forget one identity, or every identity for the server when `subject` is None.
 ///
 /// Dropping the last subject drops the server too, so a cleared file is empty

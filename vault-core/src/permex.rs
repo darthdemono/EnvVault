@@ -484,6 +484,9 @@ where
 /// The AND is why "neither" must be `None` rather than a vacuous truth: treating
 /// an absent expression as `true` would make a user with no permissions
 /// whatsoever evaluate to `true AND true` and see everything.
+//
+// (This block documents `combine`, below. It sat above `any_of` for several
+// phases, so `any_of` appeared to be the function that ANDs — it is not.)
 /// ORs two optional expressions, used for "write implies read".
 pub fn any_of(a: Option<Expr>, b: Option<Expr>) -> Option<Expr> {
     match (a, b) {
@@ -499,6 +502,29 @@ pub fn combine(class: Option<Expr>, individual: Option<Expr>) -> Option<Expr> {
         (Some(c), None) => Some(c),
         (None, Some(i)) => Some(i),
         (None, None) => None,
+    }
+}
+
+/// Rewrites a permission expression so **every** top-level alternative must
+/// match, instead of any one of them.
+///
+/// This is what "strict write scoping" means in a codebase where scopes became
+/// expressions. `compile_scopes` joins a subject's scopes with `Or`, so a user
+/// scoped to two projects may write anything in *either*. Under strict mode an
+/// entry must satisfy all of them — in practice, be in both.
+///
+/// Only the top-level `Or` chain is rewritten. Nested groups an author wrote by
+/// hand are left alone: `(a OR b) AND c` was deliberate, and silently turning
+/// its inner alternation into a conjunction would change a rule its author
+/// already expressed precisely. Strictness is about the implicit OR that
+/// scope-joining introduced, not about second-guessing explicit logic.
+///
+/// Strict mode can only ever *narrow* what is permitted. That direction matters:
+/// a bug here should lock someone out, not let them through.
+pub fn require_all(expr: Expr) -> Expr {
+    match expr {
+        Expr::Or(a, b) => Expr::And(Box::new(require_all(*a)), Box::new(require_all(*b))),
+        other => other,
     }
 }
 

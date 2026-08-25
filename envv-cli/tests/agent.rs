@@ -346,3 +346,86 @@ fn describe_documents_every_exit_code_and_the_flags_that_exist() {
     let provider = args.iter().find(|a| a["id"] == json!("provider")).unwrap();
     assert_eq!(provider["kind"], json!("positional"));
 }
+
+// ── Phase 17: the pin must have no way around it ─────────────────────────────
+
+/// There must be exactly one place an HTTP client is built.
+///
+/// This is the test that keeps 1.2 fixed. The CLI shipped for four phases with
+/// three bare `reqwest::blocking::Client::new()` calls, each of which silently
+/// used the platform CA store and could not reach a self-signed server. Adding
+/// a fourth would reopen the hole without failing any behavioural test, because
+/// the wrong client works perfectly against a server with a real certificate.
+#[test]
+fn no_http_client_is_constructed_outside_the_tls_module() {
+    let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let mut offenders = Vec::new();
+    for entry in std::fs::read_dir(&src).expect("read src/") {
+        let path = entry.expect("dir entry").path();
+        if path.extension().and_then(|e| e.to_str()) != Some("rs") {
+            continue;
+        }
+        let name = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or_default();
+        if name == "tls.rs" {
+            continue; // the one legitimate builder lives here
+        }
+        let text = std::fs::read_to_string(&path).expect("read source");
+        for (n, line) in text.lines().enumerate() {
+            // Skip doc comments: tls.rs's rationale quotes the pattern by name,
+            // and so does the module doc that explains why this test exists.
+            let trimmed = line.trim_start();
+            if trimmed.starts_with("//") {
+                continue;
+            }
+            if line.contains("Client::new()") || line.contains("Client::builder()") {
+                offenders.push(format!("{name}:{}", n + 1));
+            }
+        }
+    }
+    assert!(
+        offenders.is_empty(),
+        "HTTP clients built outside tls::build_client(): {offenders:?}\n\
+         Every client must carry the TLS policy, or --fingerprint silently does nothing there."
+    );
+}
+
+/// A fingerprint is normalised the same way wherever it enters the program.
+///
+/// `openssl x509 -fingerprint` prints upper case with colons; the app and this
+/// CLI store lower-case hex. A pin that only matches in one of those forms is a
+/// pin that fails for every user who copied it from the tool that prints it.
+#[test]
+fn pasted_fingerprint_forms_all_normalise_to_one_value() {
+    use vault_core::tls::normalize_fingerprint;
+    let canonical = "a".repeat(64);
+    let upper = canonical.to_ascii_uppercase();
+    let colons: String = upper
+        .as_bytes()
+        .chunks(2)
+        .map(|c| String::from_utf8_lossy(c).to_string())
+        .collect::<Vec<_>>()
+        .join(":");
+    for form in [
+        canonical.clone(),
+        upper.clone(),
+        colons.clone(),
+        format!("sha256:{colons}"),
+        format!("  {upper}  "),
+    ] {
+        assert_eq!(normalize_fingerprint(&form), canonical, "form: {form}");
+    }
+}
+
+/// A truncated pin is refused before any connection is attempted.
+#[test]
+fn a_short_fingerprint_is_rejected_as_input_not_as_a_network_error() {
+    let err = envv_cli::tls::configure(Some("deadbeef"), None).unwrap_err();
+    let msg = err.to_string();
+    assert!(msg.contains("64 hex"), "{msg}");
+    // Must be an input error, never `unavailable` — a caller retrying an
+    // `unavailable` would loop forever on a typo.
+    assert_eq!(err.code, envv_cli::error::Code::Invalid);
+}

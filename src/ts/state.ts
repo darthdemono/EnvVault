@@ -595,6 +595,9 @@ const DEFAULT_SETTINGS: AppSettings = {
   rememberFilters: true,
   lastView: null as PersistedView | null,
   experimentalProjectTypes: false,
+  // Off by default: the safe behaviour is the default, and the convenience is
+  // the thing you opt into.
+  keepLocalUnlocked: false,
 };
 
 export const Settings = {

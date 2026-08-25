@@ -248,6 +248,45 @@ pub fn user_passwd(access: &Access, query: &str, clear: bool) -> CliResult {
     Ok(())
 }
 
+/// Turn strict write scoping on or off for a user or a class.
+///
+/// Under strict mode a write must satisfy **every** scope the subject has, not
+/// any one of them. Local mode only for now: the server has no route for it, and
+/// inventing one silently would leave the flag looking set on a remote vault
+/// while writes carried on as before — the worst outcome available for a
+/// security control.
+pub fn set_strict(access: &Access, kind: &str, query: &str, strict: bool) -> CliResult {
+    let id = match kind {
+        "user" => resolve_user(access, query)?,
+        "class" => resolve_class(access, query)?,
+        other => return Err(CliError::invalid(format!("unknown subject kind '{other}'"))),
+    };
+    match access {
+        Access::Remote(_) => {
+            return Err(CliError::unavailable(
+                "Strict write scoping is a local-vault setting for now — run this against \
+                 the vault file (no --server).",
+            ))
+        }
+        Access::Local(_) => {
+            let conn = access.conn()?;
+            vault_core::users::set_strict_write(&conn, kind, &id, strict)?;
+        }
+    }
+    out::ok(
+        "user.strict-write",
+        json!({ "subject_kind": kind, "id": id, "strict_write": strict }),
+        || {
+            if strict {
+                println!("{query}: writes must now match EVERY scope, not any one of them.");
+            } else {
+                println!("{query}: writes match any scope again (the default).");
+            }
+        },
+    );
+    Ok(())
+}
+
 pub fn user_class(access: &Access, query: &str, class: Option<&str>) -> CliResult {
     let id = resolve_user(access, query)?;
     let class_id = match class {
@@ -697,9 +736,34 @@ pub fn perm_show(access: &Access, subject_kind: &str, query: &str) -> CliResult 
         .and_then(|x| x.as_str())
         .unwrap_or("")
         .to_string();
+    // Stored text is not what the evaluator uses once strict write scoping is on:
+    // the OR chain is narrowed to an AND chain at evaluation time. Showing only
+    // the stored form would leave an operator who has just enabled strict mode
+    // looking at an unchanged rule and concluding the flag did nothing — which
+    // is the worst way for a security control to behave.
+    let (strict, effective_write) = match (access, subject_kind) {
+        (Access::Local(_), "user") => {
+            let conn = access.conn()?;
+            let strict = vault_core::users::strict_write_for(&conn, &id).unwrap_or(false);
+            let eff = vault_core::effective_permission_expr(&conn, &id, "write")
+                .ok()
+                .flatten()
+                .map(|e| e.to_string());
+            (strict, eff)
+        }
+        _ => (false, None),
+    };
+
     out::ok(
         "perm.show",
-        json!({ "subject_kind": subject_kind, "subject": query, "read": read, "write": write }),
+        json!({
+            "subject_kind": subject_kind,
+            "subject": query,
+            "read": read,
+            "write": write,
+            "strict_write": strict,
+            "effective_write": effective_write,
+        }),
         || {
             let show = |v: &str| {
                 if v.is_empty() {
@@ -710,6 +774,15 @@ pub fn perm_show(access: &Access, subject_kind: &str, query: &str) -> CliResult 
             };
             println!("read   {}", show(&read));
             println!("write  {}", show(&write));
+            if strict {
+                println!("strict write scoping is ON — a write must match every scope:");
+                println!(
+                    "       {}",
+                    effective_write
+                        .as_deref()
+                        .unwrap_or("(none — denies everything)")
+                );
+            }
         },
     );
     Ok(())

@@ -16,6 +16,13 @@ pub use generators::{generate_certificate, generate_ssh_keypair};
 
 pub mod permex;
 pub mod pool;
+
+/// Entropy sources for secret generation — OS, or a device mixed on top of it.
+pub mod entropy;
+
+/// Shared TLS client policy. Behind the `tls` feature — see `Cargo.toml`.
+#[cfg(feature = "tls")]
+pub mod tls;
 pub use permex::{
     eval as eval_perm_expr, parse as parse_perm_expr, EntryView, Expr as PermExpr,
     Field as PermField,
@@ -61,6 +68,51 @@ pub fn derive_key(password: &str, salt: &[u8]) -> Result<VaultKey, String> {
     Ok(key)
 }
 
+/// Restrict a file to its owner where the platform can express that.
+///
+/// Windows has no chmod equivalent — files inherit the directory ACL — so this
+/// is a no-op there and `envv doctor` reports the check as *not enforceable*
+/// rather than passing. A check that always passes proves nothing.
+pub fn restrict_to_owner(path: &Path) -> Result<(), String> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o600)).map_err(|e| e.to_string())?;
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+    }
+    Ok(())
+}
+
+/// Refuse to derive a key when a database exists but its salt does not.
+///
+/// [`read_or_create_salt`] generates a salt when the file is absent, which is
+/// right for a first run and catastrophic for an existing vault: the new salt
+/// derives a different key, every unlock reports **"Wrong master password"**,
+/// and the user spends the afternoon convinced they have forgotten it. The
+/// evidence that anything else happened is gone by then, because the missing
+/// file has been silently replaced.
+///
+/// Called before key derivation by every path that opens an existing vault.
+pub fn check_salt_pairing(db_path: &Path, salt_path: &Path) -> Result<(), String> {
+    let db_exists = fs::metadata(db_path).map(|m| m.len() > 0).unwrap_or(false);
+    if db_exists && !salt_path.exists() {
+        return Err(format!(
+            "{} exists but {} is missing.\n\
+             The salt is 16 random bytes written once and stored nowhere else — without \n\
+             it this database cannot be opened by anyone, and nothing can recompute it.\n\
+             Restore both from an archive (`envv backup restore-archive`), or restore the \n\
+             vault contents from a .vaultbak (`envv backup import`), which does not need \n\
+             the original salt.",
+            db_path.display(),
+            salt_path.display()
+        ));
+    }
+    Ok(())
+}
+
 /// Reads salt from `salt_path`; generates and writes a fresh 16-byte salt if absent.
 pub fn read_or_create_salt(salt_path: &Path) -> Result<[u8; SALT_LEN], String> {
     if salt_path.exists() {
@@ -75,6 +127,10 @@ pub fn read_or_create_salt(salt_path: &Path) -> Result<[u8; SALT_LEN], String> {
             fs::create_dir_all(parent).map_err(|e| e.to_string())?;
         }
         fs::write(salt_path, s).map_err(|e| e.to_string())?;
+        // The salt is half of what opens the vault. It was written with whatever
+        // the umask gave it — 0644 on a default Linux install, which `envv
+        // doctor` is what finally noticed.
+        restrict_to_owner(salt_path)?;
         Ok(s)
     }
 }
@@ -101,6 +157,20 @@ pub fn open_db(db_path: &Path, key: &VaultKey) -> Result<Connection, String> {
     // WAL mode: allows concurrent reads + one writer, avoids full locks (item 17)
     conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;")
         .map_err(|e| e.to_string())?;
+    // SQLCipher creates the file with the process umask — 0644 on a default
+    // Linux install. The contents are encrypted, so this is not a disclosure of
+    // secrets; it is a disclosure of the ciphertext to anyone with a login on
+    // the box, which is an offline-attack head start nobody asked to give.
+    // WAL mode means two sidecars carry the same data.
+    restrict_to_owner(db_path)?;
+    for suffix in ["-wal", "-shm"] {
+        let mut side = db_path.as_os_str().to_owned();
+        side.push(suffix);
+        let side = std::path::PathBuf::from(side);
+        if side.exists() {
+            restrict_to_owner(&side)?;
+        }
+    }
     Ok(conn)
 }
 
@@ -1130,5 +1200,87 @@ mod tests {
             vec!["soon"],
             "already-expired, far-future and never-expiring entries are all excluded"
         );
+    }
+}
+
+#[cfg(test)]
+mod salt_pairing_tests {
+    use super::*;
+
+    fn tmp(name: &str) -> std::path::PathBuf {
+        let d = std::env::temp_dir().join(format!("envv-salt-{name}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&d);
+        fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    /// The bug: a database whose salt vanished was silently given a new one, and
+    /// every unlock then reported "Wrong master password" for a correct password.
+    /// By the time anyone looked, the missing file had already been replaced.
+    #[test]
+    fn a_database_without_its_salt_is_refused_not_re_salted() {
+        let d = tmp("orphan");
+        let db = d.join("vault.db");
+        let salt = d.join("vault.salt");
+        fs::write(&db, b"pretend this is a SQLCipher file").unwrap();
+
+        let err = check_salt_pairing(&db, &salt).unwrap_err();
+        assert!(err.contains("is missing"), "{err}");
+        assert!(
+            err.contains("nothing can recompute it"),
+            "the message must not imply recovery is possible: {err}"
+        );
+        assert!(!salt.exists(), "the check must not create a salt");
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    /// A first run has neither file, and must be allowed to create both.
+    #[test]
+    fn a_fresh_directory_is_fine() {
+        let d = tmp("fresh");
+        assert!(check_salt_pairing(&d.join("vault.db"), &d.join("vault.salt")).is_ok());
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    /// An empty database file is a first run that got interrupted, not a vault.
+    #[test]
+    fn an_empty_database_file_is_not_treated_as_a_vault() {
+        let d = tmp("empty");
+        let db = d.join("vault.db");
+        fs::write(&db, b"").unwrap();
+        assert!(check_salt_pairing(&db, &d.join("vault.salt")).is_ok());
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    /// New salts are owner-only. They were 0644 until `envv doctor` said so.
+    #[test]
+    #[cfg(unix)]
+    fn a_generated_salt_is_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+        let d = tmp("mode");
+        let salt = d.join("vault.salt");
+        read_or_create_salt(&salt).unwrap();
+        let mode = fs::metadata(&salt).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "salt was created world-readable");
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    /// And so is a newly created database.
+    #[test]
+    #[cfg(unix)]
+    fn a_created_database_is_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+        let d = tmp("dbmode");
+        let db = d.join("vault.db");
+        let key = derive_key(
+            "correct-horse-battery",
+            &read_or_create_salt(&d.join("vault.salt")).unwrap(),
+        )
+        .unwrap();
+        let conn = open_db(&db, &key).unwrap();
+        drop(conn);
+        let mode = fs::metadata(&db).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "database was created world-readable");
+        let _ = fs::remove_dir_all(&d);
     }
 }

@@ -370,6 +370,29 @@ async function connectRemote(cfg: RemoteVaultConfig) {
     // in-memory entries against the remote's to offer the "push local entries"
     // prompt, and clearing them would silently disable it.
     resetViewState();
+
+    // Zeroize the local vault key. Connecting to a remote left it resident in
+    // Rust's `VaultState` for the whole session with nothing on screen saying
+    // so — a locked-looking app whose key was still in memory. The LAN gate
+    // closed the one path that *exploited* it; this closes the hole.
+    //
+    // It is a real behaviour change: switching back now costs a master
+    // password. `keepLocalUnlocked` exists so the old behaviour is available,
+    // but it is opt-in and off by default — someone who wants the convenience
+    // should choose it knowingly, which is not the same as everybody getting it
+    // silently.
+    if (!Settings.get('keepLocalUnlocked')) {
+      try {
+        const tauri = (window as { __TAURI__?: { core?: { invoke?: (c: string) => Promise<unknown> } } })
+          .__TAURI__;
+        await tauri?.core?.invoke?.('lock_vault');
+      } catch {
+        // A vault that was never unlocked locally (connected straight from the
+        // startup screen) has nothing to lock, and that is not an error worth
+        // showing anyone.
+      }
+    }
+
     // User ids, class ids and audit rows all belong to the vault we just left.
     const { resetUsersPanelState } = await import('./users');
     resetUsersPanelState();

@@ -93,6 +93,10 @@ mod commands {
         let salt_file = salt_path(&app)?;
         ensure_parent(&db)?;
 
+        // A database whose salt has gone missing must say so. Generating a fresh
+        // one here made every unlock report "Wrong master password" for a
+        // password that was perfectly correct.
+        vault_core::check_salt_pairing(&db, &salt_file)?;
         let salt = vault_core::read_or_create_salt(&salt_file)?;
         let key = vault_core::derive_key(&password, &salt)?;
         let conn = vault_core::open_db(&db, &key)?;
@@ -405,13 +409,52 @@ mod commands {
     pub fn generate_certificate(
         common_name: String,
         validity_days: u32,
+        entropy_source: Option<String>,
     ) -> Result<serde_json::Value, String> {
-        vault_core::generate_certificate(&common_name, validity_days)
+        let source = vault_core::entropy::Source::parse(entropy_source.as_deref().unwrap_or("os"))?;
+        vault_core::generate_certificate(&common_name, validity_days, &source)
     }
 
     #[tauri::command]
-    pub fn generate_ssh_keypair(comment: String) -> Result<serde_json::Value, String> {
-        vault_core::generate_ssh_keypair(&comment)
+    pub fn generate_ssh_keypair(
+        comment: String,
+        entropy_source: Option<String>,
+    ) -> Result<serde_json::Value, String> {
+        let source = vault_core::entropy::Source::parse(entropy_source.as_deref().unwrap_or("os"))?;
+        vault_core::generate_ssh_keypair(&comment, &source)
+    }
+
+    /// Entropy sources this build offers, and whether each one is usable here.
+    ///
+    /// The UI dropdown is populated from this rather than from a hard-coded
+    /// list, so it can never offer a source the backend would refuse.
+    #[tauri::command]
+    pub fn entropy_sources() -> Vec<serde_json::Value> {
+        use vault_core::entropy::{Availability, Source};
+        let candidates = [
+            Source::Os,
+            Source::File {
+                path: "/dev/random".into(),
+            },
+            Source::File {
+                path: "/dev/hwrng".into(),
+            },
+        ];
+        candidates
+            .iter()
+            .map(|s| {
+                let (ready, why) = match s.availability() {
+                    Availability::Ready => (true, String::new()),
+                    Availability::Missing(w) => (false, w),
+                };
+                serde_json::json!({
+                    "id": s.label(),
+                    "ready": ready,
+                    "detail": why,
+                    "hardware": s.is_external(),
+                })
+            })
+            .collect()
     }
 
     // ── User management (owner-only Tauri commands) ────────────────────────
@@ -858,137 +901,10 @@ mod commands {
         pub body: String,
     }
 
-    /// Rustls verifier that pins the server's leaf certificate to a SHA-256
-    /// fingerprint (hex of the DER encoding).  This enforces the pin **during the
-    /// TLS handshake** — before any request body (e.g. the master password) is
-    /// sent — so a MITM presenting a different cert is rejected up front.
-    ///
-    /// Signature verification is delegated to the active crypto provider; only
-    /// the certificate identity check is replaced.
-    #[derive(Debug)]
-    struct FingerprintVerifier {
-        expected: String,
-        provider: std::sync::Arc<rustls::crypto::CryptoProvider>,
-    }
-
-    impl rustls::client::danger::ServerCertVerifier for FingerprintVerifier {
-        fn verify_server_cert(
-            &self,
-            end_entity: &rustls_pki_types::CertificateDer<'_>,
-            _intermediates: &[rustls_pki_types::CertificateDer<'_>],
-            _server_name: &rustls_pki_types::ServerName<'_>,
-            _ocsp_response: &[u8],
-            _now: rustls_pki_types::UnixTime,
-        ) -> Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
-            use sha2::{Digest, Sha256};
-            let actual = hex::encode(Sha256::digest(end_entity.as_ref()));
-            if actual.eq_ignore_ascii_case(&self.expected) {
-                Ok(rustls::client::danger::ServerCertVerified::assertion())
-            } else {
-                Err(rustls::Error::General(
-                    "TLS certificate fingerprint does not match the pinned value".into(),
-                ))
-            }
-        }
-
-        fn verify_tls12_signature(
-            &self,
-            message: &[u8],
-            cert: &rustls_pki_types::CertificateDer<'_>,
-            dss: &rustls::DigitallySignedStruct,
-        ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
-            rustls::crypto::verify_tls12_signature(
-                message,
-                cert,
-                dss,
-                &self.provider.signature_verification_algorithms,
-            )
-        }
-
-        fn verify_tls13_signature(
-            &self,
-            message: &[u8],
-            cert: &rustls_pki_types::CertificateDer<'_>,
-            dss: &rustls::DigitallySignedStruct,
-        ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
-            rustls::crypto::verify_tls13_signature(
-                message,
-                cert,
-                dss,
-                &self.provider.signature_verification_algorithms,
-            )
-        }
-
-        fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
-            self.provider
-                .signature_verification_algorithms
-                .supported_schemes()
-        }
-    }
-
-    /// Verifier used only by [`probe_cert_fingerprint`]: accepts whatever the
-    /// server presents and records its SHA-256 so the fingerprint can be shown
-    /// to the user for confirmation.
-    ///
-    /// This is the trust-on-first-use step, and it is deliberately confined to
-    /// one unauthenticated request. Without it TOFU could not bootstrap at all:
-    /// `remote_request` pins when given a fingerprint and applies normal CA
-    /// validation when not, so reaching a self-signed server required a
-    /// fingerprint that could only be obtained by reaching it.
-    #[derive(Debug)]
-    struct CapturingVerifier {
-        seen: std::sync::Arc<std::sync::Mutex<Option<String>>>,
-        provider: std::sync::Arc<rustls::crypto::CryptoProvider>,
-    }
-
-    impl rustls::client::danger::ServerCertVerifier for CapturingVerifier {
-        fn verify_server_cert(
-            &self,
-            end_entity: &rustls_pki_types::CertificateDer<'_>,
-            _intermediates: &[rustls_pki_types::CertificateDer<'_>],
-            _server_name: &rustls_pki_types::ServerName<'_>,
-            _ocsp_response: &[u8],
-            _now: rustls_pki_types::UnixTime,
-        ) -> Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
-            use sha2::{Digest, Sha256};
-            *self.seen.lock().unwrap() = Some(hex::encode(Sha256::digest(end_entity.as_ref())));
-            Ok(rustls::client::danger::ServerCertVerified::assertion())
-        }
-
-        fn verify_tls12_signature(
-            &self,
-            message: &[u8],
-            cert: &rustls_pki_types::CertificateDer<'_>,
-            dss: &rustls::DigitallySignedStruct,
-        ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
-            rustls::crypto::verify_tls12_signature(
-                message,
-                cert,
-                dss,
-                &self.provider.signature_verification_algorithms,
-            )
-        }
-
-        fn verify_tls13_signature(
-            &self,
-            message: &[u8],
-            cert: &rustls_pki_types::CertificateDer<'_>,
-            dss: &rustls::DigitallySignedStruct,
-        ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
-            rustls::crypto::verify_tls13_signature(
-                message,
-                cert,
-                dss,
-                &self.provider.signature_verification_algorithms,
-            )
-        }
-
-        fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
-            self.provider
-                .signature_verification_algorithms
-                .supported_schemes()
-        }
-    }
+    // The pinning and capturing verifiers used to be defined here, ~150 lines of
+    // them. They now live in `vault_core::tls`, because the CLI needs the same
+    // trust decision and two implementations of "is this server who it claims to
+    // be" is how one of them ends up accepting anything. See vault-core/src/tls.rs.
 
     /// Learn a server's leaf-certificate SHA-256 fingerprint on first contact.
     ///
@@ -1000,17 +916,7 @@ mod commands {
     /// Every subsequent request goes through `remote_request` and is pinned.
     #[tauri::command]
     pub async fn probe_cert_fingerprint(url: String) -> Result<String, String> {
-        let seen = std::sync::Arc::new(std::sync::Mutex::new(None::<String>));
-        let provider = std::sync::Arc::new(rustls::crypto::aws_lc_rs::default_provider());
-        let tls_config = rustls::ClientConfig::builder_with_provider(provider.clone())
-            .with_safe_default_protocol_versions()
-            .map_err(|e| e.to_string())?
-            .dangerous()
-            .with_custom_certificate_verifier(std::sync::Arc::new(CapturingVerifier {
-                seen: seen.clone(),
-                provider,
-            }))
-            .with_no_client_auth();
+        let (tls_config, seen) = vault_core::tls::capturing_config()?;
 
         let client = reqwest::ClientBuilder::new()
             .use_preconfigured_tls(tls_config)
@@ -1042,17 +948,8 @@ mod commands {
     ) -> Result<RemoteResponse, String> {
         let mut builder = reqwest::ClientBuilder::new();
         if let Some(fp) = &fingerprint {
-            let provider = std::sync::Arc::new(rustls::crypto::aws_lc_rs::default_provider());
-            let tls_config = rustls::ClientConfig::builder_with_provider(provider.clone())
-                .with_safe_default_protocol_versions()
-                .map_err(|e| e.to_string())?
-                .dangerous()
-                .with_custom_certificate_verifier(std::sync::Arc::new(FingerprintVerifier {
-                    expected: fp.trim().to_string(),
-                    provider,
-                }))
-                .with_no_client_auth();
-            builder = builder.use_preconfigured_tls(tls_config);
+            let policy = vault_core::tls::TlsPolicy::Pin(fp.clone());
+            builder = builder.use_preconfigured_tls(vault_core::tls::client_config(&policy)?);
         }
         let client = builder.build().map_err(|e| e.to_string())?;
 
@@ -1171,6 +1068,7 @@ pub fn run() {
             commands::get_audit_log,
             commands::generate_certificate,
             commands::generate_ssh_keypair,
+            commands::entropy_sources,
             commands::list_users,
             commands::create_user,
             commands::set_user_password,

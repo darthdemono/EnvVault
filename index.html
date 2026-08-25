@@ -1083,6 +1083,18 @@
               </div>
               <label class="toggle"><input type="checkbox" id="s-experimental-ptypes"><span class="toggle-track"></span></label>
             </div>
+            <div class="settings-row">
+              <div class="settings-label">
+                Keep the local vault unlocked when switching to a remote
+                <div class="settings-hint">
+                  Off by default. When off, connecting to a remote vault zeroizes the local
+                  vault's key, so switching back asks for the master password again. When on,
+                  the key stays in memory for the rest of the session with nothing on screen
+                  to say so — which is what this setting used to do silently.
+                </div>
+              </div>
+              <label class="toggle"><input type="checkbox" id="s-keep-local-unlocked"><span class="toggle-track"></span></label>
+            </div>
           </div>
           <div class="settings-section">
             <div class="settings-section-title">Custom CSS</div>

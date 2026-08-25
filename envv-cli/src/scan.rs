@@ -388,7 +388,13 @@ fn hex_encode(bytes: &[u8]) -> String {
 /// row's contents, and `prev_hash` must equal the previous row's `entry_hash`.
 /// The first chained row must anchor to `genesis` — without that check, deleting
 /// the *start* of the log verifies clean, which is the most useful part to erase.
-pub fn cmd_verify(access: &Access) -> CliResult {
+/// Verify the audit hash chain, returning the number of chained rows checked.
+///
+/// Split out of `cmd_verify` in Phase 17 so `envv doctor` can run the same
+/// check. Two implementations of a tamper check is one too many — the second
+/// one would eventually disagree with the first, and there is no way to tell
+/// which was right.
+pub fn verify_chain(access: &Access) -> CliResult<usize> {
     let rows: Vec<Value> = match access {
         Access::Local(_) => {
             let conn = access.conn()?;
@@ -419,12 +425,7 @@ pub fn cmd_verify(access: &Access) -> CliResult {
         .collect();
 
     if chained.is_empty() {
-        crate::out::ok(
-            "audit.verify",
-            serde_json::json!({ "ok": true, "checked": 0, "note": "no hash-chained rows yet" }),
-            || println!("No hash-chained rows yet — nothing to verify."),
-        );
-        return Ok(());
+        return Ok(0);
     }
     let first_prev = chained[0]
         .get("prev_hash")
@@ -485,10 +486,24 @@ pub fn cmd_verify(access: &Access) -> CliResult {
         }
         prev = Some(stored.to_string());
     }
+    Ok(chained.len())
+}
+
+/// `envv audit --verify` / `envv scan --verify`.
+pub fn cmd_verify(access: &Access) -> CliResult {
+    let checked = verify_chain(access)?;
+    if checked == 0 {
+        crate::out::ok(
+            "audit.verify",
+            serde_json::json!({ "ok": true, "checked": 0, "note": "no hash-chained rows yet" }),
+            || println!("No hash-chained rows yet — nothing to verify."),
+        );
+        return Ok(());
+    }
     crate::out::ok(
         "audit.verify",
-        serde_json::json!({ "ok": true, "checked": chained.len() }),
-        || println!("All {} chained rows verified.", chained.len()),
+        serde_json::json!({ "ok": true, "checked": checked }),
+        || println!("All {checked} chained rows verified."),
     );
     Ok(())
 }
@@ -510,6 +525,19 @@ pub fn cmd_status(access: &Access) -> CliResult {
             });
             ("remote", c.base.clone(), fp)
         }
+    };
+
+    // Local vaults report their salt, because losing it is the one failure this
+    // program cannot undo: it is 16 bytes of CSPRNG output, written once,
+    // derived from nothing and copied nowhere. `status` is where someone looks
+    // when they are about to move a vault between machines, which is exactly
+    // when they are about to copy vault.db and leave vault.salt behind.
+    let salt_info = match access {
+        Access::Local(_) => {
+            let p = crate::access::default_salt_path();
+            Some((p.display().to_string(), p.exists()))
+        }
+        Access::Remote(_) => None,
     };
 
     // An empty vault is a state to report, not an error: `status` is the command
@@ -548,6 +576,8 @@ pub fn cmd_status(access: &Access) -> CliResult {
             "chunks": chunks,
             "by_type": by_type,
             "redacting": !crate::out::revealing(),
+            "salt_path": salt_info.as_ref().map(|(p, _)| p.clone()),
+            "salt_present": salt_info.as_ref().map(|(_, e)| *e),
         }),
         || {
             println!("Mode        {mode}");
@@ -562,6 +592,18 @@ pub fn cmd_status(access: &Access) -> CliResult {
             println!("Projects    {}", projects.len());
             println!("Categories  {}", data::categories(&vault).len());
             println!("Chunks      {chunks}");
+            if let Some((path, present)) = &salt_info {
+                println!("Salt        {path}");
+                if *present {
+                    println!(
+                        "            Back it up with the database — `envv backup archive` does both.\n\
+                         \x20           A vault.db without its vault.salt cannot be opened by anyone,\n\
+                         \x20           including you. Nothing can regenerate it."
+                    );
+                } else {
+                    println!("            MISSING — this vault cannot be opened. See `envv backup restore-archive`.");
+                }
+            }
             if !by_type.is_empty() {
                 println!("\nBy type:");
                 for (t, n) in &by_type {

@@ -17,8 +17,8 @@
 
 use envv_cli::error::{CliError, CliResult};
 use envv_cli::{
-    access, agentio, backup, chunks, data, enrich, entries, envfile, exec, fmt, gen, out, pool,
-    projects, render, scan, session, users_cmd,
+    access, agentio, backup, chunks, data, doctor, enrich, entries, envfile, exec, fmt, gen, out,
+    pool, projects, render, scan, session, users_cmd,
 };
 
 use access::{open_access, Access, AuthOpts};
@@ -71,6 +71,35 @@ struct Cli {
         hide_env_values = true
     )]
     api_token: Option<String>,
+
+    /// Pin the server's TLS certificate to this SHA-256 (hex, or the colon form
+    /// `openssl x509 -fingerprint` prints).
+    ///
+    /// Without a pin or a --ca-cert, a self-signed server is refused: there is
+    /// no --insecure, because the point of this flag is that the master password
+    /// never reaches a server whose identity was not established first.
+    #[arg(long, value_name = "SHA256", env = "ENVV_FINGERPRINT", global = true)]
+    fingerprint: Option<String>,
+
+    /// Trust this CA certificate (PEM) — and only this one — for --server.
+    #[arg(long, value_name = "FILE", env = "ENVV_CA_CERT", global = true)]
+    ca_cert: Option<PathBuf>,
+
+    /// Where random bytes come from: `os` (default) or `file:PATH`.
+    ///
+    /// An external source is **mixed** with OS entropy, never used raw — a
+    /// device that is wedged or hostile can then only fail to improve the
+    /// result, not degrade it. A selected source that is unavailable is an
+    /// error, not a silent fallback.
+    #[arg(long, value_name = "SPEC", env = "ENVV_ENTROPY_SOURCE", global = true)]
+    entropy_source: Option<String>,
+
+    /// On `envv login`: learn and pin the server's certificate on first contact.
+    ///
+    /// The probe is unauthenticated and sends no credentials. Refused if this
+    /// server already has a pin.
+    #[arg(long, global = true)]
+    tofu: bool,
 
     /// Skip confirmation prompts on destructive commands.
     #[arg(long, short = 'y', global = true)]
@@ -299,6 +328,13 @@ enum Commands {
     },
     /// Where this CLI is pointed and what the vault holds.
     Status,
+    /// Check the vault: database integrity, salt, file modes, audit chain, pools.
+    ///
+    /// Exits non-zero when something is actually wrong, so a script can branch
+    /// on it. There is deliberately no `--repair` for a missing salt: nothing
+    /// can reconstruct 16 bytes of CSPRNG output, and a flag that appeared to
+    /// offer it would be discovered as a lie during a restore.
+    Doctor,
     /// Vault users.
     User {
         #[command(subcommand)]
@@ -661,6 +697,11 @@ enum CategoryCmd {
 
 #[derive(Subcommand)]
 enum GenCmd {
+    /// List entropy sources and whether each one works on this machine.
+    ///
+    /// Exists because "is my hardware source usable?" must be answerable
+    /// *without* generating a key with it.
+    Sources,
     /// Random bytes as hex / base64 / base64url.
     Secret {
         #[arg(long, default_value_t = 32)]
@@ -723,6 +764,27 @@ enum BackupCmd {
         #[arg(long, hide_env_values = true)]
         backup_password: Option<String>,
     },
+    /// Archive the vault database **and its salt** into one encrypted file.
+    ///
+    /// Different job from `export`: a .vaultbak holds vault contents and needs
+    /// no salt to restore. An archive is the answer to losing `vault.salt`,
+    /// which is unrecoverable — nothing can reconstruct 16 bytes of CSPRNG
+    /// output, so the only defence is not to store it apart from the database.
+    Archive {
+        file: PathBuf,
+        /// Archive password (min 12 chars). Prompted when omitted.
+        #[arg(long, hide_env_values = true)]
+        backup_password: Option<String>,
+    },
+    /// Restore a vault + salt archive written by `backup archive`.
+    RestoreArchive {
+        file: PathBuf,
+        #[arg(long, hide_env_values = true)]
+        backup_password: Option<String>,
+        /// Replace an existing vault on this machine.
+        #[arg(long)]
+        force: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -760,6 +822,18 @@ enum UserCmd {
         class: Option<String>,
         #[arg(long)]
         none: bool,
+    },
+    /// Require a write to match EVERY scope, not any one of them.
+    ///
+    /// The default is any-match, which makes read and write nearly the same
+    /// privilege for a scoped user. Strict mode is the narrower rule: an entry
+    /// must satisfy all of the subject's scopes before it can be changed.
+    StrictWrite {
+        /// User name or id.
+        user: String,
+        /// Turn it off again.
+        #[arg(long)]
+        off: bool,
     },
     /// API tokens for a user.
     Token {
@@ -862,6 +936,28 @@ fn main() {
         dry_run: cli.dry_run,
     });
 
+    // Establish who we trust before any client exists. An explicit flag always
+    // wins; otherwise a pin remembered by `envv login --tofu` for this server
+    // applies, so pinning survives across invocations without repeating the
+    // 64-character flag every time.
+    if let Err(e) = envv_cli::tls::configure(cli.fingerprint.as_deref(), cli.ca_cert.as_deref()) {
+        finish(Err(e));
+        return;
+    }
+    // Validated here so a typo or an unplugged device fails before the user has
+    // been prompted for a password.
+    if let Err(e) = gen::configure(cli.entropy_source.as_deref()) {
+        finish(Err(e));
+        return;
+    }
+    if cli.fingerprint.is_none() && cli.ca_cert.is_none() {
+        if let Some(server) = cli.server.as_deref() {
+            if let Some(fp) = session::fingerprint(server) {
+                envv_cli::tls::adopt_remembered(&fp);
+            }
+        }
+    }
+
     // `completions` and `describe` write a document and must never ask for a
     // password — they are the two commands a caller runs *before* it has one.
     match &cli.command {
@@ -877,6 +973,27 @@ fn main() {
         _ => {}
     }
     // Neither do the generators, unless they are asked to save into the vault.
+    if let Commands::Gen {
+        cmd: GenCmd::Sources,
+    } = &cli.command
+    {
+        let sources = gen::list_sources();
+        out::ok(
+            "gen.sources",
+            serde_json::json!({ "sources": sources }),
+            || {
+                for s in &sources {
+                    let id = s["id"].as_str().unwrap_or("?");
+                    let ready = s["ready"].as_bool().unwrap_or(false);
+                    let detail = s["detail"].as_str().unwrap_or("");
+                    let mark = if ready { "available" } else { "unavailable" };
+                    println!("{id:<24} {mark} {detail}");
+                }
+                println!("\nExternal sources are mixed with OS entropy, never used raw.");
+            },
+        );
+        return;
+    }
     if let Commands::Gen { cmd } = &cli.command {
         if let Some(result) = run_gen_offline(cmd) {
             finish(result);
@@ -942,6 +1059,26 @@ fn run(cli: &Cli) -> CliResult {
         Commands::Whoami => return cmd_whoami(cli),
         Commands::Sessions => return cmd_sessions(),
         Commands::Logout { all } => return cmd_logout(cli, *all),
+        // Restoring an archive works on files, not on an open vault — and the
+        // state it exists for is precisely "there is no vault here". Requiring
+        // one first made the command refuse with "No vault found", which is the
+        // problem the user is running it to solve.
+        // `doctor` on a vault that will not open is the case it exists for, so it
+        // must survive `open_access` failing rather than inheriting its error.
+        Commands::Doctor => {
+            return match open_access(&auth) {
+                Ok(a) => doctor::run(Some(&a), None),
+                Err(e) => doctor::run(None, Some(e.to_string())),
+            }
+        }
+        Commands::Backup {
+            cmd:
+                BackupCmd::RestoreArchive {
+                    file,
+                    backup_password,
+                    force,
+                },
+        } => return backup::restore_archive(file, backup_password.as_deref(), *force, cli.yes),
         _ => {}
     }
 
@@ -1003,6 +1140,30 @@ fn cmd_login(cli: &Cli, password: Option<&str>) -> CliResult {
              Local vaults have no session to cache; use --password-command instead.",
         ));
     };
+    // Trust on first use, and only on first use. The probe sends no credentials;
+    // the fingerprint it learns is pinned for every request that follows,
+    // including the authentication two lines below. Refusing to re-TOFU over an
+    // existing pin is the whole value of the mechanism — a certificate that
+    // changed underneath you is exactly what pinning exists to notice.
+    let mut learned: Option<String> = None;
+    if cli.tofu {
+        if cli.fingerprint.is_some() || cli.ca_cert.is_some() {
+            return Err(CliError::invalid(
+                "--tofu learns a fingerprint; --fingerprint and --ca-cert supply one. Pick one.",
+            ));
+        }
+        if let Some(existing) = session::fingerprint(server) {
+            return Err(CliError::denied(format!(
+                "{server} already has a pinned certificate ({}…). If it genuinely \n\
+                 rotated, run `envv logout --server {server}` first — but if it did not, \n\
+                 something is presenting a different certificate.",
+                &existing[..16.min(existing.len())]
+            )));
+        }
+        let fp = envv_cli::tls::probe(server)?;
+        envv_cli::tls::adopt_remembered(&fp);
+        learned = Some(fp);
+    }
     // Authenticating here is exactly what `open_access` would do; the difference
     // is that the resulting session token is kept, so nothing after this needs a
     // credential.
@@ -1023,6 +1184,11 @@ fn cmd_login(cli: &Cli, password: Option<&str>) -> CliResult {
     // occupy the owner's slot.
     let subject = cli.as_user.as_deref().unwrap_or(session::OWNER_SUBJECT);
     session::save(server, &remote.token, subject)?;
+    // Written only after authentication succeeded: a fingerprint stored for a
+    // server we never actually reached would pin us to whatever answered.
+    if let Some(fp) = &learned {
+        session::save_fingerprint(server, fp)?;
+    }
     let label = if subject == session::OWNER_SUBJECT {
         "the vault owner"
     } else {
@@ -1034,6 +1200,7 @@ fn cmd_login(cli: &Cli, password: Option<&str>) -> CliResult {
             "server": server,
             "subject": subject,
             "session_file": session::session_path().display().to_string(),
+            "pinned_fingerprint": learned,
         }),
         || {
             println!("Logged in to {server} as {label}");
@@ -1083,7 +1250,7 @@ fn cmd_whoami(cli: &Cli) -> CliResult {
     // Prove the session rather than describe it. A cached token that the server
     // has since rejected looks identical on disk to a working one, and reporting
     // a dead session as a live identity is worse than reporting nothing.
-    let client = access::RemoteClient::with_session(server, &token);
+    let client = access::RemoteClient::with_session(server, &token)?;
     let live = client.ping().is_ok();
 
     let created = entry
@@ -1221,7 +1388,10 @@ fn cmd_sessions() -> CliResult {
 /// which does need one.
 fn run_gen_offline(cmd: &GenCmd) -> Option<CliResult> {
     match cmd {
-        GenCmd::Secret { bytes, format } => Some(gen::secret(*bytes, format).map(|v| {
+        // Handled before this point, in `main`, because it needs no vault and no
+        // generation at all.
+        GenCmd::Sources => Some(Ok(())),
+        GenCmd::Secret { bytes, format } => Some(gen::secret(*bytes, format, &gen::current()).map(|v| {
             emit_generated("gen.secret", &v);
         })),
         GenCmd::Password { length, no_upper, no_lower, no_digits, symbols, no_ambiguous } => {
@@ -1233,12 +1403,13 @@ fn run_gen_offline(cmd: &GenCmd) -> Option<CliResult> {
                 symbols: *symbols,
                 no_ambiguous: *no_ambiguous,
             };
-            Some(gen::password(&opts).map(|(pw, entropy)| {
+            Some(gen::password(&opts, &gen::current()).map(|(pw, entropy)| {
                 out::ok(
                     "gen.password",
                     serde_json::json!({
                         "value": if out::revealing() { serde_json::json!(pw) } else { out::masked_json(&pw) },
                         "entropy_bits": entropy.round(),
+                        "entropy_source": gen::current().label(),
                     }),
                     || {
                         if out::revealing() {
@@ -1253,7 +1424,7 @@ fn run_gen_offline(cmd: &GenCmd) -> Option<CliResult> {
             }))
         }
         GenCmd::Cert { save_as: Some(_), .. } | GenCmd::Ssh { save_as: Some(_), .. } => None,
-        GenCmd::Cert { common_name, days, .. } => Some(gen::certificate(common_name, *days).map(|v| {
+        GenCmd::Cert { common_name, days, .. } => Some(gen::certificate(common_name, *days, &gen::current()).map(|v| {
             let cert = v.get("cert_pem").and_then(|c| c.as_str()).unwrap_or("").to_string();
             let key = v.get("key_pem").and_then(|c| c.as_str()).unwrap_or("").to_string();
             out::ok(
@@ -1261,6 +1432,7 @@ fn run_gen_offline(cmd: &GenCmd) -> Option<CliResult> {
                 serde_json::json!({
                     "cert_pem": if out::revealing() { serde_json::json!(cert) } else { out::masked_json(&cert) },
                     "key_pem":  if out::revealing() { serde_json::json!(key)  } else { out::masked_json(&key)  },
+                    "entropy_source": gen::current().label(),
                 }),
                 || {
                     if out::revealing() {
@@ -1273,7 +1445,7 @@ fn run_gen_offline(cmd: &GenCmd) -> Option<CliResult> {
                 },
             );
         })),
-        GenCmd::Ssh { comment, .. } => Some(gen::ssh_keypair(comment).map(|v| {
+        GenCmd::Ssh { comment, .. } => Some(gen::ssh_keypair(comment, &gen::current()).map(|v| {
             let pubkey = v.get("public_key").and_then(|c| c.as_str()).unwrap_or("").to_string();
             let private = v.get("private_key_openssh").and_then(|c| c.as_str()).unwrap_or("").to_string();
             out::ok(
@@ -1281,6 +1453,7 @@ fn run_gen_offline(cmd: &GenCmd) -> Option<CliResult> {
                 serde_json::json!({
                     // A public key is public: printing it is the point.
                     "public_key": pubkey,
+                    "entropy_source": gen::current().label(),
                     "private_key": if out::revealing() { serde_json::json!(private) } else { out::masked_json(&private) },
                 }),
                 || {
@@ -1297,11 +1470,17 @@ fn run_gen_offline(cmd: &GenCmd) -> Option<CliResult> {
     }
 }
 
+/// Emit a generated secret.
+///
+/// `entropy_source` is part of the envelope on purpose: an agent that asked for
+/// hardware entropy must be able to confirm it got it, and "the flag was
+/// accepted" is not the same claim as "the bytes came from there".
 fn emit_generated(command: &str, value: &str) {
     out::ok(
         command,
         serde_json::json!({
             "value": if out::revealing() { serde_json::json!(value) } else { out::masked_json(value) },
+            "entropy_source": gen::current().label(),
         }),
         || {
             if out::revealing() {
@@ -1619,7 +1798,7 @@ fn dispatch(cli: &Cli, a: &Access) -> CliResult {
                 days,
                 save_as,
             } => {
-                let v = gen::certificate(common_name, *days)?;
+                let v = gen::certificate(common_name, *days, &gen::current())?;
                 let provider = save_as.as_deref().unwrap_or(common_name);
                 let fields = EntryFields {
                     secret_type: Some("certificate".into()),
@@ -1639,7 +1818,7 @@ fn dispatch(cli: &Cli, a: &Access) -> CliResult {
                 entries::cmd_add(a, provider, &fields, false)
             }
             GenCmd::Ssh { comment, save_as } => {
-                let v = gen::ssh_keypair(comment)?;
+                let v = gen::ssh_keypair(comment, &gen::current())?;
                 let provider = save_as.as_deref().unwrap_or("ssh-key");
                 let fields = EntryFields {
                     secret_type: Some("ssh_key".into()),
@@ -1670,6 +1849,15 @@ fn dispatch(cli: &Cli, a: &Access) -> CliResult {
                 file,
                 backup_password,
             } => backup::import(a, file, backup_password.as_deref(), yes),
+            BackupCmd::Archive {
+                file,
+                backup_password,
+            } => backup::archive(file, backup_password.as_deref()),
+            BackupCmd::RestoreArchive {
+                file,
+                backup_password,
+                force,
+            } => backup::restore_archive(file, backup_password.as_deref(), *force, yes),
         },
 
         Commands::Enrich {
@@ -1690,6 +1878,7 @@ fn dispatch(cli: &Cli, a: &Access) -> CliResult {
         ),
         Commands::Scan { severity, json } => scan::cmd_scan(a, severity, *json),
         Commands::Status => scan::cmd_status(a),
+        Commands::Doctor => doctor::run(Some(a), None),
 
         Commands::User { cmd } => match cmd {
             UserCmd::Ls { json } => users_cmd::user_ls(a, *json),
@@ -1710,6 +1899,7 @@ fn dispatch(cli: &Cli, a: &Access) -> CliResult {
                 }
                 users_cmd::user_class(a, user, target)
             }
+            UserCmd::StrictWrite { user, off } => users_cmd::set_strict(a, "user", user, !*off),
             UserCmd::Token { cmd } => match cmd {
                 TokenCmd::Ls { user } => users_cmd::token_ls(a, user),
                 TokenCmd::New {

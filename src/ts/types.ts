@@ -572,4 +572,12 @@ export interface AppSettings {
    * would leave that data in the vault with no way to reach it.
    */
   experimentalProjectTypes: boolean;
+  /**
+   * Keep the local vault's key in memory after switching to a remote.
+   *
+   * Off by default. When off, connecting to a remote zeroizes the local key, so
+   * switching back asks for the master password again — the price of the key
+   * not being resident, unseen, for the rest of the session.
+   */
+  keepLocalUnlocked: boolean;
 }

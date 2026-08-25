@@ -639,12 +639,14 @@ pub fn probe_entry(entry: &Value, timeout_secs: u64, force: bool) -> Option<Live
         .iter()
         .find(|p| p.prefixes.iter().any(|pre| secret.starts_with(pre)))?;
 
-    let client = reqwest::blocking::Client::builder()
-        .timeout(std::time::Duration::from_secs(timeout_secs))
-        // Some of these APIs reject a request with no user agent outright.
-        .user_agent(concat!("envv/", env!("CARGO_PKG_VERSION")))
-        .build()
-        .ok()?;
+    // Deliberately a *public* client: these are the issuers' own endpoints, so
+    // they get ordinary CA validation and never the pin configured for
+    // --server. Some of these APIs reject a request with no user agent outright.
+    let client = crate::tls::build_public_client(
+        std::time::Duration::from_secs(timeout_secs),
+        concat!("envv/", env!("CARGO_PKG_VERSION")),
+    )
+    .ok()?;
 
     let mut req = client.get(probe.url);
     req = match probe.auth {

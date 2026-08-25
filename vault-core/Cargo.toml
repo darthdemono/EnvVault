@@ -13,6 +13,11 @@ default = []
 # Debian box shipping a different soname, and "works on my distro" is the whole
 # problem a portable bundle exists to solve.
 bundled = ["rusqlite/bundled-sqlcipher-vendored-openssl"]
+# The shared TLS client policy (`tls.rs`). Off by default so `envv-server`, which
+# only ever serves TLS, does not link a TLS *client* stack it never calls. The
+# desktop app and the CLI both turn it on — and they must both build from it, or
+# the split that this module exists to close reopens.
+tls = ["dep:rustls", "dep:rustls-pki-types", "dep:rustls-pemfile", "dep:webpki-roots"]
 
 [dependencies]
 # Unix links the system SQLCipher by default: it builds in seconds instead of
@@ -26,12 +31,24 @@ rcgen      = "=0.13.2"
 ssh-key    = { version = "=0.6.7", features = ["ed25519", "crypto"] }
 time       = "=0.3.37"
 sha2       = "0.10"
+# HKDF is implemented over this rather than pulled in as `hkdf`: the extract and
+# expand steps are ten lines, and `entropy.rs` needs them to be readable — the
+# mixing rule is the security property of that module.
+hmac       = "0.12"
 serde      = { version = "1", features = ["derive"] }
 serde_json = "1"
 # Locating the per-user state directory for pools.json ($XDG_STATE_HOME on Unix,
 # %LOCALAPPDATA% on Windows). The CLI already depended on this; the path lives
 # here now because the desktop app reads the same file.
 dirs       = "5"
+
+# TLS client policy, feature-gated behind `tls`. Versions match src-tauri's, which
+# is not a coincidence: two rustls majors in one dependency graph means two
+# CryptoProviders, and the custom verifier only satisfies the trait of one.
+rustls           = { version = "0.23", default-features = false, features = ["aws_lc_rs", "std", "tls12"], optional = true }
+rustls-pki-types = { version = "1", optional = true }
+rustls-pemfile   = { version = "2", optional = true }
+webpki-roots     = { version = "0.26", optional = true }
 
 # Windows has no system SQLCipher to link against, so it always vendors —
 # otherwise the first thing a Windows contributor meets is a linker error about

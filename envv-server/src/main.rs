@@ -39,6 +39,14 @@ struct Args {
 }
 
 fn main() {
+    // Pick the crypto provider explicitly. The workspace enables both `ring`
+    // (axum-server) and `aws_lc_rs` (vault-core's `tls` feature) on one rustls;
+    // cargo unifies features across a build, so rustls sees two candidates,
+    // refuses to guess, and panics inside the first TLS handshake — after the
+    // startup banner has already printed a URL and a fingerprint, which is a
+    // maximally confusing place to fail.
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+
     // Tokio defaults to one worker thread per CPU. On a 16-core host that is 16
     // threads for a server whose entire job is a handful of small JSON requests,
     // and each one brings its own stack and its own glibc malloc arena — which

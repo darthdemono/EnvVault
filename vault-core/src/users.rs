@@ -159,6 +159,19 @@ pub fn init_users_schema(conn: &Connection) -> Result<(), String> {
     // Idempotent migrations
     conn.execute("ALTER TABLE users ADD COLUMN class_id TEXT", [])
         .ok();
+    // Strict write scoping. Defaults to 0 — existing users keep the behaviour
+    // they had, because a migration that silently tightened permissions would
+    // break running deployments in a way nobody could attribute to an upgrade.
+    conn.execute(
+        "ALTER TABLE users ADD COLUMN strict_write INTEGER NOT NULL DEFAULT 0",
+        [],
+    )
+    .ok();
+    conn.execute(
+        "ALTER TABLE user_classes ADD COLUMN strict_write INTEGER NOT NULL DEFAULT 0",
+        [],
+    )
+    .ok();
 
     // Seed default classes if none exist
     let class_count: i32 = conn
@@ -298,6 +311,62 @@ pub fn set_permission_expr(
     Ok(())
 }
 
+/// Whether writes for this user must satisfy **every** scope rather than any.
+///
+/// True when the user *or* their class has it set. The OR is deliberate and is
+/// the fail-closed direction: a class that exists to constrain a group must not
+/// be looser than the group, and an individual asked to be strict must not be
+/// relaxed by their class.
+pub fn strict_write_for(conn: &Connection, user_id: &str) -> Result<bool, String> {
+    let user: i64 = conn
+        .query_row(
+            "SELECT COALESCE(strict_write, 0) FROM users WHERE id = ?1",
+            rusqlite::params![user_id],
+            |r| r.get(0),
+        )
+        .optional()
+        .map_err(|e| e.to_string())?
+        .unwrap_or(0);
+    if user != 0 {
+        return Ok(true);
+    }
+    let class: i64 = conn
+        .query_row(
+            "SELECT COALESCE(c.strict_write, 0) FROM users u \
+             JOIN user_classes c ON c.id = u.class_id WHERE u.id = ?1",
+            rusqlite::params![user_id],
+            |r| r.get(0),
+        )
+        .optional()
+        .map_err(|e| e.to_string())?
+        .unwrap_or(0);
+    Ok(class != 0)
+}
+
+/// Turn strict write scoping on or off for a user or a class.
+pub fn set_strict_write(
+    conn: &Connection,
+    subject_kind: &str,
+    subject_id: &str,
+    strict: bool,
+) -> Result<(), String> {
+    let table = match subject_kind {
+        "user" => "users",
+        "class" => "user_classes",
+        other => return Err(format!("unknown subject kind '{other}'")),
+    };
+    let n = conn
+        .execute(
+            &format!("UPDATE {table} SET strict_write = ?1 WHERE id = ?2"),
+            rusqlite::params![i64::from(strict), subject_id],
+        )
+        .map_err(|e| e.to_string())?;
+    if n == 0 {
+        return Err(format!("No such {subject_kind}: {subject_id}"));
+    }
+    Ok(())
+}
+
 /// Resolves what a user may actually do, combining their class and individual rules.
 ///
 /// - Class and individual are **AND**ed, so a class exclusion cannot be undone
@@ -306,6 +375,8 @@ pub fn set_permission_expr(
 ///   deliberately not treated as "no restriction": under AND that would give a
 ///   user with no permissions whatsoever full access.
 /// - Write implies read, so the effective read rule is `read OR write`.
+/// - Under strict write scoping the write rule is narrowed further — see
+///   [`strict_write_for`] and [`crate::permex::require_all`].
 pub fn effective_permission_expr(
     conn: &Connection,
     user_id: &str,
@@ -338,7 +409,19 @@ pub fn effective_permission_expr(
     };
 
     match permission {
-        "write" => raw("write"),
+        // Strict mode narrows writes only. Reads keep ANY-match semantics
+        // deliberately: a user who cannot see an entry cannot review what they
+        // are about to change, and tightening reads here would make the strict
+        // user's own vault look empty.
+        "write" => Ok(raw("write")?.map(|e| {
+            if strict_write_for(conn, user_id).unwrap_or(false) {
+                crate::permex::require_all(e)
+            } else {
+                e
+            }
+        })),
+        // Note this reads the *unstrictified* write rule, so turning strict mode
+        // on never removes visibility — only the ability to change.
         "read" => Ok(crate::permex::any_of(raw("read")?, raw("write")?)),
         other => Err(format!("unknown permission '{other}'")),
     }
@@ -1862,5 +1945,118 @@ mod tests {
             locked["api_key"], "secret",
             "the out-of-scope key must be untouched"
         );
+    }
+}
+
+#[cfg(test)]
+mod strict_write_tests {
+    use super::*;
+    use crate::permex;
+
+    fn db() -> Connection {
+        let c = Connection::open_in_memory().unwrap();
+        // The user schema's expression migration writes a marker into
+        // `vault_meta`, which the vault schema owns — so the vault schema comes
+        // first here, exactly as it does in `unlock_vault`.
+        crate::init_schema(&c).unwrap();
+        init_users_schema(&c).unwrap();
+        c
+    }
+
+    /// The transform is the feature: an OR chain becomes an AND chain.
+    #[test]
+    fn require_all_turns_any_scope_into_every_scope() {
+        let e = permex::parse("project:web OR project:api OR project:db").unwrap();
+        let strict = permex::require_all(e);
+        assert_eq!(
+            strict.to_string(),
+            "((project:web AND project:api) AND project:db)"
+        );
+    }
+
+    /// Explicit grouping an author wrote is left alone.
+    ///
+    /// `(a OR b) AND c` is a rule someone stated precisely. Rewriting its inner
+    /// alternation would change a decision that was already made, and strictness
+    /// is about the implicit OR that scope-joining introduced.
+    #[test]
+    fn require_all_does_not_rewrite_nested_groups() {
+        let e = permex::parse("(project:web OR project:api) AND env:prod").unwrap();
+        let before = e.to_string();
+        assert_eq!(permex::require_all(e).to_string(), before);
+    }
+
+    /// Strict mode narrows writes and leaves reads alone.
+    ///
+    /// Regression test for the tempting mistake: strictifying reads too. A user
+    /// who cannot see an entry cannot review the change they are making, and
+    /// their vault would appear empty the moment the flag went on.
+    #[test]
+    fn strict_mode_narrows_writes_only() {
+        let c = db();
+        let uid = create_user(&c, "alice", Some("password-1234"), false)
+            .unwrap()
+            .id;
+        set_permission_expr(&c, "user", &uid, "write", "project:web OR project:api").unwrap();
+
+        let lax = effective_permission_expr(&c, &uid, "write")
+            .unwrap()
+            .unwrap();
+        assert_eq!(lax.to_string(), "(project:web OR project:api)");
+
+        set_strict_write(&c, "user", &uid, true).unwrap();
+        let strict = effective_permission_expr(&c, &uid, "write")
+            .unwrap()
+            .unwrap();
+        assert_eq!(strict.to_string(), "(project:web AND project:api)");
+
+        // Read still sees either, via "write implies read".
+        let read = effective_permission_expr(&c, &uid, "read")
+            .unwrap()
+            .unwrap();
+        assert_eq!(read.to_string(), "(project:web OR project:api)");
+    }
+
+    /// A class can impose strictness its members cannot shed.
+    #[test]
+    fn a_strict_class_makes_its_members_strict() {
+        let c = db();
+        let cid = create_user_class(&c, "Deployers", "", false, false, false)
+            .unwrap()
+            .id;
+        let uid = create_user(&c, "bob", Some("password-1234"), false)
+            .unwrap()
+            .id;
+        assign_user_class(&c, &uid, Some(&cid)).unwrap();
+        set_permission_expr(&c, "user", &uid, "write", "project:web OR project:api").unwrap();
+
+        assert!(!strict_write_for(&c, &uid).unwrap());
+        set_strict_write(&c, "class", &cid, true).unwrap();
+        assert!(
+            strict_write_for(&c, &uid).unwrap(),
+            "a strict class must bind its members, or the class is not a boundary"
+        );
+    }
+
+    /// Existing users are untouched by the migration.
+    ///
+    /// A release that silently tightened permissions would break running
+    /// deployments in a way nobody could attribute to the upgrade.
+    #[test]
+    fn strict_is_off_by_default() {
+        let c = db();
+        let uid = create_user(&c, "carol", Some("password-1234"), false)
+            .unwrap()
+            .id;
+        assert!(!strict_write_for(&c, &uid).unwrap());
+    }
+
+    /// Setting the flag on something that does not exist is an error, not a
+    /// silent no-op that leaves an operator believing they hardened an account.
+    #[test]
+    fn setting_strict_on_a_missing_subject_fails() {
+        let c = db();
+        assert!(set_strict_write(&c, "user", "no-such-id", true).is_err());
+        assert!(set_strict_write(&c, "banana", "x", true).is_err());
     }
 }

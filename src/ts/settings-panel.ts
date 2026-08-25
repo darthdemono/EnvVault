@@ -328,6 +328,8 @@ export function openSettings() {
     s.rememberFilters !== false;
   (document.getElementById('s-experimental-ptypes') as HTMLInputElement).checked =
     !!s.experimentalProjectTypes;
+  (document.getElementById('s-keep-local-unlocked') as HTMLInputElement).checked =
+    !!s.keepLocalUnlocked;
 
   // Assignment, not addEventListener: the settings pane is opened repeatedly and
   // `{ once: true }` only detaches after a click, so every open that did not
@@ -453,6 +455,8 @@ export function saveSettings() {
     groupByType: (document.getElementById('s-group-by-type') as HTMLInputElement).checked,
     rememberFilters: (document.getElementById('s-remember-filters') as HTMLInputElement).checked,
     experimentalProjectTypes: (document.getElementById('s-experimental-ptypes') as HTMLInputElement)
+      .checked,
+    keepLocalUnlocked: (document.getElementById('s-keep-local-unlocked') as HTMLInputElement)
       .checked,
     activityBarPosition: (getSegVal('s-activity-bar-position') || 'left') as 'left' | 'right',
     activityBarStyle: (getSegVal('s-activity-bar-style') || 'icon') as 'icon' | 'icon-label',

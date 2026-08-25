@@ -112,6 +112,9 @@ pub fn get_password_for(provided: Option<&str>, user: Option<&str>) -> String {
 
 fn local_key(password: &str) -> CliResult<VaultKey> {
     let salt_path = default_salt_path();
+    // Before deriving anything: a database with no salt must be reported as
+    // exactly that, not silently given a fresh salt that will never open it.
+    vault_core::check_salt_pairing(&default_db_path(), &salt_path)?;
     let salt = read_or_create_salt(&salt_path)?;
     let key = derive_key(password, &salt)?;
     // Verify: opening with the wrong key fails here rather than at the first read.
@@ -130,12 +133,12 @@ pub struct RemoteClient {
 
 impl RemoteClient {
     pub fn connect(base: &str, password: &str) -> CliResult<Self> {
-        let client = reqwest::blocking::Client::new();
+        let client = crate::tls::build_client()?;
         let resp = client
             .post(format!("{base}/api/unlock"))
             .json(&serde_json::json!({ "password": password }))
             .send()
-            .map_err(|e| CliError::from(format!("Cannot reach server: {e}")))?;
+            .map_err(|e| crate::tls::classify_connect_error(&e, base))?;
         if !resp.status().is_success() {
             return Err(Self::err_body(resp));
         }
@@ -173,12 +176,16 @@ impl RemoteClient {
     }
 
     /// Adopt an existing session token (from `envv login`).
-    pub fn with_session(base: &str, session_token: &str) -> Self {
-        Self {
+    ///
+    /// Fallible now that the client carries a TLS policy: a bad `--ca-cert` has
+    /// to surface here rather than at the first request, where it would read as
+    /// the server being unreachable.
+    pub fn with_session(base: &str, session_token: &str) -> CliResult<Self> {
+        Ok(Self {
             base: base.to_string(),
-            client: reqwest::blocking::Client::new(),
+            client: crate::tls::build_client()?,
             token: session_token.to_string(),
-        }
+        })
     }
 
     /// Cheapest possible proof that this session is still accepted.
@@ -190,12 +197,12 @@ impl RemoteClient {
     }
 
     fn auth(base: &str, body: &serde_json::Value) -> CliResult<Self> {
-        let client = reqwest::blocking::Client::new();
+        let client = crate::tls::build_client()?;
         let resp = client
             .post(format!("{base}/api/auth"))
             .json(body)
             .send()
-            .map_err(|e| CliError::from(format!("Cannot reach server: {e}")))?;
+            .map_err(|e| crate::tls::classify_connect_error(&e, base))?;
         if !resp.status().is_success() {
             return Err(Self::err_body(resp));
         }
@@ -426,7 +433,7 @@ pub fn open_access(opts: &AuthOpts<'_>) -> CliResult<Access> {
         if let Some(session) = opts.session_token {
             // Already a session token: adopt it directly rather than trading it
             // for another one. Its validity is proven by the first real request.
-            return Ok(Access::Remote(RemoteClient::with_session(base, session)));
+            return Ok(Access::Remote(RemoteClient::with_session(base, session)?));
         }
         if let Some(tok) = opts.token {
             return Ok(Access::Remote(RemoteClient::connect_with_api_token(

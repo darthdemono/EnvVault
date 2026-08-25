@@ -244,17 +244,24 @@ impl EntryFields {
     /// Produce the value for `--generate`.
     pub fn generate_value(&self) -> CliResult<String> {
         if self.generate_format == "password" {
-            let (pw, _) = crate::gen::password(&crate::gen::PwOpts {
-                length: self.generate_bytes.max(12),
-                upper: true,
-                lower: true,
-                digits: true,
-                symbols: true,
-                no_ambiguous: false,
-            })?;
+            let (pw, _) = crate::gen::password(
+                &crate::gen::PwOpts {
+                    length: self.generate_bytes.max(12),
+                    upper: true,
+                    lower: true,
+                    digits: true,
+                    symbols: true,
+                    no_ambiguous: false,
+                },
+                &crate::gen::current(),
+            )?;
             Ok(pw)
         } else {
-            crate::gen::secret(self.generate_bytes, &self.generate_format)
+            crate::gen::secret(
+                self.generate_bytes,
+                &self.generate_format,
+                &crate::gen::current(),
+            )
         }
     }
 

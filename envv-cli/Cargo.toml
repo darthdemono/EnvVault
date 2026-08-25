@@ -13,14 +13,17 @@ name = "envv"
 path = "src/main.rs"
 
 [dependencies]
-vault-core = { path = "../vault-core" }
+vault-core = { path = "../vault-core", features = ["tls"] }
 clap       = { version = "4", features = ["derive", "env"] }
 serde      = { version = "1", features = ["derive"] }
 serde_json = "1"
 rpassword  = "7"
 dirs       = "5"
 # Blocking HTTP client for remote-mode operations
-reqwest       = { version = "0.12", features = ["json", "blocking"] }
+# default-features = false is load-bearing: the default pulls native-tls, which
+# would give the CLI a different TLS stack from the desktop app and from the
+# shared verifier in vault_core::tls.
+reqwest       = { version = "0.12", default-features = false, features = ["json", "blocking", "rustls-tls"] }
 clap_complete = "4"
 notify        = "6"
 uuid          = { version = "1", features = ["v4"] }
