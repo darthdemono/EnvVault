@@ -143,7 +143,49 @@
 .settings-label {
   font-size: 12px;
   color: var(--text2);
-  flex-shrink: 0;
+  /*
+   * `flex-shrink: 0` was right for the short labels every other row has, and
+   * wrong for the rows that nest a `.settings-hint` paragraph inside the label
+   * (Experimental project types, Keep local vault unlocked). A flex item that
+   * cannot shrink is sized from its content, so the row demanded the width of a
+   * sixty-word paragraph on one line and the whole panel scrolled sideways.
+   *
+   * `min-width: 0` is the load-bearing half: a flex item's automatic minimum
+   * size is `min-content`, so `flex-shrink: 1` alone still refuses to go below
+   * the longest unbreakable run — a <code> span or a URL in a future hint would
+   * reintroduce the bug.
+   *
+   * Short labels are unaffected: with room available, `flex: 1 1 auto` and
+   * `flex-shrink: 0` lay out identically. The difference only appears under
+   * compression, which is exactly when the old rule failed.
+   */
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* The control keeps its size; the prose reflows around it. Without this the
+   36px track is what gets squeezed once space runs out. */
+.settings-row > .toggle,
+.settings-row > .btn,
+.settings-row > select,
+.settings-row > input {
+  flex: 0 0 auto;
+}
+
+/* A one-line label centres against its control; a label carrying a paragraph
+   must not, or the toggle floats halfway down seven lines of hint text. */
+.settings-row:has(.settings-hint) {
+  align-items: flex-start;
+}
+
+.settings-row:has(.settings-hint) > .toggle {
+  margin-top: 2px;
+}
+
+/* The hint inherits a bottom margin sized for standalone use. Inside a row it
+   is the last thing in the label, so the margin only adds a ragged gap. */
+.settings-label > .settings-hint:last-child {
+  margin-bottom: 0;
 }
 
 .settings-unit {

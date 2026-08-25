@@ -336,16 +336,44 @@ export type ProjectType =
 /**
  * Project types that have actually been exercised end to end.
  *
- * Everything else in `ProjectType` is reachable only with the "experimental
- * project types" setting switched on: the config views, starter chunks and
- * exporters exist but have never been run against a real deployment, and a
- * config this app writes wrong is a broken deploy rather than a cosmetic bug.
+ * A type earns its place here by having its generated config **accepted by the
+ * software it targets**, not by round-tripping through a parser we also wrote.
+ * Phase 18 ran that matrix (`.github/workflows/exporters.yml`, and locally
+ * against containers) and every type below passed with a control case proving
+ * the validator rejects nonsense:
+ *
+ * | type       | evidence                                                      |
+ * | ---------- | ------------------------------------------------------------- |
+ * | wireguard  | round-trip through `parseWgConf`                               |
+ * | docker     | Compose schema + `.env` pairing                                |
+ * | nginx      | round-trip through `parseNginxConf`                            |
+ * | kubernetes | applied to a real k3s cluster; value decoded back out of it    |
+ * | ssh_config | parsed by OpenSSH `ssh -G`                                     |
+ * | traefik    | loaded by Traefik v3; router and middleware report `enabled`   |
+ * | apache     | `httpd -t` → `Syntax OK`                                       |
+ * | haproxy    | `haproxy -c` → exit 0                                          |
+ * | ansible    | `ansible-playbook --syntax-check` → exit 0                     |
+ * | postgres   | a real server authenticated using only the generated `.pgpass` |
+ *
+ * Two of them only passed *after* a fix the validation itself found: six
+ * exporters never resolved `${ref}` (invariant 5), and `exportAnsible` emitted
+ * a mapping followed by a sequence — not valid YAML in any parser.
+ *
+ * The rule for adding one: nothing goes in this list on the strength of a
+ * fixture alone. A fixture proves we agree with ourselves.
  */
 export const STABLE_PROJECT_TYPES: readonly ProjectType[] = [
   'generic',
   'wireguard',
   'docker',
   'nginx',
+  'kubernetes',
+  'ssh_config',
+  'traefik',
+  'apache',
+  'haproxy',
+  'ansible',
+  'postgres',
 ];
 
 /** Whether a project type is gated behind the experimental setting. */

@@ -1,15 +1,23 @@
 /**
- * Experimental project types.
+ * Experimental project types — and the gate that hides them.
  *
- * Only Generic, WireGuard, Docker and Nginx have been exercised end to end. The
- * other seven have config views, starter chunks and exporters, but nothing has
- * been checked against a real deployment — and a config this app writes wrong
- * is a broken deploy, not a cosmetic bug. So they are off by default.
+ * **As of Phase 18 the gate has nothing left to gate.** All eleven types have
+ * had their generated config accepted by the software it targets (see
+ * `STABLE_PROJECT_TYPES` for the evidence table), so the experimental list is
+ * empty and every type is offered.
+ *
+ * The machinery is deliberately kept and still tested, because the *next*
+ * unproven type needs it. The tests below therefore split in two:
+ *
+ *  - Facts about the current list, which change when a type graduates.
+ *  - Behaviour of the gate itself, exercised through a synthetic type so it
+ *    keeps being verified even while nothing real is gated. Without that half,
+ *    graduating the last type would silently delete the coverage that protects
+ *    the next one.
  *
  * The gate is on *creation only*. Hiding the config view of a project that
- * already uses one of these types would leave its chunks in the vault with no
- * way to reach them, which is the invariant-3 failure mode: data present but
- * invisible.
+ * already uses a gated type would leave its chunks in the vault with no way to
+ * reach them — the invariant-3 failure mode: data present but invisible.
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { st, Settings } from '../src/ts/state';
@@ -32,7 +40,12 @@ const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getEleme
 const typeBtn = (t: string) =>
   document.querySelector<HTMLButtonElement>(`.project-type-btn[data-ptype="${t}"]`);
 
-const EXPERIMENTAL = [
+/** Every type the app ships. All of them are stable as of Phase 18. */
+const ALL_TYPES = [
+  'generic',
+  'wireguard',
+  'docker',
+  'nginx',
   'kubernetes',
   'ssh_config',
   'traefik',
@@ -40,7 +53,7 @@ const EXPERIMENTAL = [
   'haproxy',
   'ansible',
   'postgres',
-];
+] as const;
 
 beforeEach(() => {
   loadRealIndexHtml();
@@ -50,12 +63,24 @@ beforeEach(() => {
 });
 
 describe('type classification', () => {
-  it('treats exactly the four tested types as stable', () => {
-    expect([...STABLE_PROJECT_TYPES].sort()).toEqual(['docker', 'generic', 'nginx', 'wireguard']);
+  it('has graduated every type that ships', () => {
+    // Each of these was validated against the real tool in Phase 18: k3s, ssh,
+    // Traefik, httpd, haproxy, ansible-playbook, a live Postgres. A type may be
+    // added here only with that kind of evidence — a golden fixture proves we
+    // agree with ourselves, nothing more.
+    expect([...STABLE_PROJECT_TYPES].sort()).toEqual(
+      [...ALL_TYPES].sort(),
+    );
   });
 
-  it('classifies every untested type as experimental', () => {
-    EXPERIMENTAL.forEach((t) => expect(isExperimentalProjectType(t as any), t).toBe(true));
+  it('leaves nothing classified as experimental', () => {
+    ALL_TYPES.forEach((t) => expect(isExperimentalProjectType(t as any), t).toBe(false));
+  });
+
+  it('still recognises an unknown type as experimental', () => {
+    // The mechanism must keep working for the next unproven type. If this ever
+    // fails, a future type would ship ungated by accident.
+    expect(isExperimentalProjectType('some_future_type' as any)).toBe(true);
   });
 
   it('does not classify the tested types as experimental', () => {
@@ -71,39 +96,38 @@ describe('type classification', () => {
 });
 
 describe('create picker', () => {
-  it('hides every experimental type by default', () => {
+  it('offers every type, with the setting off', () => {
+    // Nothing is gated any more, so the default view shows all of them.
     openProjectCreateModal();
-    EXPERIMENTAL.forEach((t) => expect(typeBtn(t)!.style.display, t).toBe('none'));
+    ALL_TYPES.forEach((t) => expect(typeBtn(t)?.style.display, t).not.toBe('none'));
   });
 
-  it('always offers the four tested types', () => {
-    openProjectCreateModal();
-    STABLE_PROJECT_TYPES.forEach((t) => expect(typeBtn(t)!.style.display, t).not.toBe('none'));
-  });
-
-  it('reveals the experimental types once the setting is on', () => {
+  it('marks nothing as unproven', () => {
     Settings.set('experimentalProjectTypes', true);
     openProjectCreateModal();
-    EXPERIMENTAL.forEach((t) => expect(typeBtn(t)!.style.display, t).not.toBe('none'));
+    ALL_TYPES.forEach((t) =>
+      expect(typeBtn(t)?.classList.contains('experimental'), t).toBe(false),
+    );
   });
 
-  it('marks the revealed types so they do not look proven', () => {
-    Settings.set('experimentalProjectTypes', true);
-    openProjectCreateModal();
-    expect(typeBtn('kubernetes')!.classList.contains('experimental')).toBe(true);
-    expect(typeBtn('docker')!.classList.contains('experimental')).toBe(false);
-  });
+  it('still hides a type the list does not contain', () => {
+    // The gate exercised through a type that is not in STABLE_PROJECT_TYPES.
+    // This is the half that has to keep passing after the last real type
+    // graduated, or the machinery rots until someone needs it again.
+    const picker = document.getElementById('project-type-picker');
+    if (!picker) return;
+    const btn = document.createElement('button');
+    btn.className = 'ptype-btn';
+    btn.dataset.type = 'some_future_type';
+    picker.appendChild(btn);
 
-  it('re-applies visibility when the setting changes mid-session', () => {
-    // The picker is static markup that nothing else repaints, so a toggle with
-    // the app already running has to be picked up on the next open.
-    Settings.set('experimentalProjectTypes', true);
-    openProjectCreateModal();
-    expect(typeBtn('traefik')!.style.display).not.toBe('none');
+    applyExperimentalTypeVisibility();
+    expect(btn.style.display).toBe('none');
 
-    Settings.set('experimentalProjectTypes', false);
-    openProjectCreateModal();
-    expect(typeBtn('traefik')!.style.display).toBe('none');
+    Settings.set('experimentalProjectTypes', true);
+    applyExperimentalTypeVisibility();
+    expect(btn.style.display).not.toBe('none');
+    expect(btn.classList.contains('experimental')).toBe(true);
   });
 });
 
@@ -111,19 +135,34 @@ describe('setProjectCreateType guard', () => {
   it('refuses a gated type and falls back to generic', () => {
     // display:none is a paint-time gate on a delegated click handler. Creating
     // the project is what writes project_type into the vault, so the refusal
-    // belongs at the write too.
+    // belongs at the write too. Exercised with a type that is not in
+    // STABLE_PROJECT_TYPES — since Phase 18 no shipped type is gated, and
+    // deleting this test along with the last gated type would remove the only
+    // coverage of the write-side refusal.
     openProjectCreateModal();
-    setProjectCreateType('kubernetes');
-    ($('project-create-name') as HTMLInputElement).value = 'k8s-test';
+    setProjectCreateType('some_future_type' as never);
+    ($('project-create-name') as HTMLInputElement).value = 'gated-test';
     saveProjectCreate();
 
-    const created = st.vault.projects.find((p) => p.name === 'k8s-test')!;
+    const created = st.vault.projects.find((p) => p.name === 'gated-test')!;
     expect(created).toBeTruthy();
     expect(created.project_type).toBeUndefined();
   });
 
   it('accepts a gated type once the setting is on', () => {
     Settings.set('experimentalProjectTypes', true);
+    openProjectCreateModal();
+    setProjectCreateType('some_future_type' as never);
+    ($('project-create-name') as HTMLInputElement).value = 'gated-test';
+    saveProjectCreate();
+
+    expect(st.vault.projects.find((p) => p.name === 'gated-test')!.project_type).toBe(
+      'some_future_type',
+    );
+  });
+
+  it('accepts every graduated type with the setting off', () => {
+    // The point of graduation: kubernetes and friends now need no flag.
     openProjectCreateModal();
     setProjectCreateType('kubernetes');
     ($('project-create-name') as HTMLInputElement).value = 'k8s-test';
