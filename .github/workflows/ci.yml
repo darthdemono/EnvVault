@@ -86,6 +86,13 @@ jobs:
           }
           'C:\Strawberry\c\bin', 'C:\Strawberry\perl\site\bin', 'C:\Strawberry\perl\bin' |
             ForEach-Object { Add-Content -Path $env:GITHUB_PATH -Value $_ }
+          # PATH order alone is not a guarantee. `shell: bash` is Git bash, whose
+          # msys runtime injects its own /usr/bin when it converts the Windows
+          # PATH, so Git's perl can still win however GITHUB_PATH is ordered.
+          # openssl-src reads OPENSSL_SRC_PERL before falling back to PATH
+          # (openssl-src/src/lib.rs), so name the interpreter outright and the
+          # race stops mattering.
+          Add-Content -Path $env:GITHUB_ENV -Value 'OPENSSL_SRC_PERL=C:\Strawberry\perl\bin\perl.exe'
 
       # Assert the toolchain can actually do the job, not merely that the
       # binaries exist. `command -v perl` passed for the whole life of the
@@ -96,18 +103,22 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          # Check the interpreter openssl-src will actually run, not whichever
+          # perl this shell resolves — they are not the same thing once
+          # OPENSSL_SRC_PERL is set above.
+          perl_bin="${OPENSSL_SRC_PERL:-perl}"
           missing=""
-          command -v perl >/dev/null || missing="$missing perl"
+          command -v "$perl_bin" >/dev/null || missing="$missing perl"
           command -v nasm >/dev/null || missing="$missing nasm"
           if [ -n "$missing" ]; then
-            echo "::error::openssl-src needs$missing on PATH to vendor OpenSSL for Windows."
+            echo "::error::openssl-src needs$missing to vendor OpenSSL for Windows."
             exit 1
           fi
-          echo "perl: $(command -v perl)"
-          perl --version | sed -n '2p'
+          echo "perl: $(command -v "$perl_bin")"
+          "$perl_bin" --version | sed -n '2p'
           nasm -v
-          if ! perl -MLocale::Maketext::Simple -e 1 2>/dev/null; then
-            echo "::error::The perl on PATH cannot load Locale::Maketext::Simple, so OpenSSL's Configure will fail. This is usually Git for Windows' MSYS perl shadowing Strawberry Perl."
+          if ! "$perl_bin" -MLocale::Maketext::Simple -e 1 2>/dev/null; then
+            echo "::error::$perl_bin cannot load Locale::Maketext::Simple, so OpenSSL's Configure will fail. This is usually Git for Windows' MSYS perl shadowing Strawberry Perl."
             exit 1
           fi
           echo "Locale::Maketext::Simple loads — OpenSSL's Configure will run."
