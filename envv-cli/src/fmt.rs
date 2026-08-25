@@ -1,7 +1,7 @@
 //! Terminal formatting helpers and the destructive-action confirm prompt.
 
-use std::io::{IsTerminal, Write};
 use crate::error::{CliError, CliResult};
+use std::io::{IsTerminal, Write};
 
 /// Pad or ellipsise `s` to exactly `width` display columns.
 pub fn cell(s: &str, width: usize) -> String {
@@ -15,15 +15,30 @@ pub fn cell(s: &str, width: usize) -> String {
 }
 
 pub fn fmt_entries(entries: &[serde_json::Value]) {
-    println!("{:<30} {:<20} {:<16} {:<12}", "Provider", "Account", "Type", "Expires");
+    println!(
+        "{:<30} {:<20} {:<16} {:<12}",
+        "Provider", "Account", "Type", "Expires"
+    );
     println!("{}", "-".repeat(82));
     for e in entries {
         let provider = e.get("provider").and_then(|v| v.as_str()).unwrap_or("—");
-        let account = e.get("account_name").and_then(|v| v.as_str()).unwrap_or("—");
-        let stype = e.get("secretType").and_then(|v| v.as_str()).unwrap_or("api_key");
+        let account = e
+            .get("account_name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("—");
+        let stype = e
+            .get("secretType")
+            .and_then(|v| v.as_str())
+            .unwrap_or("api_key");
         let expires = e.get("expires_at").and_then(|v| v.as_str()).unwrap_or("—");
         let exp: String = expires.chars().take(12).collect();
-        println!("{} {} {} {}", cell(provider, 30), cell(account, 20), cell(stype, 16), exp);
+        println!(
+            "{} {} {} {}",
+            cell(provider, 30),
+            cell(account, 20),
+            cell(stype, 16),
+            exp
+        );
     }
 }
 
@@ -45,7 +60,9 @@ pub fn confirm(question: &str, assume_yes: bool) -> CliResult<bool> {
     print!("{question} [y/N] ");
     std::io::stdout().flush().ok();
     let mut line = String::new();
-    std::io::stdin().read_line(&mut line).map_err(|e| CliError::from(e.to_string()))?;
+    std::io::stdin()
+        .read_line(&mut line)
+        .map_err(|e| CliError::from(e.to_string()))?;
     Ok(matches!(line.trim().to_lowercase().as_str(), "y" | "yes"))
 }
 
@@ -53,7 +70,9 @@ pub fn confirm(question: &str, assume_yes: bool) -> CliResult<bool> {
 pub fn read_stdin() -> CliResult<String> {
     use std::io::Read;
     let mut buf = String::new();
-    std::io::stdin().read_to_string(&mut buf).map_err(|e| CliError::from(e.to_string()))?;
+    std::io::stdin()
+        .read_to_string(&mut buf)
+        .map_err(|e| CliError::from(e.to_string()))?;
     Ok(buf.trim_end_matches('\n').to_string())
 }
 
@@ -61,7 +80,8 @@ pub fn read_stdin() -> CliResult<String> {
 pub fn emit(content: &str, path: Option<&std::path::Path>) -> CliResult {
     match path {
         Some(p) => {
-            std::fs::write(p, content).map_err(|e| CliError::from(format!("Cannot write {}: {e}", p.display())))?;
+            std::fs::write(p, content)
+                .map_err(|e| CliError::from(format!("Cannot write {}: {e}", p.display())))?;
             eprintln!("Wrote {}", p.display());
             Ok(())
         }

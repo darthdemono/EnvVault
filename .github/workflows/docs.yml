@@ -1,0 +1,206 @@
+name: Docs
+
+# Publishes two API references to GitHub Pages:
+#
+#   /ts    — Doxygen over src/ts/
+#   /rust  — `cargo doc` over the four workspace crates
+#
+# Two tools because there is no one tool. Doxygen has no Rust front end, and
+# rustdoc has no TypeScript one. Rather than pick the language that gets docs,
+# both halves are built with the tool that understands them and served side by
+# side behind one landing page.
+#
+# Runs on `main` only. Docs describing a branch nobody merged are worse than no
+# docs, and Pages has exactly one live deployment.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  # Pages allows one in-flight deployment. Cancelling the superseded run is
+  # correct here — unlike a release build, a half-finished docs run leaves
+  # nothing behind.
+  group: pages
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: Build both references
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # graphviz is not optional: Doxyfile sets HAVE_DOT=YES, and without `dot`
+      # every include graph silently becomes a broken image rather than an
+      # error.
+      #
+      # The WebKitGTK stack is here for `cargo doc`, which has to compile the
+      # Tauri app crate's dependencies to document it.
+      - name: Install doxygen, graphviz and the Linux build stack
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            doxygen \
+            graphviz \
+            libsqlcipher-dev \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            mold
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: docs
+
+      - run: npm ci
+
+      # tauri-build fails outright when frontendDist ("../dist") is missing, and
+      # `cargo doc` reaches the app crate.
+      - name: Build the frontend (tauri-build needs ../dist to exist)
+        run: npx vite build
+
+      # Writes docs/ts/. `npm run docs` injects ENVVAULT_VERSION from
+      # scripts/version.mjs so the rendered pages carry the real version rather
+      # than a seventh hand-maintained copy of it.
+      - name: Doxygen (TypeScript frontend)
+        run: npm run docs
+
+      # Surfaced in the run summary rather than failing the job. The
+      # TypeScript-as-Javascript parse produces unavoidable noise on generics
+      # and type-only exports; a docs job that is always red is a docs job
+      # nobody reads. A sudden jump in the count is the signal worth noticing.
+      - name: Doxygen warnings
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          log=docs/ts/doxygen-warnings.log
+          if [ -s "$log" ]; then
+            n=$(wc -l < "$log")
+            {
+              echo "### Doxygen: ${n} warnings"
+              echo ""
+              echo '```'
+              head -40 "$log"
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "### Doxygen: no warnings" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      # --no-deps: document this workspace, not the 400 crates under it.
+      - name: rustdoc (Rust crates)
+        run: cargo doc --workspace --no-deps --locked
+
+      - name: Assemble the site
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION=$(node scripts/version.mjs)
+
+          rm -rf site
+          mkdir -p site
+          cp -r docs/ts   site/ts
+          cp -r target/doc site/rust
+
+          # The warnings log is a build artefact, not documentation. It is in
+          # the run summary above; leaving it in the published tree only invites
+          # someone to read a stale copy.
+          rm -f site/ts/doxygen-warnings.log
+
+          # rustdoc's own landing page lists every crate it documented, but only
+          # if something points at it — `target/doc/index.html` does not exist
+          # for a multi-crate workspace built with --no-deps.
+          # Written as if/then, not `[ … ] && …`. Under `set -e` the `&&` form
+          # makes the test's exit status the script's, so the *absence* of the
+          # file — the normal case — would abort the job here. build.yml's
+          # binary smoke test carries a comment about the identical trap.
+          RUST_ENTRY="rust/vault_core/index.html"
+          if [ -f "site/rust/index.html" ]; then
+            RUST_ENTRY="rust/index.html"
+          fi
+
+          cat > site/index.html <<HTML
+          <!doctype html>
+          <html lang="en">
+          <head>
+            <meta charset="utf-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1">
+            <title>EnvVault ${VERSION} — API reference</title>
+            <style>
+              :root { color-scheme: light dark; }
+              body {
+                font-family: ui-monospace, "JetBrains Mono", SFMono-Regular, Menlo, monospace;
+                max-width: 46rem; margin: 4rem auto; padding: 0 1.5rem; line-height: 1.6;
+              }
+              h1 { font-size: 1.6rem; margin-bottom: 0.2rem; }
+              .v { opacity: 0.6; font-size: 0.9rem; }
+              ul { list-style: none; padding: 0; margin-top: 2.5rem; }
+              li { margin: 0 0 1.75rem; }
+              a { font-size: 1.15rem; text-decoration: none; border-bottom: 1px solid currentColor; }
+              p { margin: 0.4rem 0 0; opacity: 0.75; font-size: 0.95rem; }
+            </style>
+          </head>
+          <body>
+            <h1>EnvVault</h1>
+            <div class="v">API reference &middot; version ${VERSION} &middot; commit ${GITHUB_SHA:0:7}</div>
+            <ul>
+              <li>
+                <a href="ts/index.html">TypeScript frontend</a>
+                <p>
+                  The 24 modules under <code>src/ts/</code>, built with Doxygen.
+                  Signatures are the Javascript parser's reading of each
+                  declaration and do not carry TypeScript generics or unions —
+                  <code>src/ts/types.ts</code> is the authority on types.
+                </p>
+              </li>
+              <li>
+                <a href="${RUST_ENTRY}">Rust crates</a>
+                <p>
+                  <code>vault-core</code> (crypto, storage, RBAC),
+                  <code>envv-server</code>, <code>envv-cli</code> and the Tauri
+                  app crate, built with rustdoc.
+                </p>
+              </li>
+            </ul>
+          </body>
+          </html>
+          HTML
+
+          du -sh site/ts site/rust
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    name: Deploy to Pages
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

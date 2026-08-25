@@ -3,8 +3,8 @@
 //! None of these touch the vault, so they work with no password and no server.
 //! Pipe the output into `envv entry set --key-stdin` to store it.
 
-use rand::RngCore;
 use crate::error::{CliError, CliResult};
+use rand::RngCore;
 
 /// Random bytes rendered as hex, base64 or base64url — the "Secret generator" pane.
 pub fn secret(bytes: usize, format: &str) -> CliResult<String> {
@@ -12,9 +12,17 @@ pub fn secret(bytes: usize, format: &str) -> CliResult<String> {
     rand::thread_rng().fill_bytes(&mut buf);
     Ok(match format {
         "hex" => buf.iter().map(|b| format!("{b:02x}")).collect(),
-        "base64url" => b64(&buf).replace('+', "-").replace('/', "_").trim_end_matches('=').to_string(),
+        "base64url" => b64(&buf)
+            .replace('+', "-")
+            .replace('/', "_")
+            .trim_end_matches('=')
+            .to_string(),
         "base64" => b64(&buf),
-        other => return Err(CliError::invalid(format!("Unknown format '{other}' (hex, base64, base64url)"))),
+        other => {
+            return Err(CliError::invalid(format!(
+                "Unknown format '{other}' (hex, base64, base64url)"
+            )))
+        }
     })
 }
 
@@ -37,13 +45,25 @@ pub struct PwOpts {
 pub fn password(o: &PwOpts) -> CliResult<(String, f64)> {
     let mut chars = String::new();
     if o.upper {
-        chars += if o.no_ambiguous { "ABCDEFGHJKLMNPQRSTUVWXYZ" } else { "ABCDEFGHIJKLMNOPQRSTUVWXYZ" };
+        chars += if o.no_ambiguous {
+            "ABCDEFGHJKLMNPQRSTUVWXYZ"
+        } else {
+            "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+        };
     }
     if o.lower {
-        chars += if o.no_ambiguous { "abcdefghjkmnpqrstuvwxyz" } else { "abcdefghijklmnopqrstuvwxyz" };
+        chars += if o.no_ambiguous {
+            "abcdefghjkmnpqrstuvwxyz"
+        } else {
+            "abcdefghijklmnopqrstuvwxyz"
+        };
     }
     if o.digits {
-        chars += if o.no_ambiguous { "23456789" } else { "0123456789" };
+        chars += if o.no_ambiguous {
+            "23456789"
+        } else {
+            "0123456789"
+        };
     }
     if o.symbols {
         chars += "!@#$%^&*()-_=+[]{}|;:,.<>?";

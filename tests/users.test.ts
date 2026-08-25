@@ -7,8 +7,8 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { st } from '../src/ts/state';
 import { loadRealIndexHtml, resetState } from './helpers';
 
-const invoked: Array<{ cmd: string; args: any }> = [];
-let promptCalls: Array<{ kind: 'plain' | 'password'; msg: string }> = [];
+const invoked: { cmd: string; args: any }[] = [];
+let promptCalls: { kind: 'plain' | 'password'; msg: string }[] = [];
 let promptAnswer: string | null = 'new-secret';
 
 vi.mock('../src/ts/utils', async (importOriginal) => {
@@ -17,8 +17,14 @@ vi.mock('../src/ts/utils', async (importOriginal) => {
     ...real,
     showToast: () => {},
     showConfirm: async () => true,
-    showPrompt: async (msg: string) => { promptCalls.push({ kind: 'plain', msg }); return promptAnswer; },
-    showPasswordPrompt: async (msg: string) => { promptCalls.push({ kind: 'password', msg }); return promptAnswer; },
+    showPrompt: async (msg: string) => {
+      promptCalls.push({ kind: 'plain', msg });
+      return promptAnswer;
+    },
+    showPasswordPrompt: async (msg: string) => {
+      promptCalls.push({ kind: 'password', msg });
+      return promptAnswer;
+    },
   };
 });
 
@@ -33,14 +39,26 @@ beforeEach(() => {
       invoke: async (cmd: string, args: any) => {
         invoked.push({ cmd, args });
         switch (cmd) {
-          case 'list_users': return [{
-            id: 'u1', username: 'alice', is_owner: false, has_password: true,
-            created_at: '2024-01-01T00:00:00Z', last_seen_at: null, class_id: null,
-          }];
-          case 'list_user_tokens': return [];
-          case 'get_user_permissions': return { read: 'project:*', write: '' };
-          case 'list_user_classes': return [];
-          default: return null;
+          case 'list_users':
+            return [
+              {
+                id: 'u1',
+                username: 'alice',
+                is_owner: false,
+                has_password: true,
+                created_at: '2024-01-01T00:00:00Z',
+                last_seen_at: null,
+                class_id: null,
+              },
+            ];
+          case 'list_user_tokens':
+            return [];
+          case 'get_user_permissions':
+            return { read: 'project:*', write: '' };
+          case 'list_user_classes':
+            return [];
+          default:
+            return null;
         }
       },
     },
@@ -54,9 +72,9 @@ describe('changePassword', () => {
     const users = await import('../src/ts/users');
     await users.renderUserDetail('u1');
     document.getElementById('change-pw-btn')!.click();
-    await new Promise(r => setTimeout(r, 20));
-    expect(promptCalls.map(c => c.kind)).toContain('password');
-    expect(promptCalls.some(c => c.kind === 'plain')).toBe(false);
+    await new Promise((r) => setTimeout(r, 20));
+    expect(promptCalls.map((c) => c.kind)).toContain('password');
+    expect(promptCalls.some((c) => c.kind === 'plain')).toBe(false);
   });
 
   it('sends the password through unchanged, spaces included', async () => {
@@ -64,8 +82,8 @@ describe('changePassword', () => {
     const users = await import('../src/ts/users');
     await users.renderUserDetail('u1');
     document.getElementById('change-pw-btn')!.click();
-    await new Promise(r => setTimeout(r, 20));
-    const call = invoked.find(c => c.cmd === 'set_user_password');
+    await new Promise((r) => setTimeout(r, 20));
+    const call = invoked.find((c) => c.cmd === 'set_user_password');
     expect(call!.args.password).toBe('  pad ded  ');
   });
 
@@ -74,8 +92,8 @@ describe('changePassword', () => {
     const users = await import('../src/ts/users');
     await users.renderUserDetail('u1');
     document.getElementById('change-pw-btn')!.click();
-    await new Promise(r => setTimeout(r, 20));
-    expect(invoked.find(c => c.cmd === 'set_user_password')!.args.password).toBeNull();
+    await new Promise((r) => setTimeout(r, 20));
+    expect(invoked.find((c) => c.cmd === 'set_user_password')!.args.password).toBeNull();
   });
 
   it('does nothing when the prompt is cancelled', async () => {
@@ -83,8 +101,8 @@ describe('changePassword', () => {
     const users = await import('../src/ts/users');
     await users.renderUserDetail('u1');
     document.getElementById('change-pw-btn')!.click();
-    await new Promise(r => setTimeout(r, 20));
-    expect(invoked.find(c => c.cmd === 'set_user_password')).toBeUndefined();
+    await new Promise((r) => setTimeout(r, 20));
+    expect(invoked.find((c) => c.cmd === 'set_user_password')).toBeUndefined();
   });
 });
 
@@ -100,7 +118,8 @@ describe('resetUsersPanelState', () => {
 
   it('clears the detail workspace', async () => {
     const users = await import('../src/ts/users');
-    document.getElementById('users-workspace')!.innerHTML = '<div>stale detail for another vault</div>';
+    document.getElementById('users-workspace')!.innerHTML =
+      '<div>stale detail for another vault</div>';
     users.resetUsersPanelState();
     expect(document.getElementById('users-workspace')!.innerHTML).not.toContain('stale detail');
   });
@@ -111,7 +130,9 @@ describe('renderUserDetail', () => {
     const users = await import('../src/ts/users');
     await users.renderUserDetail('u1');
     expect(document.getElementById('detail-username-label')!.textContent).toBe('alice');
-    expect((document.getElementById('uperm-expr-read') as HTMLTextAreaElement).value).toBe('project:*');
+    expect((document.getElementById('uperm-expr-read') as HTMLTextAreaElement).value).toBe(
+      'project:*',
+    );
   });
 
   it('reports a user that no longer exists instead of rendering a blank panel', async () => {
@@ -121,7 +142,9 @@ describe('renderUserDetail', () => {
   });
 
   it('surfaces a backend error rather than showing empty permissions', async () => {
-    (window as any).__TAURI__.core.invoke = async () => { throw new Error('vault is locked'); };
+    (window as any).__TAURI__.core.invoke = async () => {
+      throw new Error('vault is locked');
+    };
     const users = await import('../src/ts/users');
     await users.renderUserDetail('u1');
     expect(document.getElementById('users-workspace')!.textContent).toContain('vault is locked');
@@ -129,10 +152,18 @@ describe('renderUserDetail', () => {
 
   it('escapes a username containing markup', async () => {
     (window as any).__TAURI__.core.invoke = async (cmd: string) => {
-      if (cmd === 'list_users') return [{
-        id: 'u1', username: '<img src=x onerror=alert(1)>', is_owner: false, has_password: true,
-        created_at: '2024-01-01T00:00:00Z', last_seen_at: null, class_id: null,
-      }];
+      if (cmd === 'list_users')
+        return [
+          {
+            id: 'u1',
+            username: '<img src=x onerror=alert(1)>',
+            is_owner: false,
+            has_password: true,
+            created_at: '2024-01-01T00:00:00Z',
+            last_seen_at: null,
+            class_id: null,
+          },
+        ];
       if (cmd === 'get_user_permissions') return { read: '', write: '' };
       return [];
     };
@@ -149,7 +180,7 @@ describe('token overlay', () => {
     (window as any).__TAURI__.core.invoke = async (cmd: string) =>
       cmd === 'create_user_token' ? { token: 'envv_secret_token' } : [];
     document.getElementById('new-token-btn')!.click();
-    await new Promise(r => setTimeout(r, 20));
+    await new Promise((r) => setTimeout(r, 20));
 
     const overlay = document.querySelector('.token-overlay-backdrop');
     expect(overlay).not.toBeNull();

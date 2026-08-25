@@ -1,5 +1,6 @@
 /**
- * @file "Open to LAN" — serve this vault to the local network from the desktop.
+ * @file
+ * "Open to LAN" — serve this vault to the local network from the desktop.
  *
  * Minecraft-style: the server exists only while the app is open, shares the
  * vault already on screen, and dies when you close it or lock. A Docker
@@ -24,7 +25,14 @@ export interface LanStatus {
   idle_secs: number;
 }
 
-const EMPTY: LanStatus = { running: false, port: 0, url: '', fingerprint: null, peers: 0, idle_secs: 0 };
+const EMPTY: LanStatus = {
+  running: false,
+  port: 0,
+  url: '',
+  fingerprint: null,
+  peers: 0,
+  idle_secs: 0,
+};
 
 let _status: LanStatus = { ...EMPTY };
 let _poll: ReturnType<typeof setInterval> | null = null;
@@ -32,7 +40,9 @@ let _poll: ReturnType<typeof setInterval> | null = null;
 /** Hours of no peer traffic after which the server closes itself. */
 const IDLE_SHUTDOWN_HOURS = 8;
 
-export function lanStatus(): LanStatus { return _status; }
+export function lanStatus(): LanStatus {
+  return _status;
+}
 
 async function refresh(): Promise<void> {
   try {
@@ -48,7 +58,11 @@ async function refresh(): Promise<void> {
   // vault decrypted indefinitely. Closing it on idle re-arms normal auto-lock.
   if (_status.running && _status.idle_secs > IDLE_SHUTDOWN_HOURS * 3600) {
     await stopLan(/* silent */ true);
-    showToast(`LAN server closed after ${IDLE_SHUTDOWN_HOURS}h with no peers — auto-lock resumed`, 'ok', 5000);
+    showToast(
+      `LAN server closed after ${IDLE_SHUTDOWN_HOURS}h with no peers — auto-lock resumed`,
+      'ok',
+      5000,
+    );
   }
 }
 
@@ -58,7 +72,10 @@ function startPolling() {
 }
 
 function stopPolling() {
-  if (_poll !== null) { clearInterval(_poll); _poll = null; }
+  if (_poll !== null) {
+    clearInterval(_poll);
+    _poll = null;
+  }
 }
 
 export async function startLan(): Promise<void> {
@@ -72,7 +89,8 @@ export async function startLan(): Promise<void> {
       st.store.isRemote
         ? 'Open to LAN serves the vault on this machine — switch to the local vault first'
         : 'Open to LAN is only available in the desktop app',
-      'err', 5000,
+      'err',
+      5000,
     );
     render();
     return;
@@ -102,7 +120,11 @@ export async function startLan(): Promise<void> {
 }
 
 export async function stopLan(silent = false): Promise<void> {
-  try { await invoke('lan_stop'); } catch { /* already down */ }
+  try {
+    await invoke('lan_stop');
+  } catch {
+    /* already down */
+  }
   _status = { ...EMPTY };
   st.lanServerRunning = false;
   stopPolling();
@@ -123,7 +145,7 @@ export async function confirmStopForLock(): Promise<boolean> {
   if (_status.peers > 0) {
     const ok = await showConfirm(
       `${_status.peers} peer${_status.peers === 1 ? ' is' : 's are'} connected to your LAN server. ` +
-      `Locking closes it and disconnects ${_status.peers === 1 ? 'them' : 'all of them'}. Continue?`,
+        `Locking closes it and disconnects ${_status.peers === 1 ? 'them' : 'all of them'}. Continue?`,
     );
     if (!ok) return false;
   }
@@ -203,7 +225,9 @@ function render(): void {
         <code class="lan-value">${esc(_status.url)}</code>
         <button class="btn btn-xs btn-ghost" id="lan-copy-url">Copy</button>
       </div>
-      ${fp ? `
+      ${
+        fp
+          ? `
       <div class="lan-field">
         <span class="lan-label">TLS fingerprint</span>
         <code class="lan-value lan-fp" title="${esc(fp)}">${esc(fp.slice(0, 32))}…</code>
@@ -212,10 +236,12 @@ function render(): void {
       <p class="lan-help">
         The certificate is self-signed, so peers must pin this fingerprint when adding
         the connection. Compare it on their screen before accepting.
-      </p>` : `
+      </p>`
+          : `
       <p class="lan-help lan-warn">
         Running without TLS — secrets travel this network in clear text.
-      </p>`}
+      </p>`
+      }
       <p class="lan-help">
         Auto-lock is suspended while serving. The server closes itself after
         ${IDLE_SHUTDOWN_HOURS}h with no peer activity.
@@ -228,21 +254,30 @@ function render(): void {
   document.getElementById('lan-stop-btn')?.addEventListener('click', async () => {
     if (_status.peers > 0) {
       const ok = await showConfirm(
-        `${_status.peers} peer${_status.peers === 1 ? ' is' : 's are'} connected. Disconnect ${_status.peers === 1 ? 'them' : 'all'}?`);
+        `${_status.peers} peer${_status.peers === 1 ? ' is' : 's are'} connected. Disconnect ${_status.peers === 1 ? 'them' : 'all'}?`,
+      );
       if (!ok) return;
     }
     await stopLan();
   });
-  document.getElementById('lan-copy-url')?.addEventListener('click', () =>
-    clipboardWrite(_status.url).then(() => showToast('Address copied ✓', 'ok', 1500)));
-  document.getElementById('lan-copy-fp')?.addEventListener('click', () =>
-    clipboardWrite(fp).then(() => showToast('Fingerprint copied ✓', 'ok', 1500)));
+  document
+    .getElementById('lan-copy-url')
+    ?.addEventListener('click', () =>
+      clipboardWrite(_status.url).then(() => showToast('Address copied ✓', 'ok', 1500)),
+    );
+  document
+    .getElementById('lan-copy-fp')
+    ?.addEventListener('click', () =>
+      clipboardWrite(fp).then(() => showToast('Fingerprint copied ✓', 'ok', 1500)),
+    );
 }
 
 export function initLanPanel(): void {
   render();
   // Pick up a server left running from before a UI reload.
-  refresh().then(() => { if (_status.running) startPolling(); });
+  refresh().then(() => {
+    if (_status.running) startPolling();
+  });
 }
 
 /**

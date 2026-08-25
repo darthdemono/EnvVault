@@ -8,11 +8,16 @@
  */
 import { describe, it, expect } from 'vitest';
 import {
-  parseWgConf, parseApacheConf, parseHaproxyConf,
-  parseDockerCompose, parseSshConfig, parseNginxConf,
+  parseWgConf,
+  parseApacheConf,
+  parseHaproxyConf,
+  parseDockerCompose,
+  parseSshConfig,
+  parseNginxConf,
 } from '../src/ts/chunks/parsers';
 
-const field = (c: any, key: string) => c.fields.find((f: any) => f.key.toLowerCase() === key.toLowerCase());
+const field = (c: any, key: string) =>
+  c.fields.find((f: any) => f.key.toLowerCase() === key.toLowerCase());
 
 describe('parseWgConf', () => {
   const CONF = `
@@ -30,7 +35,7 @@ Endpoint = vpn.example.com:51820
 
   it('splits interface and peers into chunks', () => {
     const chunks = parseWgConf(CONF);
-    expect(chunks.map(c => c.chunk_type)).toEqual(['wg_interface', 'wg_peer']);
+    expect(chunks.map((c) => c.chunk_type)).toEqual(['wg_interface', 'wg_peer']);
     expect(chunks[1].name).toBe('Peer 1');
   });
 
@@ -78,7 +83,7 @@ Endpoint = vpn.example.com:51820
 
   it('numbers multiple peers', () => {
     const chunks = parseWgConf('[Peer]\nPublicKey = a\n[Peer]\nPublicKey = b\n');
-    expect(chunks.map(c => c.name)).toEqual(['Peer 1', 'Peer 2']);
+    expect(chunks.map((c) => c.name)).toEqual(['Peer 1', 'Peer 2']);
   });
 });
 
@@ -123,7 +128,10 @@ describe('parseApacheConf', () => {
   ServerName b.example.com
 </VirtualHost>
 `);
-    expect(chunks.map(c => field(c, 'ServerName').value)).toEqual(['a.example.com', 'b.example.com']);
+    expect(chunks.map((c) => field(c, 'ServerName').value)).toEqual([
+      'a.example.com',
+      'b.example.com',
+    ]);
   });
 
   it('returns nothing for an empty or comment-only file', () => {
@@ -143,8 +151,12 @@ frontend www
 backend servers
   server s1 10.0.0.1:80
 `);
-    expect(chunks.map(c => c.chunk_type)).toEqual(['haproxy_global', 'haproxy_frontend', 'haproxy_backend']);
-    expect(chunks.map(c => c.name)).toEqual(['global', 'www', 'servers']);
+    expect(chunks.map((c) => c.chunk_type)).toEqual([
+      'haproxy_global',
+      'haproxy_frontend',
+      'haproxy_backend',
+    ]);
+    expect(chunks.map((c) => c.name)).toEqual(['global', 'www', 'servers']);
   });
 
   it('does not throw on a bare section keyword with no name', () => {
@@ -196,8 +208,8 @@ volumes:
 
   it('creates a chunk per service', () => {
     const chunks = parseDockerCompose(COMPOSE);
-    const svcs = chunks.filter(c => c.chunk_type === 'docker_service');
-    expect(svcs.map(c => c.name)).toEqual(['web', 'db']);
+    const svcs = chunks.filter((c) => c.chunk_type === 'docker_service');
+    expect(svcs.map((c) => c.name)).toEqual(['web', 'db']);
   });
 
   it('reads scalar service fields', () => {
@@ -230,8 +242,8 @@ volumes:
 
   it('picks up networks and volumes', () => {
     const chunks = parseDockerCompose(COMPOSE);
-    expect(chunks.find(c => c.chunk_type === 'docker_network')!.fields[0].key).toBe('frontnet');
-    expect(chunks.find(c => c.chunk_type === 'docker_volume')!.fields[0].key).toBe('pgdata');
+    expect(chunks.find((c) => c.chunk_type === 'docker_network')!.fields[0].key).toBe('frontnet');
+    expect(chunks.find((c) => c.chunk_type === 'docker_volume')!.fields[0].key).toBe('pgdata');
   });
 
   it('returns nothing for a file with no services', () => {
@@ -250,7 +262,7 @@ Host prod
 Host staging
   HostName 10.0.0.2
 `);
-    expect(chunks.map(c => c.name)).toEqual(['prod', 'staging']);
+    expect(chunks.map((c) => c.name)).toEqual(['prod', 'staging']);
     expect(field(chunks[0], 'User').value).toBe('deploy');
   });
 
@@ -291,39 +303,42 @@ http {
 
   it('extracts server, upstream and location blocks', () => {
     const chunks = parseNginxConf(CONF);
-    expect(chunks.map(c => c.chunk_type).sort())
-      .toEqual(['nginx_location', 'nginx_server', 'nginx_upstream']);
+    expect(chunks.map((c) => c.chunk_type).sort()).toEqual([
+      'nginx_location',
+      'nginx_server',
+      'nginx_upstream',
+    ]);
   });
 
   it('names a server from its domain and port', () => {
-    const server = parseNginxConf(CONF).find(c => c.chunk_type === 'nginx_server')!;
+    const server = parseNginxConf(CONF).find((c) => c.chunk_type === 'nginx_server')!;
     expect(server.name).toBe('example.com:443');
   });
 
   it('types certificate and proxy directives', () => {
     const chunks = parseNginxConf(CONF);
-    const server = chunks.find(c => c.chunk_type === 'nginx_server')!;
-    const loc = chunks.find(c => c.chunk_type === 'nginx_location')!;
+    const server = chunks.find((c) => c.chunk_type === 'nginx_server')!;
+    const loc = chunks.find((c) => c.chunk_type === 'nginx_location')!;
     expect(field(server, 'ssl_certificate').field_type).toBe('cert');
     expect(field(server, 'listen').field_type).toBe('port');
     expect(field(loc, 'proxy_pass').field_type).toBe('endpoint');
   });
 
   it('keeps the header name as part of a multi-argument directive key', () => {
-    const server = parseNginxConf(CONF).find(c => c.chunk_type === 'nginx_server')!;
-    const hdr = server.fields.find(f => f.key.startsWith('add_header'))!;
+    const server = parseNginxConf(CONF).find((c) => c.chunk_type === 'nginx_server')!;
+    const hdr = server.fields.find((f) => f.key.startsWith('add_header'))!;
     expect(hdr.key).toBe('add_header X-Frame-Options');
     expect(hdr.value).toBe('"SAMEORIGIN" always');
   });
 
   it('records the location path', () => {
-    const loc = parseNginxConf(CONF).find(c => c.chunk_type === 'nginx_location')!;
+    const loc = parseNginxConf(CONF).find((c) => c.chunk_type === 'nginx_location')!;
     expect(field(loc, 'path').value).toBe('/api');
   });
 
   it('does not treat a # inside a quoted value as a comment', () => {
     const chunks = parseNginxConf('server {\n  add_header X-Colour "#ff0000" always;\n}\n');
-    const hdr = chunks[0].fields.find(f => f.key.startsWith('add_header'))!;
+    const hdr = chunks[0].fields.find((f) => f.key.startsWith('add_header'))!;
     expect(hdr.value).toContain('#ff0000');
   });
 

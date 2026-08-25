@@ -5,12 +5,29 @@ name: Build & Release
 # the expensive one (a full Tauri bundle is 15+ min per platform) and only runs
 # when there is something to ship.
 #
-# Releases happen on a `v*` tag and nowhere else. The version is hand-edited in
-# tauri.conf.json rather than derived from git history, so a release-per-push
-# would try to publish `v0.6.0` again on every commit.
+# A release happens when, and only when, the version number goes up.
+#
+# The trigger is a push to `main`, but the decision is not "was there a push" —
+# it is "does a tag named v<version> already exist?". A README fix leaves the
+# version alone, `v0.6.0` is still there from last time, and the run stops after
+# the ~10-second `meta` job without building or publishing anything. Bump the
+# version with `npm run version <x.y.z>` and the same push builds and releases,
+# once. Push again without touching the version and it stops again.
+#
+# That tag check is the idempotency guard, and it is deliberately the only one:
+# re-running the workflow, pushing an empty commit, or a merge that touches
+# nothing all resolve to "the tag exists", which is the same answer whether it
+# is asked once or ten times. Nothing here compares timestamps or diffs paths,
+# because a path filter gets this wrong in exactly the case that matters — a
+# commit that bumps the version AND edits the README would be skipped by
+# `paths-ignore: ['**.md']`.
+#
+# Pushing a `v*` tag by hand still works and still publishes, for re-releasing
+# an older commit.
 
 on:
   push:
+    branches: [main]
     tags: ["v*"]
   workflow_dispatch:
     inputs:
@@ -23,20 +40,34 @@ permissions:
   contents: read
 
 concurrency:
-  # Never cancel a tag build half-way through: a partially-uploaded release is
-  # worse than a slow one. Branch/dispatch runs are cheap to redo.
+  # Never cancel a run that might be releasing: a partially-uploaded release —
+  # image pushed, GitHub Release missing — is worse than a slow one.
+  #
+  # That now covers `main` as well as tags. Before this workflow triggered on
+  # branches, a main push never reached it and cancelling was free; now the
+  # release path runs from main, and a second push landing mid-upload would
+  # kill it. Pushes that change nothing still queue, but they stop at the
+  # ~10-second `meta` job, so the queue costs almost nothing.
   group: build-${{ github.ref }}
-  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+  cancel-in-progress: >-
+    ${{ github.ref != 'refs/heads/main'
+        && !startsWith(github.ref, 'refs/tags/') }}
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
   # ---------------------------------------------------------------------------
-  # Version is stated in five files. This job is the only thing that stops them
+  # Version is stated in six files. This job is the only thing that stops them
   # from drifting, because nothing else in the build reads more than one of them
   # and a mismatch is invisible until a user downloads `EnvVault_0.6.0.AppImage`
-  # from a release labelled 0.7.0.
+  # from a release labelled 0.7.0. `npm run version <x.y.z>` writes all six;
+  # `npm run version:check` is the same comparison this job performs, so drift
+  # is catchable before pushing.
+  #
+  # It also decides whether the rest of the workflow runs at all. Everything
+  # below it is expensive — a Tauri bundle is 15+ minutes per platform — so the
+  # gate has to be here, in a job that finishes in seconds.
   # ---------------------------------------------------------------------------
   meta:
     name: Resolve version
@@ -44,7 +75,11 @@ jobs:
     outputs:
       version: ${{ steps.v.outputs.version }}
       publish: ${{ steps.v.outputs.publish }}
+      build: ${{ steps.v.outputs.build }}
     steps:
+      # fetch-depth 0 brings the tags with it. `git tag --list` below is the
+      # whole release gate, and on a shallow clone it would find nothing and
+      # re-release every push.
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
@@ -76,20 +111,68 @@ jobs:
               "$(sed -n 's/^version *= *"\(.*\)"/\1/p' "$c/Cargo.toml" | head -n1)"
           done
 
-          # On a tag, the tag itself is a sixth copy of the number.
-          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
-            TAG="${GITHUB_REF#refs/tags/v}"
-            if [ "$TAG" != "$VERSION" ]; then
-              echo "::error::tag v${TAG} does not match tauri.conf.json ${VERSION}"
-              fail=1
-            fi
-            echo "publish=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "publish=${{ inputs.publish || false }}" >> "$GITHUB_OUTPUT"
-          fi
-
           [ "$fail" -eq 0 ] || exit 1
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+
+          # ---- Does anything downstream run? ---------------------------------
+          #
+          # `publish` gates the release job. `build` gates the two expensive
+          # build jobs, and is a separate output so that a manual dispatch can
+          # produce installers to test without publishing them.
+          publish=false
+          build=false
+
+          case "${GITHUB_REF}" in
+            refs/tags/v*)
+              # A hand-pushed tag. It is a seventh copy of the number, so it
+              # gets checked like the rest.
+              TAG="${GITHUB_REF#refs/tags/v}"
+              if [ "$TAG" != "$VERSION" ]; then
+                echo "::error::tag v${TAG} does not match tauri.conf.json ${VERSION}"
+                exit 1
+              fi
+              publish=true
+              build=true
+              ;;
+
+            refs/heads/main)
+              # THE RELEASE GATE.
+              #
+              # `git tag --list` prints the name if it exists and nothing if it
+              # does not — it never fails, so `set -e` cannot abort here. An
+              # existing tag means this version has already been released and
+              # this push changed something else: documentation, a test, a
+              # refactor. Stop.
+              if [ -n "$(git tag --list "v${VERSION}")" ]; then
+                echo "v${VERSION} is already tagged — nothing to release."
+                echo "Bump with 'npm run version <x.y.z>' to cut a new one."
+                {
+                  echo "### No release"
+                  echo ""
+                  echo "\`v${VERSION}\` already exists. This push did not change the version."
+                } >> "$GITHUB_STEP_SUMMARY"
+              else
+                echo "v${VERSION} has no tag yet — releasing."
+                {
+                  echo "### Releasing ${VERSION}"
+                  echo ""
+                  echo "No \`v${VERSION}\` tag existed; it will be created on \`${GITHUB_SHA}\`."
+                } >> "$GITHUB_STEP_SUMMARY"
+                publish=true
+                build=true
+              fi
+              ;;
+
+            *)
+              # workflow_dispatch, or a push to some other branch. Build so the
+              # artefacts can be downloaded and tested; publish only if asked.
+              publish="${{ inputs.publish || false }}"
+              build=true
+              ;;
+          esac
+
+          echo "publish=${publish}" >> "$GITHUB_OUTPUT"
+          echo "build=${build}"     >> "$GITHUB_OUTPUT"
 
   # ---------------------------------------------------------------------------
   # The desktop app. `tauri build` runs `npm run build:frontend` itself via
@@ -98,6 +181,11 @@ jobs:
   desktop:
     name: Desktop (${{ matrix.label }})
     needs: meta
+    # Skipped on any push that did not move the version. ci.yml already ran
+    # check, clippy, the Rust tests and the frontend suite on this commit; what
+    # is skipped here is only the packaging, which nothing consumes unless a
+    # release is being cut.
+    if: needs.meta.outputs.build == 'true'
     runs-on: ${{ matrix.os }}
     strategy:
       # A Windows-only break must not hide behind a green Linux run.
@@ -193,6 +281,7 @@ jobs:
   headless:
     name: CLI + server (${{ matrix.label }})
     needs: meta
+    if: needs.meta.outputs.build == 'true'
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -264,14 +353,103 @@ jobs:
           if-no-files-found: error
 
   # ---------------------------------------------------------------------------
+  # The server image. `envv-server` is the one component people run unattended
+  # and on a machine that is not their desktop, so it is the one that wants a
+  # pull-able artefact rather than a tarball.
+  #
+  # Built here rather than in ci.yml because a full Rust image build is 10+
+  # minutes and ci.yml already compiles and tests the same code natively. What
+  # this adds over that is the packaging, and packaging only matters when
+  # something is being shipped.
+  # ---------------------------------------------------------------------------
+  docker:
+    name: Server image (GHCR)
+    needs: meta
+    if: needs.meta.outputs.build == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write # push to ghcr.io
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      # Logging in only when the image will actually be pushed keeps the
+      # dispatch-without-publish path from needing a credential at all.
+      - name: Log in to GHCR
+        if: needs.meta.outputs.publish == 'true'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compute image name and tags
+        id: img
+        shell: bash
+        run: |
+          set -euo pipefail
+          # `github.repository` is `owner/name`, and GHCR requires it lowercased:
+          # a capital letter in either half makes `docker push` fail with an
+          # "invalid reference format" that names nothing useful.
+          NAME="ghcr.io/$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')/envv-server"
+          VERSION="${{ needs.meta.outputs.version }}"
+          MINOR="${VERSION%.*}"
+          echo "name=${NAME}"   >> "$GITHUB_OUTPUT"
+          echo "minor=${MINOR}" >> "$GITHUB_OUTPUT"
+          echo "image: ${NAME}:${VERSION} (also :${MINOR}, :latest)"
+
+      # Three tags on a release: the exact version, the minor line, and
+      # `latest`. `0.6` moving to `0.6.1` is what lets a compose file pin a
+      # patch stream; `latest` is for people who have not decided yet.
+      #
+      # No `:main` tag. An image named after a branch is one `docker pull`
+      # away from someone running unreleased code against a real vault.
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          push: ${{ needs.meta.outputs.publish == 'true' }}
+          # `load: true` on every path, including the pushing one. This is a
+          # single-platform build, so buildx can write to the local daemon and
+          # the registry from the same invocation — and that is what lets the
+          # smoke test below run against the exact image that was pushed rather
+          # than skipping on the only path where it matters.
+          load: true
+          tags: |
+            ${{ steps.img.outputs.name }}:${{ needs.meta.outputs.version }}
+            ${{ steps.img.outputs.name }}:${{ steps.img.outputs.minor }}
+            ${{ steps.img.outputs.name }}:latest
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.version=${{ needs.meta.outputs.version }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.licenses=MIT
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # The image has to actually start. A Dockerfile that builds and then dies
+      # on ENTRYPOINT is the failure a build-only job cannot see, and for a
+      # server image it is the only failure that matters.
+      #
+      # `--entrypoint` overrides the ENTRYPOINT's `--host/--db-path/--salt-path`
+      # so this does not try to open a vault in a container with no volume.
+      - name: Smoke test the image
+        run: |
+          docker run --rm --entrypoint envv-server \
+            "${{ steps.img.outputs.name }}:${{ needs.meta.outputs.version }}" --version
+
+  # ---------------------------------------------------------------------------
   release:
     name: Publish release
-    needs: [meta, desktop, headless]
+    needs: [meta, desktop, headless, docker]
     if: needs.meta.outputs.publish == 'true'
     runs-on: ubuntu-latest
     permissions:
-      contents: write   # create the release
-      id-token: write   # cosign keyless (Sigstore OIDC)
+      contents: write # create the release
+      id-token: write # cosign keyless (Sigstore OIDC)
     steps:
       - uses: actions/checkout@v4
         with:
@@ -311,8 +489,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          # The tag being released is already at HEAD, so ask for the one before it.
-          PREV=$(git describe --tags --abbrev=0 --exclude="${GITHUB_REF_NAME}" 2>/dev/null || echo "")
+          # Exclude the tag being released by NAME, not by ${GITHUB_REF_NAME}.
+          # On the branch-push path GITHUB_REF_NAME is "main", the exclusion
+          # matches nothing, and `git describe` happily returns the tag we are
+          # about to create — producing an empty changelog on every release.
+          PREV=$(git describe --tags --abbrev=0 \
+                   --exclude="v${{ needs.meta.outputs.version }}" 2>/dev/null || echo "")
           if [ -n "$PREV" ]; then
             RANGE="${PREV}..HEAD"; echo "range: ${RANGE}"
           else
@@ -348,10 +530,22 @@ jobs:
           done
           ls -lh release-assets/
 
+      # `commit:` is what makes the branch-push path work: when no `v<version>`
+      # tag exists, this action creates it pointing at the commit that was
+      # built, rather than requiring a tag to have been pushed first. On the
+      # hand-pushed-tag path the tag already exists at that same commit and this
+      # is a no-op.
+      #
+      # `allowUpdates: true` keeps a re-run from failing outright, but note what
+      # it means: re-running a release job replaces the assets on an existing
+      # release. That is the desired behaviour for a retried upload and the
+      # wrong one for a second release of the same number — which is precisely
+      # what the tag check in `meta` prevents from ever reaching this job.
       - name: Create GitHub Release
         uses: ncipollo/release-action@v1
         with:
           tag: v${{ needs.meta.outputs.version }}
+          commit: ${{ github.sha }}
           name: EnvVault ${{ needs.meta.outputs.version }}
           artifacts: "release-assets/*"
           token: ${{ secrets.GITHUB_TOKEN }}

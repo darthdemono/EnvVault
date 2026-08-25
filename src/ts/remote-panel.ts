@@ -1,15 +1,28 @@
 /**
- * @file Remote Vaults panel — manage and connect to multiple remote envv-server instances.
+ * @file
+ * Remote Vaults panel — manage and connect to multiple remote envv-server instances.
  */
 
 import type { RemoteVaultConfig } from './types';
-import { st, Settings, RemoteVaultStore, TauriVaultStore, LocalVaultStore, inTauri, applyUsersPanelVisibility, resetViewState, triggerRender } from './state';
+import {
+  st,
+  Settings,
+  RemoteVaultStore,
+  TauriVaultStore,
+  LocalVaultStore,
+  inTauri,
+  applyUsersPanelVisibility,
+  resetViewState,
+  triggerRender,
+} from './state';
 import { esc, escAttr, showToast, showConfirm, showPasswordPrompt } from './utils';
 import { relativeTime } from './ui-qol';
 import { refreshLanPanel } from './lan';
 
 let _finishInitFn: () => Promise<void> = async () => {};
-export function setRemoteFinishInitFn(fn: () => Promise<void>) { _finishInitFn = fn; }
+export function setRemoteFinishInitFn(fn: () => Promise<void>) {
+  _finishInitFn = fn;
+}
 
 // Keep-alive ping — sends GET /api/ping every 90s while connected.
 let _pingInterval: ReturnType<typeof setInterval> | null = null;
@@ -21,13 +34,19 @@ function startPing() {
     // TLS-pinning proxy. This used to hand-build a request reading a `_token`
     // field that does not exist (the field is `token`), so every ping went out
     // as `Bearer ` and was rejected — the keep-alive never kept anything alive.
-    if (!(st.store instanceof RemoteVaultStore)) { stopPing(); return; }
+    if (!(st.store instanceof RemoteVaultStore)) {
+      stopPing();
+      return;
+    }
     await (st.store as RemoteVaultStore).ping();
   }, 90_000);
 }
 
 function stopPing() {
-  if (_pingInterval !== null) { clearInterval(_pingInterval); _pingInterval = null; }
+  if (_pingInterval !== null) {
+    clearInterval(_pingInterval);
+    _pingInterval = null;
+  }
 }
 
 function genId(): string {
@@ -72,9 +91,9 @@ export async function acquireFingerprint(url: string): Promise<string | null> {
   }
   const ok = await showConfirm(
     `${url} presented a certificate this app has not seen before.\n\n` +
-    `SHA-256 fingerprint:\n${formatFingerprint(fp)}\n\n` +
-    `Check this against the server before accepting. OK pins this certificate; ` +
-    `future connections are refused if it changes.`,
+      `SHA-256 fingerprint:\n${formatFingerprint(fp)}\n\n` +
+      `Check this against the server before accepting. OK pins this certificate; ` +
+      `future connections are refused if it changes.`,
   );
   return ok ? fp : null;
 }
@@ -82,7 +101,7 @@ export async function acquireFingerprint(url: string): Promise<string | null> {
 /** Saved config for a server, matched on the pair that identifies a login. */
 export function findSavedRemote(url: string, username = ''): RemoteVaultConfig | undefined {
   const clean = url.replace(/\/$/, '');
-  return getSaved().find(c => c.url === clean && c.username === username);
+  return getSaved().find((c) => c.url === clean && c.username === username);
 }
 
 /**
@@ -93,17 +112,28 @@ export function findSavedRemote(url: string, username = ''): RemoteVaultConfig |
  * the Remote panel or the vault switcher, and the next session had to retype the
  * URL. Connecting is the intent to use a server — that is enough to remember it.
  */
-export function upsertSavedRemote(input: { url: string; username: string; certFingerprint?: string }): RemoteVaultConfig {
+export function upsertSavedRemote(input: {
+  url: string;
+  username: string;
+  certFingerprint?: string;
+}): RemoteVaultConfig {
   const url = input.url.replace(/\/$/, '');
   const saved = getSaved();
-  const idx = saved.findIndex(c => c.url === url && c.username === input.username);
+  const idx = saved.findIndex((c) => c.url === url && c.username === input.username);
 
   if (idx >= 0) {
     const prev = saved[idx];
-    if (input.certFingerprint && prev.certFingerprint && prev.certFingerprint !== input.certFingerprint) {
+    if (
+      input.certFingerprint &&
+      prev.certFingerprint &&
+      prev.certFingerprint !== input.certFingerprint
+    ) {
       showToast('⚠ TLS cert fingerprint changed — server certificate may have rotated', 'err');
     }
-    saved[idx] = { ...prev, ...(input.certFingerprint ? { certFingerprint: input.certFingerprint } : {}) };
+    saved[idx] = {
+      ...prev,
+      ...(input.certFingerprint ? { certFingerprint: input.certFingerprint } : {}),
+    };
     saveSaved(saved);
     return saved[idx];
   }
@@ -128,7 +158,7 @@ export function upsertSavedRemote(input: { url: string; username: string; certFi
  */
 export function markRemoteConnected(id: string): void {
   const saved = getSaved();
-  const idx = saved.findIndex(c => c.id === id);
+  const idx = saved.findIndex((c) => c.id === id);
   if (idx < 0) return;
   saved[idx] = { ...saved[idx], lastConnectedAt: new Date().toISOString() };
   saveSaved(saved);
@@ -144,7 +174,10 @@ export function renderRemotePanel() {
   const saved = getSaved();
   const activeId = st.activeRemoteId;
 
-  sidebar.innerHTML = saved.length ? saved.map(cfg => `
+  sidebar.innerHTML = saved.length
+    ? saved
+        .map(
+          (cfg) => `
     <button class="remote-list-item${activeId === cfg.id ? ' active' : ''}" data-remote-id="${escAttr(cfg.id)}">
       <span class="remote-item-icon">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -158,21 +191,25 @@ export function renderRemotePanel() {
       </span>
       ${activeId === cfg.id ? '<span class="remote-connected-dot" title="Connected"></span>' : ''}
     </button>
-  `).join('') : '<div class="users-empty">No saved remotes.<br>Add one below.</div>';
+  `,
+        )
+        .join('')
+    : '<div class="users-empty">No saved remotes.<br>Add one below.</div>';
 
   if (workspace) {
     if (activeId) {
-      const cfg = saved.find(c => c.id === activeId);
+      const cfg = saved.find((c) => c.id === activeId);
       if (cfg) renderRemoteDetail(cfg, workspace);
     } else {
-      workspace.innerHTML = '<div class="users-detail-empty">Select a remote vault or add a new one.</div>';
+      workspace.innerHTML =
+        '<div class="users-detail-empty">Select a remote vault or add a new one.</div>';
     }
   }
 }
 
 function renderRemoteDetail(cfg: RemoteVaultConfig, ws: HTMLElement) {
-  const isConnected = st.store instanceof RemoteVaultStore &&
-    (st.store as RemoteVaultStore).baseUrl === cfg.url;
+  const isConnected =
+    st.store instanceof RemoteVaultStore && (st.store as RemoteVaultStore).baseUrl === cfg.url;
 
   ws.innerHTML = `
     <div class="users-detail">
@@ -190,9 +227,11 @@ function renderRemoteDetail(cfg: RemoteVaultConfig, ws: HTMLElement) {
           <div class="users-detail-sub">${esc(cfg.url)} · ${cfg.username ? esc(cfg.username) : 'owner (master password)'}</div>
         </div>
         <div class="users-detail-actions">
-          ${isConnected
-            ? `<button class="btn btn-xs danger" id="remote-disconnect-btn">Disconnect</button>`
-            : `<button class="btn btn-xs btn-accent" id="remote-connect-btn">Connect</button>`}
+          ${
+            isConnected
+              ? `<button class="btn btn-xs danger" id="remote-disconnect-btn">Disconnect</button>`
+              : `<button class="btn btn-xs btn-accent" id="remote-connect-btn">Connect</button>`
+          }
           <button class="btn btn-xs btn-ghost" id="remote-delete-btn">Remove</button>
         </div>
       </div>
@@ -220,23 +259,35 @@ function renderRemoteDetail(cfg: RemoteVaultConfig, ws: HTMLElement) {
         </div>
       </section>
 
-      ${isConnected ? `
+      ${
+        isConnected
+          ? `
       <section class="users-section">
         <div class="users-section-head"><span>Vault Status</span></div>
         <div id="remote-status-area" class="remote-status-area">
           <button class="btn btn-xs btn-ghost" id="remote-refresh-status-btn">Refresh Status</button>
         </div>
-      </section>` : ''}
+      </section>`
+          : ''
+      }
     </div>
   `;
 
   // Bindings
-  document.getElementById('remote-connect-btn')?.addEventListener('click', () => connectRemote(cfg));
-  document.getElementById('remote-disconnect-btn')?.addEventListener('click', () => disconnectRemote());
-  document.getElementById('remote-delete-btn')?.addEventListener('click', () => deleteRemote(cfg.id));
+  document
+    .getElementById('remote-connect-btn')
+    ?.addEventListener('click', () => connectRemote(cfg));
+  document
+    .getElementById('remote-disconnect-btn')
+    ?.addEventListener('click', () => disconnectRemote());
+  document
+    .getElementById('remote-delete-btn')
+    ?.addEventListener('click', () => deleteRemote(cfg.id));
   document.getElementById('re-save-btn')?.addEventListener('click', () => saveRemoteEdits(cfg.id));
   document.getElementById('re-test-btn')?.addEventListener('click', () => testRemote(cfg));
-  document.getElementById('remote-refresh-status-btn')?.addEventListener('click', () => refreshRemoteStatus(cfg));
+  document
+    .getElementById('remote-refresh-status-btn')
+    ?.addEventListener('click', () => refreshRemoteStatus(cfg));
 
   if (isConnected) refreshRemoteStatus(cfg);
 }
@@ -252,13 +303,17 @@ async function connectRemote(cfg: RemoteVaultConfig) {
     const fp = await acquireFingerprint(cfg.url);
     if (!fp) return;
     const saved = getSaved();
-    const idx = saved.findIndex(c => c.id === cfg.id);
-    if (idx >= 0) { saved[idx] = { ...saved[idx], certFingerprint: fp }; saveSaved(saved); cfg = saved[idx]; }
-    else cfg = { ...cfg, certFingerprint: fp };
+    const idx = saved.findIndex((c) => c.id === cfg.id);
+    if (idx >= 0) {
+      saved[idx] = { ...saved[idx], certFingerprint: fp };
+      saveSaved(saved);
+      cfg = saved[idx];
+    } else cfg = { ...cfg, certFingerprint: fp };
   }
 
   const pw = await showPasswordPrompt(
-    `${cfg.username ? `Password for "${cfg.username}"` : 'Master password'} on ${cfg.name}:`);
+    `${cfg.username ? `Password for "${cfg.username}"` : 'Master password'} on ${cfg.name}:`,
+  );
   if (pw === null) return;
 
   const remote = new RemoteVaultStore(cfg.url, cfg.certFingerprint);
@@ -269,7 +324,10 @@ async function connectRemote(cfg: RemoteVaultConfig) {
     } else {
       ok = await remote.unlock(pw);
     }
-    if (!ok) { showToast('Authentication failed', 'err'); return; }
+    if (!ok) {
+      showToast('Authentication failed', 'err');
+      return;
+    }
 
     // Record the fingerprint on first contact. A *changed* fingerprint is not
     // silently re-pinned: the old code overwrote the stored value on every
@@ -280,11 +338,15 @@ async function connectRemote(cfg: RemoteVaultConfig) {
     const serverStatus = await remote.getStatus();
     if (serverStatus.cert_fingerprint) {
       const saved = getSaved();
-      const idx = saved.findIndex(c => c.id === cfg.id);
+      const idx = saved.findIndex((c) => c.id === cfg.id);
       if (idx >= 0) {
         const stored = saved[idx].certFingerprint;
         if (stored && stored !== serverStatus.cert_fingerprint) {
-          showToast('⚠ TLS certificate does not match the pinned one — not trusting it', 'err', 6000);
+          showToast(
+            '⚠ TLS certificate does not match the pinned one — not trusting it',
+            'err',
+            6000,
+          );
         } else if (!stored) {
           saved[idx] = { ...saved[idx], certFingerprint: serverStatus.cert_fingerprint };
           saveSaved(saved);
@@ -353,9 +415,9 @@ export async function switchToLocalVault(): Promise<void> {
   st.activeRemoteId = null;
   Settings.set('remote', { enabled: false, serverUrl: '' });
 
-  st.vault.api_keys        = [];
+  st.vault.api_keys = [];
   st.vault.user_categories = [];
-  st.vault.projects        = [{ id: 'Universal', name: 'Universal', description: '' }];
+  st.vault.projects = [{ id: 'Universal', name: 'Universal', description: '' }];
   resetViewState();
   const { resetUsersPanelState } = await import('./users');
   resetUsersPanelState();
@@ -393,33 +455,45 @@ export async function switchToLocalVault(): Promise<void> {
   await _finishInitFn();
 }
 
-function disconnectRemote() { void switchToLocalVault(); }
+function disconnectRemote() {
+  void switchToLocalVault();
+}
 
 async function deleteRemote(id: string) {
   const saved = getSaved();
-  const cfg = saved.find(c => c.id === id);
-  if (!await showConfirm(`Remove "${cfg?.name ?? id}" from saved remotes?`)) return;
+  const cfg = saved.find((c) => c.id === id);
+  if (!(await showConfirm(`Remove "${cfg?.name ?? id}" from saved remotes?`))) return;
   if (st.activeRemoteId === id) disconnectRemote();
-  saveSaved(saved.filter(c => c.id !== id));
+  saveSaved(saved.filter((c) => c.id !== id));
   st.activeRemoteId = null;
   renderRemotePanel();
 }
 
 async function saveRemoteEdits(id: string) {
-  const name     = (document.getElementById('re-name')     as HTMLInputElement).value.trim();
-  const url      = (document.getElementById('re-url')      as HTMLInputElement).value.trim().replace(/\/$/, '');
-  const username = (document.getElementById('re-username')  as HTMLInputElement).value.trim();
-  if (!name || !url) { showToast('Name and URL are required', 'err'); return; }
-  const saved = getSaved().map(c => c.id === id ? { ...c, name, url, username } : c);
+  const name = (document.getElementById('re-name') as HTMLInputElement).value.trim();
+  const url = (document.getElementById('re-url') as HTMLInputElement).value
+    .trim()
+    .replace(/\/$/, '');
+  const username = (document.getElementById('re-username') as HTMLInputElement).value.trim();
+  if (!name || !url) {
+    showToast('Name and URL are required', 'err');
+    return;
+  }
+  const saved = getSaved().map((c) => (c.id === id ? { ...c, name, url, username } : c));
   saveSaved(saved);
   showToast('Saved', 'ok');
   renderRemotePanel();
 }
 
 async function testRemote(cfg?: RemoteVaultConfig) {
-  const url      = (document.getElementById('re-url')  as HTMLInputElement)?.value.trim().replace(/\/$/, '');
+  const url = (document.getElementById('re-url') as HTMLInputElement)?.value
+    .trim()
+    .replace(/\/$/, '');
   const statusEl = document.getElementById('re-test-status');
-  if (!url) { showToast('Enter a URL first', 'err'); return; }
+  if (!url) {
+    showToast('Enter a URL first', 'err');
+    return;
+  }
   if (statusEl) statusEl.textContent = 'Testing…';
   try {
     // Must go through RemoteVaultStore, not bare fetch(): for an https:// server
@@ -432,12 +506,18 @@ async function testRemote(cfg?: RemoteVaultConfig) {
     // reporting a reachable server as down.
     if (!fingerprint && url.startsWith('https://')) {
       const fp = await acquireFingerprint(url);
-      if (!fp) { if (statusEl) statusEl.textContent = '✗ Certificate not trusted'; return; }
+      if (!fp) {
+        if (statusEl) statusEl.textContent = '✗ Certificate not trusted';
+        return;
+      }
       fingerprint = fp;
       if (cfg) {
         const saved = getSaved();
-        const idx = saved.findIndex(c => c.id === cfg.id);
-        if (idx >= 0) { saved[idx] = { ...saved[idx], certFingerprint: fp }; saveSaved(saved); }
+        const idx = saved.findIndex((c) => c.id === cfg.id);
+        if (idx >= 0) {
+          saved[idx] = { ...saved[idx], certFingerprint: fp };
+          saveSaved(saved);
+        }
       }
     }
     const body = await new RemoteVaultStore(url, fingerprint).getStatus();
@@ -475,11 +555,15 @@ async function refreshRemoteStatus(cfg: RemoteVaultConfig) {
       </div>
       <button class="btn btn-xs btn-ghost" id="remote-refresh-status-btn" style="margin-top:8px">Refresh</button>
     `;
-    document.getElementById('remote-refresh-status-btn')?.addEventListener('click', () => refreshRemoteStatus(cfg));
+    document
+      .getElementById('remote-refresh-status-btn')
+      ?.addEventListener('click', () => refreshRemoteStatus(cfg));
   } catch {
     area.innerHTML = `<div class="remote-status-err">Could not reach server.</div>
       <button class="btn btn-xs btn-ghost" id="remote-refresh-status-btn" style="margin-top:6px">Retry</button>`;
-    document.getElementById('remote-refresh-status-btn')?.addEventListener('click', () => refreshRemoteStatus(cfg));
+    document
+      .getElementById('remote-refresh-status-btn')
+      ?.addEventListener('click', () => refreshRemoteStatus(cfg));
   }
 }
 
@@ -529,11 +613,21 @@ function openAddRemoteForm() {
   (document.getElementById('add-remote-name') as HTMLInputElement)?.focus();
 
   document.getElementById('add-remote-confirm')!.addEventListener('click', () => {
-    const name     = (document.getElementById('add-remote-name')     as HTMLInputElement).value.trim();
-    const url      = (document.getElementById('add-remote-url')      as HTMLInputElement).value.trim().replace(/\/$/, '');
-    const username = (document.getElementById('add-remote-username')  as HTMLInputElement).value.trim();
-    if (!name) { showToast('Name is required', 'err'); return; }
-    if (!url)  { showToast('URL is required', 'err'); return; }
+    const name = (document.getElementById('add-remote-name') as HTMLInputElement).value.trim();
+    const url = (document.getElementById('add-remote-url') as HTMLInputElement).value
+      .trim()
+      .replace(/\/$/, '');
+    const username = (
+      document.getElementById('add-remote-username') as HTMLInputElement
+    ).value.trim();
+    if (!name) {
+      showToast('Name is required', 'err');
+      return;
+    }
+    if (!url) {
+      showToast('URL is required', 'err');
+      return;
+    }
     const cfg: RemoteVaultConfig = { id: genId(), name, url, username };
     saveSaved([...getSaved(), cfg]);
     st.activeRemoteId = cfg.id;
@@ -542,9 +636,14 @@ function openAddRemoteForm() {
   });
 
   document.getElementById('add-remote-test')!.addEventListener('click', async () => {
-    const url      = (document.getElementById('add-remote-url')   as HTMLInputElement).value.trim().replace(/\/$/, '');
+    const url = (document.getElementById('add-remote-url') as HTMLInputElement).value
+      .trim()
+      .replace(/\/$/, '');
     const statusEl = document.getElementById('add-test-status');
-    if (!url) { showToast('Enter a URL first', 'err'); return; }
+    if (!url) {
+      showToast('Enter a URL first', 'err');
+      return;
+    }
     if (statusEl) statusEl.textContent = 'Testing…';
     try {
       const probe = new RemoteVaultStore(url);

@@ -3,10 +3,10 @@
 //! Every command takes an [`Access`] rather than a connection, so the same code
 //! path serves `envv list` and `envv --server https://… list`.
 
+use crate::error::{CliError, CliResult};
 use std::path::PathBuf;
 use std::sync::OnceLock;
 use vault_core::{derive_key, open_db, read_or_create_salt, VaultKey};
-use crate::error::{CliError, CliResult};
 
 // ── Path resolution (local mode) ──────────────────────────────────────────────
 
@@ -56,7 +56,10 @@ fn data_dir_or_exit() -> PathBuf {
                  Pass --db-path and --salt-path explicitly.",
             );
             if crate::out::is_json() {
-                println!("{}", serde_json::to_string_pretty(&e.to_json()).unwrap_or_default());
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&e.to_json()).unwrap_or_default()
+                );
             } else {
                 eprintln!("Error: {}", e.message);
             }
@@ -143,7 +146,11 @@ impl RemoteClient {
             .and_then(|t| t.as_str())
             .unwrap_or("")
             .to_string();
-        Ok(Self { base: base.to_string(), client, token })
+        Ok(Self {
+            base: base.to_string(),
+            client,
+            token,
+        })
     }
 
     /// Authenticate as a named sub-user (`/api/auth`) instead of the vault owner.
@@ -199,7 +206,11 @@ impl RemoteClient {
             .and_then(|t| t.as_str())
             .unwrap_or("")
             .to_string();
-        Ok(Self { base: base.to_string(), client, token })
+        Ok(Self {
+            base: base.to_string(),
+            client,
+            token,
+        })
     }
 
     /// Turn a failed HTTP response into a classified error.
@@ -364,7 +375,10 @@ impl Access {
                 vault_core::save_vault(
                     &conn,
                     data.clone(),
-                    vault_core::SaveCtx { actor: actor.as_deref(), ..Default::default() },
+                    vault_core::SaveCtx {
+                        actor: actor.as_deref(),
+                        ..Default::default()
+                    },
                 )
                 .map(|_| ())
                 .map_err(CliError::from)
@@ -391,7 +405,6 @@ impl Access {
             )),
         }
     }
-
 }
 
 /// How the caller wants to authenticate. Owner (master password) is the default;
@@ -416,11 +429,15 @@ pub fn open_access(opts: &AuthOpts<'_>) -> CliResult<Access> {
             return Ok(Access::Remote(RemoteClient::with_session(base, session)));
         }
         if let Some(tok) = opts.token {
-            return Ok(Access::Remote(RemoteClient::connect_with_api_token(base, tok)?));
+            return Ok(Access::Remote(RemoteClient::connect_with_api_token(
+                base, tok,
+            )?));
         }
         if let Some(username) = opts.user {
             let pw = get_password_for(opts.password, Some(username));
-            return Ok(Access::Remote(RemoteClient::connect_as_user(base, username, &pw)?));
+            return Ok(Access::Remote(RemoteClient::connect_as_user(
+                base, username, &pw,
+            )?));
         }
         let pw = get_password(opts.password);
         return Ok(Access::Remote(RemoteClient::connect(base, &pw)?));

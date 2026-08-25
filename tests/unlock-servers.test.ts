@@ -32,7 +32,7 @@ describe('markRemoteConnected', () => {
     const cfg = upsertSavedRemote({ url: 'http://a.example', username: 'joy' });
     expect(cfg.lastConnectedAt).toBeUndefined();
     markRemoteConnected(cfg.id);
-    const saved = Settings.get('remoteSaved')!.find(c => c.id === cfg.id)!;
+    const saved = Settings.get('remoteSaved')!.find((c) => c.id === cfg.id)!;
     expect(Date.parse(saved.lastConnectedAt!)).not.toBeNaN();
   });
 
@@ -55,14 +55,13 @@ describe('recentServers', () => {
   it('orders most-recently-connected first', () => {
     const a = upsertSavedRemote({ url: 'http://a.example', username: '' });
     const b = upsertSavedRemote({ url: 'http://b.example', username: '' });
-    const saved = Settings.get('remoteSaved')!.map(c => ({
+    const saved = Settings.get('remoteSaved')!.map((c) => ({
       ...c,
-      lastConnectedAt: c.id === a.id
-        ? new Date(Date.now() - 60_000).toISOString()
-        : new Date().toISOString(),
+      lastConnectedAt:
+        c.id === a.id ? new Date(Date.now() - 60_000).toISOString() : new Date().toISOString(),
     }));
     Settings.set('remoteSaved', saved);
-    expect(recentServers().map(c => c.id)).toEqual([b.id, a.id]);
+    expect(recentServers().map((c) => c.id)).toEqual([b.id, a.id]);
   });
 
   it('sorts a never-connected server last', () => {
@@ -71,9 +70,9 @@ describe('recentServers', () => {
     // its original order, so a never-connected server stayed wherever it was
     // added rather than sinking below the one actually in use.
     const never = upsertSavedRemote({ url: 'http://never.example', username: '' });
-    const used  = upsertSavedRemote({ url: 'http://used.example', username: '' });
+    const used = upsertSavedRemote({ url: 'http://used.example', username: '' });
     markRemoteConnected(used.id);
-    expect(recentServers().map(c => c.id)).toEqual([used.id, never.id]);
+    expect(recentServers().map((c) => c.id)).toEqual([used.id, never.id]);
   });
 
   it('does not mutate the stored list', () => {
@@ -81,7 +80,7 @@ describe('recentServers', () => {
     const b = upsertSavedRemote({ url: 'http://b.example', username: '' });
     markRemoteConnected(b.id);
     recentServers();
-    expect(Settings.get('remoteSaved')!.map(c => c.id)).toEqual([a.id, b.id]);
+    expect(Settings.get('remoteSaved')!.map((c) => c.id)).toEqual([a.id, b.id]);
   });
 
   it('returns an empty list rather than throwing when nothing is saved', () => {
@@ -92,13 +91,14 @@ describe('recentServers', () => {
 
 describe('unlock screen server picker', () => {
   it('pre-fills the URL and username of the last server actually connected to', async () => {
-    const stale  = upsertSavedRemote({ url: 'http://stale.example', username: 'old' });
+    const stale = upsertSavedRemote({ url: 'http://stale.example', username: 'old' });
     const recent = upsertSavedRemote({ url: 'http://recent.example', username: 'joy' });
     markRemoteConnected(stale.id);
     // Force a distinct, later timestamp — two calls inside the same millisecond
     // would tie and make the assertion depend on sort stability.
-    const saved = Settings.get('remoteSaved')!.map(c =>
-      c.id === recent.id ? { ...c, lastConnectedAt: new Date(Date.now() + 1000).toISOString() } : c);
+    const saved = Settings.get('remoteSaved')!.map((c) =>
+      c.id === recent.id ? { ...c, lastConnectedAt: new Date(Date.now() + 1000).toISOString() } : c,
+    );
     Settings.set('remoteSaved', saved);
 
     await showUnlockModal(false);
@@ -114,7 +114,7 @@ describe('unlock screen server picker', () => {
 
     $('unlock-server-recent').click();
     const items = document.querySelectorAll('#dropdown [data-ddid]');
-    expect(items).toHaveLength(3);            // Local Vault + 2 servers
+    expect(items).toHaveLength(3); // Local Vault + 2 servers
     expect($('dropdown').textContent).toContain('a.example');
     expect($('dropdown').textContent).toContain('b.example');
   });
@@ -156,9 +156,14 @@ describe('unlock screen server picker', () => {
   it('escapes a server name before putting it in the dropdown', async () => {
     // The saved list is plain JSON on disk and the name is derived from a URL
     // the user typed — invariant 4 applies here as much as to vault fields.
-    Settings.set('remoteSaved', [{
-      id: 'x', name: '<img src=x onerror=alert(1)>', url: 'http://a.example', username: '',
-    }]);
+    Settings.set('remoteSaved', [
+      {
+        id: 'x',
+        name: '<img src=x onerror=alert(1)>',
+        url: 'http://a.example',
+        username: '',
+      },
+    ]);
     await showUnlockModal(false);
     $('unlock-server-recent').click();
     expect($('dropdown').querySelector('img')).toBeNull();
@@ -177,17 +182,32 @@ describe('unlock screen id contract', () => {
   // querying null, and every affordance below would just do nothing.
   it('index.html still has every element the unlock screen reaches for', () => {
     [
-      'unlock-server', 'unlock-server-recent', 'unlock-username', 'unlock-password',
-      'unlock-capslock', 'unlock-confirm', 'unlock-confirm-group',
-      'unlock-strength', 'unlock-strength-fill', 'unlock-strength-label',
-      'relock-password', 'relock-capslock',
-      'search-history', 'clear-filters-btn', 'clear-filters-count',
-      's-remember-filters', 's-clear-recent',
-    ].forEach(id => expect($(id), `#${id} missing from index.html`).toBeTruthy());
+      'unlock-server',
+      'unlock-server-recent',
+      'unlock-username',
+      'unlock-password',
+      'unlock-capslock',
+      'unlock-confirm',
+      'unlock-confirm-group',
+      'unlock-strength',
+      'unlock-strength-fill',
+      'unlock-strength-label',
+      'relock-password',
+      'relock-capslock',
+      'search-history',
+      'clear-filters-btn',
+      'clear-filters-count',
+      's-remember-filters',
+      's-clear-recent',
+    ].forEach((id) => expect($(id), `#${id} missing from index.html`).toBeTruthy());
   });
 
   it('both password fields have a reveal button pointing at them', () => {
-    ['unlock-password', 'relock-password'].forEach(id =>
-      expect(document.querySelector(`[data-reveal="${id}"]`), `no reveal button for #${id}`).toBeTruthy());
+    ['unlock-password', 'relock-password'].forEach((id) =>
+      expect(
+        document.querySelector(`[data-reveal="${id}"]`),
+        `no reveal button for #${id}`,
+      ).toBeTruthy(),
+    );
   });
 });

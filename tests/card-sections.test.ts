@@ -35,7 +35,7 @@ describe('collapsed card sections', () => {
   });
 
   it('every card size fits at least three lines of description', () => {
-    const lines = [...cards.matchAll(/--cs-desc-lines:\s*(\d+)/g)].map(m => Number(m[1]));
+    const lines = [...cards.matchAll(/--cs-desc-lines:\s*(\d+)/g)].map((m) => Number(m[1]));
     expect(lines.length).toBeGreaterThanOrEqual(3);
     expect(Math.min(...lines)).toBeGreaterThanOrEqual(3);
   });

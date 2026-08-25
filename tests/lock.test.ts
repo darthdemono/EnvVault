@@ -18,7 +18,10 @@ beforeEach(() => {
   resetState(st);
   st.store = new LocalVaultStore();
   st.vault = makeVault({
-    projects: [makeProject({ id: 'Universal', name: 'Universal' }), makeProject({ id: 'p1', name: 'Acme' })],
+    projects: [
+      makeProject({ id: 'Universal', name: 'Universal' }),
+      makeProject({ id: 'p1', name: 'Acme' }),
+    ],
     user_categories: ['infra'],
     api_keys: [
       makeEntry({ id: 'a', provider: 'Alpha', api_key: 'sk-alpha-secret' }),
@@ -33,7 +36,7 @@ describe('lockVault', () => {
     await lockVault('manual');
     expect(st.vault.api_keys).toEqual([]);
     expect(st.vault.user_categories).toEqual([]);
-    expect(st.vault.projects.map(p => p.id)).toEqual(['Universal']);
+    expect(st.vault.projects.map((p) => p.id)).toEqual(['Universal']);
   });
 
   it('drops pending undos, which hold deleted secrets', async () => {
@@ -56,7 +59,10 @@ describe('lockVault', () => {
   });
 
   it('clears the session storage copy', async () => {
-    sessionStorage.setItem('envvault', JSON.stringify({ api_keys: [{ api_key: 'sk-alpha-secret' }] }));
+    sessionStorage.setItem(
+      'envvault',
+      JSON.stringify({ api_keys: [{ api_key: 'sk-alpha-secret' }] }),
+    );
     await lockVault('manual');
     expect(sessionStorage.getItem('envvault')).toBeNull();
   });

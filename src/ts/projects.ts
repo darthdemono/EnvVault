@@ -1,5 +1,6 @@
 /**
- * @file Project and category CRUD operations.
+ * @file
+ * Project and category CRUD operations.
  */
 
 import type { Project, ProjectType } from './types';
@@ -22,7 +23,10 @@ import {
 // ── Filter setter ─────────────────────────────────────────────────────────
 
 export function doSetFilter(type: string, value: string) {
-  st.filter = (st.filter.type === type && st.filter.value === value) ? { type: 'all', value: '' } : { type, value };
+  st.filter =
+    st.filter.type === type && st.filter.value === value
+      ? { type: 'all', value: '' }
+      : { type, value };
   triggerRender();
 }
 
@@ -35,15 +39,19 @@ export async function deleteCategory(name: string) {
   // on every entry that carried it.
   const prefix = name + '/';
   const doomed = (c: string) => c === name || c.startsWith(prefix);
-  const subCount = st.vault.user_categories.filter(c => c.startsWith(prefix)).length;
+  const subCount = st.vault.user_categories.filter((c) => c.startsWith(prefix)).length;
 
   let msg = `Delete category "${name}"?`;
-  if (subCount) msg += ` ${subCount} sub-categor${subCount === 1 ? 'y' : 'ies'} will be deleted too.`;
-  if (!await showConfirm(msg)) return;
+  if (subCount)
+    msg += ` ${subCount} sub-categor${subCount === 1 ? 'y' : 'ies'} will be deleted too.`;
+  if (!(await showConfirm(msg))) return;
 
-  st.vault.user_categories = st.vault.user_categories.filter(c => !doomed(c));
-  st.vault.api_keys.forEach(k => { if (k.categories) k.categories = k.categories.filter(c => !doomed(c)); });
-  if (st.filter.type === 'category' && doomed(st.filter.value)) st.filter = { type: 'all', value: '' };
+  st.vault.user_categories = st.vault.user_categories.filter((c) => !doomed(c));
+  st.vault.api_keys.forEach((k) => {
+    if (k.categories) k.categories = k.categories.filter((c) => !doomed(c));
+  });
+  if (st.filter.type === 'category' && doomed(st.filter.value))
+    st.filter = { type: 'all', value: '' };
   persist();
   triggerRender();
 }
@@ -51,15 +59,24 @@ export async function deleteCategory(name: string) {
 export async function renameCategory(name: string) {
   const next = (await showPrompt('Rename category:', name))?.trim();
   if (!next || next === name) return;
-  if (st.vault.user_categories.includes(next)) { showToast(`Category "${next}" already exists`, 'err'); return; }
+  if (st.vault.user_categories.includes(next)) {
+    showToast(`Category "${next}" already exists`, 'err');
+    return;
+  }
 
   // Carry the sub-tree along, as deleteCategory now does.
   const prefix = name + '/';
-  const remap = (c: string) => c === name ? next : (c.startsWith(prefix) ? next + c.slice(name.length) : c);
+  const remap = (c: string) =>
+    c === name ? next : c.startsWith(prefix) ? next + c.slice(name.length) : c;
 
   st.vault.user_categories = st.vault.user_categories.map(remap);
-  st.vault.api_keys.forEach(k => { if (k.categories) k.categories = k.categories.map(remap); });
-  if (st.filter.type === 'category' && (st.filter.value === name || st.filter.value.startsWith(prefix))) {
+  st.vault.api_keys.forEach((k) => {
+    if (k.categories) k.categories = k.categories.map(remap);
+  });
+  if (
+    st.filter.type === 'category' &&
+    (st.filter.value === name || st.filter.value.startsWith(prefix))
+  ) {
     st.filter = { type: 'category', value: remap(st.filter.value) };
   }
   persist();
@@ -70,7 +87,10 @@ export async function renameCategory(name: string) {
 
 /** Project name → id. Kept in one place so rename and delete agree on the shape. */
 export function slugifyProjectName(name: string): string {
-  return name.toLowerCase().replace(/[^a-z0-9/]+/g, '-').replace(/^-|-$/g, '');
+  return name
+    .toLowerCase()
+    .replace(/[^a-z0-9/]+/g, '-')
+    .replace(/^-|-$/g, '');
 }
 
 /**
@@ -104,12 +124,13 @@ export function validateSlug(raw: string, existing: Project[], selfId?: string):
   if (!SLUG_RE.test(slug)) {
     return 'Slug may use lowercase letters, digits, - and / (no leading, trailing or repeated separators)';
   }
-  if (existing.some(p => p.id === slug && p.id !== selfId)) return `Slug "${slug}" is already taken`;
+  if (existing.some((p) => p.id === slug && p.id !== selfId))
+    return `Slug "${slug}" is already taken`;
   return null;
 }
 
 export async function renameProject(id: string) {
-  const project = st.vault.projects.find(p => p.id === id);
+  const project = st.vault.projects.find((p) => p.id === id);
   if (!project) return;
   const newName = (await showPrompt(`Rename "${project.name}" to:`, project.name))?.trim();
   if (!newName || newName === project.name) return;
@@ -118,14 +139,19 @@ export async function renameProject(id: string) {
   // new display name would silently retarget all of them — which is exactly why
   // someone pinned it in the first place.
   const newId = hasCustomSlug(project) ? project.id : slugifyProjectName(newName);
-  if (newId !== id && st.vault.projects.find(p => p.id === newId)) { showToast('Project already exists', 'err'); return; }
+  if (newId !== id && st.vault.projects.find((p) => p.id === newId)) {
+    showToast('Project already exists', 'err');
+    return;
+  }
 
   const oldName = project.name;
   // Sub-projects are just names sharing a `parent/` prefix, so renaming the
   // parent has to carry them along. It used to rename only the parent, leaving
   // "Acme/Web" behind after "Acme" became "Corp" — buildProjectTree then
   // synthesised a phantom "Acme" node for a project that no longer existed.
-  const children = st.vault.projects.filter(p => p !== project && p.name.startsWith(oldName + '/'));
+  const children = st.vault.projects.filter(
+    (p) => p !== project && p.name.startsWith(oldName + '/'),
+  );
 
   const idRemap = new Map<string, string>();
   if (newId !== id) idRemap.set(id, newId);
@@ -135,17 +161,22 @@ export async function renameProject(id: string) {
   for (const child of children) {
     const childName = newName + child.name.slice(oldName.length);
     // Same rule per child: a sub-project with its own pinned slug keeps it.
-    if (hasCustomSlug(child)) { child.name = childName; continue; }
+    if (hasCustomSlug(child)) {
+      child.name = childName;
+      continue;
+    }
     const base = slugifyProjectName(childName);
-    let fid = base; let n = 1;
-    while (st.vault.projects.find(p => p !== child && p.id === fid)) fid = `${base}-${n++}`;
+    let fid = base;
+    let n = 1;
+    while (st.vault.projects.find((p) => p !== child && p.id === fid)) fid = `${base}-${n++}`;
     if (child.id !== fid) idRemap.set(child.id, fid);
-    child.id = fid; child.name = childName;
+    child.id = fid;
+    child.name = childName;
   }
 
   if (idRemap.size) {
-    st.vault.api_keys.forEach(k => {
-      if (k.projectIds) k.projectIds = k.projectIds.map(pid => idRemap.get(pid) ?? pid);
+    st.vault.api_keys.forEach((k) => {
+      if (k.projectIds) k.projectIds = k.projectIds.map((pid) => idRemap.get(pid) ?? pid);
     });
     const selected = st.currentSelectedProjectIds[0];
     if (selected && idRemap.has(selected)) st.currentSelectedProjectIds = [idRemap.get(selected)!];
@@ -158,17 +189,20 @@ export async function renameProject(id: string) {
 
 export async function deleteProject(id: string) {
   if (id === 'Universal') return;
-  const project = st.vault.projects.find(p => p.id === id);
+  const project = st.vault.projects.find((p) => p.id === id);
   if (!project) return;
-  const children = st.vault.projects.filter(p => p !== project && p.name.startsWith(project.name + '/'));
+  const children = st.vault.projects.filter(
+    (p) => p !== project && p.name.startsWith(project.name + '/'),
+  );
   let msg = `Delete project "${project.name}"?`;
-  if (children.length) msg += ` ${children.length} sub-project${children.length === 1 ? '' : 's'} will be promoted to top level.`;
-  if (!await showConfirm(msg)) return;
+  if (children.length)
+    msg += ` ${children.length} sub-project${children.length === 1 ? '' : 's'} will be promoted to top level.`;
+  if (!(await showConfirm(msg))) return;
 
-  st.vault.api_keys.forEach(k => {
-    if (k.projectIds?.includes(id)) k.projectIds = k.projectIds.filter(pid => pid !== id);
+  st.vault.api_keys.forEach((k) => {
+    if (k.projectIds?.includes(id)) k.projectIds = k.projectIds.filter((pid) => pid !== id);
   });
-  st.vault.projects = st.vault.projects.filter(p => p.id !== id);
+  st.vault.projects = st.vault.projects.filter((p) => p.id !== id);
 
   // Promoting a sub-project changes its id, so every entry that referenced the
   // old id has to follow it. Without this remap the next prune pass saw those
@@ -179,21 +213,28 @@ export async function deleteProject(id: string) {
     const newName = child.name.slice(project.name.length + 1);
     // A promoted sub-project with a pinned slug keeps it — promotion changes
     // where it sits in the tree, not what points at it.
-    if (hasCustomSlug(child)) { child.name = newName; continue; }
+    if (hasCustomSlug(child)) {
+      child.name = newName;
+      continue;
+    }
     const newId = slugifyProjectName(newName);
-    let fid = newId; let n = 1;
-    while (st.vault.projects.find(p => p !== child && p.id === fid)) fid = `${newId}-${n++}`;
+    let fid = newId;
+    let n = 1;
+    while (st.vault.projects.find((p) => p !== child && p.id === fid)) fid = `${newId}-${n++}`;
     if (child.id !== fid) idRemap.set(child.id, fid);
-    child.id = fid; child.name = newName;
+    child.id = fid;
+    child.name = newName;
   }
   if (idRemap.size) {
-    st.vault.api_keys.forEach(k => {
-      if (k.projectIds) k.projectIds = k.projectIds.map(pid => idRemap.get(pid) ?? pid);
+    st.vault.api_keys.forEach((k) => {
+      if (k.projectIds) k.projectIds = k.projectIds.map((pid) => idRemap.get(pid) ?? pid);
     });
   }
 
-  st.vault.api_keys.forEach(k => {
-    k.projectIds = (k.projectIds ?? []).filter(pid => pid === 'Universal' || st.vault.projects.some(p => p.id === pid));
+  st.vault.api_keys.forEach((k) => {
+    k.projectIds = (k.projectIds ?? []).filter(
+      (pid) => pid === 'Universal' || st.vault.projects.some((p) => p.id === pid),
+    );
     if (!k.projectIds.includes('Universal')) k.projectIds.push('Universal');
   });
 
@@ -202,7 +243,8 @@ export async function deleteProject(id: string) {
   // The selection can also be a promoted child, whose id just changed. Leaving
   // it stale pointed the sidebar at a project that no longer existed, and the
   // grid rendered empty.
-  else if (selected && idRemap.has(selected)) st.currentSelectedProjectIds = [idRemap.get(selected)!];
+  else if (selected && idRemap.has(selected))
+    st.currentSelectedProjectIds = [idRemap.get(selected)!];
 
   persist();
   triggerRender();
@@ -222,7 +264,7 @@ let _projectCreateType: ProjectType = 'generic';
  */
 export function applyExperimentalTypeVisibility(): void {
   const show = !!Settings.get('experimentalProjectTypes');
-  document.querySelectorAll<HTMLButtonElement>('.project-type-btn').forEach(btn => {
+  document.querySelectorAll<HTMLButtonElement>('.project-type-btn').forEach((btn) => {
     const type = btn.dataset.ptype as ProjectType | undefined;
     if (!isExperimentalProjectType(type)) return;
     btn.style.display = show ? '' : 'none';
@@ -249,7 +291,7 @@ export function openProjectCreateModal() {
     };
   }
   applyExperimentalTypeVisibility();
-  document.querySelectorAll<HTMLButtonElement>('.project-type-btn').forEach(btn => {
+  document.querySelectorAll<HTMLButtonElement>('.project-type-btn').forEach((btn) => {
     btn.classList.toggle('active', btn.dataset.ptype === 'generic');
   });
   overlay.classList.add('open');
@@ -275,8 +317,14 @@ export function closeCategoryCreateModal() {
 export function saveCategoryCreate() {
   const nameEl = document.getElementById('category-create-name') as HTMLInputElement;
   const name = nameEl.value.trim().toLowerCase();
-  if (!name) { showToast('Name is required', 'err'); return; }
-  if (st.vault.user_categories.includes(name)) { showToast('Category already exists', 'err'); return; }
+  if (!name) {
+    showToast('Name is required', 'err');
+    return;
+  }
+  if (st.vault.user_categories.includes(name)) {
+    showToast('Category already exists', 'err');
+    return;
+  }
   st.vault.user_categories.push(name);
   persist();
   closeCategoryCreateModal();
@@ -289,17 +337,29 @@ export function saveProjectCreate() {
   const descEl = document.getElementById('project-create-desc') as HTMLInputElement;
   const slugEl = document.getElementById('project-create-slug') as HTMLInputElement | null;
   const trimmed = nameEl.value.trim();
-  if (!trimmed) { showToast('Name is required', 'err'); return; }
+  if (!trimmed) {
+    showToast('Name is required', 'err');
+    return;
+  }
 
   const customSlug = slugEl?.value.trim() ?? '';
   if (customSlug) {
     const problem = validateSlug(customSlug, st.vault.projects);
-    if (problem) { showToast(problem, 'err', 4000); return; }
+    if (problem) {
+      showToast(problem, 'err', 4000);
+      return;
+    }
   }
   // One place decides the id, and it is the same rule the CLI applies.
   const leafId = customSlug || slugifyProjectName(trimmed);
-  if (!leafId) { showToast('Name produces an empty slug — set one explicitly', 'err', 4000); return; }
-  if (st.vault.projects.find(p => p.id === leafId)) { showToast('Project already exists', 'err'); return; }
+  if (!leafId) {
+    showToast('Name produces an empty slug — set one explicitly', 'err', 4000);
+    return;
+  }
+  if (st.vault.projects.find((p) => p.id === leafId)) {
+    showToast('Project already exists', 'err');
+    return;
+  }
 
   const newProject: Project = {
     id: leafId,
@@ -333,8 +393,11 @@ export function saveProjectCreate() {
   const nameParts = trimmed.split('/');
   for (let i = 1; i < nameParts.length; i++) {
     const ancestorName = nameParts.slice(0, i).join('/');
-    const ancestorId = ancestorName.toLowerCase().replace(/[^a-z0-9/]+/g, '-').replace(/^-|-$/g, '');
-    if (!st.vault.projects.find(p => p.id === ancestorId)) {
+    const ancestorId = ancestorName
+      .toLowerCase()
+      .replace(/[^a-z0-9/]+/g, '-')
+      .replace(/^-|-$/g, '');
+    if (!st.vault.projects.find((p) => p.id === ancestorId)) {
       st.vault.projects.push({ id: ancestorId, name: ancestorName });
     }
   }

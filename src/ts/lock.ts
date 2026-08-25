@@ -1,12 +1,33 @@
 /**
- * @file Lock / unlock vault: lockVault, resetLock, showUnlockModal.
+ * @file
+ * Lock / unlock vault: lockVault, resetLock, showUnlockModal.
  */
 
-import { st, TauriVaultStore, RemoteVaultStore, LocalVaultStore, inTauri, Settings, triggerRender, resetViewState } from './state';
+import {
+  st,
+  TauriVaultStore,
+  RemoteVaultStore,
+  LocalVaultStore,
+  inTauri,
+  Settings,
+  triggerRender,
+  resetViewState,
+} from './state';
 import { showToast, showConfirm, esc } from './utils';
-import { upsertSavedRemote, findSavedRemote, renderRemotePanel, markRemoteConnected } from './remote-panel';
+import {
+  upsertSavedRemote,
+  findSavedRemote,
+  renderRemotePanel,
+  markRemoteConnected,
+} from './remote-panel';
 import { showDropdown } from './modals';
-import { wireRevealButtons, resetReveal, wireCapsLockHint, wirePasswordStrength, relativeTime } from './ui-qol';
+import {
+  wireRevealButtons,
+  resetReveal,
+  wireCapsLockHint,
+  wirePasswordStrength,
+  relativeTime,
+} from './ui-qol';
 
 let _finishInitFn: () => Promise<void> = async () => {};
 let _warnTimer: ReturnType<typeof setTimeout> | null = null;
@@ -22,7 +43,7 @@ export async function lockVault(reason: 'auto' | 'manual' | 'visibility' = 'manu
   // Confirm first if anyone is actually connected.
   if (st.lanServerRunning) {
     const { confirmStopForLock } = await import('./lan');
-    if (!await confirmStopForLock()) return;
+    if (!(await confirmStopForLock())) return;
   }
 
   clearTimeout(_warnTimer!);
@@ -56,16 +77,19 @@ export async function lockVault(reason: 'auto' | 'manual' | 'visibility' = 'manu
   if (lockStatus) lockStatus.textContent = 'Locked';
 
   if (st.store instanceof TauriVaultStore) showRelockScreen(reason);
-  else { document.getElementById('load-banner')!.style.display = 'flex'; showToast('Vault locked', 'err', 3500); }
+  else {
+    document.getElementById('load-banner')!.style.display = 'flex';
+    showToast('Vault locked', 'err', 3500);
+  }
 }
 
 export function showRelockScreen(reason: 'auto' | 'manual' | 'visibility' | 'switch' = 'manual') {
-  const overlay   = document.getElementById('relock-overlay')!;
-  const reasonEl  = document.getElementById('relock-reason')!;
-  const pwField   = document.getElementById('relock-password') as HTMLInputElement;
-  const errEl     = document.getElementById('relock-error')!;
+  const overlay = document.getElementById('relock-overlay')!;
+  const reasonEl = document.getElementById('relock-reason')!;
+  const pwField = document.getElementById('relock-password') as HTMLInputElement;
+  const errEl = document.getElementById('relock-error')!;
   const submitBtn = document.getElementById('relock-submit-btn') as HTMLButtonElement;
-  const labelEl   = document.getElementById('relock-vault-label');
+  const labelEl = document.getElementById('relock-vault-label');
 
   if (labelEl) {
     const vaultName = document.getElementById('vault-name')?.textContent ?? 'Local Vault';
@@ -73,10 +97,10 @@ export function showRelockScreen(reason: 'auto' | 'manual' | 'visibility' | 'swi
   }
 
   const msgs: Record<typeof reason, string> = {
-    auto:       'Auto-locked after inactivity. Enter your master password to continue.',
+    auto: 'Auto-locked after inactivity. Enter your master password to continue.',
     visibility: 'Vault locked while the app was in the background.',
-    manual:     'Vault locked. Enter your master password to continue.',
-    switch:     'Switched to the local vault. Enter your master password to unlock it.',
+    manual: 'Vault locked. Enter your master password to continue.',
+    switch: 'Switched to the local vault. Enter your master password to unlock it.',
   };
   reasonEl.textContent = msgs[reason];
 
@@ -101,7 +125,10 @@ export function showRelockScreen(reason: 'auto' | 'manual' | 'visibility' | 'swi
 
   async function doUnlock() {
     const pw = pwField.value;
-    if (!pw) { showErr('Password cannot be empty.'); return; }
+    if (!pw) {
+      showErr('Password cannot be empty.');
+      return;
+    }
     submitBtn.disabled = true;
     submitBtn.textContent = 'Unlocking…';
     try {
@@ -117,7 +144,9 @@ export function showRelockScreen(reason: 'auto' | 'manual' | 'visibility' | 'swi
   }
 
   submitBtn.onclick = doUnlock;
-  pwField.onkeydown = (e) => { if (e.key === 'Enter') doUnlock(); };
+  pwField.onkeydown = (e) => {
+    if (e.key === 'Enter') doUnlock();
+  };
 }
 
 export function resetLock() {
@@ -158,10 +187,12 @@ export function resetLock() {
   // Bind activity listeners once — any mouse or keyboard event resets the timer.
   if (!_activityBound) {
     _activityBound = true;
-    const onActivity = () => { if (st.lockTimer) resetLock(); };
-    document.addEventListener('mousemove',  onActivity, { passive: true });
-    document.addEventListener('keydown',    onActivity, { passive: true });
-    document.addEventListener('mousedown',  onActivity, { passive: true });
+    const onActivity = () => {
+      if (st.lockTimer) resetLock();
+    };
+    document.addEventListener('mousemove', onActivity, { passive: true });
+    document.addEventListener('keydown', onActivity, { passive: true });
+    document.addEventListener('mousedown', onActivity, { passive: true });
     document.addEventListener('touchstart', onActivity, { passive: true });
   }
 }
@@ -187,16 +218,16 @@ export function recentServers() {
 }
 
 export async function showUnlockModal(isFirstRun: boolean) {
-  const overlay      = document.getElementById('unlock-overlay')!;
-  const titleEl      = document.getElementById('unlock-title')!;
-  const subtitleEl   = document.getElementById('unlock-subtitle')!;
+  const overlay = document.getElementById('unlock-overlay')!;
+  const titleEl = document.getElementById('unlock-title')!;
+  const subtitleEl = document.getElementById('unlock-subtitle')!;
   const confirmGroup = document.getElementById('unlock-confirm-group')!;
-  const submitBtn    = document.getElementById('unlock-submit-btn') as HTMLButtonElement;
-  const pwField      = document.getElementById('unlock-password') as HTMLInputElement;
+  const submitBtn = document.getElementById('unlock-submit-btn') as HTMLButtonElement;
+  const pwField = document.getElementById('unlock-password') as HTMLInputElement;
   const confirmField = document.getElementById('unlock-confirm') as HTMLInputElement;
-  const userField    = document.getElementById('unlock-username') as HTMLInputElement | null;
-  const serverField  = document.getElementById('unlock-server') as HTMLInputElement | null;
-  const errEl        = document.getElementById('unlock-error')!;
+  const userField = document.getElementById('unlock-username') as HTMLInputElement | null;
+  const serverField = document.getElementById('unlock-server') as HTMLInputElement | null;
+  const errEl = document.getElementById('unlock-error')!;
 
   function isRemoteMode() {
     const url = serverField?.value.trim() ?? '';
@@ -208,12 +239,14 @@ export async function showUnlockModal(isFirstRun: boolean) {
     const remote = isRemoteMode();
     if (remote) {
       titleEl.textContent = 'Connect to Remote Vault';
-      subtitleEl.textContent = 'Enter the server URL, then your credentials. Leave username blank to authenticate as vault owner.';
+      subtitleEl.textContent =
+        'Enter the server URL, then your credentials. Leave username blank to authenticate as vault owner.';
       confirmGroup.style.display = 'none';
       submitBtn.textContent = 'Connect';
     } else if (firstRun) {
       titleEl.textContent = 'Create Master Password';
-      subtitleEl.textContent = 'This password encrypts your vault with AES-256 + Argon2id. There is no recovery — keep it safe.';
+      subtitleEl.textContent =
+        'This password encrypts your vault with AES-256 + Argon2id. There is no recovery — keep it safe.';
       confirmGroup.style.display = 'block';
       submitBtn.textContent = 'Create Vault';
     } else {
@@ -261,7 +294,7 @@ export async function showUnlockModal(isFirstRun: boolean) {
   if (recentBtn && serverField) {
     recentBtn.onclick = () => {
       const servers = recentServers();
-      const items: Array<{ label: string; active: boolean; fn: () => void } | '---'> = [
+      const items: ({ label: string; active: boolean; fn: () => void } | '---')[] = [
         {
           label: '&nbsp;&nbsp;Local Vault',
           active: !serverField.value,
@@ -274,7 +307,7 @@ export async function showUnlockModal(isFirstRun: boolean) {
         },
       ];
       if (servers.length) items.push('---');
-      servers.forEach(cfg => {
+      servers.forEach((cfg) => {
         items.push({
           label:
             `<div>${esc(cfg.name)}</div>` +
@@ -291,7 +324,11 @@ export async function showUnlockModal(isFirstRun: boolean) {
       });
       if (!servers.length) {
         items.push('---');
-        items.push({ label: '<span style="color:var(--text3)">No servers connected yet</span>', active: false, fn: () => {} });
+        items.push({
+          label: '<span style="color:var(--text3)">No servers connected yet</span>',
+          active: false,
+          fn: () => {},
+        });
       }
       showDropdown(recentBtn, items);
     };
@@ -313,13 +350,16 @@ export async function showUnlockModal(isFirstRun: boolean) {
 
   async function doUnlock() {
     errEl.style.display = 'none';
-    const pw       = pwField.value;
+    const pw = pwField.value;
     const username = userField?.value.trim() ?? '';
     const serverUrl = serverField?.value.trim().replace(/\/$/, '') ?? '';
 
     if (serverUrl) {
       // Remote mode (URL provided in modal)
-      if (!pw) { showErr('Password cannot be empty.'); return; }
+      if (!pw) {
+        showErr('Password cannot be empty.');
+        return;
+      }
       submitBtn.disabled = true;
       submitBtn.textContent = 'Connecting…';
       try {
@@ -337,8 +377,9 @@ export async function showUnlockModal(isFirstRun: boolean) {
         if (!ok) throw new Error('Authentication failed — wrong password or username');
 
         // TOFU pinning, same as the Remote panel's connect path.
-        const fingerprint = await remote.getStatus()
-          .then(s => s.cert_fingerprint ?? undefined)
+        const fingerprint = await remote
+          .getStatus()
+          .then((s) => s.cert_fingerprint ?? undefined)
           .catch(() => undefined);
         if (fingerprint) remote.fingerprint = fingerprint;
 
@@ -366,9 +407,18 @@ export async function showUnlockModal(isFirstRun: boolean) {
     }
 
     // Local mode
-    if (!pw) { showErr('Password cannot be empty.'); return; }
-    if (isFirstRun && pw.length < 12) { showErr('Use at least 12 characters for a secrets manager vault.'); return; }
-    if (isFirstRun && pw !== confirmField.value) { showErr('Passwords do not match.'); return; }
+    if (!pw) {
+      showErr('Password cannot be empty.');
+      return;
+    }
+    if (isFirstRun && pw.length < 12) {
+      showErr('Use at least 12 characters for a secrets manager vault.');
+      return;
+    }
+    if (isFirstRun && pw !== confirmField.value) {
+      showErr('Passwords do not match.');
+      return;
+    }
 
     submitBtn.disabled = true;
     submitBtn.textContent = isFirstRun ? 'Creating…' : 'Unlocking…';
@@ -386,8 +436,12 @@ export async function showUnlockModal(isFirstRun: boolean) {
   }
 
   submitBtn.onclick = doUnlock;
-  pwField.onkeydown     = (e) => { if (e.key === 'Enter') doUnlock(); };
-  confirmField.onkeydown = (e) => { if (e.key === 'Enter') doUnlock(); };
+  pwField.onkeydown = (e) => {
+    if (e.key === 'Enter') doUnlock();
+  };
+  confirmField.onkeydown = (e) => {
+    if (e.key === 'Enter') doUnlock();
+  };
 
   // reset_vault removed from UI — delete vault data via CLI or by removing
   // the vault.db + vault.salt files from the data directory.

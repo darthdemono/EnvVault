@@ -1,10 +1,19 @@
 /**
- * @file Users panel — multi-user RBAC management for vault owners.
+ * @file
+ * Users panel — multi-user RBAC management for vault owners.
  */
 
 import type { UserInfo, TokenInfo, UserClass } from './types';
 import { st, RemoteVaultStore } from './state';
-import { esc, escAttr, showToast, showConfirm, showPrompt, showPasswordPrompt, clipboardWrite } from './utils';
+import {
+  esc,
+  escAttr,
+  showToast,
+  showConfirm,
+  showPrompt,
+  showPasswordPrompt,
+  clipboardWrite,
+} from './utils';
 import { permEditorHtml, wirePermEditor, type PermExprs } from './perm-editor';
 
 const localInvoke = (cmd: string, args?: Record<string, any>) =>
@@ -25,37 +34,55 @@ async function invoke(cmd: string, args: Record<string, any> = {}): Promise<any>
   const caps = (a: Record<string, any>) => ({
     name: a.name,
     description: a.description ?? '',
-    cap_manage_users:    !!a.capManageUsers,
-    cap_manage_classes:  !!a.capManageClasses,
+    cap_manage_users: !!a.capManageUsers,
+    cap_manage_classes: !!a.capManageClasses,
     cap_delete_projects: !!a.capDeleteProjects,
   });
 
   switch (cmd) {
-    case 'list_users':            return api('/api/users');
-    case 'create_user':           return api('/api/users', 'POST', { username: args.username, password: args.password ?? null });
-    case 'delete_user':           return api(`/api/users/${uid}`, 'DELETE');
-    case 'rename_user':           return api(`/api/users/${uid}/rename`,   'PUT', { username: args.newUsername });
-    case 'set_user_password':     return api(`/api/users/${uid}/password`, 'PUT', { password: args.password ?? null });
-    case 'assign_user_class':     return api(`/api/users/${uid}/class`,    'PUT', { class_id: args.classId ?? null });
-    case 'list_user_tokens':      return api(`/api/users/${uid}/tokens`);
-    case 'create_user_token':     return api(`/api/users/${uid}/tokens`, 'POST', { description: args.description ?? '' });
-    case 'revoke_user_token':     return api(`/api/users/${args.userId}/tokens/${args.tokenId}`, 'DELETE');
-    case 'get_user_permissions':  return api(`/api/users/${uid}/permissions`);
-    case 'set_user_permissions':  return api(`/api/users/${uid}/permissions`, 'PUT', args.permissions);
-    case 'list_user_classes':     return api('/api/classes');
-    case 'create_user_class':     return api('/api/classes', 'POST', caps(args));
-    case 'update_user_class':     return api(`/api/classes/${cid}`, 'PUT', caps(args));
-    case 'delete_user_class':     return api(`/api/classes/${cid}`, 'DELETE');
-    case 'get_class_permissions': return api(`/api/classes/${cid}/permissions`);
-    case 'set_class_permissions': return api(`/api/classes/${cid}/permissions`, 'PUT', args.permissions);
-    default: throw new Error(`Unsupported remote user op: ${cmd}`);
+    case 'list_users':
+      return api('/api/users');
+    case 'create_user':
+      return api('/api/users', 'POST', {
+        username: args.username,
+        password: args.password ?? null,
+      });
+    case 'delete_user':
+      return api(`/api/users/${uid}`, 'DELETE');
+    case 'rename_user':
+      return api(`/api/users/${uid}/rename`, 'PUT', { username: args.newUsername });
+    case 'set_user_password':
+      return api(`/api/users/${uid}/password`, 'PUT', { password: args.password ?? null });
+    case 'assign_user_class':
+      return api(`/api/users/${uid}/class`, 'PUT', { class_id: args.classId ?? null });
+    case 'list_user_tokens':
+      return api(`/api/users/${uid}/tokens`);
+    case 'create_user_token':
+      return api(`/api/users/${uid}/tokens`, 'POST', { description: args.description ?? '' });
+    case 'revoke_user_token':
+      return api(`/api/users/${args.userId}/tokens/${args.tokenId}`, 'DELETE');
+    case 'get_user_permissions':
+      return api(`/api/users/${uid}/permissions`);
+    case 'set_user_permissions':
+      return api(`/api/users/${uid}/permissions`, 'PUT', args.permissions);
+    case 'list_user_classes':
+      return api('/api/classes');
+    case 'create_user_class':
+      return api('/api/classes', 'POST', caps(args));
+    case 'update_user_class':
+      return api(`/api/classes/${cid}`, 'PUT', caps(args));
+    case 'delete_user_class':
+      return api(`/api/classes/${cid}`, 'DELETE');
+    case 'get_class_permissions':
+      return api(`/api/classes/${cid}/permissions`);
+    case 'set_class_permissions':
+      return api(`/api/classes/${cid}/permissions`, 'PUT', args.permissions);
+    default:
+      throw new Error(`Unsupported remote user op: ${cmd}`);
   }
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
-
-
-
 
 // ── Render user list ──────────────────────────────────────────────────────────
 
@@ -65,13 +92,16 @@ export async function renderUsersPanel() {
 
   let users: UserInfo[] = [];
   try {
-    users = await invoke?.('list_users') ?? [];
+    users = (await invoke?.('list_users')) ?? [];
   } catch (e: any) {
     listEl.innerHTML = `<div class="users-empty">Could not load users: ${esc(String(e?.message ?? e))}</div>`;
     return;
   }
 
-  listEl.innerHTML = users.map(u => `
+  listEl.innerHTML =
+    users
+      .map(
+        (u) => `
     <button class="users-list-item${st.selectedUserId === u.id ? ' active' : ''}" data-user-id="${escAttr(u.id)}">
       <span class="user-avatar${u.is_owner ? ' owner' : ''}">${esc(u.username.slice(0, 2).toUpperCase())}</span>
       <span class="user-info">
@@ -84,7 +114,9 @@ export async function renderUsersPanel() {
         </span>
       </span>
     </button>
-  `).join('') || '<div class="users-empty">No users yet. Create one to get started.</div>';
+  `,
+      )
+      .join('') || '<div class="users-empty">No users yet. Create one to get started.</div>';
 }
 
 // ── Render user detail ────────────────────────────────────────────────────────
@@ -97,7 +129,7 @@ export async function renderUserDetail(userId: string) {
 
   let users: UserInfo[] = [];
   let tokens: TokenInfo[] = [];
-  let perms: PermExprs = { read: "", write: "" };
+  let perms: PermExprs = { read: '', write: '' };
   let classes: UserClass[] = [];
 
   try {
@@ -123,8 +155,10 @@ export async function renderUserDetail(userId: string) {
   }
 
   const user = users.find((u: UserInfo) => u.id === userId);
-  if (!user) { ws.innerHTML = '<div class="users-detail-empty">User not found.</div>'; return; }
-
+  if (!user) {
+    ws.innerHTML = '<div class="users-detail-empty">User not found.</div>';
+    return;
+  }
 
   ws.innerHTML = `
     <div class="users-detail">
@@ -161,16 +195,20 @@ export async function renderUserDetail(userId: string) {
       </div>
 
       <!-- Class assignment (non-owner only) -->
-      ${!user.is_owner ? `
+      ${
+        !user.is_owner
+          ? `
       <div class="user-class-row">
         <span class="user-class-label">Role / Class</span>
         <select id="user-class-select" class="perm-input" style="min-width:160px">
           <option value="">— No class assigned —</option>
-          ${classes.map(c => `<option value="${escAttr(c.id)}"${user.class_id === c.id ? ' selected' : ''}>${esc(c.name)}</option>`).join('')}
+          ${classes.map((c) => `<option value="${escAttr(c.id)}"${user.class_id === c.id ? ' selected' : ''}>${esc(c.name)}</option>`).join('')}
         </select>
         <button class="btn btn-xs accent" id="assign-class-btn">Apply</button>
         <span class="user-class-hint">Effective permissions = class + individual rules below</span>
-      </div>` : ''}
+      </div>`
+          : ''
+      }
 
       <!-- Tokens -->
       <section class="users-section">
@@ -179,16 +217,22 @@ export async function renderUserDetail(userId: string) {
           <button class="btn btn-xs accent" id="new-token-btn">+ New Token</button>
         </div>
         <div id="tokens-list" class="tokens-list">
-          ${tokens.length ? tokens.map((t: TokenInfo) => {
-            const exp = t.expires_at ? t.expires_at.slice(0, 10) : null;
-            const today = new Date().toISOString().slice(0, 10);
-            const soon = exp ? new Date(exp).getTime() - Date.now() < 7 * 86400000 : false;
-            const expired = exp ? exp < today : false;
-            const expHtml = !exp ? 'never expires'
-              : expired ? `<span style="color:var(--price-paid);font-weight:700">⚠ EXPIRED ${esc(exp)}</span>`
-              : soon ? `<span style="color:#e69632">⚠ expires ${esc(exp)}</span>`
-              : `expires ${esc(exp)}`;
-            return `
+          ${
+            tokens.length
+              ? tokens
+                  .map((t: TokenInfo) => {
+                    const exp = t.expires_at ? t.expires_at.slice(0, 10) : null;
+                    const today = new Date().toISOString().slice(0, 10);
+                    const soon = exp ? new Date(exp).getTime() - Date.now() < 7 * 86400000 : false;
+                    const expired = exp ? exp < today : false;
+                    const expHtml = !exp
+                      ? 'never expires'
+                      : expired
+                        ? `<span style="color:var(--price-paid);font-weight:700">⚠ EXPIRED ${esc(exp)}</span>`
+                        : soon
+                          ? `<span style="color:#e69632">⚠ expires ${esc(exp)}</span>`
+                          : `expires ${esc(exp)}`;
+                    return `
             <div class="token-row"${expired ? ' style="opacity:.6"' : ''}>
               <div class="token-info">
                 <span class="token-desc">${esc(t.description ?? 'Unnamed token')}</span>
@@ -196,7 +240,10 @@ export async function renderUserDetail(userId: string) {
               </div>
               <button class="btn btn-xs danger revoke-token-btn" data-token-id="${escAttr(t.id)}">Revoke</button>
             </div>`;
-          }).join('') : '<div class="users-empty">No tokens — create one so this user can authenticate via CLI or API.</div>'}
+                  })
+                  .join('')
+              : '<div class="users-empty">No tokens — create one so this user can authenticate via CLI or API.</div>'
+          }
         </div>
       </section>
 
@@ -220,7 +267,9 @@ export async function renderUserDetail(userId: string) {
   document.getElementById('rename-user-cancel')?.addEventListener('click', () => {
     document.getElementById('rename-user-form')!.style.display = 'none';
   });
-  document.getElementById('rename-user-confirm')?.addEventListener('click', () => renameUser(userId));
+  document
+    .getElementById('rename-user-confirm')
+    ?.addEventListener('click', () => renameUser(userId));
 
   document.getElementById('change-pw-btn')?.addEventListener('click', () => changePassword(userId));
   document.getElementById('delete-user-btn')?.addEventListener('click', () => deleteUser(userId));
@@ -230,7 +279,9 @@ export async function renderUserDetail(userId: string) {
       await invoke?.('assign_user_class', { userId, classId: sel });
       showToast(sel ? 'Class assigned' : 'Class removed', 'ok');
       await renderUserDetail(userId);
-    } catch (e: any) { showToast('Failed: ' + (e?.message ?? e), 'err'); }
+    } catch (e: any) {
+      showToast('Failed: ' + (e?.message ?? e), 'err');
+    }
   });
   document.getElementById('new-token-btn')?.addEventListener('click', () => newToken(userId));
 
@@ -238,7 +289,7 @@ export async function renderUserDetail(userId: string) {
     await invoke?.('set_user_permissions', { userId, permissions: exprs });
   });
 
-  document.querySelectorAll<HTMLButtonElement>('.revoke-token-btn').forEach(btn => {
+  document.querySelectorAll<HTMLButtonElement>('.revoke-token-btn').forEach((btn) => {
     btn.addEventListener('click', () => revokeToken(btn.dataset.tokenId!, userId));
   });
 }
@@ -247,7 +298,10 @@ export async function renderUserDetail(userId: string) {
 
 async function renameUser(userId: string) {
   const val = (document.getElementById('rename-user-input') as HTMLInputElement).value.trim();
-  if (!val) { showToast('Username cannot be empty', 'err'); return; }
+  if (!val) {
+    showToast('Username cannot be empty', 'err');
+    return;
+  }
   try {
     // Tauri 2: camelCase param names
     await invoke?.('rename_user', { userId, newUsername: val });
@@ -274,7 +328,12 @@ async function changePassword(userId: string) {
 }
 
 async function deleteUser(userId: string) {
-  if (!await showConfirm('Delete this user and all their tokens and permissions? This cannot be undone.')) return;
+  if (
+    !(await showConfirm(
+      'Delete this user and all their tokens and permissions? This cannot be undone.',
+    ))
+  )
+    return;
   try {
     await invoke?.('delete_user', { userId });
     st.selectedUserId = null;
@@ -293,7 +352,10 @@ async function newToken(userId: string) {
   try {
     const result = await invoke?.('create_user_token', { userId, description: desc ?? '' });
     const token = result?.token as string;
-    if (!token) { showToast('Token creation failed', 'err'); return; }
+    if (!token) {
+      showToast('Token creation failed', 'err');
+      return;
+    }
     showTokenCreatedOverlay(token);
     await renderUserDetail(userId);
   } catch (e: any) {
@@ -320,22 +382,29 @@ function showTokenCreatedOverlay(token: string) {
       </div>
     </div>`;
   document.body.appendChild(overlay);
-  overlay.querySelector('#copy-new-token')!.addEventListener('click', () =>
-    clipboardWrite(token).then(() => showToast('Copied ✓', 'ok', 1500)));
+  overlay
+    .querySelector('#copy-new-token')!
+    .addEventListener('click', () =>
+      clipboardWrite(token).then(() => showToast('Copied ✓', 'ok', 1500)),
+    );
   const close = () => {
     document.removeEventListener('keydown', onKey);
     if (document.body.contains(overlay)) document.body.removeChild(overlay);
   };
   // Escape dismisses it like every other overlay in the app; without this the
   // token stayed on screen in clear text until the mouse found the button.
-  const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') close(); };
+  const onKey = (e: KeyboardEvent) => {
+    if (e.key === 'Escape') close();
+  };
   document.addEventListener('keydown', onKey);
   overlay.querySelector('#close-token-overlay')!.addEventListener('click', close);
-  overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+  overlay.addEventListener('click', (e) => {
+    if (e.target === overlay) close();
+  });
 }
 
 async function revokeToken(tokenId: string, userId: string) {
-  if (!await showConfirm('Revoke this token? The token will stop working immediately.')) return;
+  if (!(await showConfirm('Revoke this token? The token will stop working immediately.'))) return;
   try {
     await invoke?.('revoke_user_token', { tokenId, userId });
     showToast('Token revoked', 'ok');
@@ -344,8 +413,6 @@ async function revokeToken(tokenId: string, userId: string) {
     showToast('Revoke failed: ' + (e?.message ?? e), 'err');
   }
 }
-
-
 
 // ── Create user form ──────────────────────────────────────────────────────────
 
@@ -384,11 +451,18 @@ export async function openCreateUserForm() {
 
   document.getElementById('confirm-create-user')!.addEventListener('click', async () => {
     const username = (document.getElementById('new-user-name') as HTMLInputElement).value.trim();
-    const password = (document.getElementById('new-user-password') as HTMLInputElement).value || undefined;
-    if (!username) { showToast('Username is required', 'err'); return; }
+    const password =
+      (document.getElementById('new-user-password') as HTMLInputElement).value || undefined;
+    if (!username) {
+      showToast('Username is required', 'err');
+      return;
+    }
     try {
-      const user: UserInfo = await invoke?.('create_user', { username, password }) ?? null;
-      if (!user) { showToast('Failed to create user', 'err'); return; }
+      const user: UserInfo = (await invoke?.('create_user', { username, password })) ?? null;
+      if (!user) {
+        showToast('Failed to create user', 'err');
+        return;
+      }
       showToast(`User "${username}" created`, 'ok');
       st.selectedUserId = user.id;
       await renderUsersPanel();
@@ -410,10 +484,17 @@ export async function renderClassesPanel() {
   const listEl = document.getElementById('classes-list');
   if (!listEl) return;
   let classes: UserClass[] = [];
-  try { classes = await invoke?.('list_user_classes') ?? []; }
-  catch (e: any) { listEl.innerHTML = `<div class="users-empty">${esc(String(e?.message ?? e))}</div>`; return; }
+  try {
+    classes = (await invoke?.('list_user_classes')) ?? [];
+  } catch (e: any) {
+    listEl.innerHTML = `<div class="users-empty">${esc(String(e?.message ?? e))}</div>`;
+    return;
+  }
 
-  listEl.innerHTML = classes.map(c => `
+  listEl.innerHTML =
+    classes
+      .map(
+        (c) => `
     <button class="users-list-item${_activeClassId === c.id ? ' active' : ''}" data-class-id="${escAttr(c.id)}">
       <span class="class-dot${c.cap_manage_classes ? ' admin-dot' : c.cap_manage_users ? ' mod-dot' : ''}"></span>
       <span class="user-info">
@@ -421,7 +502,9 @@ export async function renderClassesPanel() {
         <span class="user-meta">${esc(c.description) || '—'}</span>
       </span>
     </button>
-  `).join('') || '<div class="users-empty">No classes found.</div>';
+  `,
+      )
+      .join('') || '<div class="users-empty">No classes found.</div>';
 }
 
 async function renderClassDetail(classId: string) {
@@ -431,7 +514,7 @@ async function renderClassDetail(classId: string) {
   await renderClassesPanel();
 
   let classes: UserClass[] = [];
-  let perms: PermExprs = { read: "", write: "" };
+  let perms: PermExprs = { read: '', write: '' };
   try {
     [classes, perms] = await Promise.all([
       invoke?.('list_user_classes') ?? [],
@@ -441,8 +524,11 @@ async function renderClassDetail(classId: string) {
     ws.innerHTML = `<div class="users-detail-empty">${esc(String(e?.message ?? e))}</div>`;
     return;
   }
-  const cls = classes.find(c => c.id === classId);
-  if (!cls) { ws.innerHTML = '<div class="users-detail-empty">Class not found.</div>'; return; }
+  const cls = classes.find((c) => c.id === classId);
+  if (!cls) {
+    ws.innerHTML = '<div class="users-detail-empty">Class not found.</div>';
+    return;
+  }
 
   const isBuiltin = classId.startsWith('cls-');
 
@@ -517,40 +603,66 @@ async function renderClassDetail(classId: string) {
     </div>
   `;
 
-  document.getElementById('delete-class-btn')?.addEventListener('click', () => deleteClass(classId));
-  document.getElementById('save-class-btn')?.addEventListener('click', () => saveClassDetails(classId));
+  document
+    .getElementById('delete-class-btn')
+    ?.addEventListener('click', () => deleteClass(classId));
+  document
+    .getElementById('save-class-btn')
+    ?.addEventListener('click', () => saveClassDetails(classId));
   wirePermEditor('cperm', async (exprs) => {
     await invoke?.('set_class_permissions', { classId, permissions: exprs });
   });
 }
 
 async function saveClassDetails(classId: string) {
-  const name        = (document.getElementById('cls-name')         as HTMLInputElement).value.trim();
-  const description = (document.getElementById('cls-desc')         as HTMLInputElement).value.trim();
-  const cap_manage_users    = (document.getElementById('cap-manage-users')    as HTMLInputElement).checked;
-  const cap_manage_classes  = (document.getElementById('cap-manage-classes')  as HTMLInputElement).checked;
-  const cap_delete_projects = (document.getElementById('cap-delete-projects') as HTMLInputElement).checked;
-  if (!name) { showToast('Name is required', 'err'); return; }
+  const name = (document.getElementById('cls-name') as HTMLInputElement).value.trim();
+  const description = (document.getElementById('cls-desc') as HTMLInputElement).value.trim();
+  const cap_manage_users = (document.getElementById('cap-manage-users') as HTMLInputElement)
+    .checked;
+  const cap_manage_classes = (document.getElementById('cap-manage-classes') as HTMLInputElement)
+    .checked;
+  const cap_delete_projects = (document.getElementById('cap-delete-projects') as HTMLInputElement)
+    .checked;
+  if (!name) {
+    showToast('Name is required', 'err');
+    return;
+  }
   try {
-    await invoke?.('update_user_class', { classId, name, description, capManageUsers: cap_manage_users, capManageClasses: cap_manage_classes, capDeleteProjects: cap_delete_projects });
+    await invoke?.('update_user_class', {
+      classId,
+      name,
+      description,
+      capManageUsers: cap_manage_users,
+      capManageClasses: cap_manage_classes,
+      capDeleteProjects: cap_delete_projects,
+    });
     showToast('Class updated', 'ok');
     await renderClassDetail(classId);
-  } catch (e: any) { showToast('Failed: ' + (e?.message ?? e), 'err'); }
+  } catch (e: any) {
+    showToast('Failed: ' + (e?.message ?? e), 'err');
+  }
 }
 
 async function deleteClass(classId: string) {
-  if (!await showConfirm('Delete this class? Users assigned to it will lose their class permissions.')) return;
+  if (
+    !(await showConfirm(
+      'Delete this class? Users assigned to it will lose their class permissions.',
+    ))
+  )
+    return;
   try {
     await invoke?.('delete_user_class', { classId });
     showToast('Class deleted', 'ok');
     _activeClassId = null;
     await renderClassesPanel();
     const ws = document.getElementById('users-workspace');
-    if (ws) ws.innerHTML = '<div class="users-detail-empty">Select a class to manage, or create one.</div>';
-  } catch (e: any) { showToast('Failed: ' + (e?.message ?? e), 'err'); }
+    if (ws)
+      ws.innerHTML =
+        '<div class="users-detail-empty">Select a class to manage, or create one.</div>';
+  } catch (e: any) {
+    showToast('Failed: ' + (e?.message ?? e), 'err');
+  }
 }
-
-
 
 async function openCreateClassForm() {
   const ws = document.getElementById('users-workspace');
@@ -588,20 +700,35 @@ async function openCreateClassForm() {
   (document.getElementById('new-cls-name') as HTMLInputElement)?.focus();
 
   document.getElementById('confirm-create-class')!.addEventListener('click', async () => {
-    const name        = (document.getElementById('new-cls-name') as HTMLInputElement).value.trim();
+    const name = (document.getElementById('new-cls-name') as HTMLInputElement).value.trim();
     const description = (document.getElementById('new-cls-desc') as HTMLInputElement).value.trim();
-    const capManageUsers    = (document.getElementById('new-cap-mu') as HTMLInputElement).checked;
-    const capManageClasses  = (document.getElementById('new-cap-mc') as HTMLInputElement).checked;
+    const capManageUsers = (document.getElementById('new-cap-mu') as HTMLInputElement).checked;
+    const capManageClasses = (document.getElementById('new-cap-mc') as HTMLInputElement).checked;
     const capDeleteProjects = (document.getElementById('new-cap-dp') as HTMLInputElement).checked;
-    if (!name) { showToast('Name is required', 'err'); return; }
+    if (!name) {
+      showToast('Name is required', 'err');
+      return;
+    }
     try {
-      const cls: UserClass = await invoke?.('create_user_class', { name, description, capManageUsers, capManageClasses, capDeleteProjects }) ?? null;
-      if (!cls) { showToast('Failed to create class', 'err'); return; }
+      const cls: UserClass =
+        (await invoke?.('create_user_class', {
+          name,
+          description,
+          capManageUsers,
+          capManageClasses,
+          capDeleteProjects,
+        })) ?? null;
+      if (!cls) {
+        showToast('Failed to create class', 'err');
+        return;
+      }
       showToast(`Class "${name}" created`, 'ok');
       _activeClassId = cls.id;
       await renderClassesPanel();
       await renderClassDetail(cls.id);
-    } catch (e: any) { showToast('Failed: ' + (e?.message ?? e), 'err'); }
+    } catch (e: any) {
+      showToast('Failed: ' + (e?.message ?? e), 'err');
+    }
   });
   document.getElementById('cancel-create-class')!.addEventListener('click', () => {
     ws.innerHTML = '<div class="users-detail-empty">Select a class to manage, or create one.</div>';
@@ -625,36 +752,42 @@ export function resetUsersPanelState(): void {
   st.selectedUserId = null;
   _activeClassId = null;
   const ws = document.getElementById('users-workspace');
-  if (ws) ws.innerHTML = '<div class="users-detail-empty">Select a user to manage, or create one.</div>';
+  if (ws)
+    ws.innerHTML = '<div class="users-detail-empty">Select a user to manage, or create one.</div>';
 }
 
 export function initUsersPanel() {
-  if (_usersPanelInited) { renderUsersPanel(); return; }
+  if (_usersPanelInited) {
+    renderUsersPanel();
+    return;
+  }
   _usersPanelInited = true;
   // Sub-nav switching
-  document.querySelectorAll<HTMLButtonElement>('.users-subnav-btn').forEach(btn => {
+  document.querySelectorAll<HTMLButtonElement>('.users-subnav-btn').forEach((btn) => {
     btn.addEventListener('click', async () => {
-      document.querySelectorAll('.users-subnav-btn').forEach(b => b.classList.remove('active'));
+      document.querySelectorAll('.users-subnav-btn').forEach((b) => b.classList.remove('active'));
       btn.classList.add('active');
       _activeSubPanel = btn.dataset.sub as 'users' | 'classes';
 
-      const usersList    = document.getElementById('users-list');
-      const classesList  = document.getElementById('classes-list');
-      const createUser   = document.getElementById('create-user-btn');
-      const createClass  = document.getElementById('create-class-btn');
-      const ws           = document.getElementById('users-workspace');
+      const usersList = document.getElementById('users-list');
+      const classesList = document.getElementById('classes-list');
+      const createUser = document.getElementById('create-user-btn');
+      const createClass = document.getElementById('create-class-btn');
+      const ws = document.getElementById('users-workspace');
 
       if (_activeSubPanel === 'users') {
-        if (usersList)   usersList.style.display = '';
+        if (usersList) usersList.style.display = '';
         if (classesList) classesList.style.display = 'none';
-        if (createUser)  createUser.style.display = '';
+        if (createUser) createUser.style.display = '';
         if (createClass) createClass.style.display = 'none';
-        if (ws) ws.innerHTML = '<div class="users-detail-empty">Select a user to manage, or create one.</div>';
+        if (ws)
+          ws.innerHTML =
+            '<div class="users-detail-empty">Select a user to manage, or create one.</div>';
         await renderUsersPanel();
       } else {
-        if (usersList)   usersList.style.display = 'none';
+        if (usersList) usersList.style.display = 'none';
         if (classesList) classesList.style.display = '';
-        if (createUser)  createUser.style.display = 'none';
+        if (createUser) createUser.style.display = 'none';
         if (createClass) createClass.style.display = '';
         if (ws) ws.innerHTML = '<div class="users-detail-empty">Select a class to configure.</div>';
         await renderClassesPanel();
@@ -680,7 +813,8 @@ export function initUsersPanel() {
   document.getElementById('create-class-btn')?.addEventListener('click', openCreateClassForm);
 
   const ws = document.getElementById('users-workspace');
-  if (ws) ws.innerHTML = '<div class="users-detail-empty">Select a user to manage, or create one.</div>';
+  if (ws)
+    ws.innerHTML = '<div class="users-detail-empty">Select a user to manage, or create one.</div>';
 
   // Show users create btn by default
   const createUser = document.getElementById('create-user-btn');

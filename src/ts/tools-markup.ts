@@ -1,5 +1,6 @@
 /**
- * @file Markup for the Tools workspace panes.
+ * @file
+ * Markup for the Tools workspace panes.
  *
  * Extracted verbatim from index.html, which had grown past 1650 lines with ~420
  * of them being static tool-pane markup. Injected into #tools-workspace during

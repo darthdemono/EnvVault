@@ -33,7 +33,7 @@ function insert(field: string, value: string) {
   ($('t-b-field') as HTMLSelectElement).value = field;
   $('t-b-field').dispatchEvent(new Event('change'));
   const valueSel = $('t-b-value') as HTMLSelectElement;
-  const opt = [...valueSel.options].find(o => o.value === value);
+  const opt = [...valueSel.options].find((o) => o.value === value);
   expect(opt, `builder offered no value "${value}"`).toBeDefined();
   valueSel.value = value;
   $('t-b-insert').click();
@@ -86,7 +86,10 @@ describe('inserted terms parse back to the chosen value', () => {
 
   it('round-trips a nested project name', () => {
     st.vault = makeVault({
-      projects: [makeProject({ id: 'Universal', name: 'Universal' }), makeProject({ id: 'p', name: 'Acme/Web' })],
+      projects: [
+        makeProject({ id: 'Universal', name: 'Universal' }),
+        makeProject({ id: 'p', name: 'Acme/Web' }),
+      ],
       api_keys: [],
     });
     mount();
@@ -126,7 +129,10 @@ describe('live validation', () => {
     mount();
   });
 
-  const type = (v: string) => { readBox().value = v; readBox().dispatchEvent(new Event('input')); };
+  const type = (v: string) => {
+    readBox().value = v;
+    readBox().dispatchEvent(new Event('input'));
+  };
 
   it('reports how many entries a rule matches', () => {
     type('tag:prod');
@@ -167,21 +173,25 @@ describe('saving', () => {
 
   it('hands both trimmed expressions to the callback', async () => {
     const saved: any[] = [];
-    mount({ read: '', write: '' }, async (e: any) => { saved.push(e); });
+    mount({ read: '', write: '' }, async (e: any) => {
+      saved.push(e);
+    });
     readBox().value = '  tag:prod  ';
     readBox().dispatchEvent(new Event('input'));
     $('t-expr-save').click();
-    await new Promise(r => setTimeout(r, 10));
+    await new Promise((r) => setTimeout(r, 10));
     expect(saved).toEqual([{ read: 'tag:prod', write: '' }]);
   });
 
   it('refuses to save a malformed rule', async () => {
     const saved: any[] = [];
-    mount({ read: '', write: '' }, async (e: any) => { saved.push(e); });
+    mount({ read: '', write: '' }, async (e: any) => {
+      saved.push(e);
+    });
     readBox().value = 'tag:a AND';
     readBox().dispatchEvent(new Event('input'));
     $('t-expr-save').click();
-    await new Promise(r => setTimeout(r, 10));
+    await new Promise((r) => setTimeout(r, 10));
     expect(saved).toEqual([]);
   });
 });

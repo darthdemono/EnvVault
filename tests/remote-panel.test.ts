@@ -8,8 +8,11 @@
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import {
-  upsertSavedRemote, findSavedRemote, switchToLocalVault,
-  setRemoteFinishInitFn, renderRemotePanel,
+  upsertSavedRemote,
+  findSavedRemote,
+  switchToLocalVault,
+  setRemoteFinishInitFn,
+  renderRemotePanel,
 } from '../src/ts/remote-panel';
 import { st, Settings, RemoteVaultStore, LocalVaultStore } from '../src/ts/state';
 // Importing render.ts registers the real render fn with setRenderFn, so
@@ -35,13 +38,15 @@ describe('upsertSavedRemote', () => {
   });
 
   it('names an owner connection after the host', () => {
-    expect(upsertSavedRemote({ url: 'https://vault.example.com', username: '' }).name)
-      .toBe('vault.example.com');
+    expect(upsertSavedRemote({ url: 'https://vault.example.com', username: '' }).name).toBe(
+      'vault.example.com',
+    );
   });
 
   it('distinguishes a per-user connection in the name', () => {
-    expect(upsertSavedRemote({ url: 'http://localhost:8743', username: 'alice' }).name)
-      .toBe('localhost:8743 (alice)');
+    expect(upsertSavedRemote({ url: 'http://localhost:8743', username: 'alice' }).name).toBe(
+      'localhost:8743 (alice)',
+    );
   });
 
   it('does not duplicate on reconnect to the same server and user', () => {
@@ -65,19 +70,35 @@ describe('upsertSavedRemote', () => {
   });
 
   it('stores the TLS fingerprint for TOFU pinning', () => {
-    const cfg = upsertSavedRemote({ url: 'https://localhost:8743', username: '', certFingerprint: 'ab:cd' });
+    const cfg = upsertSavedRemote({
+      url: 'https://localhost:8743',
+      username: '',
+      certFingerprint: 'ab:cd',
+    });
     expect(cfg.certFingerprint).toBe('ab:cd');
   });
 
   it('warns when a known server presents a different certificate', () => {
-    upsertSavedRemote({ url: 'https://localhost:8743', username: '', certFingerprint: 'old-print' });
-    upsertSavedRemote({ url: 'https://localhost:8743', username: '', certFingerprint: 'new-print' });
+    upsertSavedRemote({
+      url: 'https://localhost:8743',
+      username: '',
+      certFingerprint: 'old-print',
+    });
+    upsertSavedRemote({
+      url: 'https://localhost:8743',
+      username: '',
+      certFingerprint: 'new-print',
+    });
     expect(document.getElementById('toast')!.textContent).toMatch(/fingerprint changed/i);
     expect(findSavedRemote('https://localhost:8743')!.certFingerprint).toBe('new-print');
   });
 
   it('does not warn on the first sight of a certificate', () => {
-    upsertSavedRemote({ url: 'https://localhost:8743', username: '', certFingerprint: 'first-print' });
+    upsertSavedRemote({
+      url: 'https://localhost:8743',
+      username: '',
+      certFingerprint: 'first-print',
+    });
     expect(document.getElementById('toast')!.textContent).not.toMatch(/fingerprint changed/i);
   });
 
@@ -142,7 +163,7 @@ describe('switchToLocalVault', () => {
     await switchToLocalVault();
     expect(st.vault.api_keys).toEqual([]);
     expect(st.vault.user_categories).toEqual([]);
-    expect(st.vault.projects.map(p => p.id)).toEqual(['Universal']);
+    expect(st.vault.projects.map((p) => p.id)).toEqual(['Universal']);
   });
 
   it('resets a project selection that pointed at a remote-only project', async () => {
@@ -209,10 +230,21 @@ describe('switchToLocalVault', () => {
   // the unlock was abandoned. finishInit is a no-op here on purpose: that is
   // exactly the locked-local case.
   it('repaints the DOM itself instead of relying on finishInit', async () => {
-    st.vault.projects.push(makeProject({
-      id: 'rp2', name: 'Remote WG', project_type: 'wireguard',
-      chunks: [{ id: 'c1', chunk_type: 'wg_peer', name: 'PeerOne', fields: [{ key: 'PublicKey', value: 'abc' }] }],
-    } as any));
+    st.vault.projects.push(
+      makeProject({
+        id: 'rp2',
+        name: 'Remote WG',
+        project_type: 'wireguard',
+        chunks: [
+          {
+            id: 'c1',
+            chunk_type: 'wg_peer',
+            name: 'PeerOne',
+            fields: [{ key: 'PublicKey', value: 'abc' }],
+          },
+        ],
+      } as any),
+    );
     st.currentSelectedProjectIds = ['rp2'];
     setRemoteFinishInitFn(async () => {});
     render();

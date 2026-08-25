@@ -3,10 +3,10 @@
 
 use crate::access::Access;
 use crate::data;
+use crate::error::{CliError, CliResult};
 use crate::fmt::cell;
 use crate::refs::resolve_value;
 use serde_json::Value;
-use crate::error::{CliError, CliResult};
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Severity {
@@ -81,9 +81,15 @@ pub fn analyse(vault: &Value) -> Vec<Issue> {
             _ => "?".to_string(),
         };
         let api_key = k.get("api_key").and_then(|v| v.as_str()).unwrap_or("");
-        let stype = k.get("secretType").and_then(|v| v.as_str()).unwrap_or("api_key");
+        let stype = k
+            .get("secretType")
+            .and_then(|v| v.as_str())
+            .unwrap_or("api_key");
 
-        if k.get("compromised").and_then(|v| v.as_bool()).unwrap_or(false) {
+        if k.get("compromised")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+        {
             issues.push(Issue {
                 severity: Severity::High,
                 subject: prov.clone(),
@@ -91,8 +97,12 @@ pub fn analyse(vault: &Value) -> Vec<Issue> {
             });
         }
         let token_shaped = api_key.chars().count() >= 20
-            && api_key.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-');
-        if (stype == "password" || stype == "api_key") && api_key.chars().count() < 12 && !token_shaped
+            && api_key
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-');
+        if (stype == "password" || stype == "api_key")
+            && api_key.chars().count() < 12
+            && !token_shaped
         {
             issues.push(Issue {
                 severity: Severity::High,
@@ -112,7 +122,11 @@ pub fn analyse(vault: &Value) -> Vec<Issue> {
                 message: "Secret starts with a common weak value".into(),
             });
         }
-        if let Some(exp) = k.get("expires_at").and_then(|v| v.as_str()).filter(|s| !s.is_empty()) {
+        if let Some(exp) = k
+            .get("expires_at")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+        {
             let day: String = exp.chars().take(10).collect();
             if day < today {
                 issues.push(Issue {
@@ -150,8 +164,14 @@ pub fn analyse(vault: &Value) -> Vec<Issue> {
                 }
             }
         }
-        let never_rotated = k.get("last_rotated_at").and_then(|v| v.as_str()).unwrap_or("").is_empty()
-            && k.get("version_history").and_then(|v| v.as_array()).map_or(true, |a| a.is_empty());
+        let never_rotated = k
+            .get("last_rotated_at")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .is_empty()
+            && k.get("version_history")
+                .and_then(|v| v.as_array())
+                .is_none_or(|a| a.is_empty());
         if never_rotated {
             issues.push(Issue {
                 severity: Severity::Low,
@@ -159,8 +179,16 @@ pub fn analyse(vault: &Value) -> Vec<Issue> {
                 message: "Never rotated".into(),
             });
         }
-        let described = !k.get("api_description").and_then(|v| v.as_str()).unwrap_or("").is_empty()
-            || !k.get("description").and_then(|v| v.as_str()).unwrap_or("").is_empty();
+        let described = !k
+            .get("api_description")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .is_empty()
+            || !k
+                .get("description")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .is_empty();
         if !described {
             issues.push(Issue {
                 severity: Severity::Low,
@@ -177,17 +205,22 @@ pub fn analyse(vault: &Value) -> Vec<Issue> {
         if v.chars().count() < 6 {
             continue;
         }
-        by_value
-            .entry(v)
-            .or_default()
-            .push(k.get("provider").and_then(|p| p.as_str()).unwrap_or("?").to_string());
+        by_value.entry(v).or_default().push(
+            k.get("provider")
+                .and_then(|p| p.as_str())
+                .unwrap_or("?")
+                .to_string(),
+        );
     }
     for (_, provs) in by_value {
         if provs.len() > 1 {
             issues.push(Issue {
                 severity: Severity::Med,
                 subject: provs.join(", "),
-                message: format!("Same secret value in {} entries — consider merging", provs.len()),
+                message: format!(
+                    "Same secret value in {} entries — consider merging",
+                    provs.len()
+                ),
             });
         }
     }
@@ -207,7 +240,7 @@ pub fn analyse(vault: &Value) -> Vec<Issue> {
         let mut best: Option<(usize, &String)> = None;
         for p in &providers {
             let d = levenshtein(&target.to_lowercase(), &p.to_lowercase());
-            if best.map_or(true, |(bd, _)| d < bd) {
+            if best.is_none_or(|(bd, _)| d < bd) {
                 best = Some((d, p));
             }
         }
@@ -219,9 +252,19 @@ pub fn analyse(vault: &Value) -> Vec<Issue> {
     let mut seen: std::collections::BTreeSet<String> = Default::default();
     for p in &projects {
         let pname = p.get("name").and_then(|v| v.as_str()).unwrap_or("");
-        for c in p.get("chunks").and_then(|v| v.as_array()).into_iter().flatten() {
+        for c in p
+            .get("chunks")
+            .and_then(|v| v.as_array())
+            .into_iter()
+            .flatten()
+        {
             let cname = c.get("name").and_then(|v| v.as_str()).unwrap_or("");
-            for f in c.get("fields").and_then(|v| v.as_array()).into_iter().flatten() {
+            for f in c
+                .get("fields")
+                .and_then(|v| v.as_array())
+                .into_iter()
+                .flatten()
+            {
                 let raw = f.get("value").and_then(|v| v.as_str()).unwrap_or("");
                 if !(raw.starts_with("${") && raw.ends_with('}') && raw.len() > 3) {
                     continue;
@@ -234,7 +277,13 @@ pub fn analyse(vault: &Value) -> Vec<Issue> {
                     continue;
                 }
                 let inner = raw[2..raw.len() - 1].trim_start_matches("chunk:");
-                let prov_part = inner.split('/').next().unwrap_or("").split('_').next().unwrap_or("");
+                let prov_part = inner
+                    .split('/')
+                    .next()
+                    .unwrap_or("")
+                    .split('_')
+                    .next()
+                    .unwrap_or("");
                 let hint = nearest(prov_part)
                     .map(|g| format!(" — did you mean ${{{g}/…}}?"))
                     .unwrap_or_default();
@@ -258,11 +307,23 @@ pub fn cmd_scan(access: &Access, min_severity: &str, json_out: bool) -> CliResul
         "med" => Severity::Med,
         _ => Severity::Low,
     };
-    let issues: Vec<Issue> = analyse(&vault).into_iter().filter(|i| i.severity <= floor).collect();
+    let issues: Vec<Issue> = analyse(&vault)
+        .into_iter()
+        .filter(|i| i.severity <= floor)
+        .collect();
 
-    let high = issues.iter().filter(|i| i.severity == Severity::High).count();
-    let med = issues.iter().filter(|i| i.severity == Severity::Med).count();
-    let low = issues.iter().filter(|i| i.severity == Severity::Low).count();
+    let high = issues
+        .iter()
+        .filter(|i| i.severity == Severity::High)
+        .count();
+    let med = issues
+        .iter()
+        .filter(|i| i.severity == Severity::Med)
+        .count();
+    let low = issues
+        .iter()
+        .filter(|i| i.severity == Severity::Low)
+        .count();
 
     if json_out || crate::out::is_json() {
         let arr: Vec<Value> = issues
@@ -291,12 +352,20 @@ pub fn cmd_scan(access: &Access, min_severity: &str, json_out: bool) -> CliResul
         println!("No issues found.");
         return Ok(());
     }
-    println!("{:<6} {:<34} {}", "Sev", "Subject", "Issue");
+    println!("{:<6} {:<34} Issue", "Sev", "Subject");
     println!("{}", "-".repeat(96));
     for i in &issues {
-        println!("{:<6} {} {}", i.severity.label(), cell(&i.subject, 34), i.message);
+        println!(
+            "{:<6} {} {}",
+            i.severity.label(),
+            cell(&i.subject, 34),
+            i.message
+        );
     }
-    println!("\n{} issue(s): {high} high, {med} medium, {low} low", issues.len());
+    println!(
+        "\n{} issue(s): {high} high, {med} medium, {low} low",
+        issues.len()
+    );
     Ok(())
 }
 
@@ -341,7 +410,12 @@ pub fn cmd_verify(access: &Access) -> CliResult {
     ordered.sort_by_key(|r| r.get("id").and_then(|v| v.as_i64()).unwrap_or(0));
     let chained: Vec<&Value> = ordered
         .iter()
-        .filter(|r| !r.get("entry_hash").and_then(|v| v.as_str()).unwrap_or("").is_empty())
+        .filter(|r| {
+            !r.get("entry_hash")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .is_empty()
+        })
         .collect();
 
     if chained.is_empty() {
@@ -352,7 +426,10 @@ pub fn cmd_verify(access: &Access) -> CliResult {
         );
         return Ok(());
     }
-    let first_prev = chained[0].get("prev_hash").and_then(|v| v.as_str()).unwrap_or("");
+    let first_prev = chained[0]
+        .get("prev_hash")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
     if !first_prev.is_empty() && first_prev != "genesis" {
         return Err(CliError::new(crate::error::Code::Error, format!(
             "Row #{} is the oldest hashed row but links to an earlier hash — rows before it were removed.",
@@ -364,11 +441,20 @@ pub fn cmd_verify(access: &Access) -> CliResult {
     for (i, r) in chained.iter().enumerate() {
         let id = r.get("id").and_then(|v| v.as_i64()).unwrap_or(0);
         let action = r.get("action").and_then(|v| v.as_str()).unwrap_or("");
-        let provider = r.get("entry_provider").and_then(|v| v.as_str()).unwrap_or("");
+        let provider = r
+            .get("entry_provider")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
         let ts = r.get("timestamp").and_then(|v| v.as_str()).unwrap_or("");
-        let actor = r.get("actor").and_then(|v| v.as_str()).filter(|s| !s.is_empty());
+        let actor = r
+            .get("actor")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty());
         let stored = r.get("entry_hash").and_then(|v| v.as_str()).unwrap_or("");
-        let prev_for_hash = r.get("prev_hash").and_then(|v| v.as_str()).unwrap_or("genesis");
+        let prev_for_hash = r
+            .get("prev_hash")
+            .and_then(|v| v.as_str())
+            .unwrap_or("genesis");
 
         // Two chain formats coexist, mirroring `compute_audit_hash`:
         //   v2  action|provider|timestamp|actor|prev
@@ -378,17 +464,23 @@ pub fn cmd_verify(access: &Access) -> CliResult {
             None => sha256_hex(&format!("{action}|{provider}|{ts}|{prev_for_hash}")),
         };
         if expected != stored {
-            return Err(CliError::new(crate::error::Code::Error, format!(
-                "Chain broken at row {} (#{id}): contents do not match the stored hash.",
-                i + 1
-            )));
+            return Err(CliError::new(
+                crate::error::Code::Error,
+                format!(
+                    "Chain broken at row {} (#{id}): contents do not match the stored hash.",
+                    i + 1
+                ),
+            ));
         }
         if let Some(p) = &prev {
             if r.get("prev_hash").and_then(|v| v.as_str()).unwrap_or("") != p {
-                return Err(CliError::new(crate::error::Code::Error, format!(
-                    "Chain broken at row {} (#{id}): does not link to the previous row.",
-                    i + 1
-                )));
+                return Err(CliError::new(
+                    crate::error::Code::Error,
+                    format!(
+                        "Chain broken at row {} (#{id}): does not link to the previous row.",
+                        i + 1
+                    ),
+                ));
             }
         }
         prev = Some(stored.to_string());
@@ -411,10 +503,11 @@ pub fn cmd_status(access: &Access) -> CliResult {
             None,
         ),
         Access::Remote(c) => {
-            let fp = c
-                .get_json("/api/status")
-                .ok()
-                .and_then(|s| s.get("cert_fingerprint").and_then(|v| v.as_str()).map(String::from));
+            let fp = c.get_json("/api/status").ok().and_then(|s| {
+                s.get("cert_fingerprint")
+                    .and_then(|v| v.as_str())
+                    .map(String::from)
+            });
             ("remote", c.base.clone(), fp)
         }
     };
@@ -426,12 +519,20 @@ pub fn cmd_status(access: &Access) -> CliResult {
     let projects = data::projects(&vault);
     let chunks: usize = projects
         .iter()
-        .map(|p| p.get("chunks").and_then(|c| c.as_array()).map_or(0, |a| a.len()))
+        .map(|p| {
+            p.get("chunks")
+                .and_then(|c| c.as_array())
+                .map_or(0, |a| a.len())
+        })
         .sum();
     let mut by_type: std::collections::BTreeMap<&str, usize> = Default::default();
     for e in &entries {
         *by_type
-            .entry(e.get("secretType").and_then(|v| v.as_str()).unwrap_or("api_key"))
+            .entry(
+                e.get("secretType")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("api_key"),
+            )
             .or_insert(0) += 1;
     }
 
@@ -450,7 +551,10 @@ pub fn cmd_status(access: &Access) -> CliResult {
         }),
         || {
             println!("Mode        {mode}");
-            println!("{:<11} {location}", if mode == "local" { "Vault" } else { "Server" });
+            println!(
+                "{:<11} {location}",
+                if mode == "local" { "Vault" } else { "Server" }
+            );
             if let Some(fp) = &fingerprint {
                 println!("Cert SHA256 {fp}");
             }

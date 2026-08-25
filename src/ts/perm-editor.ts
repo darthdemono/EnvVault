@@ -1,5 +1,6 @@
 /**
- * @file Permission expression editor — shared by the user and class panels.
+ * @file
+ * Permission expression editor — shared by the user and class panels.
  *
  * Two rules per subject: one for read, one for write. Each is a boolean
  * expression (see `permex.ts`). The editor gives you a predicate builder for the
@@ -13,22 +14,36 @@ import { st } from './state';
 import { esc, escAttr, showToast } from './utils';
 import { FIELDS, validate, parse, evaluate, type Field } from './permex';
 
-export interface PermExprs { read: string; write: string; }
+export interface PermExprs {
+  read: string;
+  write: string;
+}
 
 /** Distinct values present in the vault for a given predicate field. */
 function suggestionsFor(field: Field): string[] {
   const keys = st.vault.api_keys;
   switch (field) {
     case 'project':
-      return st.vault.projects.filter(p => p.id !== 'Universal').map(p => p.name).sort();
+      return st.vault.projects
+        .filter((p) => p.id !== 'Universal')
+        .map((p) => p.name)
+        .sort();
     case 'category':
       return [...new Set(st.vault.user_categories ?? [])].sort();
     case 'tag':
-      return [...new Set(keys.flatMap(k => k.tags ?? []))].sort();
+      return [...new Set(keys.flatMap((k) => k.tags ?? []))].sort();
     case 'env':
       return ['production', 'staging', 'development', 'testing'];
     case 'type':
-      return ['api_key', 'password', 'certificate', 'env_var', 'connection_string', 'ssh_key', 'file_blob'];
+      return [
+        'api_key',
+        'password',
+        'certificate',
+        'env_var',
+        'connection_string',
+        'ssh_key',
+        'file_blob',
+      ];
     default:
       return ['*'];
   }
@@ -39,7 +54,7 @@ function suggestionsFor(field: Field): string[] {
  * `p` namespaces every id so the user and class panels can both be open.
  */
 export function permEditorHtml(p: string, exprs: PermExprs): string {
-  const fieldOpts = FIELDS.map(f => `<option value="${f}">${f}</option>`).join('');
+  const fieldOpts = FIELDS.map((f) => `<option value="${f}">${f}</option>`).join('');
   return `
     <div class="perm-expr-editor">
       <p class="perm-expr-help">
@@ -92,20 +107,22 @@ export function permEditorHtml(p: string, exprs: PermExprs): string {
  * `onSave` receives the two expression strings; it should persist them.
  */
 export function wirePermEditor(p: string, onSave: (e: PermExprs) => Promise<void>): void {
-  const readEl  = document.getElementById(`${p}-expr-read`)  as HTMLTextAreaElement | null;
+  const readEl = document.getElementById(`${p}-expr-read`) as HTMLTextAreaElement | null;
   const writeEl = document.getElementById(`${p}-expr-write`) as HTMLTextAreaElement | null;
   if (!readEl || !writeEl) return;
 
-  const fieldSel  = document.getElementById(`${p}-b-field`)  as HTMLSelectElement;
-  const valueSel  = document.getElementById(`${p}-b-value`)  as HTMLSelectElement;
+  const fieldSel = document.getElementById(`${p}-b-field`) as HTMLSelectElement;
+  const valueSel = document.getElementById(`${p}-b-value`) as HTMLSelectElement;
   const targetSel = document.getElementById(`${p}-b-target`) as HTMLSelectElement;
-  const joinSel   = document.getElementById(`${p}-b-join`)   as HTMLSelectElement;
+  const joinSel = document.getElementById(`${p}-b-join`) as HTMLSelectElement;
   const previewEl = document.getElementById(`${p}-preview`)!;
 
   const refreshValues = () => {
     const field = fieldSel.value as Field;
-    const opts = ['*', ...suggestionsFor(field).filter(v => v !== '*')];
-    valueSel.innerHTML = opts.map(v => `<option value="${escAttr(v)}">${esc(v)}</option>`).join('');
+    const opts = ['*', ...suggestionsFor(field).filter((v) => v !== '*')];
+    valueSel.innerHTML = opts
+      .map((v) => `<option value="${escAttr(v)}">${esc(v)}</option>`)
+      .join('');
   };
   fieldSel.addEventListener('change', refreshValues);
   refreshValues();
@@ -128,7 +145,7 @@ export function wirePermEditor(p: string, onSave: (e: PermExprs) => Promise<void
     }
     const expr = parse(src);
     const total = st.vault.api_keys.length;
-    const hits = st.vault.api_keys.filter(e => evaluate(expr, e, st.vault.projects)).length;
+    const hits = st.vault.api_keys.filter((e) => evaluate(expr, e, st.vault.projects)).length;
     status.className = 'perm-expr-status ok';
     status.textContent = `Valid — matches ${hits} of ${total} entries.`;
     return true;
@@ -139,14 +156,16 @@ export function wirePermEditor(p: string, onSave: (e: PermExprs) => Promise<void
     const b = refreshOne(writeEl, `${p}-status-write`);
     // Write implies read, so the effective read set is the union.
     if (a && b) {
-      const parts = [readEl.value, writeEl.value].filter(s => s.trim());
+      const parts = [readEl.value, writeEl.value].filter((s) => s.trim());
       if (parts.length === 2) {
         const combined = `(${parts[0]}) OR (${parts[1]})`;
         try {
           const expr = parse(combined);
-          const hits = st.vault.api_keys.filter(e => evaluate(expr, e, st.vault.projects)).length;
+          const hits = st.vault.api_keys.filter((e) => evaluate(expr, e, st.vault.projects)).length;
           previewEl.textContent = `Effective read (read OR write): ${hits} of ${st.vault.api_keys.length}`;
-        } catch { previewEl.textContent = ''; }
+        } catch {
+          previewEl.textContent = '';
+        }
       } else previewEl.textContent = '';
     } else previewEl.textContent = '';
     return a && b;
@@ -158,7 +177,7 @@ export function wirePermEditor(p: string, onSave: (e: PermExprs) => Promise<void
 
   document.getElementById(`${p}-b-insert`)?.addEventListener('click', () => {
     const target = targetSel.value === 'write' ? writeEl : readEl;
-    const value  = valueSel.value;
+    const value = valueSel.value;
     // Quote values containing characters the lexer would treat as delimiters.
     // Backslash has to be escaped before the quote character, and before any
     // quoting decision: inside a quoted value the lexer reads `\x` as a literal
@@ -166,15 +185,16 @@ export function wirePermEditor(p: string, onSave: (e: PermExprs) => Promise<void
     const needsQuotes = /[\s()"\\]/.test(value);
     const escaped = value.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
     const term = `${fieldSel.value}:${needsQuotes ? `"${escaped}"` : value}`;
-    target.value = target.value.trim()
-      ? `${target.value.trim()} ${joinSel.value} ${term}`
-      : term;
+    target.value = target.value.trim() ? `${target.value.trim()} ${joinSel.value} ${term}` : term;
     refresh();
     target.focus();
   });
 
   document.getElementById(`${p}-expr-save`)?.addEventListener('click', async () => {
-    if (!refresh()) { showToast('Fix the expression before saving', 'err'); return; }
+    if (!refresh()) {
+      showToast('Fix the expression before saving', 'err');
+      return;
+    }
     try {
       await onSave({ read: readEl.value.trim(), write: writeEl.value.trim() });
       showToast('Permissions saved ✓', 'ok');

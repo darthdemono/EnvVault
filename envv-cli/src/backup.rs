@@ -6,13 +6,13 @@
 //! *not* the master password: this file is meant to leave the machine.
 
 use crate::access::Access;
+use crate::error::{CliError, CliResult};
 use crate::fmt::confirm;
 use aes_gcm::aead::{Aead, KeyInit, Payload};
 use aes_gcm::{Aes256Gcm, Nonce};
 use base64::Engine;
 use rand::RngCore;
 use serde_json::{json, Value};
-use crate::error::{CliError, CliResult};
 
 const BAK_MAGIC: &str = "ENVVBAK1";
 const PBKDF2_ITERS: u32 = 210_000;
@@ -34,9 +34,11 @@ fn ask_password(provided: Option<&str>, confirm_twice: bool) -> CliResult<String
     if let Some(p) = provided {
         return Ok(p.to_string());
     }
-    let pw = rpassword::prompt_password("Backup password: ").map_err(|e| CliError::from(e.to_string()))?;
+    let pw = rpassword::prompt_password("Backup password: ")
+        .map_err(|e| CliError::from(e.to_string()))?;
     if confirm_twice {
-        let again = rpassword::prompt_password("Repeat: ").map_err(|e| CliError::from(e.to_string()))?;
+        let again =
+            rpassword::prompt_password("Repeat: ").map_err(|e| CliError::from(e.to_string()))?;
         if pw != again {
             return Err("Passwords do not match".into());
         }
@@ -47,7 +49,9 @@ fn ask_password(provided: Option<&str>, confirm_twice: bool) -> CliResult<String
 pub fn export(access: &Access, path: &std::path::Path, password: Option<&str>) -> CliResult {
     let pw = ask_password(password, true)?;
     if pw.chars().count() < MIN_PASSWORD {
-        return Err(CliError::invalid(format!("Backup password must be at least {MIN_PASSWORD} characters")));
+        return Err(CliError::invalid(format!(
+            "Backup password must be at least {MIN_PASSWORD} characters"
+        )));
     }
     let vault = access.load_vault()?;
 
@@ -60,7 +64,13 @@ pub fn export(access: &Access, path: &std::path::Path, password: Option<&str>) -
     let cipher = Aes256Gcm::new_from_slice(&key).map_err(|e| CliError::from(e.to_string()))?;
     let plain = serde_json::to_vec(&vault).map_err(|e| CliError::from(e.to_string()))?;
     let ct = cipher
-        .encrypt(Nonce::from_slice(&iv), Payload { msg: &plain, aad: b"" })
+        .encrypt(
+            Nonce::from_slice(&iv),
+            Payload {
+                msg: &plain,
+                aad: b"",
+            },
+        )
         .map_err(|_| CliError::from("Encryption failed"))?;
 
     let envelope = json!({
@@ -70,9 +80,15 @@ pub fn export(access: &Access, path: &std::path::Path, password: Option<&str>) -
         "iv":   b64().encode(iv),
         "ct":   b64().encode(&ct),
     });
-    std::fs::write(path, serde_json::to_string(&envelope).map_err(|e| CliError::from(e.to_string()))?)
-        .map_err(|e| CliError::from(format!("Cannot write {}: {e}", path.display())))?;
-    let n = vault.get("api_keys").and_then(|v| v.as_array()).map_or(0, |a| a.len());
+    std::fs::write(
+        path,
+        serde_json::to_string(&envelope).map_err(|e| CliError::from(e.to_string()))?,
+    )
+    .map_err(|e| CliError::from(format!("Cannot write {}: {e}", path.display())))?;
+    let n = vault
+        .get("api_keys")
+        .and_then(|v| v.as_array())
+        .map_or(0, |a| a.len());
     crate::out::ok(
         "backup.export",
         json!({ "path": path.display().to_string(), "entries": n, "kdf_iters": PBKDF2_ITERS }),
@@ -89,7 +105,8 @@ pub fn import(
 ) -> CliResult {
     let raw = std::fs::read_to_string(path)
         .map_err(|e| CliError::from(format!("Cannot read {}: {e}", path.display())))?;
-    let env: Value = serde_json::from_str(&raw).map_err(|_| CliError::invalid("Not a valid backup file"))?;
+    let env: Value =
+        serde_json::from_str(&raw).map_err(|_| CliError::invalid("Not a valid backup file"))?;
     if env.get("magic").and_then(|v| v.as_str()) != Some(BAK_MAGIC) {
         return Err("Unrecognised backup format".into());
     }
@@ -133,7 +150,9 @@ pub fn import(
         .and_then(|v| v.as_array())
         .map_or(0, |a| a.len());
     if !confirm(
-        &format!("Replace the current vault ({current_n} entries) with this backup ({count} entries)?"),
+        &format!(
+            "Replace the current vault ({current_n} entries) with this backup ({count} entries)?"
+        ),
         yes,
     )? {
         println!("Cancelled.");

@@ -6,15 +6,28 @@
  */
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 import {
-  TYPE_CONFIG, buildCatChips, dynamicSecretFields, formToEntry, fillForm,
-  populateProjectSelect, openModal, closeModal, openAdd, pushUndo,
-  showDropdown, showContextMenu, CustomSelect, injectIntoForm,
+  TYPE_CONFIG,
+  buildCatChips,
+  dynamicSecretFields,
+  formToEntry,
+  fillForm,
+  populateProjectSelect,
+  openModal,
+  closeModal,
+  openAdd,
+  pushUndo,
+  showDropdown,
+  showContextMenu,
+  CustomSelect,
+  injectIntoForm,
 } from '../src/ts/modals';
 import { st } from '../src/ts/state';
 import { loadRealIndexHtml, makeEntry, makeProject, makeVault, resetState } from './helpers';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
-const setVal = (id: string, v: string) => { ($(id) as HTMLInputElement).value = v; };
+const setVal = (id: string, v: string) => {
+  ($(id) as HTMLInputElement).value = v;
+};
 
 beforeEach(() => {
   loadRealIndexHtml();
@@ -26,16 +39,48 @@ describe('form element contract with index.html', () => {
   // Every id `formToEntry`/`fillForm` reach for must actually exist in the
   // shipped markup — this is the check that catches silent id drift.
   const REQUIRED_IDS = [
-    'f-provider', 'f-account', 'f-username', 'f-email', 'f-key', 'f-secret', 'f-keyid',
-    'f-price', 'f-env', 'f-project', 'f-apiurl', 'f-cburl', 'f-version', 'f-ratelimit',
-    'f-expires', 'f-scopes', 'f-apidesc', 'f-desc', 'f-details', 'f-icon', 'f-icon-preview',
-    'f-secret-type', 'f-categories', 'f-cert', 'f-cert-key', 'f-cert-issuer', 'f-blob',
-    'f-tags-input', 'f-env-prefixes', 'f-extra-vars-list', 'f-envvar-subtype',
-    'modal-overlay', 'modal-title', 'modal-duplicate', 'edit-index',
-    'undo-bar', 'undo-msg', 'dropdown', 'toast',
+    'f-provider',
+    'f-account',
+    'f-username',
+    'f-email',
+    'f-key',
+    'f-secret',
+    'f-keyid',
+    'f-price',
+    'f-env',
+    'f-project',
+    'f-apiurl',
+    'f-cburl',
+    'f-version',
+    'f-ratelimit',
+    'f-expires',
+    'f-scopes',
+    'f-apidesc',
+    'f-desc',
+    'f-details',
+    'f-icon',
+    'f-icon-preview',
+    'f-secret-type',
+    'f-categories',
+    'f-cert',
+    'f-cert-key',
+    'f-cert-issuer',
+    'f-blob',
+    'f-tags-input',
+    'f-env-prefixes',
+    'f-extra-vars-list',
+    'f-envvar-subtype',
+    'modal-overlay',
+    'modal-title',
+    'modal-duplicate',
+    'edit-index',
+    'undo-bar',
+    'undo-msg',
+    'dropdown',
+    'toast',
   ];
 
-  it.each(REQUIRED_IDS)('#%s exists', id => {
+  it.each(REQUIRED_IDS)('#%s exists', (id) => {
     expect(document.getElementById(id), `#${id} missing from index.html`).not.toBeNull();
   });
 
@@ -52,9 +97,15 @@ describe('form element contract with index.html', () => {
 
 describe('TYPE_CONFIG', () => {
   it('covers every secret type', () => {
-    expect(Object.keys(TYPE_CONFIG).sort()).toEqual(
-      ['api_key', 'certificate', 'connection_string', 'env_var', 'file_blob', 'password', 'ssh_key'],
-    );
+    expect(Object.keys(TYPE_CONFIG).sort()).toEqual([
+      'api_key',
+      'certificate',
+      'connection_string',
+      'env_var',
+      'file_blob',
+      'password',
+      'ssh_key',
+    ]);
   });
 
   it('labels certificate and file_blob by what they hold, not "API Key"', () => {
@@ -70,7 +121,10 @@ describe('TYPE_CONFIG', () => {
 });
 
 describe('dynamicSecretFields', () => {
-  const typeIs = (t: string) => { ($('f-secret-type') as HTMLSelectElement).value = t; dynamicSecretFields(); };
+  const typeIs = (t: string) => {
+    ($('f-secret-type') as HTMLSelectElement).value = t;
+    dynamicSecretFields();
+  };
 
   it('shows the API secret field only for api_key', () => {
     typeIs('api_key');
@@ -124,8 +178,10 @@ describe('buildCatChips', () => {
     st.vault.user_categories = ['infra', 'billing', 'ai'];
     buildCatChips(['billing']);
     const chips = [...document.querySelectorAll('#f-categories .cat-chip')];
-    expect(chips.map(c => c.textContent)).toEqual(['infra', 'billing', 'ai']);
-    expect(chips.filter(c => c.classList.contains('selected')).map(c => c.textContent)).toEqual(['billing']);
+    expect(chips.map((c) => c.textContent)).toEqual(['infra', 'billing', 'ai']);
+    expect(chips.filter((c) => c.classList.contains('selected')).map((c) => c.textContent)).toEqual(
+      ['billing'],
+    );
   });
 
   it('toggles selection on click', () => {
@@ -142,7 +198,9 @@ describe('buildCatChips', () => {
     st.vault.user_categories = ['<img src=x onerror=alert(1)>'];
     buildCatChips([]);
     expect(document.querySelector('#f-categories img')).toBeNull();
-    expect(document.querySelector('#f-categories .cat-chip')!.textContent).toBe('<img src=x onerror=alert(1)>');
+    expect(document.querySelector('#f-categories .cat-chip')!.textContent).toBe(
+      '<img src=x onerror=alert(1)>',
+    );
   });
 
   it('shows a hint instead of chips when no categories exist', () => {
@@ -174,7 +232,7 @@ describe('populateProjectSelect', () => {
   it('lists every project except the Universal catch-all', () => {
     populateProjectSelect();
     const items = [...document.querySelectorAll<HTMLElement>('#f-project .project-pick-item')];
-    expect(items.map(i => i.dataset.value)).toEqual(['p1', 'p2']);
+    expect(items.map((i) => i.dataset.value)).toEqual(['p1', 'p2']);
   });
 
   it('toggles an item on click', () => {
@@ -205,10 +263,15 @@ describe('formToEntry', () => {
   it('always includes Universal in projectIds, even when specific projects are picked', () => {
     // Dropping Universal orphans the entry from the default view.
     st.vault = makeVault({
-      projects: [makeProject({ id: 'Universal', name: 'Universal' }), makeProject({ id: 'p1', name: 'Acme' })],
+      projects: [
+        makeProject({ id: 'Universal', name: 'Universal' }),
+        makeProject({ id: 'p1', name: 'Acme' }),
+      ],
     });
     populateProjectSelect();
-    document.querySelector<HTMLElement>('#f-project .project-pick-item[data-value="p1"]')!.classList.add('selected');
+    document
+      .querySelector<HTMLElement>('#f-project .project-pick-item[data-value="p1"]')!
+      .classList.add('selected');
     expect(formToEntry().projectIds).toEqual(['Universal', 'p1']);
   });
 
@@ -284,11 +347,22 @@ describe('fillForm → formToEntry round trip', () => {
   it('preserves an api_key entry through a full cycle', () => {
     st.vault.user_categories = ['infra'];
     const original = makeEntry({
-      provider: 'GitHub', api_key: 'sk-123', api_secret: 'shh', key_id: 'kid-1',
-      price_type: 'paid', environment: 'production', api_url: 'https://api.github.com',
-      version: 'v3', rate_limit: '100/min', scopes: ['read', 'write'],
-      api_description: 'CI token', description: 'notes', categories: ['infra'],
-      tags: ['prod'], secretType: 'api_key', env_prefixes: ['VITE'],
+      provider: 'GitHub',
+      api_key: 'sk-123',
+      api_secret: 'shh',
+      key_id: 'kid-1',
+      price_type: 'paid',
+      environment: 'production',
+      api_url: 'https://api.github.com',
+      version: 'v3',
+      rate_limit: '100/min',
+      scopes: ['read', 'write'],
+      api_description: 'CI token',
+      description: 'notes',
+      categories: ['infra'],
+      tags: ['prod'],
+      secretType: 'api_key',
+      env_prefixes: ['VITE'],
     });
     buildCatChips(original.categories);
     fillForm(original);
@@ -308,8 +382,11 @@ describe('fillForm → formToEntry round trip', () => {
 
   it('preserves a certificate entry, including its private key', () => {
     const original = makeEntry({
-      provider: 'example.com', api_key: '', secretType: 'certificate',
-      certificate_data: '-----BEGIN CERTIFICATE-----', cert_key_data: '-----BEGIN PRIVATE KEY-----',
+      provider: 'example.com',
+      api_key: '',
+      secretType: 'certificate',
+      certificate_data: '-----BEGIN CERTIFICATE-----',
+      cert_key_data: '-----BEGIN PRIVATE KEY-----',
       cert_issuer: 'Lets Encrypt',
     });
     fillForm(original);
@@ -321,7 +398,14 @@ describe('fillForm → formToEntry round trip', () => {
   });
 
   it('preserves extra vars across a cycle', () => {
-    fillForm(makeEntry({ extra_vars: [{ key: 'A', value: '1', secret: false }, { key: 'B', value: '2', secret: true }] }));
+    fillForm(
+      makeEntry({
+        extra_vars: [
+          { key: 'A', value: '1', secret: false },
+          { key: 'B', value: '2', secret: true },
+        ],
+      }),
+    );
     expect(formToEntry().extra_vars).toEqual([
       { key: 'A', value: '1', secret: false },
       { key: 'B', value: '2', secret: true },
@@ -336,7 +420,7 @@ describe('fillForm → formToEntry round trip', () => {
     expect(out.key_id).toBeUndefined();
   });
 
-  it('selects exactly the entry\'s projects in the picker', () => {
+  it("selects exactly the entry's projects in the picker", () => {
     st.vault = makeVault({
       projects: [
         makeProject({ id: 'Universal', name: 'Universal' }),
@@ -346,8 +430,10 @@ describe('fillForm → formToEntry round trip', () => {
     });
     populateProjectSelect();
     fillForm(makeEntry({ projectIds: ['Universal', 'p2'] }));
-    const selected = [...document.querySelectorAll<HTMLElement>('#f-project .project-pick-item.selected')];
-    expect(selected.map(e => e.dataset.value)).toEqual(['p2']);
+    const selected = [
+      ...document.querySelectorAll<HTMLElement>('#f-project .project-pick-item.selected'),
+    ];
+    expect(selected.map((e) => e.dataset.value)).toEqual(['p2']);
     expect(formToEntry().projectIds).toEqual(['Universal', 'p2']);
   });
 
@@ -383,7 +469,10 @@ describe('openModal / closeModal', () => {
 
 describe('openAdd draft restore', () => {
   it('restores a saved draft into the form', () => {
-    sessionStorage.setItem('envvault-form-draft', JSON.stringify({ provider: 'Draft Co', api_key: 'sk-draft' }));
+    sessionStorage.setItem(
+      'envvault-form-draft',
+      JSON.stringify({ provider: 'Draft Co', api_key: 'sk-draft' }),
+    );
     openAdd();
     expect(($('f-provider') as HTMLInputElement).value).toBe('Draft Co');
     expect(($('f-key') as HTMLInputElement).value).toBe('sk-draft');
@@ -409,17 +498,18 @@ describe('pushUndo', () => {
     // Regression: the timeout used to pop() the newest entry rather than
     // removing its own, so two deletes inside the window dropped the wrong undo.
     vi.useFakeTimers();
-    const first = vi.fn(), second = vi.fn();
+    const first = vi.fn(),
+      second = vi.fn();
     pushUndo('first', first);
     vi.advanceTimersByTime(3000);
     pushUndo('second', second);
 
-    vi.advanceTimersByTime(2000);      // first expires, second has 3s left
+    vi.advanceTimersByTime(2000); // first expires, second has 3s left
     expect(st.undoStack).toHaveLength(1);
     expect(st.undoStack[0].fn).toBe(second);
     expect($('undo-bar').classList.contains('visible')).toBe(true);
 
-    vi.advanceTimersByTime(3000);      // second expires
+    vi.advanceTimersByTime(3000); // second expires
     expect(st.undoStack).toHaveLength(0);
     expect($('undo-bar').classList.contains('visible')).toBe(false);
   });
@@ -440,7 +530,7 @@ describe('showDropdown', () => {
     expect(dd.style.display).toBe('block');
   });
 
-  it('runs the clicked item\'s callback and closes', () => {
+  it("runs the clicked item's callback and closes", () => {
     const fn = vi.fn();
     showDropdown(document.body, [{ label: 'Copy', fn }]);
     $('dropdown').querySelector<HTMLElement>('.dropdown-item')!.click();
@@ -449,14 +539,18 @@ describe('showDropdown', () => {
   });
 
   it('marks the active item', () => {
-    showDropdown(document.body, [{ label: 'A', fn: () => {}, active: true }, { label: 'B', fn: () => {} }]);
+    showDropdown(document.body, [
+      { label: 'A', fn: () => {}, active: true },
+      { label: 'B', fn: () => {} },
+    ]);
     const items = [...$('dropdown').querySelectorAll('.dropdown-item')];
     expect(items[0].classList.contains('active')).toBe(true);
     expect(items[1].classList.contains('active')).toBe(false);
   });
 
   it('does not fire a stale callback after being reopened with new items', () => {
-    const stale = vi.fn(), fresh = vi.fn();
+    const stale = vi.fn(),
+      fresh = vi.fn();
     showDropdown(document.body, [{ label: 'Old', fn: stale }]);
     showDropdown(document.body, [{ label: 'New', fn: fresh }]);
     $('dropdown').querySelector<HTMLElement>('.dropdown-item')!.click();
@@ -467,7 +561,7 @@ describe('showDropdown', () => {
   it('closes on an outside click', () => {
     vi.useFakeTimers();
     showDropdown(document.body, [{ label: 'A', fn: () => {} }]);
-    vi.advanceTimersByTime(100);       // the outside-click listener binds late
+    vi.advanceTimersByTime(100); // the outside-click listener binds late
     const outside = document.getElementById('card-grid');
     expect(outside, '#card-grid missing from index.html').not.toBeNull();
     outside!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
@@ -509,7 +603,9 @@ describe('CustomSelect', () => {
 
     cs._btn.click();
     const items = [...$('dropdown').querySelectorAll<HTMLElement>('.dropdown-item')];
-    const target = items.findIndex(i => i.textContent === sel.options[sel.options.length - 1].text);
+    const target = items.findIndex(
+      (i) => i.textContent === sel.options[sel.options.length - 1].text,
+    );
     items[target].click();
 
     expect(sel.selectedIndex).toBe(sel.options.length - 1);

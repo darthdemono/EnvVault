@@ -42,37 +42,43 @@ function nestedVault() {
     ],
     api_keys: [
       makeEntry({ provider: 'ParentKey', projectIds: ['Universal', 'acme'] }),
-      makeEntry({ provider: 'WebKey',    projectIds: ['Universal', 'acme-web'] }),
-      makeEntry({ provider: 'EdgeKey',   projectIds: ['Universal', 'acme-web-edge'] }),
+      makeEntry({ provider: 'WebKey', projectIds: ['Universal', 'acme-web'] }),
+      makeEntry({ provider: 'EdgeKey', projectIds: ['Universal', 'acme-web-edge'] }),
     ],
   });
 }
 
 describe('deleteProject', () => {
-  beforeEach(() => { st.vault = nestedVault(); });
+  beforeEach(() => {
+    st.vault = nestedVault();
+  });
 
   it('keeps entries attached to sub-projects that survive the delete', async () => {
     // The bug: promoting a child changed its id, the prune pass then saw every
     // entry's reference as dangling and stripped it, so deleting a parent
     // silently emptied all of its surviving sub-projects.
     await deleteProject('acme');
-    const web = st.vault.projects.find(p => p.name === 'Web')!;
+    const web = st.vault.projects.find((p) => p.name === 'Web')!;
     expect(web).toBeDefined();
-    const webKey = st.vault.api_keys.find(e => e.provider === 'WebKey')!;
+    const webKey = st.vault.api_keys.find((e) => e.provider === 'WebKey')!;
     expect(webKey.projectIds).toContain(web.id);
   });
 
   it('leaves the promoted sub-project reachable from the sidebar', async () => {
     await deleteProject('acme');
-    const web = st.vault.projects.find(p => p.name === 'Web')!;
+    const web = st.vault.projects.find((p) => p.name === 'Web')!;
     st.currentSelectedProjectIds = [web.id];
-    expect(getFiltered().map(e => e.provider).sort()).toEqual(['EdgeKey', 'WebKey']);
+    expect(
+      getFiltered()
+        .map((e) => e.provider)
+        .sort(),
+    ).toEqual(['EdgeKey', 'WebKey']);
   });
 
   it('follows the selection when the selected project is a promoted child', async () => {
     st.currentSelectedProjectIds = ['acme-web'];
     await deleteProject('acme');
-    const web = st.vault.projects.find(p => p.name === 'Web')!;
+    const web = st.vault.projects.find((p) => p.name === 'Web')!;
     expect(st.currentSelectedProjectIds).toEqual([web.id]);
     expect(getFiltered().length).toBeGreaterThan(0);
   });
@@ -85,13 +91,13 @@ describe('deleteProject', () => {
 
   it('drops entries of the deleted project back to Universal', async () => {
     await deleteProject('acme');
-    const parentKey = st.vault.api_keys.find(e => e.provider === 'ParentKey')!;
+    const parentKey = st.vault.api_keys.find((e) => e.provider === 'ParentKey')!;
     expect(parentKey.projectIds).toEqual(['Universal']);
   });
 
   it('promotes the whole chain, keeping grandchildren nested under their parent', async () => {
     await deleteProject('acme');
-    const names = st.vault.projects.map(p => p.name).sort();
+    const names = st.vault.projects.map((p) => p.name).sort();
     expect(names).toEqual(['Universal', 'Web', 'Web/Edge']);
   });
 
@@ -104,33 +110,39 @@ describe('deleteProject', () => {
 
   it('refuses to delete the Universal catch-all', async () => {
     await deleteProject('Universal');
-    expect(st.vault.projects.find(p => p.id === 'Universal')).toBeDefined();
+    expect(st.vault.projects.find((p) => p.id === 'Universal')).toBeDefined();
   });
 
   it('does nothing when the user cancels', async () => {
     confirmAnswer = false;
     await deleteProject('acme');
-    expect(st.vault.projects.map(p => p.id)).toContain('acme');
+    expect(st.vault.projects.map((p) => p.id)).toContain('acme');
   });
 
   it('does not collide a promoted child with an existing top-level project', async () => {
     st.vault.projects.push(makeProject({ id: 'web', name: 'Web' }));
     await deleteProject('acme');
-    const ids = st.vault.projects.map(p => p.id);
+    const ids = st.vault.projects.map((p) => p.id);
     expect(new Set(ids).size).toBe(ids.length);
   });
 });
 
 describe('renameProject', () => {
-  beforeEach(() => { st.vault = nestedVault(); });
+  beforeEach(() => {
+    st.vault = nestedVault();
+  });
 
   it('renames sub-projects along with their parent', async () => {
     // Renaming only the parent left "Acme/Web" orphaned, and buildProjectTree
     // then invented a phantom virtual "Acme" for a project that was gone.
     promptAnswer = 'Corp';
     await renameProject('acme');
-    expect(st.vault.projects.map(p => p.name).sort())
-      .toEqual(['Corp', 'Corp/Web', 'Corp/Web/Edge', 'Universal']);
+    expect(st.vault.projects.map((p) => p.name).sort()).toEqual([
+      'Corp',
+      'Corp/Web',
+      'Corp/Web/Edge',
+      'Universal',
+    ]);
   });
 
   it('leaves no phantom parent in the sidebar tree', async () => {
@@ -144,18 +156,22 @@ describe('renameProject', () => {
   it('repoints entries at the new sub-project ids', async () => {
     promptAnswer = 'Corp';
     await renameProject('acme');
-    const web = st.vault.projects.find(p => p.name === 'Corp/Web')!;
-    const webKey = st.vault.api_keys.find(e => e.provider === 'WebKey')!;
+    const web = st.vault.projects.find((p) => p.name === 'Corp/Web')!;
+    const webKey = st.vault.api_keys.find((e) => e.provider === 'WebKey')!;
     expect(webKey.projectIds).toContain(web.id);
     st.currentSelectedProjectIds = [web.id];
-    expect(getFiltered().map(e => e.provider).sort()).toEqual(['EdgeKey', 'WebKey']);
+    expect(
+      getFiltered()
+        .map((e) => e.provider)
+        .sort(),
+    ).toEqual(['EdgeKey', 'WebKey']);
   });
 
   it('follows the selection when a renamed child was selected', async () => {
     st.currentSelectedProjectIds = ['acme-web'];
     promptAnswer = 'Corp';
     await renameProject('acme');
-    const web = st.vault.projects.find(p => p.name === 'Corp/Web')!;
+    const web = st.vault.projects.find((p) => p.name === 'Corp/Web')!;
     expect(st.currentSelectedProjectIds).toEqual([web.id]);
   });
 
@@ -163,20 +179,22 @@ describe('renameProject', () => {
     st.currentSelectedProjectIds = ['acme'];
     promptAnswer = 'Corp';
     await renameProject('acme');
-    expect(st.currentSelectedProjectIds).toEqual([st.vault.projects.find(p => p.name === 'Corp')!.id]);
+    expect(st.currentSelectedProjectIds).toEqual([
+      st.vault.projects.find((p) => p.name === 'Corp')!.id,
+    ]);
   });
 
   it('refuses a name that collides with an existing project', async () => {
     st.vault.projects.push(makeProject({ id: 'corp', name: 'Corp' }));
     promptAnswer = 'Corp';
     await renameProject('acme');
-    expect(st.vault.projects.find(p => p.id === 'acme')!.name).toBe('Acme');
+    expect(st.vault.projects.find((p) => p.id === 'acme')!.name).toBe('Acme');
   });
 
   it('does nothing when the prompt is cancelled or unchanged', async () => {
     promptAnswer = 'Acme';
     await renameProject('acme');
-    expect(st.vault.projects.find(p => p.id === 'acme')).toBeDefined();
+    expect(st.vault.projects.find((p) => p.id === 'acme')).toBeDefined();
   });
 });
 
@@ -202,14 +220,16 @@ describe('deleteCategory', () => {
 
   it('strips the whole sub-tree from entries', async () => {
     await deleteCategory('infra');
-    expect(st.vault.api_keys.find(e => e.provider === 'A')!.categories).toEqual([]);
-    expect(st.vault.api_keys.find(e => e.provider === 'B')!.categories).toEqual(['billing']);
+    expect(st.vault.api_keys.find((e) => e.provider === 'A')!.categories).toEqual([]);
+    expect(st.vault.api_keys.find((e) => e.provider === 'B')!.categories).toEqual(['billing']);
   });
 
   it('does not touch a category that merely shares a name prefix', async () => {
     await deleteCategory('infra');
     expect(st.vault.user_categories).toContain('infrastructure');
-    expect(st.vault.api_keys.find(e => e.provider === 'C')!.categories).toEqual(['infrastructure']);
+    expect(st.vault.api_keys.find((e) => e.provider === 'C')!.categories).toEqual([
+      'infrastructure',
+    ]);
   });
 
   it('clears a filter pointing anywhere inside the deleted sub-tree', async () => {
@@ -246,13 +266,15 @@ describe('renameCategory', () => {
   it('repoints entries in the sub-tree', async () => {
     promptAnswer = 'core';
     await renameCategory('infra');
-    expect(st.vault.api_keys.find(e => e.provider === 'B')!.categories).toEqual(['core/db']);
+    expect(st.vault.api_keys.find((e) => e.provider === 'B')!.categories).toEqual(['core/db']);
   });
 
   it('leaves a name-prefix sibling alone', async () => {
     promptAnswer = 'core';
     await renameCategory('infra');
-    expect(st.vault.api_keys.find(e => e.provider === 'C')!.categories).toEqual(['infrastructure']);
+    expect(st.vault.api_keys.find((e) => e.provider === 'C')!.categories).toEqual([
+      'infrastructure',
+    ]);
   });
 
   it('follows a filter pointing at a renamed sub-category', async () => {
@@ -260,7 +282,7 @@ describe('renameCategory', () => {
     promptAnswer = 'core';
     await renameCategory('infra');
     expect(st.filter).toEqual({ type: 'category', value: 'core/db' });
-    expect(getFiltered().map(e => e.provider)).toEqual(['B']);
+    expect(getFiltered().map((e) => e.provider)).toEqual(['B']);
   });
 
   it('refuses a name that already exists', async () => {

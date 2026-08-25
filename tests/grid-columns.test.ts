@@ -3,11 +3,14 @@ import { loadRealIndexHtml } from '../tests/helpers';
 import { Settings, applyGridSettings } from '../src/ts/state';
 
 describe('grid columns', () => {
-  beforeEach(() => { loadRealIndexHtml(); });
+  beforeEach(() => {
+    loadRealIndexHtml();
+  });
 
   it('offers the new counts in the segmented control', () => {
-    const vals = [...document.querySelectorAll('#s-grid-cols button')]
-      .map(b => (b as HTMLElement).dataset.val);
+    const vals = [...document.querySelectorAll('#s-grid-cols button')].map(
+      (b) => (b as HTMLElement).dataset.val,
+    );
     expect(vals).toEqual(['auto', '2', '3', '4', '5', '6', '8']);
   });
 

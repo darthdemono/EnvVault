@@ -1,0 +1,202 @@
+{
+  "src/ts/audit.ts": {
+    "@typescript-eslint/no-floating-promises": {
+      "count": 1
+    },
+    "@typescript-eslint/no-misused-promises": {
+      "count": 2
+    }
+  },
+  "src/ts/chunk-ops.ts": {
+    "@typescript-eslint/no-base-to-string": {
+      "count": 1
+    },
+    "@typescript-eslint/no-unused-vars": {
+      "count": 6
+    },
+    "no-useless-assignment": {
+      "count": 1
+    },
+    "no-useless-escape": {
+      "count": 2
+    }
+  },
+  "src/ts/chunks/edit-modal.ts": {
+    "@typescript-eslint/no-floating-promises": {
+      "count": 1
+    },
+    "@typescript-eslint/no-unused-vars": {
+      "count": 1
+    }
+  },
+  "src/ts/chunks/parsers.ts": {
+    "@typescript-eslint/no-unused-vars": {
+      "count": 1
+    },
+    "no-useless-assignment": {
+      "count": 4
+    }
+  },
+  "src/ts/icons.ts": {
+    "@typescript-eslint/no-base-to-string": {
+      "count": 1
+    }
+  },
+  "src/ts/import-export.ts": {
+    "@typescript-eslint/no-floating-promises": {
+      "count": 4
+    },
+    "@typescript-eslint/no-unused-vars": {
+      "count": 1
+    }
+  },
+  "src/ts/lan.ts": {
+    "@typescript-eslint/no-floating-promises": {
+      "count": 1
+    },
+    "@typescript-eslint/no-misused-promises": {
+      "count": 5
+    },
+    "@typescript-eslint/no-unused-vars": {
+      "count": 1
+    }
+  },
+  "src/ts/lock.ts": {
+    "@typescript-eslint/no-floating-promises": {
+      "count": 3
+    },
+    "@typescript-eslint/no-misused-promises": {
+      "count": 1
+    },
+    "@typescript-eslint/no-unused-vars": {
+      "count": 3
+    },
+    "@typescript-eslint/require-await": {
+      "count": 1
+    }
+  },
+  "src/ts/modals.ts": {
+    "@typescript-eslint/no-floating-promises": {
+      "count": 7
+    },
+    "@typescript-eslint/no-unused-vars": {
+      "count": 7
+    }
+  },
+  "src/ts/perm-editor.ts": {
+    "@typescript-eslint/no-misused-promises": {
+      "count": 1
+    }
+  },
+  "src/ts/projects.ts": {
+    "@typescript-eslint/no-floating-promises": {
+      "count": 6
+    }
+  },
+  "src/ts/remote-panel.ts": {
+    "@typescript-eslint/no-floating-promises": {
+      "count": 1
+    },
+    "@typescript-eslint/no-misused-promises": {
+      "count": 9
+    },
+    "@typescript-eslint/require-await": {
+      "count": 1
+    }
+  },
+  "src/ts/render.ts": {
+    "@typescript-eslint/no-floating-promises": {
+      "count": 33
+    },
+    "@typescript-eslint/no-misused-promises": {
+      "count": 19
+    },
+    "@typescript-eslint/no-unused-vars": {
+      "count": 1
+    }
+  },
+  "src/ts/settings-panel.ts": {
+    "@typescript-eslint/no-base-to-string": {
+      "count": 1
+    }
+  },
+  "src/ts/state.ts": {
+    "@typescript-eslint/class-literal-property-style": {
+      "count": 5
+    },
+    "@typescript-eslint/require-await": {
+      "count": 9
+    }
+  },
+  "src/ts/tools.ts": {
+    "@typescript-eslint/no-base-to-string": {
+      "count": 1
+    },
+    "@typescript-eslint/no-floating-promises": {
+      "count": 14
+    },
+    "@typescript-eslint/no-misused-promises": {
+      "count": 6
+    },
+    "@typescript-eslint/no-unused-vars": {
+      "count": 3
+    },
+    "no-useless-assignment": {
+      "count": 1
+    }
+  },
+  "src/ts/types.ts": {
+    "@typescript-eslint/no-redundant-type-constituents": {
+      "count": 10
+    }
+  },
+  "src/ts/users.ts": {
+    "@typescript-eslint/no-floating-promises": {
+      "count": 1
+    },
+    "@typescript-eslint/no-misused-promises": {
+      "count": 16
+    },
+    "@typescript-eslint/require-await": {
+      "count": 2
+    },
+    "no-useless-assignment": {
+      "count": 8
+    }
+  },
+  "src/ts/utils.ts": {
+    "@typescript-eslint/no-base-to-string": {
+      "count": 2
+    },
+    "@typescript-eslint/prefer-promise-reject-errors": {
+      "count": 1
+    }
+  },
+  "src/ts/vault.ts": {
+    "@typescript-eslint/no-base-to-string": {
+      "count": 1
+    },
+    "@typescript-eslint/no-floating-promises": {
+      "count": 10
+    },
+    "@typescript-eslint/no-misused-promises": {
+      "count": 3
+    },
+    "@typescript-eslint/no-unused-expressions": {
+      "count": 1
+    },
+    "@typescript-eslint/no-unused-vars": {
+      "count": 14
+    }
+  },
+  "tests/entry-ops.test.ts": {
+    "@typescript-eslint/no-unused-vars": {
+      "count": 1
+    }
+  },
+  "tests/filters.test.ts": {
+    "@typescript-eslint/no-unused-vars": {
+      "count": 1
+    }
+  }
+}

@@ -104,19 +104,23 @@ describe('expires_at', () => {
 
 describe('rotation_days', () => {
   it('does not break out of the rotation badge title', () => {
-    st.vault.api_keys = [makeEntry({
-      rotation_days: '1" onmouseover="steal()' as any,
-      last_rotated_at: new Date(Date.now() - 400 * 86_400_000).toISOString(),
-    })];
+    st.vault.api_keys = [
+      makeEntry({
+        rotation_days: '1" onmouseover="steal()' as any,
+        last_rotated_at: new Date(Date.now() - 400 * 86_400_000).toISOString(),
+      }),
+    ];
     renderGrid();
     assertNoInjection();
   });
 
   it('still flags a genuinely overdue rotation', () => {
-    st.vault.api_keys = [makeEntry({
-      rotation_days: 30,
-      last_rotated_at: new Date(Date.now() - 400 * 86_400_000).toISOString(),
-    })];
+    st.vault.api_keys = [
+      makeEntry({
+        rotation_days: 30,
+        last_rotated_at: new Date(Date.now() - 400 * 86_400_000).toISOString(),
+      }),
+    ];
     renderGrid();
     expect(grid().querySelector('.badge-rotation-due')).not.toBeNull();
   });
@@ -159,23 +163,25 @@ describe('a fully hostile entry', () => {
         makeProject({ id: 'p1', name: TAG_INJECTION }),
       ],
       user_categories: [TAG_INJECTION],
-      api_keys: [makeEntry({
-        id: 'evil',
-        provider: TAG_INJECTION,
-        account_name: TAG_INJECTION,
-        api_key: TAG_INJECTION,
-        key_id: TAG_INJECTION,
-        api_description: TAG_INJECTION,
-        description: TAG_INJECTION,
-        environment: ATTR_BREAKOUT as any,
-        secretType: TAG_INJECTION as any,
-        price_type: ATTR_BREAKOUT as any,
-        categories: [TAG_INJECTION],
-        tags: [TAG_INJECTION],
-        env_prefixes: [TAG_INJECTION],
-        api_url: 'javascript:alert(1)',
-        projectIds: ['Universal', 'p1'],
-      } as any)],
+      api_keys: [
+        makeEntry({
+          id: 'evil',
+          provider: TAG_INJECTION,
+          account_name: TAG_INJECTION,
+          api_key: TAG_INJECTION,
+          key_id: TAG_INJECTION,
+          api_description: TAG_INJECTION,
+          description: TAG_INJECTION,
+          environment: ATTR_BREAKOUT as any,
+          secretType: TAG_INJECTION as any,
+          price_type: ATTR_BREAKOUT as any,
+          categories: [TAG_INJECTION],
+          tags: [TAG_INJECTION],
+          env_prefixes: [TAG_INJECTION],
+          api_url: 'javascript:alert(1)',
+          projectIds: ['Universal', 'p1'],
+        } as any),
+      ],
     });
     st.expanded = new Set(['evil']);
     render();

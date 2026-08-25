@@ -22,7 +22,13 @@ describe('sidebar "All" filter', () => {
     resetState(st);
     st.vault = makeVault({
       api_keys: [
-        makeEntry({ id: 'a', provider: 'Tagged', tags: ['prod'], env_prefixes: ['VITE'], environment: 'production' } as any),
+        makeEntry({
+          id: 'a',
+          provider: 'Tagged',
+          tags: ['prod'],
+          env_prefixes: ['VITE'],
+          environment: 'production',
+        } as any),
         makeEntry({ id: 'b', provider: 'Plain' }),
       ],
     });
@@ -89,8 +95,8 @@ describe('card context menu targets', () => {
     loadRealIndexHtml();
     const markup = await import('../src/ts/tools-markup');
     markup.mountToolsPanes();
-    await import('../src/ts/vault');   // running init() binds the shell handlers
-    await new Promise(r => setTimeout(r, 50));
+    await import('../src/ts/vault'); // running init() binds the shell handlers
+    await new Promise((r) => setTimeout(r, 50));
     boundNodes = Array.from(document.body.childNodes);
   });
 
@@ -110,14 +116,16 @@ describe('card context menu targets', () => {
   });
 
   function openMenuOn(provider: string) {
-    const card = [...document.querySelectorAll<HTMLElement>('#card-grid .card')]
-      .find(c => c.textContent?.includes(provider))!;
+    const card = [...document.querySelectorAll<HTMLElement>('#card-grid .card')].find((c) =>
+      c.textContent?.includes(provider),
+    )!;
     card.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true }));
   }
 
   function clickMenuItem(label: string) {
-    const item = [...document.querySelectorAll<HTMLElement>('#dropdown .dropdown-item')]
-      .find(i => i.textContent?.includes(label))!;
+    const item = [...document.querySelectorAll<HTMLElement>('#dropdown .dropdown-item')].find((i) =>
+      i.textContent?.includes(label),
+    )!;
     expect(item, `no menu item matching "${label}"`).toBeDefined();
     item.click();
   }
@@ -125,28 +133,33 @@ describe('card context menu targets', () => {
   it('deletes the entry the menu was opened on', () => {
     openMenuOn('Bravo');
     clickMenuItem('Delete');
-    expect(st.vault.api_keys.map(e => e.provider)).toEqual(['Alpha', 'Charlie']);
+    expect(st.vault.api_keys.map((e) => e.provider)).toEqual(['Alpha', 'Charlie']);
   });
 
   it('still deletes the right entry after the array shifted underneath', () => {
     // The menu captured an array position at open time. An entry removed in
     // between slid every higher position down, and Delete took a neighbour.
     openMenuOn('Charlie');
-    st.vault.api_keys.splice(0, 1);       // Alpha removed while the menu is open
+    st.vault.api_keys.splice(0, 1); // Alpha removed while the menu is open
     clickMenuItem('Delete');
-    expect(st.vault.api_keys.map(e => e.provider)).toEqual(['Bravo']);
+    expect(st.vault.api_keys.map((e) => e.provider)).toEqual(['Bravo']);
   });
 
   it('duplicates the entry the menu was opened on', () => {
     openMenuOn('Alpha');
     clickMenuItem('Duplicate');
-    expect(st.vault.api_keys.map(e => e.provider)).toEqual(['Alpha', 'Alpha', 'Bravo', 'Charlie']);
+    expect(st.vault.api_keys.map((e) => e.provider)).toEqual([
+      'Alpha',
+      'Alpha',
+      'Bravo',
+      'Charlie',
+    ]);
   });
 
   it('reports gracefully when the entry is gone by the time the item is clicked', () => {
     openMenuOn('Bravo');
-    st.vault.api_keys = st.vault.api_keys.filter(e => e.provider !== 'Bravo');
+    st.vault.api_keys = st.vault.api_keys.filter((e) => e.provider !== 'Bravo');
     expect(() => clickMenuItem('Delete')).not.toThrow();
-    expect(st.vault.api_keys.map(e => e.provider)).toEqual(['Alpha', 'Charlie']);
+    expect(st.vault.api_keys.map((e) => e.provider)).toEqual(['Alpha', 'Charlie']);
   });
 });

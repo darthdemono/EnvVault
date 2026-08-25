@@ -2,9 +2,5 @@
   "identifier": "default",
   "description": "Default capability",
   "windows": ["main"],
-  "permissions": [
-    "core:default",
-    "shell:allow-open",
-    "window-state:default"
-  ]
+  "permissions": ["core:default", "shell:allow-open", "window-state:default"]
 }

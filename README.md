@@ -4,11 +4,11 @@ EnvVault is a secrets manager that runs on your machine and talks to nothing els
 
 It ships as three things that share one storage engine:
 
-| | What it is |
-| --- | --- |
-| **The desktop app** | A Tauri 2 window. This is where you look at and edit secrets. |
-| **`envv`** | A CLI built so that an automated caller can drive the whole vault without a single secret value entering its output. |
-| **`envv-server`** | An optional HTTP/HTTPS server, so the desktop app and the CLI on other machines can reach one vault. |
+|                     | What it is                                                                                                           |
+| ------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| **The desktop app** | A Tauri 2 window. This is where you look at and edit secrets.                                                        |
+| **`envv`**          | A CLI built so that an automated caller can drive the whole vault without a single secret value entering its output. |
+| **`envv-server`**   | An optional HTTP/HTTPS server, so the desktop app and the CLI on other machines can reach one vault.                 |
 
 Current version **0.6.0**. The version in `src-tauri/tauri.conf.json` is the authoritative one; `package.json`, the four `Cargo.toml` files and the git tag are all checked against it by the `meta` job in `.github/workflows/build.yml`.
 
@@ -34,6 +34,7 @@ Current version **0.6.0**. The version in `src-tauri/tauri.conf.json` is the aut
 - [The security model](#the-security-model)
 - [Where your files live](#where-your-files-live)
 - [Building from source](#building-from-source)
+- [Development](#development)
 - [Continuous integration](#continuous-integration)
 - [What is not finished](#what-is-not-finished)
 - [How it got here](#how-it-got-here)
@@ -94,7 +95,7 @@ Everything below is implemented and in the shipping build. The sections after th
 ### The server, and sharing
 
 - **HTTP or HTTPS**, with a self-signed certificate generated on demand or your own via `--cert`/`--key`.
-- **Real certificate pinning** in the desktop app — SHA-256 of the leaf compared *during the handshake*, before the master password goes over the wire — with a trust-on-first-use bootstrap that sends no credentials.
+- **Real certificate pinning** in the desktop app — SHA-256 of the leaf compared _during the handshake_, before the master password goes over the wire — with a trust-on-first-use bootstrap that sends no credentials.
 - **Session tokens with a sliding idle expiry** (`--session-ttl-mins`, default 480).
 - **Rate limiting on failures only**, counted from the real socket address rather than `X-Forwarded-For`.
 - **CORS restricted to an explicit allow-list**, not `permissive()`.
@@ -128,14 +129,14 @@ Everything below is implemented and in the shipping build. The sections after th
 
 Grab the artefact for your platform from the [Releases](../../releases) page.
 
-| File | Platform |
-| --- | --- |
-| `*.AppImage` | Any Linux distribution. SQLCipher and OpenSSL are compiled in, so it does not care what your package manager ships. |
-| `*.deb` | Debian, Ubuntu |
-| `*.rpm` | Fedora, RHEL, Nobara |
-| `*-setup.exe` | Windows. Fetches WebView2 during install if the machine lacks it. |
-| `envv-*-linux-x86_64.tar.gz` | `envv` and `envv-server`, no GUI toolkit required |
-| `envv-*-windows-x86_64.zip` | The same two, for Windows |
+| File                         | Platform                                                                                                            |
+| ---------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| `*.AppImage`                 | Any Linux distribution. SQLCipher and OpenSSL are compiled in, so it does not care what your package manager ships. |
+| `*.deb`                      | Debian, Ubuntu                                                                                                      |
+| `*.rpm`                      | Fedora, RHEL, Nobara                                                                                                |
+| `*-setup.exe`                | Windows. Fetches WebView2 during install if the machine lacks it.                                                   |
+| `envv-*-linux-x86_64.tar.gz` | `envv` and `envv-server`, no GUI toolkit required                                                                   |
+| `envv-*-windows-x86_64.zip`  | The same two, for Windows                                                                                           |
 
 Every asset carries a keyless Sigstore signature. If you want to check that a download actually came out of this repository's CI and not from somewhere else:
 
@@ -204,19 +205,19 @@ The form autosaves a draft to `sessionStorage` on every keystroke, so closing th
 
 ### What a card can do
 
-| Action | How |
-| --- | --- |
-| Copy the key | Click the card header, or the copy icon beside the key |
-| Copy a `.env` line | The `.env` badge in the footer |
-| Reveal or hide | The eye icon |
-| Expand | The chevron, or the header area |
-| Edit / Duplicate | Pencil / two-page icon in the footer |
-| Mark as rotated | The `↺` icon — stamps `last_rotated_at` |
-| Pin | The pin icon. Pinned entries sort first in every view. |
-| Mark compromised | Flags the entry and surfaces it in the health scan |
-| View history | Previous values with timestamps, restorable |
-| Delete | Trash icon, with a five-second undo toast |
-| Everything at once | Right-click for the context menu |
+| Action             | How                                                    |
+| ------------------ | ------------------------------------------------------ |
+| Copy the key       | Click the card header, or the copy icon beside the key |
+| Copy a `.env` line | The `.env` badge in the footer                         |
+| Reveal or hide     | The eye icon                                           |
+| Expand             | The chevron, or the header area                        |
+| Edit / Duplicate   | Pencil / two-page icon in the footer                   |
+| Mark as rotated    | The `↺` icon — stamps `last_rotated_at`                |
+| Pin                | The pin icon. Pinned entries sort first in every view. |
+| Mark compromised   | Flags the entry and surfaces it in the health scan     |
+| View history       | Previous values with timestamps, restorable            |
+| Delete             | Trash icon, with a five-second undo toast              |
+| Everything at once | Right-click for the context menu                       |
 
 The coloured left border tracks expiry: red for expired or within seven days, amber for within thirty, green for an expiry that is comfortably away.
 
@@ -232,15 +233,15 @@ Type in the search bar and it matches provider, account, description, tags and U
 
 Pick the type at the top of the add form and the rest of the form changes with it. The type is not cosmetic — it decides which fields exist, what **Generate** produces, how the card renders, and how the `.env` export names the value.
 
-| Type | Identified by | The secret field | Extra fields | Generate produces |
-| --- | --- | --- | --- | --- |
-| **API key** | Provider (`GitHub`) | API Key | Account, a second *secret*/client-secret field, scopes, plan type, rate limit | 32 bytes of hex |
-| **Password** | Service or app (`Gmail`) | Password | Username, strength meter | A random password |
-| **Certificate** | Site or domain (`example.com`) | Fullchain PEM | Private key (`cert_key_data`), issuer, expiry | A self-signed X.509 pair via `rcgen` |
-| **SSH key** | Host or service (`github.com`) | Private key, OpenSSH format | Username, account | An Ed25519 keypair via `ssh-key` |
-| **Environment variable** | Variable name (`DATABASE_URL`) | Value | Subtype (see below) | 32 bytes of hex |
-| **Connection string** | Service (`PostgreSQL`) | DSN or URI | — | 32 bytes of hex |
-| **File reference** | Name (`config.yaml`) | — | Path or reference on disk (`blob_ref`) | — |
+| Type                     | Identified by                  | The secret field            | Extra fields                                                                  | Generate produces                    |
+| ------------------------ | ------------------------------ | --------------------------- | ----------------------------------------------------------------------------- | ------------------------------------ |
+| **API key**              | Provider (`GitHub`)            | API Key                     | Account, a second _secret_/client-secret field, scopes, plan type, rate limit | 32 bytes of hex                      |
+| **Password**             | Service or app (`Gmail`)       | Password                    | Username, strength meter                                                      | A random password                    |
+| **Certificate**          | Site or domain (`example.com`) | Fullchain PEM               | Private key (`cert_key_data`), issuer, expiry                                 | A self-signed X.509 pair via `rcgen` |
+| **SSH key**              | Host or service (`github.com`) | Private key, OpenSSH format | Username, account                                                             | An Ed25519 keypair via `ssh-key`     |
+| **Environment variable** | Variable name (`DATABASE_URL`) | Value                       | Subtype (see below)                                                           | 32 bytes of hex                      |
+| **Connection string**    | Service (`PostgreSQL`)         | DSN or URI                  | —                                                                             | 32 bytes of hex                      |
+| **File reference**       | Name (`config.yaml`)           | —                           | Path or reference on disk (`blob_ref`)                                        | —                                    |
 
 Notes on the ones with sharp edges:
 
@@ -263,87 +264,87 @@ ip       cidr        port     url       date      json
 
 ### What every entry carries, regardless of type
 
-| Field | For |
-| --- | --- |
-| `id` | Stable identity. Version history, audit attribution and write scoping all key on it — never on a position in an array. |
-| `provider` | The only required field |
-| `account_name` | Which account the credential belongs to |
-| `api_description`, `api_url` | Free text, and a link (only ever rendered as one for `http(s):`) |
-| `projectIds` | Which projects it belongs to; always includes `Universal` |
-| `categories`, `tags` | Flat labels and chips, both sidebar-filterable |
-| `environment` | `development` / `staging` / `testing` / `production` |
-| `expires_at` | Drives the card's colour band, the expiry calendar and `rotate-check` |
-| `last_rotated_at` | Stamped by the ↺ button and by `entry rotate` |
-| `rotation_days` | A rotation cadence. Set it and the health scan flags the entry once it is overdue. |
-| `price_type` | `free` / `paid` / `local` / `conditional` |
-| `scopes`, `rate_limit` | Filled by hand, or by `envv enrich --online` from the issuer |
-| `pinned` | Sorts first in every view |
-| `compromised` | Flags the entry and surfaces it in the security audit |
-| `custom_icon` | A Simple Icons slug **or** a `data:` image URI |
-| `version_history` | Up to 50 previous values with timestamps, restorable |
-| `extra_vars` | Arbitrary key/value pairs the card renders |
+| Field                        | For                                                                                                                    |
+| ---------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `id`                         | Stable identity. Version history, audit attribution and write scoping all key on it — never on a position in an array. |
+| `provider`                   | The only required field                                                                                                |
+| `account_name`               | Which account the credential belongs to                                                                                |
+| `api_description`, `api_url` | Free text, and a link (only ever rendered as one for `http(s):`)                                                       |
+| `projectIds`                 | Which projects it belongs to; always includes `Universal`                                                              |
+| `categories`, `tags`         | Flat labels and chips, both sidebar-filterable                                                                         |
+| `environment`                | `development` / `staging` / `testing` / `production`                                                                   |
+| `expires_at`                 | Drives the card's colour band, the expiry calendar and `rotate-check`                                                  |
+| `last_rotated_at`            | Stamped by the ↺ button and by `entry rotate`                                                                          |
+| `rotation_days`              | A rotation cadence. Set it and the health scan flags the entry once it is overdue.                                     |
+| `price_type`                 | `free` / `paid` / `local` / `conditional`                                                                              |
+| `scopes`, `rate_limit`       | Filled by hand, or by `envv enrich --online` from the issuer                                                           |
+| `pinned`                     | Sorts first in every view                                                                                              |
+| `compromised`                | Flags the entry and surfaces it in the security audit                                                                  |
+| `custom_icon`                | A Simple Icons slug **or** a `data:` image URI                                                                         |
+| `version_history`            | Up to 50 previous values with timestamps, restorable                                                                   |
+| `extra_vars`                 | Arbitrary key/value pairs the card renders                                                                             |
 
 ### Templates
 
 Ten prefilled shapes, in Tools → Templates. Each one sets the type, the icon, sensible defaults and per-field hints, so a GitHub PAT does not need you to remember that the API base is `api.github.com`.
 
-| Template | Type | Category |
-| --- | --- | --- |
-| GitHub PAT | API key | Dev Tools |
-| AWS Access Key | API key | Cloud |
-| Cloudflare API Token | API key | Cloud |
-| Stripe API Key | API key | Payments |
-| OpenAI API Key | API key | AI |
-| Docker Registry | API key | Dev Tools |
-| PostgreSQL DSN | Connection string | Database |
-| SSH Key Pair | SSH key | Infrastructure |
-| TLS Certificate | Certificate | Security |
-| `.env` Variable | Environment variable | Config |
+| Template             | Type                 | Category       |
+| -------------------- | -------------------- | -------------- |
+| GitHub PAT           | API key              | Dev Tools      |
+| AWS Access Key       | API key              | Cloud          |
+| Cloudflare API Token | API key              | Cloud          |
+| Stripe API Key       | API key              | Payments       |
+| OpenAI API Key       | API key              | AI             |
+| Docker Registry      | API key              | Dev Tools      |
+| PostgreSQL DSN       | Connection string    | Database       |
+| SSH Key Pair         | SSH key              | Infrastructure |
+| TLS Certificate      | Certificate          | Security       |
+| `.env` Variable      | Environment variable | Config         |
 
 ### Secrets EnvVault recognises on sight
 
 `envv enrich` types a secret from the **public** prefix its issuer stamps on it, with no network call. Forty signatures, matched longest-first so `sk-ant-` cannot be swallowed by `sk-`:
 
-| Issuer | Prefixes |
-| --- | --- |
-| GitHub | `ghp_`, `gho_`, `ghs_`, `github_pat_` |
-| GitLab | `glpat-` |
-| OpenAI | `sk-proj-`, `sk-` |
-| Anthropic | `sk-ant-` |
-| xAI | `xai-` |
-| Groq | `gsk_` |
-| NVIDIA | `nvapi-` |
-| Replicate | `r8_` |
-| Pinecone | `pcsk_` |
-| HuggingFace | `hf_` |
-| Tavily | `tvly-` |
-| AWS | `AKIA`, `ASIA` |
-| Google | `AIza`, `ya29.` |
-| DigitalOcean | `dop_v1_`, `doo_v1_` |
-| Slack | `xoxb-`, `xoxp-`, `xapp-` |
-| Stripe | `sk_live_`, `sk_test_`, `pk_live_`, `pk_test_`, `rk_live_` |
-| Shopify | `shpat_` |
-| Docker Hub | `dckr_pat_` |
-| npm | `npm_` |
-| PyPI | `pypi-` |
-| SendGrid | `SG.` |
-| Mailgun | `key-` |
-| Figma | `fig_` |
-| MongoDB Atlas | `atlasv1.` |
-| Linear | `lin_api_` |
-| Notion | `ntn_`, `secret_` |
+| Issuer        | Prefixes                                                   |
+| ------------- | ---------------------------------------------------------- |
+| GitHub        | `ghp_`, `gho_`, `ghs_`, `github_pat_`                      |
+| GitLab        | `glpat-`                                                   |
+| OpenAI        | `sk-proj-`, `sk-`                                          |
+| Anthropic     | `sk-ant-`                                                  |
+| xAI           | `xai-`                                                     |
+| Groq          | `gsk_`                                                     |
+| NVIDIA        | `nvapi-`                                                   |
+| Replicate     | `r8_`                                                      |
+| Pinecone      | `pcsk_`                                                    |
+| HuggingFace   | `hf_`                                                      |
+| Tavily        | `tvly-`                                                    |
+| AWS           | `AKIA`, `ASIA`                                             |
+| Google        | `AIza`, `ya29.`                                            |
+| DigitalOcean  | `dop_v1_`, `doo_v1_`                                       |
+| Slack         | `xoxb-`, `xoxp-`, `xapp-`                                  |
+| Stripe        | `sk_live_`, `sk_test_`, `pk_live_`, `pk_test_`, `rk_live_` |
+| Shopify       | `shpat_`                                                   |
+| Docker Hub    | `dckr_pat_`                                                |
+| npm           | `npm_`                                                     |
+| PyPI          | `pypi-`                                                    |
+| SendGrid      | `SG.`                                                      |
+| Mailgun       | `key-`                                                     |
+| Figma         | `fig_`                                                     |
+| MongoDB Atlas | `atlasv1.`                                                 |
+| Linear        | `lin_api_`                                                 |
+| Notion        | `ntn_`, `secret_`                                          |
 
-Stripe's prefixes carry more than an issuer: `sk_live_` *proves* the key is production and `sk_test_` proves it is not, so `enrich` fills `environment` from the prefix rather than guessing from the entry's name.
+Stripe's prefixes carry more than an issuer: `sk_live_` _proves_ the key is production and `sk_test_` proves it is not, so `enrich` fills `environment` from the prefix rather than guessing from the entry's name.
 
 It also types secrets structurally, with no issuer involved:
 
-| Shape | Becomes |
-| --- | --- |
-| `-----BEGIN CERTIFICATE` | `certificate` |
-| `-----BEGIN … PRIVATE KEY` | `ssh_key` or a certificate key |
-| `ssh-rsa `, `ssh-ed25519 `, `ecdsa-sha2-` | `ssh_key` |
-| `eyJ` with exactly two dots | A JWT |
-| `postgres://` `postgresql://` `mysql://` `mongodb://` `mongodb+srv://` `redis://` `rediss://` `amqp://` `amqps://` `mssql://` `clickhouse://` | `connection_string` |
+| Shape                                                                                                                                         | Becomes                        |
+| --------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------ |
+| `-----BEGIN CERTIFICATE`                                                                                                                      | `certificate`                  |
+| `-----BEGIN … PRIVATE KEY`                                                                                                                    | `ssh_key` or a certificate key |
+| `ssh-rsa `, `ssh-ed25519 `, `ecdsa-sha2-`                                                                                                     | `ssh_key`                      |
+| `eyJ` with exactly two dots                                                                                                                   | A JWT                          |
+| `postgres://` `postgresql://` `mysql://` `mongodb://` `mongodb+srv://` `redis://` `rediss://` `amqp://` `amqps://` `mssql://` `clickhouse://` | `connection_string`            |
 
 That last row exists because **`secretType` is `api_key` on every entry ever written**, including every variable imported from a `.env`. Without the structural pass, an imported `postgres://` URL stays classified as an API key forever.
 
@@ -351,15 +352,15 @@ Eight of those issuers will also answer questions about their own credentials wh
 
 ### Importing existing secrets
 
-| Source | Via |
-| --- | --- |
-| `.env` files | Tools → Import, or `envv import`, or `envv watch` to keep one in sync |
-| Bitwarden JSON export | Tools → Import |
-| 1Password JSON export | Tools → Import |
-| Raw vault JSON | Tools → Import |
-| Encrypted `.vaultbak` | Tools → Backup, or `envv backup import` |
-| `docker-compose.yaml` | A Docker project's config view — becomes chunks, not entries |
-| An nginx site config | An nginx project's config view — likewise |
+| Source                | Via                                                                   |
+| --------------------- | --------------------------------------------------------------------- |
+| `.env` files          | Tools → Import, or `envv import`, or `envv watch` to keep one in sync |
+| Bitwarden JSON export | Tools → Import                                                        |
+| 1Password JSON export | Tools → Import                                                        |
+| Raw vault JSON        | Tools → Import                                                        |
+| Encrypted `.vaultbak` | Tools → Backup, or `envv backup import`                               |
+| `docker-compose.yaml` | A Docker project's config view — becomes chunks, not entries          |
+| An nginx site config  | An nginx project's config view — likewise                             |
 
 `.env` import upserts by provider. It used to append unconditionally, which meant `envv watch` added a complete copy of the file to the vault on every save; `--allow-duplicates` restores the old behaviour if you actually wanted it.
 
@@ -379,16 +380,16 @@ Create one with **+** in the Projects section. Use `/` in the name for hierarchy
 
 Four project types are tested end to end and available by default:
 
-| Type | Chunks | Exports to |
-| --- | --- | --- |
-| Generic | Any key/value chunk | — |
-| WireGuard | `wg_interface`, `wg_peer` | `wg0.conf` |
-| Docker | `docker_service`, `docker_network`, `docker_volume`, `env_file` | `docker-compose.yaml` + `.env` |
-| Nginx | `nginx_server`, `nginx_upstream`, `nginx_location`, `nginx_key` | an nginx site config |
+| Type      | Chunks                                                          | Exports to                     |
+| --------- | --------------------------------------------------------------- | ------------------------------ |
+| Generic   | Any key/value chunk                                             | —                              |
+| WireGuard | `wg_interface`, `wg_peer`                                       | `wg0.conf`                     |
+| Docker    | `docker_service`, `docker_network`, `docker_volume`, `env_file` | `docker-compose.yaml` + `.env` |
+| Nginx     | `nginx_server`, `nginx_upstream`, `nginx_location`, `nginx_key` | an nginx site config           |
 
 Seven more exist — Kubernetes, SSH config, Traefik, Apache, HAProxy, Ansible and PostgreSQL — but they are behind **Settings → Advanced → experimental project types**, off by default, because they have not been exercised end to end and I would rather you knew that before you deployed something they produced.
 
-Turning the flag back off hides those types from the *creation* menu and nothing else. Projects you already made keep working, keep exporting, and stay reachable. Hiding the config view of an existing project would strand its chunks in the vault with no way to reach them, which is worse than an untested exporter.
+Turning the flag back off hides those types from the _creation_ menu and nothing else. Projects you already made keep working, keep exporting, and stay reachable. Hiding the config view of an existing project would strand its chunks in the vault with no way to reach them, which is worse than an untested exporter.
 
 The 29 chunk types in full:
 
@@ -432,23 +433,23 @@ Every exporter exists twice — `src/ts/chunk-ops.ts` for the app, `envv-cli/src
 
 Switch to Tools in the activity bar.
 
-| Tool | What it does |
-| --- | --- |
-| Key generator | 32 or 64 bytes of hex |
-| Certificate generator | Self-signed X.509, via `rcgen` |
-| SSH keypair | Ed25519, via `ssh-key` |
-| Health dashboard | Finds weak (under 12 characters), expired, expiring within 30 days, never-rotated and undescribed secrets |
-| Security audit | Duplicate values, compromised entries, stale `${refs}` |
-| Secret diff | Field-by-field comparison of two entries, values masked |
-| Expiry calendar | A month grid with colour-coded dots |
-| Audit log | The append-only log, with hash-chain verification |
-| Cron explainer | Parses a 5-field expression and shows the next five fire times |
-| CIDR calculator | Network, broadcast, host count and mask |
-| JSON / YAML formatter | Format, validate or minify, backed by `js-yaml` |
-| Import | `.env`, Bitwarden JSON, 1Password JSON, raw vault JSON |
-| Templates | Ten prefilled shapes — GitHub PAT, AWS access key, Stripe, PostgreSQL DSN, OpenAI, and so on |
-| Bulk operations | Select mode, then bulk delete or bulk `.env` export |
-| Backup | Encrypted `.vaultbak` export and restore |
+| Tool                  | What it does                                                                                              |
+| --------------------- | --------------------------------------------------------------------------------------------------------- |
+| Key generator         | 32 or 64 bytes of hex                                                                                     |
+| Certificate generator | Self-signed X.509, via `rcgen`                                                                            |
+| SSH keypair           | Ed25519, via `ssh-key`                                                                                    |
+| Health dashboard      | Finds weak (under 12 characters), expired, expiring within 30 days, never-rotated and undescribed secrets |
+| Security audit        | Duplicate values, compromised entries, stale `${refs}`                                                    |
+| Secret diff           | Field-by-field comparison of two entries, values masked                                                   |
+| Expiry calendar       | A month grid with colour-coded dots                                                                       |
+| Audit log             | The append-only log, with hash-chain verification                                                         |
+| Cron explainer        | Parses a 5-field expression and shows the next five fire times                                            |
+| CIDR calculator       | Network, broadcast, host count and mask                                                                   |
+| JSON / YAML formatter | Format, validate or minify, backed by `js-yaml`                                                           |
+| Import                | `.env`, Bitwarden JSON, 1Password JSON, raw vault JSON                                                    |
+| Templates             | Ten prefilled shapes — GitHub PAT, AWS access key, Stripe, PostgreSQL DSN, OpenAI, and so on              |
+| Bulk operations       | Select mode, then bulk delete or bulk `.env` export                                                       |
+| Backup                | Encrypted `.vaultbak` export and restore                                                                  |
 
 ---
 
@@ -458,31 +459,31 @@ Switch to Tools in the activity bar.
 
 Press `S` or click the gear. Five tabs:
 
-| Tab | Holds |
-| --- | --- |
+| Tab            | Holds                                                                                              |
+| -------------- | -------------------------------------------------------------------------------------------------- |
 | **Appearance** | Seven themes — dark, midnight, dracula, nord, catppuccin, light, and system, which follows your OS |
-| **Layout** | Card size, column count, activity bar placement and icon style |
-| **Security** | Auto-lock timeout, lock on window hide, mask keys by default |
-| **Data** | Export format, expiry warning window, custom CSS |
-| **Advanced** | Vault path, experimental project types |
+| **Layout**     | Card size, column count, activity bar placement and icon style                                     |
+| **Security**   | Auto-lock timeout, lock on window hide, mask keys by default                                       |
+| **Data**       | Export format, expiry warning window, custom CSS                                                   |
+| **Advanced**   | Vault path, experimental project types                                                             |
 
 ### Keyboard shortcuts
 
-| Key | Action |
-| --- | --- |
-| `Ctrl+K` | Focus the search bar |
-| `Ctrl+N` | Add a secret |
-| `Esc` | Clear search, or close the modal |
-| `Shift+Esc` | Clear every active filter |
-| `S` | Settings |
-| `B` | Toggle the sidebar |
-| `?` | The shortcut list |
+| Key         | Action                           |
+| ----------- | -------------------------------- |
+| `Ctrl+K`    | Focus the search bar             |
+| `Ctrl+N`    | Add a secret                     |
+| `Esc`       | Clear search, or close the modal |
+| `Shift+Esc` | Clear every active filter        |
+| `S`         | Settings                         |
+| `B`         | Toggle the sidebar               |
+| `?`         | The shortcut list                |
 
 ### Auto-lock
 
 The vault locks itself after 60 idle minutes by default; set the timeout to 0 in Settings → Security to disable it. Mouse and keyboard activity resets the clock, and a dismissible toast warns you a minute out.
 
-Locking mid-session brings up a dedicated re-lock screen rather than the startup one — it tells you *why* it locked (idle, manual, or the window was hidden) and asks for the password only. You do not re-enter a server URL to get back into a session you never left. Locking also clears any pending undo, since a pending undo closes over a deleted entry including its secret.
+Locking mid-session brings up a dedicated re-lock screen rather than the startup one — it tells you _why_ it locked (idle, manual, or the window was hidden) and asks for the password only. You do not re-enter a server URL to get back into a session you never left. Locking also clears any pending undo, since a pending undo closes over a deleted entry including its secret.
 
 Locking when the window is hidden is **opt-in**, in Settings → Security. It used to fire on every alt-tab, which is not security, it is an annoyance with a security-shaped excuse.
 
@@ -490,7 +491,7 @@ Auto-lock and lock-on-hide are both suspended while you are [serving to the LAN]
 
 ### Window state
 
-Size, position and maximized state persist across restarts. Visibility deliberately does not: the tray handler hides the window, so saving visibility would mean hide-to-tray plus quit restores an *invisible* window on next launch, and the app appears to start and do nothing with only the tray icon as a way back. The plugin also skips restoring a position no connected monitor intersects, so unplugging a second display cannot strand the window off-screen.
+Size, position and maximized state persist across restarts. Visibility deliberately does not: the tray handler hides the window, so saving visibility would mean hide-to-tray plus quit restores an _invisible_ window on next launch, and the app appears to start and do nothing with only the tray icon as a way back. The plugin also skips restoring a position no connected monitor intersects, so unplugging a second display cannot strand the window off-screen.
 
 ---
 
@@ -498,7 +499,7 @@ Size, position and maximized state persist across restarts. Visibility deliberat
 
 `envv` does everything the app does, and it is built around one rule:
 
-> The caller decides *what happens*. Values move from the vault to their target without passing through the caller's output.
+> The caller decides _what happens_. Values move from the vault to their target without passing through the caller's output.
 
 That rule exists because the CLI is meant to be driven by scripts, by CI, and by automated tooling whose logs are not as private as people assume. Five mechanisms enforce it.
 
@@ -548,18 +549,18 @@ Pass `--json` to any command and stdout becomes exactly one JSON document:
 
 Exit codes are stable, so a script can branch on them:
 
-| Code | Exit | Means |
-| --- | --- | --- |
-| `error` | 1 | Unclassified |
-| — | 2 | Bad arguments |
-| `not_found` | 3 | No such entry, project, chunk, user or class |
-| `ambiguous` | 4 | Matched several; `details.candidates` lists them |
-| `denied` | 5 | Authentication failed, or the permission is missing |
-| `conflict` | 6 | Already exists, or a concurrent write won |
-| `unavailable` | 7 | Vault or server unreachable, or locked |
-| `needs_confirmation` | 8 | Destructive, no `--yes`, and no terminal to ask |
-| `redacted` | 9 | The output would have contained secrets |
-| `invalid` | 10 | Well-formed request, invalid input |
+| Code                 | Exit | Means                                               |
+| -------------------- | ---- | --------------------------------------------------- |
+| `error`              | 1    | Unclassified                                        |
+| —                    | 2    | Bad arguments                                       |
+| `not_found`          | 3    | No such entry, project, chunk, user or class        |
+| `ambiguous`          | 4    | Matched several; `details.candidates` lists them    |
+| `denied`             | 5    | Authentication failed, or the permission is missing |
+| `conflict`           | 6    | Already exists, or a concurrent write won           |
+| `unavailable`        | 7    | Vault or server unreachable, or locked              |
+| `needs_confirmation` | 8    | Destructive, no `--yes`, and no terminal to ask     |
+| `redacted`           | 9    | The output would have contained secrets             |
+| `invalid`            | 10   | Well-formed request, invalid input                  |
 
 Exit 4 deserves a note. `envv entry rm git` with both GitHub and GitLab in the vault does not guess. It lists both and exits non-zero. Deleting the wrong secret because a substring matched two things is not a failure mode worth accepting for the convenience of typing three letters. Use `provider:key_id` to disambiguate.
 
@@ -707,15 +708,15 @@ envv-server --port 8743 --tls                 # HTTPS, self-signed cert generate
 envv-server --tls --cert cert.pem --key key.pem   # bring your own
 ```
 
-| Flag | Default | Notes |
-| --- | --- | --- |
-| `--host` | `127.0.0.1` | Set to `0.0.0.0` only when you mean it |
-| `--port` | `8743` | |
-| `--db-path` / `--salt-path` | app data dir | |
-| `--tls` | off | Generates a 3-year self-signed cert for `localhost` and `127.0.0.1` if `--cert`/`--key` are absent |
-| `--session-ttl-mins` | `480` | Idle minutes before a token expires; any authenticated request resets it. 0 disables expiry. |
+| Flag                        | Default      | Notes                                                                                              |
+| --------------------------- | ------------ | -------------------------------------------------------------------------------------------------- |
+| `--host`                    | `127.0.0.1`  | Set to `0.0.0.0` only when you mean it                                                             |
+| `--port`                    | `8743`       |                                                                                                    |
+| `--db-path` / `--salt-path` | app data dir |                                                                                                    |
+| `--tls`                     | off          | Generates a 3-year self-signed cert for `localhost` and `127.0.0.1` if `--cert`/`--key` are absent |
+| `--session-ttl-mins`        | `480`        | Idle minutes before a token expires; any authenticated request resets it. 0 disables expiry.       |
 
-Auth is a bearer token. Failed attempts are rate-limited to 10 per IP per 60 seconds, counted from the real socket address rather than `X-Forwarded-For` — a header the client controls is not an identity. Only *failures* count, so a busy legitimate client never rate-limits itself.
+Auth is a bearer token. Failed attempts are rate-limited to 10 per IP per 60 seconds, counted from the real socket address rather than `X-Forwarded-For` — a header the client controls is not an identity. Only _failures_ count, so a busy legitimate client never rate-limits itself.
 
 Locking is asymmetric on purpose. `DELETE /api/unlock` from the owner is **global**: every session is dropped and every key zeroized. From a non-owner it is a personal logout. The earlier behaviour — remove only the caller's session, while every user session held its own copy of the vault key — meant an owner "locking" left everyone else reading and writing indefinitely.
 
@@ -729,20 +730,20 @@ Fingerprints are parsed with `rustls-pemfile`. A hand-rolled base64 decoder that
 
 ### API
 
-| Method | Path | Auth | What |
-| --- | --- | --- | --- |
-| POST | `/api/unlock` | — | `{password}` → `{token}` |
-| DELETE | `/api/unlock` | token | Lock (global for the owner, personal otherwise) |
-| GET | `/api/status` | — | `{unlocked, vault_exists, cert_fingerprint}` |
-| POST | `/api/auth` | — | `{username, password}` or `{token}` → `{token}` |
-| GET | `/api/ping` | token | Keep-alive, resets the idle clock |
-| GET / PUT | `/api/vault` | token | Read / write the whole `VaultData`; ETag + `If-Match` |
-| GET | `/api/vault/expiring?days=30` | token | Expiring entries |
-| GET | `/api/audit` | token | The audit log |
-| GET/POST/DELETE | `/api/users`, `/api/users/{id}/…` | owner | Users, passwords, classes, tokens, permissions |
-| GET/POST/DELETE | `/api/classes`, `/api/classes/{id}/…` | owner | Classes and their permissions |
-| GET | `/api/stats` | — | Public counts, 0 while locked |
-| GET | `/api/openapi.json` | — | The spec |
+| Method          | Path                                  | Auth  | What                                                  |
+| --------------- | ------------------------------------- | ----- | ----------------------------------------------------- |
+| POST            | `/api/unlock`                         | —     | `{password}` → `{token}`                              |
+| DELETE          | `/api/unlock`                         | token | Lock (global for the owner, personal otherwise)       |
+| GET             | `/api/status`                         | —     | `{unlocked, vault_exists, cert_fingerprint}`          |
+| POST            | `/api/auth`                           | —     | `{username, password}` or `{token}` → `{token}`       |
+| GET             | `/api/ping`                           | token | Keep-alive, resets the idle clock                     |
+| GET / PUT       | `/api/vault`                          | token | Read / write the whole `VaultData`; ETag + `If-Match` |
+| GET             | `/api/vault/expiring?days=30`         | token | Expiring entries                                      |
+| GET             | `/api/audit`                          | token | The audit log                                         |
+| GET/POST/DELETE | `/api/users`, `/api/users/{id}/…`     | owner | Users, passwords, classes, tokens, permissions        |
+| GET/POST/DELETE | `/api/classes`, `/api/classes/{id}/…` | owner | Classes and their permissions                         |
+| GET             | `/api/stats`                          | —     | Public counts, 0 while locked                         |
+| GET             | `/api/openapi.json`                   | —     | The spec                                              |
 
 Read events are deliberately **not** audited. Every `GET /api/vault` used to write a row, so a polling client grew the table without bound — and pruning it would have broken the very chain that makes the log tamper-evident.
 
@@ -751,7 +752,12 @@ Read events are deliberately **not** audited. Every `GET /api/vault` used to wri
 `GET /api/stats` needs no authentication and returns no secrets:
 
 ```json
-{"secrets_stored": 42, "users_total": 5, "users_connected": 2, "vault_unlocked": true}
+{
+  "secrets_stored": 42,
+  "users_total": 5,
+  "users_connected": 2,
+  "vault_unlocked": true
+}
 ```
 
 For [gethomepage.dev](https://gethomepage.dev), in `services.yaml`:
@@ -764,8 +770,8 @@ For [gethomepage.dev](https://gethomepage.dev), in `services.yaml`:
       type: customapi
       url: http://your-server:8743/api/stats
       mappings:
-        - { field: secrets_stored,  label: Secrets,   format: number }
-        - { field: users_total,     label: Users,     format: number }
+        - { field: secrets_stored, label: Secrets, format: number }
+        - { field: users_total, label: Users, format: number }
         - { field: users_connected, label: Connected, format: number }
 ```
 
@@ -785,7 +791,7 @@ The desktop app can host the vault it already has open, from the Remote panel, s
 
 **Locking is suspended while serving.** Peers are mid-request, and the host not touching the keyboard is no reason to cut them off. Because that would otherwise leave the vault decrypted indefinitely on an unattended machine, the server closes itself after **8 hours with no peer traffic**, which re-arms normal auto-lock. An explicit lock stops the server and disconnects everyone, behind a confirmation naming how many peers are connected. Every teardown path zeroizes the keys held by peer sessions.
 
-**It refuses while you are connected to a remote vault.** `lan_start` opens *this* machine's `vault.db`, so pressing it during a remote session published the local vault under the remote's UI. The gate is enforced at the button and again at the call, because a control that is merely hidden is not a control that is prevented. A server that is already running stays visible and stoppable regardless.
+**It refuses while you are connected to a remote vault.** `lan_start` opens _this_ machine's `vault.db`, so pressing it during a remote session published the local vault under the remote's UI. The gate is enforced at the button and again at the call, because a control that is merely hidden is not a control that is prevented. A server that is already running stays visible and stoppable regardless.
 
 The Users panel appears whenever you are hosting or connected to a remote, and is hidden on a purely local vault — local accounts written into the desktop's own `vault.db` are never read by `envv-server`, so they could never authenticate anywhere.
 
@@ -801,7 +807,7 @@ The check now lives **inside `save_vault`**. `SaveCtx { actor, expect_version }`
 
 Audit rows are written **inside** that transaction too. They previously ran before it, so a rejected or failed write still appended audit rows describing changes that never happened.
 
-The version identity is the `data_hash` `save_vault` already stores, so it is by construction the hash of exactly the bytes on disk, and the GET ETag reads that stored value rather than re-hashing parsed JSON. Where a handler needs both the version and the data it describes, the version is read first: mis-pairing that way can only pin an *older* version than the data, which fails the compare-and-swap and retries. The other order passes the check while merging against a stale base — which is the clobber itself.
+The version identity is the `data_hash` `save_vault` already stores, so it is by construction the hash of exactly the bytes on disk, and the GET ETag reads that stored value rather than re-hashing parsed JSON. Where a handler needs both the version and the data it describes, the version is read first: mis-pairing that way can only pin an _older_ version than the data, which fails the compare-and-swap and retries. The other order passes the check while merging against a stale base — which is the clobber itself.
 
 **On conflict the desktop asks.** There is no safe automatic answer; silently picking a winner is how data goes missing. You get the choice between keeping your version (an explicit unconditional overwrite) and reloading theirs, with the cost of each spelled out.
 
@@ -861,7 +867,7 @@ Terms are `field:glob`, where field is one of `vault`, `project` (id or display 
 
 Precedence is `NOT` > `AND` > `OR`; parentheses override. `&&`, `||` and `!` are accepted as aliases and operators are case-insensitive. Adjacency is **not** implicit AND — an operator is always required, so an expression can never quietly mean something other than it reads.
 
-Five rules govern how they combine, and all of them fail towards *less* access:
+Five rules govern how they combine, and all of them fail towards _less_ access:
 
 1. Effective permission is the class expression **AND** the individual one. A class-level exclusion is a real boundary, not a suggestion.
 2. **Write implies read**, so the effective read rule is `read OR write`.
@@ -869,7 +875,7 @@ Five rules govern how they combine, and all of them fail towards *less* access:
 4. A specific `project:` term is never satisfied by the `Universal` catch-all project.
 5. A malformed expression **denies**. `set_permission_expr` parses before storing, so a bad rule is rejected at the API with a 400 rather than saved as something that silently denies everything; stored text is re-parsed on every evaluation rather than trusted, so a row edited outside the app also fails closed.
 
-Write scoping is ANY-match: one matching category or project is enough, the same rule reads already used. Requiring *every* scope an entry declared made project-scoped grants unusable, since almost every entry also carries a category. A `scope_value` of `*` is an unconditional match for its type, so wildcards reach unfiled entries and `project:*` and `category:*` behave identically. Note the consequence: for scoped users, "can see it" and "can edit it" are close to the same thing. **Vault scope remains the real privilege boundary.**
+Write scoping is ANY-match: one matching category or project is enough, the same rule reads already used. Requiring _every_ scope an entry declared made project-scoped grants unusable, since almost every entry also carries a category. A `scope_value` of `*` is an unconditional match for its type, so wildcards reach unfiled entries and `project:*` and `category:*` behave identically. Note the consequence: for scoped users, "can see it" and "can edit it" are close to the same thing. **Vault scope remains the real privilege boundary.**
 
 Existing flat `(scope_type, scope_value, permission)` rows are compiled once into equivalent OR-chains, reproducing the previous read behaviour exactly. The migration is guarded by a marker in `vault_meta`, so deliberately clearing every expression does not resurrect the old rules on the next start, and it runs after class seeding so the built-in classes are compiled too.
 
@@ -881,26 +887,26 @@ Existing flat `(scope_type, scope_value, permission)` rows are compiled once int
 
 Collected in one place, because the reasoning matters more than the list.
 
-| Layer | What holds |
-| --- | --- |
-| At rest | SQLCipher AES-256-CBC. The key is derived per-session and never written. |
-| Key derivation | Argon2id m=65536, t=3, p=1, 16-byte random salt in a separate file. |
-| In memory | `Mutex<Option<[u8;32]>>`, zeroized on lock, on quit, and on every LAN teardown path. |
-| Backups | PBKDF2-SHA256 → AES-256-GCM `.vaultbak`. |
-| In transit | TLS with leaf-certificate pinning verified during the handshake; TOFU bootstrap sends no credentials. |
-| Sub-user auth | Argon2id PHC, sliding-expiry bearer tokens, failure-only rate limiting from the real socket address. |
-| Authorization | Boolean expressions, composed with AND, failing closed at every ambiguity. |
-| Integrity | Hash-chained append-only audit log, verified on demand. |
-| Concurrency | Compare-and-swap inside the write transaction. |
-| Output | Redaction by default in the CLI; refusal rather than masking where a masked file would look deployable. |
-| Rendering | Every vault field is HTML-escaped. A vault is JSON from a remote someone else runs; TypeScript unions are erased at runtime and prove nothing. Only `http(s):` URLs become links. |
-| Assets | Fonts vendored, CSP `font-src 'self'`, no CDN request at runtime. |
-| Icons | Typed by magic bytes, size-capped, re-validated on read, SVG refused. |
+| Layer          | What holds                                                                                                                                                                        |
+| -------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| At rest        | SQLCipher AES-256-CBC. The key is derived per-session and never written.                                                                                                          |
+| Key derivation | Argon2id m=65536, t=3, p=1, 16-byte random salt in a separate file.                                                                                                               |
+| In memory      | `Mutex<Option<[u8;32]>>`, zeroized on lock, on quit, and on every LAN teardown path.                                                                                              |
+| Backups        | PBKDF2-SHA256 → AES-256-GCM `.vaultbak`.                                                                                                                                          |
+| In transit     | TLS with leaf-certificate pinning verified during the handshake; TOFU bootstrap sends no credentials.                                                                             |
+| Sub-user auth  | Argon2id PHC, sliding-expiry bearer tokens, failure-only rate limiting from the real socket address.                                                                              |
+| Authorization  | Boolean expressions, composed with AND, failing closed at every ambiguity.                                                                                                        |
+| Integrity      | Hash-chained append-only audit log, verified on demand.                                                                                                                           |
+| Concurrency    | Compare-and-swap inside the write transaction.                                                                                                                                    |
+| Output         | Redaction by default in the CLI; refusal rather than masking where a masked file would look deployable.                                                                           |
+| Rendering      | Every vault field is HTML-escaped. A vault is JSON from a remote someone else runs; TypeScript unions are erased at runtime and prove nothing. Only `http(s):` URLs become links. |
+| Assets         | Fonts vendored, CSP `font-src 'self'`, no CDN request at runtime.                                                                                                                 |
+| Icons          | Typed by magic bytes, size-capped, re-validated on read, SVG refused.                                                                                                             |
 
 ### Things deliberately removed
 
 - **TOTP/2FA.** It had no UI and was never reachable. A half-wired second factor is worse than none, because people believe in it.
-- **The Settings "Quick Connect" pane.** Saving settings ran `applyRemoteConfig()`, which reassigned the vault store from an unchecked toggle — so opening and closing Settings while connected to a remote *silently disconnected it*. Remote connections are managed only in the Remote panel.
+- **The Settings "Quick Connect" pane.** Saving settings ran `applyRemoteConfig()`, which reassigned the vault store from an unchecked toggle — so opening and closing Settings while connected to a remote _silently disconnected it_. Remote connections are managed only in the Remote panel.
 - **The Google Fonts CDN.** Syne and JetBrains Mono are vendored and bundled.
 - **The `chunk` secret type.** It was in the dropdown but could never be saved: `dynamicSecretFields` hid its key input while `saveModal` still required `api_key`. Its content lived in `extra_vars`, which ordinary cards render anyway, so existing entries are relabelled `env_var` on load with nothing lost. Project `SecretChunk`s are a different concept and untouched.
 
@@ -926,16 +932,17 @@ Collected in one place, because the reasoning matters more than the list.
 
 On Linux:
 
-| | Path |
-| --- | --- |
-| Database | `~/.local/share/io.envvault/vault.db` |
-| Salt | `~/.local/share/io.envvault/vault.salt` |
-| Settings | `~/.config/io.envvault/settings.json` — plain JSON, deliberately not encrypted |
-| CLI sessions | `$XDG_STATE_HOME/envv/sessions.json`, mode 0600 |
+|              | Path                                                                           |
+| ------------ | ------------------------------------------------------------------------------ |
+| Database     | `~/.local/share/io.envvault/vault.db`                                          |
+| Salt         | `~/.local/share/io.envvault/vault.salt`                                        |
+| Settings     | `~/.config/io.envvault/settings.json` — plain JSON, deliberately not encrypted |
+| CLI sessions | `$XDG_STATE_HOME/envv/sessions.json`, mode 0600                                |
 
 On Windows the CLI keeps sessions in `%LOCALAPPDATA%` rather than the roaming profile, since a cached session token should not follow you onto another machine.
 
 > **If you used this when it was called API Vault:** the identifier changed from `io.apivault` to `io.envvault`. Move the directories before you launch the renamed build, or it will greet you as a first-time user and offer to create an empty vault.
+>
 > ```bash
 > mv ~/.local/share/io.apivault ~/.local/share/io.envvault
 > mv ~/.config/io.apivault      ~/.config/io.envvault
@@ -996,18 +1003,148 @@ The frontend tests load the real `index.html` rather than a fixture, deliberatel
 
 ---
 
+## Development
+
+### Linting and formatting
+
+Formatting is not a matter of taste here — it is checked in CI, so an unformatted
+file fails the build.
+
+| Command                                     | Does                                                   |
+| ------------------------------------------- | ------------------------------------------------------ |
+| `npm run format`                            | Prettier over TypeScript, CSS, JSON, YAML and Markdown |
+| `npm run format:check`                      | The same, read-only — what CI runs                     |
+| `npm run lint`                              | ESLint, type-aware, over `src/` and `tests/`           |
+| `npm run lint:fix`                          | ESLint with `--fix`                                    |
+| `npm run format:rust` / `format:rust:check` | rustfmt across the workspace                           |
+| `npm run lint:rust`                         | Clippy across the workspace, all targets               |
+| `npm run check`                             | All of the above plus typecheck and tests              |
+
+Three things about that setup are deliberate and will look wrong otherwise.
+
+**`index.html` is not formatted.** It is in `.prettierignore` on purpose. An HTML
+formatter has already silently deleted an element from it once — `#new-category-form`,
+during Phase 3 — and the frontend queries element ids that no tool can prove are
+still present. `tests/modals.test.ts` asserts the id contract; a formatter is not
+allowed near the file.
+
+**`tests/fixtures/` is not formatted either.** Those files _are_ the assertion.
+`tests/cli-parity.test.ts` and `envv-cli/tests/parity.rs` compare the TypeScript
+and Rust exporters against the same golden bytes; reformatting one makes both
+sides fail against a file that no longer describes any real config format.
+
+**Two ESLint rules are switched off with a comment explaining why.**
+`no-unnecessary-type-assertion` and `non-nullable-type-assertion-style` both
+misread this codebase's DOM helpers — `$<T extends HTMLElement = HTMLElement>(id)`
+lets the checker infer `T` from the assertion's own context, so every
+`as HTMLSelectElement` looks redundant and is not. Enabling them and running
+`--fix` removed about 170 assertions and produced 130+ type errors in a tree
+that had just typechecked clean.
+
+### The lint backlog
+
+ESLint found 237 pre-existing violations when it was introduced — mostly
+unawaited promises, unused imports, and `any` flowing out of vault JSON. They are
+recorded in `eslint-suppressions.json`, so `npm run lint` passes today and fails
+on anything **new**.
+
+Fix some of them and run `npx eslint --prune-suppressions` to shrink the file.
+Do not regenerate it with `--suppress-all`: that absorbs real regressions along
+with the old debt, which is the one thing the file exists to prevent.
+
+### Versioning
+
+The version is stated in six files — `src-tauri/tauri.conf.json`,
+`package.json`, and four `Cargo.toml` files — because six different tools read
+it and none of them can read another's copy. Tauri stamps its copy into every
+bundle filename and the Windows installer metadata; Cargo stamps its copy into
+`CARGO_PKG_VERSION`, which is what `envv --version` and `envv describe` report.
+
+One command writes all six, and `Cargo.lock` with them:
+
+```bash
+npm run version            # print the current version
+npm run version:check      # verify all six agree — CI runs this
+npm run version 0.7.0      # set an explicit version
+npm run version -- minor   # or patch / major
+```
+
+It does not commit, tag or push. Pushing the bump to `main` is what cuts the
+release — see below.
+
+### API documentation
+
+```bash
+npm run docs        # Doxygen over src/ts/  -> docs/ts/
+npm run docs:rust   # cargo doc             -> target/doc/
+npm run docs:all    # both
+```
+
+Two tools because there is no one tool: Doxygen has no Rust front end and
+rustdoc has no TypeScript one. The Doxygen build reads TypeScript through its
+Javascript parser, which handles ES modules, exported functions and `/** */`
+comments but does not understand generics, unions or `as` — a signature there is
+the parser's reading of a declaration, not the type. `src/ts/types.ts` remains
+the authority.
+
+`doxygen` and `graphviz` must be on `PATH`; on Fedora, `dnf install doxygen graphviz`.
+Both trees are published to GitHub Pages by `.github/workflows/docs.yml`.
+
+---
+
 ## Continuous integration
 
-`.github/workflows/ci.yml` runs two jobs on every push to `main`, every pull request, and on demand.
+Three workflows.
 
-| Job | Runs on | Does |
-| --- | --- | --- |
-| **Rust** | `ubuntu-latest` and `windows-latest`, `fail-fast: false` | Builds the frontend (the Tauri crate's build script needs `dist/` to exist), checks `Cargo.lock` is current with `--locked`, then `cargo test --workspace` and `cargo check --workspace --all-targets`. Linux additionally checks the bundled, distro-independent build. |
-| **Frontend** | `ubuntu-latest` | `npm ci`, `tsc --noEmit`, `npm test`, `vite build`. |
+### `ci.yml` — the gate on every push and pull request
 
-Two things in there look like noise and are not. `RUSTFLAGS: -D warnings` is set as an environment variable, which makes cargo ignore `.cargo/config.toml` — where this repo passes `-fuse-ld=mold`. Remove that line and every Linux job fails to link, because the runners have no mold. And the matrix runs both platforms without `fail-fast`, so a Windows-only break cannot hide behind a green Linux run.
+| Job          | Runs on                                                  | Does                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| ------------ | -------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Rust**     | `ubuntu-latest` and `windows-latest`, `fail-fast: false` | Builds the frontend (the Tauri crate's build script needs `dist/` to exist), checks `Cargo.lock` is current with `--locked`, then `cargo test --workspace`, `cargo check --workspace --all-targets`, `cargo fmt --check` (Linux only — formatting is platform-independent) and `cargo clippy` (both, because the lints that matter are behind `cfg`). Linux additionally checks the bundled, distro-independent build. |
+| **Frontend** | `ubuntu-latest`                                          | `npm ci`, the version cross-check, Prettier `--check`, ESLint, `tsc --noEmit`, `npm test`, `vite build`.                                                                                                                                                                                                                                                                                                               |
 
-`.github/workflows/build.yml` handles releases: it checks the version is consistent across `tauri.conf.json`, `package.json` and the four `Cargo.toml` files, builds every bundle target, and signs each artefact with keyless Sigstore.
+Two things in there look like noise and are not.
+
+Warnings are denied through `[workspace.lints]` in the root `Cargo.toml` rather
+than through a `RUSTFLAGS` environment variable. `RUSTFLAGS` would apply to
+dependencies too, so a warning inside `windows-sys` or `openssl-src` would fail
+the build with nothing in this repository to fix — and setting it also makes
+cargo ignore `.cargo/config.toml`, where this repo passes `-fuse-ld=mold`. Doing
+it through `[lints]` means `cargo check` locally enforces exactly what CI does.
+
+And the matrix runs both platforms without `fail-fast`, so a Windows-only break
+cannot hide behind a green Linux run.
+
+### `build.yml` — release when, and only when, the version goes up
+
+The trigger is a push to `main`, but the decision is not "was there a push". It
+is **"does a tag named `v<version>` already exist?"**
+
+- Fix a typo in the README, push: the version is unchanged, `v0.6.0` is still
+  there from last time, and the run stops after the ~10-second `meta` job.
+  Nothing is built and nothing is published.
+- Run `npm run version 0.7.0`, push: no `v0.7.0` tag exists, so the same
+  workflow builds every bundle, publishes the release, and creates the tag.
+- Push again without touching the version: back to the first case.
+
+That tag check is the only guard, deliberately. Re-running the workflow, pushing
+an empty commit, and a merge that changes nothing all resolve to "the tag
+exists", which is the same answer however many times it is asked. A path filter
+would get this wrong in exactly the case that matters — a commit that bumps the
+version _and_ edits the README would be skipped by `paths-ignore: ['**.md']`.
+
+Pushing a `v*` tag by hand still works, for re-releasing an older commit.
+
+What a release produces: AppImage, `.deb`, `.rpm` and an NSIS installer; `envv`
+and `envv-server` archived per platform; `SHA256SUMS`; a keyless Sigstore
+signature and certificate for every asset; and a server image on GHCR tagged
+`:0.7.0`, `:0.7` and `:latest`. The `meta` job refuses to start any of it if the
+six version numbers disagree.
+
+### `docs.yml` — API references to GitHub Pages
+
+Doxygen over `src/ts/` at `/ts`, `cargo doc` over the four crates at `/rust`,
+behind one landing page. Runs on `main` only.
 
 ---
 
@@ -1028,25 +1165,25 @@ Every project has a list like this. Most do not publish it.
 
 The feature sections above are the current state. This is the order it arrived in, for anyone reading the git history.
 
-| Phase | Delivered |
-| --- | --- |
-| 1 | Tauri wrapper, static frontend |
-| 2 | SQLCipher + Argon2id encrypted storage, unlock flow |
-| 3 | TypeScript + Vite, inline-handler elimination, structured project types, audit table, version history |
-| 4 | Remote vault server and the first CLI |
-| 5 | Multi-user RBAC, user classes, remote panel, health dashboard |
-| 5.1 | Security hardening: Argon2id for sub-users, failure-only rate limiting, restricted CORS |
-| 6 | TLS on the server, certificate pinning, tag sidebar filter, YAML formatter, re-lock overlay |
-| 7 | Correctness pass: stable entry ids, audit log viewer, offline fonts, session expiry, tests and CI |
-| 8 | Owner as a real user row, audit attribution, permission scoping, enumeration oracle closed |
-| 9 | Permission expression language (AND / OR / NOT) with a live editor |
-| 10 | Open to LAN — hosting the vault from the desktop app |
-| 10.1 | Lost-update fix: compare-and-swap on every vault write |
-| 11 | Frontend test suite and a module-by-module audit; 66 bugs fixed |
-| 12 | UX persistence, window state, the LAN wrong-vault gate, experimental project types |
-| 13 | CLI parity, exporter golden fixtures — which found the disabled-chunk and nginx-`${ref}` export bugs |
-| 14 | The agent-safe CLI: redaction, JSON envelope, exit codes, `describe` |
-| 15 | Custom icons, live enrichment, Windows and cross-distro portability, Docker memory |
+| Phase | Delivered                                                                                             |
+| ----- | ----------------------------------------------------------------------------------------------------- |
+| 1     | Tauri wrapper, static frontend                                                                        |
+| 2     | SQLCipher + Argon2id encrypted storage, unlock flow                                                   |
+| 3     | TypeScript + Vite, inline-handler elimination, structured project types, audit table, version history |
+| 4     | Remote vault server and the first CLI                                                                 |
+| 5     | Multi-user RBAC, user classes, remote panel, health dashboard                                         |
+| 5.1   | Security hardening: Argon2id for sub-users, failure-only rate limiting, restricted CORS               |
+| 6     | TLS on the server, certificate pinning, tag sidebar filter, YAML formatter, re-lock overlay           |
+| 7     | Correctness pass: stable entry ids, audit log viewer, offline fonts, session expiry, tests and CI     |
+| 8     | Owner as a real user row, audit attribution, permission scoping, enumeration oracle closed            |
+| 9     | Permission expression language (AND / OR / NOT) with a live editor                                    |
+| 10    | Open to LAN — hosting the vault from the desktop app                                                  |
+| 10.1  | Lost-update fix: compare-and-swap on every vault write                                                |
+| 11    | Frontend test suite and a module-by-module audit; 66 bugs fixed                                       |
+| 12    | UX persistence, window state, the LAN wrong-vault gate, experimental project types                    |
+| 13    | CLI parity, exporter golden fixtures — which found the disabled-chunk and nginx-`${ref}` export bugs  |
+| 14    | The agent-safe CLI: redaction, JSON envelope, exit codes, `describe`                                  |
+| 15    | Custom icons, live enrichment, Windows and cross-distro portability, Docker memory                    |
 
 ---
 

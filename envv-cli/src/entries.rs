@@ -3,12 +3,12 @@
 
 use crate::access::Access;
 use crate::data::{self, entries_mut, find_entry_index, projects};
+use crate::error::{CliError, CliResult};
 use crate::fmt::{confirm, fmt_entries, read_stdin};
 use crate::out;
 use clap::Args;
 use serde_json::{json, Value};
 use std::path::PathBuf;
-use crate::error::{CliError, CliResult};
 
 /// Every writable field of a `VaultEntry`, shared by `entry add` and `entry set`.
 ///
@@ -122,11 +122,26 @@ pub struct EntryFields {
 }
 
 pub const SECRET_TYPES: [&str; 7] = [
-    "api_key", "password", "certificate", "env_var", "connection_string", "ssh_key", "file_blob",
+    "api_key",
+    "password",
+    "certificate",
+    "env_var",
+    "connection_string",
+    "ssh_key",
+    "file_blob",
 ];
 
 pub const ENV_SUBTYPES: [&str; 11] = [
-    "string", "multiline", "secret", "boolean", "number", "ip", "cidr", "port", "url", "date",
+    "string",
+    "multiline",
+    "secret",
+    "boolean",
+    "number",
+    "ip",
+    "cidr",
+    "port",
+    "url",
+    "date",
     "json",
 ];
 
@@ -183,7 +198,10 @@ fn maybe_file(raw: &str) -> CliResult<String> {
 }
 
 fn split_list(raw: &str) -> Vec<String> {
-    raw.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect()
+    raw.split(',')
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect()
 }
 
 /// Set a string field, or remove it when the caller passed an empty string.
@@ -222,50 +240,107 @@ impl EntryFields {
         } else if let Some(v) = &self.key {
             entry["api_key"] = json!(v);
         }
-        if let Some(v) = &self.secret { set_str(entry, "api_secret", v); }
-        if let Some(v) = &self.account { set_str(entry, "account_name", v); }
-        if let Some(v) = &self.username { set_str(entry, "username", v); }
-        if let Some(v) = &self.email { set_str(entry, "email", v); }
-        if let Some(v) = &self.key_id { set_str(entry, "key_id", v); }
-        if let Some(v) = &self.secret_type { entry["secretType"] = json!(v); }
-        if let Some(v) = &self.price { entry["price_type"] = json!(v); }
-        if let Some(v) = &self.env { set_str(entry, "environment", v); }
-        if let Some(v) = &self.url { set_str(entry, "api_url", v); }
-        if let Some(v) = &self.callback_url { set_str(entry, "callback_url", v); }
-        if let Some(v) = &self.version { set_str(entry, "version", v); }
-        if let Some(v) = &self.rate_limit { set_str(entry, "rate_limit", v); }
-        if let Some(v) = &self.expires { set_str(entry, "expires_at", v); }
-        if let Some(v) = self.rotation_days {
-            if v == 0 { entry.as_object_mut().map(|o| o.remove("rotation_days")); }
-            else { entry["rotation_days"] = json!(v); }
+        if let Some(v) = &self.secret {
+            set_str(entry, "api_secret", v);
         }
-        if let Some(v) = &self.desc { set_str(entry, "api_description", v); }
-        if let Some(v) = &self.notes { set_str(entry, "description", v); }
-        if let Some(v) = &self.details { set_str(entry, "details", v); }
-        if let Some(v) = &self.icon { set_str(entry, "custom_icon", v); }
+        if let Some(v) = &self.account {
+            set_str(entry, "account_name", v);
+        }
+        if let Some(v) = &self.username {
+            set_str(entry, "username", v);
+        }
+        if let Some(v) = &self.email {
+            set_str(entry, "email", v);
+        }
+        if let Some(v) = &self.key_id {
+            set_str(entry, "key_id", v);
+        }
+        if let Some(v) = &self.secret_type {
+            entry["secretType"] = json!(v);
+        }
+        if let Some(v) = &self.price {
+            entry["price_type"] = json!(v);
+        }
+        if let Some(v) = &self.env {
+            set_str(entry, "environment", v);
+        }
+        if let Some(v) = &self.url {
+            set_str(entry, "api_url", v);
+        }
+        if let Some(v) = &self.callback_url {
+            set_str(entry, "callback_url", v);
+        }
+        if let Some(v) = &self.version {
+            set_str(entry, "version", v);
+        }
+        if let Some(v) = &self.rate_limit {
+            set_str(entry, "rate_limit", v);
+        }
+        if let Some(v) = &self.expires {
+            set_str(entry, "expires_at", v);
+        }
+        if let Some(v) = self.rotation_days {
+            if v == 0 {
+                entry.as_object_mut().map(|o| o.remove("rotation_days"));
+            } else {
+                entry["rotation_days"] = json!(v);
+            }
+        }
+        if let Some(v) = &self.desc {
+            set_str(entry, "api_description", v);
+        }
+        if let Some(v) = &self.notes {
+            set_str(entry, "description", v);
+        }
+        if let Some(v) = &self.details {
+            set_str(entry, "details", v);
+        }
+        if let Some(v) = &self.icon {
+            set_str(entry, "custom_icon", v);
+        }
         if let Some(path) = &self.icon_file {
             entry["custom_icon"] = json!(embed_icon(path)?);
         }
-        if let Some(v) = &self.scopes { entry["scopes"] = json!(split_list(v)); }
-        if let Some(v) = &self.categories { entry["categories"] = json!(split_list(v)); }
+        if let Some(v) = &self.scopes {
+            entry["scopes"] = json!(split_list(v));
+        }
+        if let Some(v) = &self.categories {
+            entry["categories"] = json!(split_list(v));
+        }
         if let Some(v) = &self.tags {
             let tags = split_list(v);
-            if tags.is_empty() { entry.as_object_mut().map(|o| o.remove("tags")); }
-            else { entry["tags"] = json!(tags); }
+            if tags.is_empty() {
+                entry.as_object_mut().map(|o| o.remove("tags"));
+            } else {
+                entry["tags"] = json!(tags);
+            }
         }
-        if let Some(v) = &self.cert { set_str(entry, "certificate_data", &maybe_file(v)?); }
-        if let Some(v) = &self.cert_key { set_str(entry, "cert_key_data", &maybe_file(v)?); }
-        if let Some(v) = &self.cert_issuer { set_str(entry, "cert_issuer", v); }
-        if let Some(v) = &self.blob_ref { set_str(entry, "blob_ref", v); }
-        if let Some(v) = &self.env_subtype { set_str(entry, "env_var_subtype", v); }
+        if let Some(v) = &self.cert {
+            set_str(entry, "certificate_data", &maybe_file(v)?);
+        }
+        if let Some(v) = &self.cert_key {
+            set_str(entry, "cert_key_data", &maybe_file(v)?);
+        }
+        if let Some(v) = &self.cert_issuer {
+            set_str(entry, "cert_issuer", v);
+        }
+        if let Some(v) = &self.blob_ref {
+            set_str(entry, "blob_ref", v);
+        }
+        if let Some(v) = &self.env_subtype {
+            set_str(entry, "env_var_subtype", v);
+        }
         if let Some(v) = &self.env_prefixes {
             let parts: Vec<String> = split_list(v)
                 .into_iter()
                 .map(|p| p.trim_end_matches('_').to_string())
                 .filter(|p| !p.is_empty())
                 .collect();
-            if parts.is_empty() { entry.as_object_mut().map(|o| o.remove("env_prefixes")); }
-            else { entry["env_prefixes"] = json!(parts); }
+            if parts.is_empty() {
+                entry.as_object_mut().map(|o| o.remove("env_prefixes"));
+            } else {
+                entry["env_prefixes"] = json!(parts);
+            }
         }
         if !self.vars.is_empty() {
             let mut list: Vec<Value> = entry
@@ -286,8 +361,11 @@ impl EntryFields {
                     list.push(json!({ "key": key, "value": v, "secret": is_secret }));
                 }
             }
-            if list.is_empty() { entry.as_object_mut().map(|o| o.remove("extra_vars")); }
-            else { entry["extra_vars"] = json!(list); }
+            if list.is_empty() {
+                entry.as_object_mut().map(|o| o.remove("extra_vars"));
+            } else {
+                entry["extra_vars"] = json!(list);
+            }
         }
         if let Some(v) = &self.projects {
             let mut ids = split_list(v);
@@ -295,9 +373,13 @@ impl EntryFields {
             // the entry would simply vanish from the grid with no explanation.
             for id in &ids {
                 if id != "Universal"
-                    && !vault_projects.iter().any(|p| p.get("id").and_then(|x| x.as_str()) == Some(id))
+                    && !vault_projects
+                        .iter()
+                        .any(|p| p.get("id").and_then(|x| x.as_str()) == Some(id))
                 {
-                    return Err(CliError::not_found(format!("No such project id: '{id}' (see `envv project ls`)")));
+                    return Err(CliError::not_found(format!(
+                        "No such project id: '{id}' (see `envv project ls`)"
+                    )));
                 }
             }
             if !ids.iter().any(|i| i == "Universal") {
@@ -352,7 +434,11 @@ pub fn cmd_add(
     });
     fields.apply(&mut entry, &projs)?;
     let fingerprint = out::fingerprint(entry.get("api_key").and_then(|v| v.as_str()).unwrap_or(""));
-    let id = entry.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let id = entry
+        .get("id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
 
     entries_mut(&mut vault).push(entry);
     access.save(&vault)?;
@@ -364,12 +450,7 @@ pub fn cmd_add(
     Ok(())
 }
 
-pub fn cmd_set(
-    access: &Access,
-    query: &str,
-    fields: &EntryFields,
-    create: bool,
-) -> CliResult {
+pub fn cmd_set(access: &Access, query: &str, fields: &EntryFields, create: bool) -> CliResult {
     let mut vault = access.load_vault_or_empty()?;
     let projs = projects(&vault);
     let idx = match find_entry_index(&vault, query) {
@@ -382,14 +463,27 @@ pub fn cmd_set(
         Err(e) => return Err(e),
     };
     let mut entry = data::entries(&vault)[idx].clone();
-    let before = entry.get("api_key").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let before = entry
+        .get("api_key")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
     fields.apply(&mut entry, &projs)?;
     // Entries written before ids existed still parse; stamp one rather than
     // leaving an entry the audit log and RBAC scoping cannot name.
-    if entry.get("id").and_then(|v| v.as_str()).unwrap_or("").is_empty() {
+    if entry
+        .get("id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .is_empty()
+    {
         entry["id"] = json!(uuid::Uuid::new_v4().to_string());
     }
-    let after = entry.get("api_key").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let after = entry
+        .get("api_key")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
     let provider = data::provider_of(&entry).to_string();
     entries_mut(&mut vault)[idx] = entry;
     access.save(&vault)?;
@@ -423,9 +517,11 @@ pub fn cmd_rm(access: &Access, query: &str, yes: bool) -> CliResult {
     }
     entries_mut(&mut vault).remove(idx);
     access.save(&vault)?;
-    out::ok("entry.rm", json!({ "provider": provider, "deleted": true }), || {
-        println!("Deleted '{provider}'")
-    });
+    out::ok(
+        "entry.rm",
+        json!({ "provider": provider, "deleted": true }),
+        || println!("Deleted '{provider}'"),
+    );
     Ok(())
 }
 
@@ -451,19 +547,33 @@ pub fn cmd_rename(access: &Access, query: &str, new_name: &str) -> CliResult {
     entries_mut(&mut vault)[idx]["provider"] = json!(new_name);
 
     let mut rewritten = 0usize;
-    let compound_old = if key_id.is_empty() { None } else { Some(format!("{old}_{key_id}")) };
-    let compound_new = if key_id.is_empty() { None } else { Some(format!("{new_name}_{key_id}")) };
+    let compound_old = if key_id.is_empty() {
+        None
+    } else {
+        Some(format!("{old}_{key_id}"))
+    };
+    let compound_new = if key_id.is_empty() {
+        None
+    } else {
+        Some(format!("{new_name}_{key_id}"))
+    };
 
     for project in data::projects_mut(&mut vault).iter_mut() {
-        let Some(chunks) = project.get_mut("chunks").and_then(|c| c.as_array_mut()) else { continue };
+        let Some(chunks) = project.get_mut("chunks").and_then(|c| c.as_array_mut()) else {
+            continue;
+        };
         for chunk in chunks.iter_mut() {
-            let Some(fields) = chunk.get_mut("fields").and_then(|f| f.as_array_mut()) else { continue };
+            let Some(fields) = chunk.get_mut("fields").and_then(|f| f.as_array_mut()) else {
+                continue;
+            };
             for field in fields.iter_mut() {
                 let val = match field.get("value").and_then(|v| v.as_str()) {
                     Some(v) => v.to_string(),
                     None => continue,
                 };
-                let Some(inner) = val.strip_prefix("${").and_then(|s| s.strip_suffix('}')) else { continue };
+                let Some(inner) = val.strip_prefix("${").and_then(|s| s.strip_suffix('}')) else {
+                    continue;
+                };
                 if inner.starts_with("chunk:") {
                     continue;
                 }
@@ -509,19 +619,18 @@ pub fn cmd_rename(access: &Access, query: &str, new_name: &str) -> CliResult {
     Ok(())
 }
 
-pub fn cmd_tag(
-    access: &Access,
-    query: &str,
-    add: &[String],
-    remove: &[String],
-) -> CliResult {
+pub fn cmd_tag(access: &Access, query: &str, add: &[String], remove: &[String]) -> CliResult {
     let mut vault = access.load_vault()?;
     let idx = find_entry_index(&vault, query)?;
     let entries = entries_mut(&mut vault);
     let mut tags: Vec<String> = entries[idx]
         .get("tags")
         .and_then(|v| v.as_array())
-        .map(|a| a.iter().filter_map(|t| t.as_str().map(String::from)).collect())
+        .map(|a| {
+            a.iter()
+                .filter_map(|t| t.as_str().map(String::from))
+                .collect()
+        })
         .unwrap_or_default();
     for t in add {
         if !tags.iter().any(|x| x == t) {
@@ -537,7 +646,14 @@ pub fn cmd_tag(
     access.save(&vault)?;
     let shown = tags.clone();
     out::ok("entry.tag", json!({ "tags": shown }), || {
-        println!("Tags: {}", if tags.is_empty() { "(none)".to_string() } else { tags.join(", ") })
+        println!(
+            "Tags: {}",
+            if tags.is_empty() {
+                "(none)".to_string()
+            } else {
+                tags.join(", ")
+            }
+        )
     });
     Ok(())
 }
@@ -554,9 +670,11 @@ pub fn cmd_flag(access: &Access, query: &str, field: &str, on: bool) -> CliResul
     }
     let provider = data::provider_of(&entries[idx]).to_string();
     access.save(&vault)?;
-    out::ok("entry.flag", json!({ "provider": provider, "field": field, "value": on }), || {
-        println!("{provider}: {field} = {on}")
-    });
+    out::ok(
+        "entry.flag",
+        json!({ "provider": provider, "field": field, "value": on }),
+        || println!("{provider}: {field} = {on}"),
+    );
     Ok(())
 }
 
@@ -574,22 +692,37 @@ pub fn cmd_rotate(
     let mut vault = access.load_vault()?;
     let idx = find_entry_index(&vault, query)?;
     let entries = entries_mut(&mut vault);
-    let before = entries[idx].get("api_key").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let before = entries[idx]
+        .get("api_key")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
     if generate {
         // Same shape as `entry add --generate`: the replacement is created,
         // stored and fingerprinted without ever being printed.
-        let fields = EntryFields { generate: true, generate_bytes: 32, generate_format: "base64url".into(), ..Default::default() };
+        let fields = EntryFields {
+            generate: true,
+            generate_bytes: 32,
+            generate_format: "base64url".into(),
+            ..Default::default()
+        };
         entries[idx]["api_key"] = json!(fields.generate_value()?);
     } else if from_stdin {
         entries[idx]["api_key"] = json!(read_stdin()?);
     } else if let Some(k) = new_key {
         entries[idx]["api_key"] = json!(k);
     }
-    let after = entries[idx].get("api_key").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let after = entries[idx]
+        .get("api_key")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
     let at = vault_core::iso_now();
     entries[idx]["last_rotated_at"] = json!(at);
     // Rotating is the answer to being compromised, so clear the flag.
-    entries[idx].as_object_mut().map(|o| o.remove("compromised"));
+    entries[idx]
+        .as_object_mut()
+        .map(|o| o.remove("compromised"));
     let provider = data::provider_of(&entries[idx]).to_string();
     access.save(&vault)?;
     out::ok(
@@ -614,9 +747,17 @@ pub fn cmd_history(access: &Access, query: &str) -> CliResult {
     let vault = access.load_vault()?;
     let idx = find_entry_index(&vault, query)?;
     let entry = &data::entries(&vault)[idx];
-    let hist = entry.get("version_history").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+    let hist = entry
+        .get("version_history")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
     let provider = data::provider_of(entry).to_string();
-    let rotated = entry.get("last_rotated_at").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let rotated = entry
+        .get("last_rotated_at")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
 
     // History is a list of previous secrets. Fingerprints answer the question
     // history is actually for — "did this value change, and when?" — without
@@ -645,7 +786,11 @@ pub fn cmd_history(access: &Access, query: &str) -> CliResult {
             for (i, h) in hist.iter().enumerate() {
                 let when = h.get("saved_at").and_then(|v| v.as_str()).unwrap_or("?");
                 let val = h.get("value").and_then(|v| v.as_str()).unwrap_or("");
-                let shown = if out::revealing() { val.to_string() } else { out::masked(val) };
+                let shown = if out::revealing() {
+                    val.to_string()
+                } else {
+                    out::masked(val)
+                };
                 println!("{:<4} {:<26} {}", i + 1, when, shown);
             }
         },
@@ -663,9 +808,17 @@ pub fn cmd_restore(access: &Access, query: &str, version: usize, yes: bool) -> C
         .cloned()
         .unwrap_or_default();
     let item = hist
-        .get(version.checked_sub(1).ok_or("Versions are numbered from 1")?)
+        .get(
+            version
+                .checked_sub(1)
+                .ok_or("Versions are numbered from 1")?,
+        )
         .ok_or_else(|| format!("No version {version} — history holds {}", hist.len()))?;
-    let value = item.get("value").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let value = item
+        .get("value")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
     let provider = data::provider_of(&data::entries(&vault)[idx]).to_string();
     if !confirm(&format!("Restore '{provider}' to version {version}?"), yes)? {
         println!("Cancelled.");
@@ -703,24 +856,32 @@ pub fn cmd_list(
                 p.get("id").and_then(|i| i.as_str()) == Some(proj)
                     || p.get("name")
                         .and_then(|n| n.as_str())
-                        .map_or(false, |n| n.to_lowercase().contains(&proj_lc))
+                        .is_some_and(|n| n.to_lowercase().contains(&proj_lc))
             })
             .filter_map(|p| p.get("id").and_then(|i| i.as_str()).map(String::from))
             .collect();
         list.retain(|e| {
-            e.get("projectIds").and_then(|v| v.as_array()).map_or(false, |ids| {
-                ids.iter().any(|id| matching_ids.iter().any(|m| Some(m.as_str()) == id.as_str()))
-            })
+            e.get("projectIds")
+                .and_then(|v| v.as_array())
+                .is_some_and(|ids| {
+                    ids.iter()
+                        .any(|id| matching_ids.iter().any(|m| Some(m.as_str()) == id.as_str()))
+                })
         });
     }
     if let Some(t) = type_filter {
-        list.retain(|e| e.get("secretType").and_then(|v| v.as_str()).unwrap_or("api_key") == t);
+        list.retain(|e| {
+            e.get("secretType")
+                .and_then(|v| v.as_str())
+                .unwrap_or("api_key")
+                == t
+        });
     }
     if let Some(t) = tag {
         list.retain(|e| {
             e.get("tags")
                 .and_then(|v| v.as_array())
-                .map_or(false, |a| a.iter().any(|x| x.as_str() == Some(t)))
+                .is_some_and(|a| a.iter().any(|x| x.as_str() == Some(t)))
         });
     }
     if let Some(v) = env {
@@ -730,7 +891,7 @@ pub fn cmd_list(
         list.retain(|e| {
             e.get("categories")
                 .and_then(|v| v.as_array())
-                .map_or(false, |a| a.iter().any(|x| x.as_str() == Some(c)))
+                .is_some_and(|a| a.iter().any(|x| x.as_str() == Some(c)))
         });
     }
     if let Some(q) = search {
@@ -740,7 +901,9 @@ pub fn cmd_list(
                 "{} {} {} {}",
                 data::provider_of(e),
                 e.get("account_name").and_then(|v| v.as_str()).unwrap_or(""),
-                e.get("api_description").and_then(|v| v.as_str()).unwrap_or(""),
+                e.get("api_description")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or(""),
                 e.get("description").and_then(|v| v.as_str()).unwrap_or(""),
             );
             hay.to_lowercase().contains(&q)
@@ -751,7 +914,11 @@ pub fn cmd_list(
     // a new command cannot forget it.
     let safe = out::redact_entries(&list);
     if json_out || out::is_json() {
-        out::ok("entry.ls", json!({ "count": safe.len(), "entries": safe }), || {});
+        out::ok(
+            "entry.ls",
+            json!({ "count": safe.len(), "entries": safe }),
+            || {},
+        );
         return Ok(());
     }
     if list.is_empty() {
@@ -773,7 +940,11 @@ pub fn cmd_get(access: &Access, query: &str, field: Option<&str>) -> CliResult {
         // A named field is very often the secret itself, so the same rule
         // applies: fingerprint unless the caller asked to reveal.
         let secret_field = SECRET_FIELD_NAMES.contains(&crate::refs::canonical_field(f));
-        let shown = if secret_field && !out::revealing() { out::masked(&val) } else { val.clone() };
+        let shown = if secret_field && !out::revealing() {
+            out::masked(&val)
+        } else {
+            val.clone()
+        };
         out::ok(
             "entry.get",
             json!({
@@ -794,30 +965,42 @@ pub fn cmd_get(access: &Access, query: &str, field: Option<&str>) -> CliResult {
         return Err(CliError::not_found(format!("No entry matching '{query}'")));
     }
     let safe = out::redact_entries(&found);
-    out::ok("entry.get", json!({ "count": safe.len(), "entries": safe }), || {
-        for e in &safe {
-            println!("{}", serde_json::to_string_pretty(e).unwrap_or_default());
-        }
-    });
+    out::ok(
+        "entry.get",
+        json!({ "count": safe.len(), "entries": safe }),
+        || {
+            for e in &safe {
+                println!("{}", serde_json::to_string_pretty(e).unwrap_or_default());
+            }
+        },
+    );
     Ok(())
 }
 
 /// Entry fields whose contents are secret material.
-const SECRET_FIELD_NAMES: [&str; 4] = ["api_key", "api_secret", "certificate_data", "cert_key_data"];
+const SECRET_FIELD_NAMES: [&str; 4] =
+    ["api_key", "api_secret", "certificate_data", "cert_key_data"];
 
 /// Every tag in the vault with its entry count — the sidebar's tag section.
 pub fn cmd_tags(access: &Access) -> CliResult {
     let vault = access.load_vault()?;
     let mut counts: std::collections::BTreeMap<String, usize> = Default::default();
     for e in data::entries(&vault) {
-        for t in e.get("tags").and_then(|v| v.as_array()).into_iter().flatten() {
+        for t in e
+            .get("tags")
+            .and_then(|v| v.as_array())
+            .into_iter()
+            .flatten()
+        {
             if let Some(s) = t.as_str() {
                 *counts.entry(s.to_string()).or_insert(0) += 1;
             }
         }
     }
-    let rows: Vec<Value> =
-        counts.iter().map(|(tag, n)| json!({ "tag": tag, "entry_count": n })).collect();
+    let rows: Vec<Value> = counts
+        .iter()
+        .map(|(tag, n)| json!({ "tag": tag, "entry_count": n }))
+        .collect();
     out::ok("tags", json!({ "count": rows.len(), "tags": rows }), || {
         if counts.is_empty() {
             println!("No tags.");

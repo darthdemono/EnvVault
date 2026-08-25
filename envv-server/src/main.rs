@@ -15,19 +15,27 @@ use envv_server::{
 #[derive(Parser)]
 #[command(name = "envv-server", version, about = "EnvVault remote vault server")]
 struct Args {
-    #[arg(long, default_value_t = 8743)] port:      u16,
-    #[arg(long, default_value = "127.0.0.1")] host: String,
-    #[arg(long)] db_path:   Option<PathBuf>,
-    #[arg(long)] salt_path: Option<PathBuf>,
+    #[arg(long, default_value_t = 8743)]
+    port: u16,
+    #[arg(long, default_value = "127.0.0.1")]
+    host: String,
+    #[arg(long)]
+    db_path: Option<PathBuf>,
+    #[arg(long)]
+    salt_path: Option<PathBuf>,
     /// Enable TLS (HTTPS).  A self-signed cert is auto-generated if --cert/--key are absent.
-    #[arg(long)] tls:       bool,
+    #[arg(long)]
+    tls: bool,
     /// Path to PEM-encoded TLS certificate (requires --tls).
-    #[arg(long)] cert:      Option<PathBuf>,
+    #[arg(long)]
+    cert: Option<PathBuf>,
     /// Path to PEM-encoded TLS private key (requires --tls).
-    #[arg(long)] key:       Option<PathBuf>,
+    #[arg(long)]
+    key: Option<PathBuf>,
     /// Idle minutes before a session token expires. Any authenticated request
     /// resets the clock; `GET /api/ping` exists to do exactly that. 0 disables expiry.
-    #[arg(long, default_value_t = 480)] session_ttl_mins: u64,
+    #[arg(long, default_value_t = 480)]
+    session_ttl_mins: u64,
 }
 
 fn main() {
@@ -80,8 +88,12 @@ async fn async_main() {
             .join("envv-server")
     };
 
-    let db_path   = args.db_path.unwrap_or_else(|| resolve_data_dir().join("vault.db"));
-    let salt_path = args.salt_path.unwrap_or_else(|| resolve_data_dir().join("vault.salt"));
+    let db_path = args
+        .db_path
+        .unwrap_or_else(|| resolve_data_dir().join("vault.db"));
+    let salt_path = args
+        .salt_path
+        .unwrap_or_else(|| resolve_data_dir().join("vault.salt"));
 
     if let Some(parent) = db_path.parent() {
         std::fs::create_dir_all(parent).expect("create data dir");
@@ -97,10 +109,11 @@ async fn async_main() {
                 (Some(TlsFiles { cert, key }), Some(fp))
             }
             (None, None) => {
-                let (files, fp) = ensure_self_signed_cert(&resolve_data_dir()).unwrap_or_else(|e| {
-                    eprintln!("TLS cert generation failed: {e}");
-                    std::process::exit(1);
-                });
+                let (files, fp) =
+                    ensure_self_signed_cert(&resolve_data_dir()).unwrap_or_else(|e| {
+                        eprintln!("TLS cert generation failed: {e}");
+                        std::process::exit(1);
+                    });
                 println!("TLS cert → {}", files.cert.display());
                 (Some(files), Some(fp))
             }
@@ -131,7 +144,7 @@ async fn async_main() {
         }
     }
 
-    let scheme   = if args.tls { "https" } else { "http" };
+    let scheme = if args.tls { "https" } else { "http" };
     let addr_str = format!("{}:{}", args.host, args.port);
     println!("envv-server  →  {scheme}://{addr_str}");
     println!("OpenAPI JSON →  {scheme}://{addr_str}/api/openapi.json");

@@ -16,7 +16,13 @@ import { loadRealIndexHtml, resetState } from './helpers';
 const toasts: string[] = [];
 vi.mock('../src/ts/utils', async (importOriginal) => {
   const real = await importOriginal<typeof import('../src/ts/utils')>();
-  return { ...real, showToast: (m: string) => { toasts.push(m); }, showConfirm: async () => true };
+  return {
+    ...real,
+    showToast: (m: string) => {
+      toasts.push(m);
+    },
+    showConfirm: async () => true,
+  };
 });
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;

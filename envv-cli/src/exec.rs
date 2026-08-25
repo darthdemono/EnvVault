@@ -90,7 +90,10 @@ pub fn build_env(access: &Access, opts: &ExecOpts<'_>) -> CliResult<BTreeMap<Str
     }
 
     if let Some(prefix) = opts.prefix {
-        env = env.into_iter().map(|(k, v)| (format!("{prefix}{k}"), v)).collect();
+        env = env
+            .into_iter()
+            .map(|(k, v)| (format!("{prefix}{k}"), v))
+            .collect();
     }
     Ok(env)
 }
@@ -107,7 +110,9 @@ pub fn manifest(env: &BTreeMap<String, String>) -> Value {
 /// Load the variables and run `argv`, returning the child's exit code.
 pub fn run(access: &Access, opts: &ExecOpts<'_>, argv: &[String]) -> CliResult<i32> {
     let Some((program, args)) = argv.split_first() else {
-        return Err(CliError::invalid("No command given — use `envv exec … -- <command>`"));
+        return Err(CliError::invalid(
+            "No command given — use `envv exec … -- <command>`",
+        ));
     };
     let env = build_env(access, opts)?;
 
@@ -118,7 +123,11 @@ pub fn run(access: &Access, opts: &ExecOpts<'_>, argv: &[String]) -> CliResult<i
             json!({ "command": argv, "env": m, "executed": false }),
             || {
                 println!("Would run: {}", argv.join(" "));
-                println!("With {} variable(s): {}", env.len(), env.keys().cloned().collect::<Vec<_>>().join(", "));
+                println!(
+                    "With {} variable(s): {}",
+                    env.len(),
+                    env.keys().cloned().collect::<Vec<_>>().join(", ")
+                );
             },
         );
         return Ok(0);
@@ -132,9 +141,22 @@ pub fn run(access: &Access, opts: &ExecOpts<'_>, argv: &[String]) -> CliResult<i
         // On Windows that is more than PATH: without SYSTEMROOT, anything
         // touching the CRT or winsock fails with errors that name none of this.
         const KEEP_UNIX: &[&str] = &["PATH", "HOME", "LANG", "TERM"];
-        const KEEP_WINDOWS: &[&str] =
-            &["PATH", "PATHEXT", "SYSTEMROOT", "SYSTEMDRIVE", "WINDIR", "TEMP", "TMP", "COMSPEC", "USERPROFILE"];
-        let keep = if cfg!(windows) { KEEP_WINDOWS } else { KEEP_UNIX };
+        const KEEP_WINDOWS: &[&str] = &[
+            "PATH",
+            "PATHEXT",
+            "SYSTEMROOT",
+            "SYSTEMDRIVE",
+            "WINDIR",
+            "TEMP",
+            "TMP",
+            "COMSPEC",
+            "USERPROFILE",
+        ];
+        let keep = if cfg!(windows) {
+            KEEP_WINDOWS
+        } else {
+            KEEP_UNIX
+        };
         for key in keep {
             if let Some(value) = std::env::var_os(key) {
                 cmd.env(key, value);

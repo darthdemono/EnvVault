@@ -117,7 +117,11 @@ describe('evaluate', () => {
   });
 
   it('matches category, tag and env predicates', () => {
-    const entry = makeEntry({ categories: ['infra/db'], tags: ['prod'], environment: 'production' });
+    const entry = makeEntry({
+      categories: ['infra/db'],
+      tags: ['prod'],
+      environment: 'production',
+    });
     expect(evaluateSrc('cat:infra/*', entry, PROJECTS)).toBe(true);
     expect(evaluateSrc('tag:prod', entry, PROJECTS)).toBe(true);
     expect(evaluateSrc('env:production', entry, PROJECTS)).toBe(true);

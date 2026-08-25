@@ -81,6 +81,8 @@ jobs:
           nasm -v
 
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
 
       - uses: Swatinem/rust-cache@v2
 
@@ -112,6 +114,25 @@ jobs:
       - name: Check the whole workspace
         run: cargo check --workspace --locked --all-targets
 
+      # Formatting is platform-independent, so checking it on both runners would
+      # pay twice for the same answer. `--check` prints a diff and exits
+      # non-zero; it never rewrites the tree.
+      - name: Formatting (rustfmt)
+        if: runner.os == 'Linux'
+        run: cargo fmt --all -- --check
+
+      # Clippy runs on both, because the lints that matter here are behind
+      # `cfg` — vault-core vendors SQLCipher and OpenSSL only on Windows, and
+      # envv-cli's process-spawning code takes a different branch there. A
+      # Linux-only clippy would never see either.
+      #
+      # No `-D warnings` on the command line: the levels live in the root
+      # Cargo.toml under `[workspace.lints.clippy]`, so `cargo clippy` locally
+      # enforces exactly what this line does. Passing the flag here as well
+      # would apply it to dependencies too.
+      - name: Clippy
+        run: cargo clippy --workspace --locked --all-targets
+
       # The portable build path — SQLCipher and OpenSSL compiled in — is what
       # release artefacts use, so it has to be exercised somewhere. Checking it
       # on Linux catches a broken feature union without paying for it on both.
@@ -131,6 +152,26 @@ jobs:
           cache: npm
 
       - run: npm ci
+
+      # First, because it is the cheapest and the one whose failure invalidates
+      # a release rather than a commit. The version is stated in six files and
+      # nothing else in this workflow reads more than one of them.
+      - name: Version numbers agree
+        run: npm run version:check
+
+      # `--check` only reports. Reformatting in CI and committing the result
+      # would mean the tree on disk never matches the tree that was reviewed.
+      - name: Formatting (Prettier)
+        run: npm run format:check
+
+      # `eslint-suppressions.json` records the 237 pre-existing violations this
+      # config found when it was introduced, so this step passes today and
+      # fails on anything NEW. Fix some of the backlog and run
+      # `npx eslint --prune-suppressions` to shrink the file — never regenerate
+      # it wholesale with `--suppress-all`, which would silently absorb real
+      # regressions along with the old debt.
+      - name: Lint (ESLint)
+        run: npm run lint
 
       - name: Type check
         run: npx tsc --noEmit

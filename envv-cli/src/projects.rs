@@ -5,10 +5,10 @@ use crate::access::Access;
 use crate::data::{
     self, categories_mut, entries_mut, find_project_index, projects, projects_mut, slugify,
 };
+use crate::error::{CliError, CliResult};
 use crate::fmt::{cell, confirm};
 use crate::out;
 use serde_json::{json, Value};
-use crate::error::{CliError, CliResult};
 
 // ── Projects ──────────────────────────────────────────────────────────────────
 
@@ -26,7 +26,7 @@ pub fn cmd_ls(access: &Access, json_out: bool) -> CliResult {
                     .filter(|e| {
                         e.get("projectIds")
                             .and_then(|v| v.as_array())
-                            .map_or(false, |ids| ids.iter().any(|x| x.as_str() == Some(id)))
+                            .is_some_and(|ids| ids.iter().any(|x| x.as_str() == Some(id)))
                     })
                     .count();
                 let mut row = out::redact_project(p);
@@ -34,29 +34,49 @@ pub fn cmd_ls(access: &Access, json_out: bool) -> CliResult {
                 row
             })
             .collect();
-        out::ok("project.ls", json!({ "count": rows.len(), "projects": rows }), || {});
+        out::ok(
+            "project.ls",
+            json!({ "count": rows.len(), "projects": rows }),
+            || {},
+        );
         return Ok(());
     }
     if list.is_empty() {
         println!("No projects.");
         return Ok(());
     }
-    println!("{:<28} {:<28} {:<12} {:>7} {:>7}", "Id", "Name", "Type", "Entries", "Chunks");
+    println!(
+        "{:<28} {:<28} {:<12} {:>7} {:>7}",
+        "Id", "Name", "Type", "Entries", "Chunks"
+    );
     println!("{}", "-".repeat(86));
     for p in &list {
         let id = p.get("id").and_then(|v| v.as_str()).unwrap_or("");
         let name = p.get("name").and_then(|v| v.as_str()).unwrap_or("");
-        let ptype = p.get("project_type").and_then(|v| v.as_str()).unwrap_or("generic");
-        let chunks = p.get("chunks").and_then(|v| v.as_array()).map_or(0, |a| a.len());
+        let ptype = p
+            .get("project_type")
+            .and_then(|v| v.as_str())
+            .unwrap_or("generic");
+        let chunks = p
+            .get("chunks")
+            .and_then(|v| v.as_array())
+            .map_or(0, |a| a.len());
         let n = entries
             .iter()
             .filter(|e| {
                 e.get("projectIds")
                     .and_then(|v| v.as_array())
-                    .map_or(false, |ids| ids.iter().any(|x| x.as_str() == Some(id)))
+                    .is_some_and(|ids| ids.iter().any(|x| x.as_str() == Some(id)))
             })
             .count();
-        println!("{} {} {} {:>7} {:>7}", cell(id, 28), cell(name, 28), cell(ptype, 12), n, chunks);
+        println!(
+            "{} {} {} {:>7} {:>7}",
+            cell(id, 28),
+            cell(name, 28),
+            cell(ptype, 12),
+            n,
+            chunks
+        );
     }
     Ok(())
 }
@@ -66,7 +86,10 @@ pub fn cmd_show(access: &Access, query: &str) -> CliResult {
     let idx = find_project_index(&vault, query)?;
     let safe = out::redact_project(&projects(&vault)[idx]);
     out::ok("project.show", safe.clone(), || {
-        println!("{}", serde_json::to_string_pretty(&safe).unwrap_or_default())
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&safe).unwrap_or_default()
+        )
     });
     Ok(())
 }
@@ -107,7 +130,10 @@ pub fn cmd_add(
             "That name produces an empty slug — pass --slug to set one explicitly",
         ));
     }
-    if projects(&vault).iter().any(|p| p.get("id").and_then(|v| v.as_str()) == Some(&leaf_id)) {
+    if projects(&vault)
+        .iter()
+        .any(|p| p.get("id").and_then(|v| v.as_str()) == Some(&leaf_id))
+    {
         // Idempotency for provisioning scripts: re-running is not an error.
         if if_missing {
             crate::out::ok(
@@ -117,7 +143,9 @@ pub fn cmd_add(
             );
             return Ok(());
         }
-        return Err(CliError::conflict(format!("Project '{leaf_id}' already exists")));
+        return Err(CliError::conflict(format!(
+            "Project '{leaf_id}' already exists"
+        )));
     }
 
     let mut new_project = json!({ "id": leaf_id, "name": trimmed });
@@ -137,13 +165,22 @@ pub fn cmd_add(
     for i in 1..parts.len() {
         let ancestor_name = parts[..i].join("/");
         let ancestor_id = slugify(&ancestor_name);
-        if !projects(&vault).iter().any(|p| p.get("id").and_then(|v| v.as_str()) == Some(&ancestor_id))
+        if !projects(&vault)
+            .iter()
+            .any(|p| p.get("id").and_then(|v| v.as_str()) == Some(&ancestor_id))
         {
             projects_mut(&mut vault).push(json!({ "id": ancestor_id, "name": ancestor_name }));
         }
     }
-    let created_id = new_project.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
-    let chunk_count = new_project.get("chunks").and_then(|c| c.as_array()).map_or(0, |a| a.len());
+    let created_id = new_project
+        .get("id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let chunk_count = new_project
+        .get("chunks")
+        .and_then(|c| c.as_array())
+        .map_or(0, |a| a.len());
     projects_mut(&mut vault).push(new_project);
     access.save(&vault)?;
     let custom = slug.is_some();
@@ -166,8 +203,16 @@ pub fn cmd_rename(
 ) -> CliResult {
     let mut vault = access.load_vault()?;
     let idx = find_project_index(&vault, query)?;
-    let old_name = projects(&vault)[idx].get("name").and_then(|v| v.as_str()).unwrap_or("").to_string();
-    let old_id = projects(&vault)[idx].get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let old_name = projects(&vault)[idx]
+        .get("name")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let old_id = projects(&vault)[idx]
+        .get("id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
     let new_name = new_name.unwrap_or(&old_name).to_string();
     let new_name = new_name.as_str();
     if new_name == old_name && new_slug.is_none() {
@@ -185,9 +230,13 @@ pub fn cmd_rename(
         None => slugify(new_name),
     };
     if new_id != old_id
-        && projects(&vault).iter().any(|p| p.get("id").and_then(|v| v.as_str()) == Some(&new_id))
+        && projects(&vault)
+            .iter()
+            .any(|p| p.get("id").and_then(|v| v.as_str()) == Some(&new_id))
     {
-        return Err(CliError::conflict(format!("Project '{new_id}' already exists")));
+        return Err(CliError::conflict(format!(
+            "Project '{new_id}' already exists"
+        )));
     }
 
     // Sub-projects are names sharing a `parent/` prefix, so the rename has to
@@ -198,7 +247,10 @@ pub fn cmd_rename(
         .iter()
         .filter(|p| {
             p.get("id").and_then(|v| v.as_str()) != Some(&old_id)
-                && p.get("name").and_then(|v| v.as_str()).unwrap_or("").starts_with(&child_prefix)
+                && p.get("name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .starts_with(&child_prefix)
         })
         .filter_map(|p| p.get("id").and_then(|v| v.as_str()).map(String::from))
         .collect();
@@ -220,7 +272,11 @@ pub fn cmd_rename(
                 .iter()
                 .position(|p| p.get("id").and_then(|v| v.as_str()) == Some(&cid))
                 .ok_or("child project vanished mid-rename")?;
-            let n = list[ci].get("name").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let n = list[ci]
+                .get("name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
             (ci, n, data::has_custom_slug(&list[ci]))
         };
         let next_name = format!("{new_name}{}", &child_name[old_name.len()..]);
@@ -232,9 +288,11 @@ pub fn cmd_rename(
         let base = slugify(&next_name);
         let mut fid = base.clone();
         let mut n = 1;
-        while projects(&vault).iter().enumerate().any(|(i, p)| {
-            i != ci && p.get("id").and_then(|v| v.as_str()) == Some(&fid)
-        }) {
+        while projects(&vault)
+            .iter()
+            .enumerate()
+            .any(|(i, p)| i != ci && p.get("id").and_then(|v| v.as_str()) == Some(&fid))
+        {
             fid = format!("{base}-{n}");
             n += 1;
         }
@@ -246,7 +304,11 @@ pub fn cmd_rename(
         list[ci]["name"] = json!(next_name);
     }
 
-    let touched = if id_remap.is_empty() { 0 } else { remap_entry_projects(&mut vault, &id_remap) };
+    let touched = if id_remap.is_empty() {
+        0
+    } else {
+        remap_entry_projects(&mut vault, &id_remap)
+    };
     access.save(&vault)?;
     out::ok(
         "project.rename",
@@ -258,8 +320,10 @@ pub fn cmd_rename(
         || {
             println!("Renamed project '{old_name}' → '{new_name}'");
             if new_id != old_id {
-                println!("Slug '{old_id}' → '{new_id}' ({touched} entr{} repointed)",
-                    if touched == 1 { "y" } else { "ies" });
+                println!(
+                    "Slug '{old_id}' → '{new_id}' ({touched} entr{} repointed)",
+                    if touched == 1 { "y" } else { "ies" }
+                );
             }
         },
     );
@@ -272,7 +336,9 @@ pub fn cmd_rename(
 fn remap_entry_projects(vault: &mut Value, remap: &[(String, String)]) -> usize {
     let mut touched = 0usize;
     for entry in entries_mut(vault).iter_mut() {
-        let Some(ids) = entry.get("projectIds").and_then(|v| v.as_array()) else { continue };
+        let Some(ids) = entry.get("projectIds").and_then(|v| v.as_array()) else {
+            continue;
+        };
         let next: Vec<Value> = ids
             .iter()
             .map(|id| {
@@ -294,17 +360,28 @@ fn remap_entry_projects(vault: &mut Value, remap: &[(String, String)]) -> usize 
 pub fn cmd_rm(access: &Access, query: &str, yes: bool) -> CliResult {
     let mut vault = access.load_vault()?;
     let idx = find_project_index(&vault, query)?;
-    let id = projects(&vault)[idx].get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let id = projects(&vault)[idx]
+        .get("id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
     if id == "Universal" {
         return Err("The Universal project cannot be deleted".into());
     }
-    let name = projects(&vault)[idx].get("name").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let name = projects(&vault)[idx]
+        .get("name")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
     let child_prefix = format!("{name}/");
     let child_ids: Vec<String> = projects(&vault)
         .iter()
         .filter(|p| {
             p.get("id").and_then(|v| v.as_str()) != Some(&id)
-                && p.get("name").and_then(|v| v.as_str()).unwrap_or("").starts_with(&child_prefix)
+                && p.get("name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .starts_with(&child_prefix)
         })
         .filter_map(|p| p.get("id").and_then(|v| v.as_str()).map(String::from))
         .collect();
@@ -324,7 +401,11 @@ pub fn cmd_rm(access: &Access, query: &str, yes: bool) -> CliResult {
 
     for entry in entries_mut(&mut vault).iter_mut() {
         if let Some(ids) = entry.get("projectIds").and_then(|v| v.as_array()) {
-            let kept: Vec<Value> = ids.iter().filter(|x| x.as_str() != Some(&id)).cloned().collect();
+            let kept: Vec<Value> = ids
+                .iter()
+                .filter(|x| x.as_str() != Some(&id))
+                .cloned()
+                .collect();
             entry["projectIds"] = json!(kept);
         }
     }
@@ -341,7 +422,11 @@ pub fn cmd_rm(access: &Access, query: &str, yes: bool) -> CliResult {
                 .iter()
                 .position(|p| p.get("id").and_then(|v| v.as_str()) == Some(&cid))
                 .ok_or("child project vanished mid-delete")?;
-            let n = list[ci].get("name").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let n = list[ci]
+                .get("name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
             (ci, n, data::has_custom_slug(&list[ci]))
         };
         let next_name = child_name[name.len() + 1..].to_string();
@@ -382,7 +467,11 @@ pub fn cmd_rm(access: &Access, query: &str, yes: bool) -> CliResult {
         let mut ids: Vec<String> = entry
             .get("projectIds")
             .and_then(|v| v.as_array())
-            .map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect())
+            .map(|a| {
+                a.iter()
+                    .filter_map(|x| x.as_str().map(String::from))
+                    .collect()
+            })
             .unwrap_or_default();
         ids.retain(|i| i == "Universal" || live.iter().any(|l| l == i));
         if !ids.iter().any(|i| i == "Universal") {
@@ -415,13 +504,17 @@ pub fn cat_ls(access: &Access) -> CliResult {
                     .filter(|e| {
                         e.get("categories")
                             .and_then(|v| v.as_array())
-                            .map_or(false, |a| a.iter().any(|x| x.as_str() == Some(c.as_str())))
+                            .is_some_and(|a| a.iter().any(|x| x.as_str() == Some(c.as_str())))
                     })
                     .count();
                 json!({ "name": c, "entry_count": n })
             })
             .collect();
-        out::ok("category.ls", json!({ "count": rows.len(), "categories": rows }), || {});
+        out::ok(
+            "category.ls",
+            json!({ "count": rows.len(), "categories": rows }),
+            || {},
+        );
         return Ok(());
     }
     if cats.is_empty() {
@@ -434,7 +527,7 @@ pub fn cat_ls(access: &Access) -> CliResult {
             .filter(|e| {
                 e.get("categories")
                     .and_then(|v| v.as_array())
-                    .map_or(false, |a| a.iter().any(|x| x.as_str() == Some(&c)))
+                    .is_some_and(|a| a.iter().any(|x| x.as_str() == Some(&c)))
             })
             .count();
         println!("{}  {n}", cell(&c, 34));
@@ -450,13 +543,17 @@ pub fn cat_add(access: &Access, name: &str) -> CliResult {
         return Err("Name is required".into());
     }
     if data::categories(&vault).iter().any(|c| c == &name) {
-        return Err(CliError::conflict(format!("Category '{name}' already exists")));
+        return Err(CliError::conflict(format!(
+            "Category '{name}' already exists"
+        )));
     }
     categories_mut(&mut vault).push(json!(name));
     access.save(&vault)?;
-    out::ok("category.add", json!({ "name": name, "created": true }), || {
-        println!("Created category '{name}'")
-    });
+    out::ok(
+        "category.add",
+        json!({ "name": name, "created": true }),
+        || println!("Created category '{name}'"),
+    );
     Ok(())
 }
 
@@ -466,7 +563,9 @@ pub fn cat_rename(access: &Access, name: &str, new_name: &str) -> CliResult {
         return Err(CliError::not_found(format!("No category '{name}'")));
     }
     if data::categories(&vault).iter().any(|c| c == new_name) {
-        return Err(CliError::conflict(format!("Category '{new_name}' already exists")));
+        return Err(CliError::conflict(format!(
+            "Category '{new_name}' already exists"
+        )));
     }
     // Categories nest by slash exactly as projects do — carry the sub-tree.
     let prefix = format!("{name}/");
@@ -480,20 +579,26 @@ pub fn cat_rename(access: &Access, name: &str, new_name: &str) -> CliResult {
         }
     };
 
-    let next: Vec<Value> =
-        data::categories(&vault).iter().map(|c| json!(remap(c))).collect();
+    let next: Vec<Value> = data::categories(&vault)
+        .iter()
+        .map(|c| json!(remap(c)))
+        .collect();
     *categories_mut(&mut vault) = next;
     for entry in entries_mut(&mut vault).iter_mut() {
         if let Some(cats) = entry.get("categories").and_then(|v| v.as_array()) {
-            let mapped: Vec<Value> =
-                cats.iter().map(|c| json!(remap(c.as_str().unwrap_or("")))).collect();
+            let mapped: Vec<Value> = cats
+                .iter()
+                .map(|c| json!(remap(c.as_str().unwrap_or(""))))
+                .collect();
             entry["categories"] = json!(mapped);
         }
     }
     access.save(&vault)?;
-    out::ok("category.rename", json!({ "from": name, "to": new_name }), || {
-        println!("Renamed category '{name}' → '{new_name}'")
-    });
+    out::ok(
+        "category.rename",
+        json!({ "from": name, "to": new_name }),
+        || println!("Renamed category '{name}' → '{new_name}'"),
+    );
     Ok(())
 }
 
@@ -518,13 +623,19 @@ pub fn cat_rm(access: &Access, name: &str, yes: bool) -> CliResult {
         return Ok(());
     }
 
-    let kept: Vec<Value> =
-        cats.iter().filter(|c| !doomed(c)).map(|c| json!(c)).collect();
+    let kept: Vec<Value> = cats
+        .iter()
+        .filter(|c| !doomed(c))
+        .map(|c| json!(c))
+        .collect();
     *categories_mut(&mut vault) = kept;
     for entry in entries_mut(&mut vault).iter_mut() {
         if let Some(list) = entry.get("categories").and_then(|v| v.as_array()) {
-            let kept: Vec<Value> =
-                list.iter().filter(|c| !doomed(c.as_str().unwrap_or(""))).cloned().collect();
+            let kept: Vec<Value> = list
+                .iter()
+                .filter(|c| !doomed(c.as_str().unwrap_or("")))
+                .cloned()
+                .collect();
             entry["categories"] = json!(kept);
         }
     }

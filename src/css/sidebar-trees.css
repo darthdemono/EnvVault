@@ -61,7 +61,7 @@
 }
 
 .project-count {
-  font-family: 'JetBrains Mono', monospace;
+  font-family: "JetBrains Mono", monospace;
   font-size: 9px;
   background: var(--surface3);
   border-radius: 4px;
@@ -74,7 +74,7 @@
   grid-column: 1 / -1;
   font-size: 9.5px;
   font-weight: 700;
-  letter-spacing: .1em;
+  letter-spacing: 0.1em;
   text-transform: uppercase;
   color: var(--text3);
   padding: 10px 4px 4px;
@@ -115,13 +115,20 @@
 }
 
 .sidebar-order-row.sidebar-order-hidden {
-  opacity: .5;
+  opacity: 0.5;
   border-style: dashed;
 }
 
-.sidebar-order-row[draggable="true"] { cursor: grab; }
-.sidebar-order-row.dragging { opacity: .4; }
-.sidebar-order-row.drag-over { border-color: var(--accent); box-shadow: inset 0 2px 0 var(--accent); }
+.sidebar-order-row[draggable="true"] {
+  cursor: grab;
+}
+.sidebar-order-row.dragging {
+  opacity: 0.4;
+}
+.sidebar-order-row.drag-over {
+  border-color: var(--accent);
+  box-shadow: inset 0 2px 0 var(--accent);
+}
 
 .sidebar-order-grip {
   cursor: grab;
@@ -130,7 +137,9 @@
   margin-right: 6px;
   user-select: none;
 }
-.sidebar-order-label { flex: 1; }
+.sidebar-order-label {
+  flex: 1;
+}
 
 .sidebar-order-label {
   font-size: 12px;
@@ -205,10 +214,19 @@
   margin-bottom: 3px;
   font-size: 11px;
 }
-.env-link-row--match  { background: color-mix(in srgb, var(--accent) 8%, transparent); }
-.env-link-row--create { background: color-mix(in srgb, #f5a623 8%, transparent); }
-.env-link-row--linked { background: var(--surface2); opacity: 0.65; }
-.env-link-row--skip   { opacity: 0.45; }
+.env-link-row--match {
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+.env-link-row--create {
+  background: color-mix(in srgb, #f5a623 8%, transparent);
+}
+.env-link-row--linked {
+  background: var(--surface2);
+  opacity: 0.65;
+}
+.env-link-row--skip {
+  opacity: 0.45;
+}
 
 .env-link-check-label {
   display: flex;
@@ -233,8 +251,18 @@
   white-space: nowrap;
   flex-shrink: 0;
 }
-.env-link-badge--vault  { background: color-mix(in srgb, var(--accent) 18%, transparent); color: var(--accent); }
-.env-link-badge--new    { background: color-mix(in srgb, #f5a623 18%, transparent); color: #f5a623; }
-.env-link-badge--linked { background: var(--surface); color: var(--text3); }
-.env-link-conf { opacity: 0.7; }
-
+.env-link-badge--vault {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  color: var(--accent);
+}
+.env-link-badge--new {
+  background: color-mix(in srgb, #f5a623 18%, transparent);
+  color: #f5a623;
+}
+.env-link-badge--linked {
+  background: var(--surface);
+  color: var(--text3);
+}
+.env-link-conf {
+  opacity: 0.7;
+}

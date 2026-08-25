@@ -9,7 +9,11 @@ use crate::refs::Resolver;
 use serde_json::Value;
 
 fn fields_of(chunk: &Value) -> Vec<Value> {
-    chunk.get("fields").and_then(|v| v.as_array()).cloned().unwrap_or_default()
+    chunk
+        .get("fields")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default()
 }
 
 fn s<'a>(v: &'a Value, key: &str) -> &'a str {
@@ -33,9 +37,9 @@ fn yaml_str(v: &str) -> String {
     if v.is_empty() {
         return "\"\"".into();
     }
-    if v.chars().any(|c| {
-        c.is_whitespace() || "':#[]{},|>&*!\"@`".contains(c)
-    }) {
+    if v.chars()
+        .any(|c| c.is_whitespace() || "':#[]{},|>&*!\"@`".contains(c))
+    {
         return serde_json::to_string(v).unwrap_or_else(|_| format!("\"{v}\""));
     }
     v.to_string()
@@ -50,9 +54,16 @@ fn quote_item(v: &str) -> String {
 }
 
 fn split_items(raw: &str, newline_only: bool) -> Vec<String> {
-    let parts: Vec<&str> =
-        if newline_only { raw.split('\n').collect() } else { raw.split(['\n', ',']).collect() };
-    parts.iter().map(|p| p.trim().to_string()).filter(|p| !p.is_empty()).collect()
+    let parts: Vec<&str> = if newline_only {
+        raw.split('\n').collect()
+    } else {
+        raw.split(['\n', ',']).collect()
+    };
+    parts
+        .iter()
+        .map(|p| p.trim().to_string())
+        .filter(|p| !p.is_empty())
+        .collect()
 }
 
 // ── WireGuard ─────────────────────────────────────────────────────────────────
@@ -89,7 +100,11 @@ pub struct Compose {
 pub fn export_docker_compose(project: &Value, r: &Resolver) -> Compose {
     let chunks = chunks_of(project);
     let by_type = |t: &str| -> Vec<Value> {
-        chunks.iter().filter(|c| s(c, "chunk_type") == t).cloned().collect()
+        chunks
+            .iter()
+            .filter(|c| s(c, "chunk_type") == t)
+            .cloned()
+            .collect()
     };
     let service_chunks = by_type("docker_service");
     let network_chunks = by_type("docker_network");
@@ -179,7 +194,13 @@ pub fn export_docker_compose(project: &Value, r: &Resolver) -> Compose {
             }
 
             const PRIO: [&str; 8] = [
-                "image", "container_name", "user", "hostname", "network_mode", "pid", "entrypoint",
+                "image",
+                "container_name",
+                "user",
+                "hostname",
+                "network_mode",
+                "pid",
+                "entrypoint",
                 "command",
             ];
             let mut remaining = scalars.clone();
@@ -196,7 +217,10 @@ pub fn export_docker_compose(project: &Value, r: &Resolver) -> Compose {
             if !port_items.is_empty() {
                 out.push("    ports:".into());
                 for p in &port_items {
-                    out.push(format!("      - {}", serde_json::to_string(p).unwrap_or_default()));
+                    out.push(format!(
+                        "      - {}",
+                        serde_json::to_string(p).unwrap_or_default()
+                    ));
                 }
             }
 
@@ -214,7 +238,13 @@ pub fn export_docker_compose(project: &Value, r: &Resolver) -> Compose {
                         let var_name: String = key
                             .to_uppercase()
                             .chars()
-                            .map(|c| if c.is_ascii_alphanumeric() || c == '_' { c } else { '_' })
+                            .map(|c| {
+                                if c.is_ascii_alphanumeric() || c == '_' {
+                                    c
+                                } else {
+                                    '_'
+                                }
+                            })
                             .collect();
                         out.push(format!("      - {key}=${{{var_name}}}"));
                         // The .env beside a compose file is pure secret
@@ -253,7 +283,10 @@ pub fn export_docker_compose(project: &Value, r: &Resolver) -> Compose {
         }
     }
 
-    Compose { yaml: out.join("\n"), env_file: env_lines.join("\n") }
+    Compose {
+        yaml: out.join("\n"),
+        env_file: env_lines.join("\n"),
+    }
 }
 
 // ── nginx ─────────────────────────────────────────────────────────────────────
@@ -261,7 +294,11 @@ pub fn export_docker_compose(project: &Value, r: &Resolver) -> Compose {
 pub fn export_nginx(project: &Value, r: &Resolver) -> String {
     let chunks = chunks_of(project);
     let of_type = |t: &str| -> Vec<Value> {
-        chunks.iter().filter(|c| s(c, "chunk_type") == t).cloned().collect()
+        chunks
+            .iter()
+            .filter(|c| s(c, "chunk_type") == t)
+            .cloned()
+            .collect()
     };
     let upstreams = of_type("nginx_upstream");
     let servers = of_type("nginx_server");
@@ -370,7 +407,11 @@ pub fn export_project_env(project: &Value, r: &Resolver) -> EnvOut {
         }
         out.push(String::new());
     }
-    EnvOut { text: out.join("\n"), unresolved, had_chunks }
+    EnvOut {
+        text: out.join("\n"),
+        unresolved,
+        had_chunks,
+    }
 }
 
 // ── Single chunk → its native config text ─────────────────────────────────────
@@ -384,7 +425,11 @@ pub fn chunk_to_string(chunk: &Value, r: &Resolver) -> String {
 
     match ctype {
         "wg_interface" | "wg_peer" => {
-            let header = if ctype == "wg_interface" { "[Interface]" } else { "[Peer]" };
+            let header = if ctype == "wg_interface" {
+                "[Interface]"
+            } else {
+                "[Peer]"
+            };
             let mut lines = vec![header.to_string()];
             for f in fields_of(chunk) {
                 lines.push(format!("{} = {}", s(&f, "key"), rv(s(&f, "value"), &f)));
@@ -418,7 +463,11 @@ pub fn chunk_to_string(chunk: &Value, r: &Resolver) -> String {
                     .unwrap_or_default(),
                 "nginx_upstream" => {
                     let n = s(chunk, "name");
-                    if n.is_empty() { String::new() } else { format!(" {n}") }
+                    if n.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" {n}")
+                    }
                 }
                 _ => String::new(),
             };
@@ -452,7 +501,11 @@ pub fn chunk_to_string(chunk: &Value, r: &Resolver) -> String {
 }
 
 fn service_chunk_to_yaml(sc: &Value) -> String {
-    let svc_name = s(sc, "name").split_whitespace().collect::<Vec<_>>().join("_").to_lowercase();
+    let svc_name = s(sc, "name")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join("_")
+        .to_lowercase();
     let mut out = vec![format!("{svc_name}:")];
 
     let mut env_fields: Vec<Value> = Vec::new();
@@ -487,7 +540,13 @@ fn service_chunk_to_yaml(sc: &Value) -> String {
     }
 
     const PRIO: [&str; 8] = [
-        "image", "container_name", "user", "hostname", "network_mode", "pid", "entrypoint",
+        "image",
+        "container_name",
+        "user",
+        "hostname",
+        "network_mode",
+        "pid",
+        "entrypoint",
         "command",
     ];
     let mut remaining = scalars;
@@ -503,7 +562,10 @@ fn service_chunk_to_yaml(sc: &Value) -> String {
     if !port_items.is_empty() {
         out.push("  ports:".into());
         for p in &port_items {
-            out.push(format!("    - {}", serde_json::to_string(p).unwrap_or_default()));
+            out.push(format!(
+                "    - {}",
+                serde_json::to_string(p).unwrap_or_default()
+            ));
         }
     }
     if !env_fields.is_empty() {
@@ -562,7 +624,10 @@ pub fn yaml(entries: &[Value]) -> String {
     let mut out = String::from("# EnvVault Export\n");
     for e in entries {
         let p = crate::data::env_key(s(e, "provider"));
-        out.push_str(&format!("{p}: {}\n", serde_json::to_string(s(e, "api_key")).unwrap_or_default()));
+        out.push_str(&format!(
+            "{p}: {}\n",
+            serde_json::to_string(s(e, "api_key")).unwrap_or_default()
+        ));
     }
     out
 }

@@ -5,22 +5,34 @@
 //! sit earlier in the array — the same class of bug as identifying an entry by
 //! array index (see the invariants in CLAUDE.md).
 
-use serde_json::{json, Value};
 use crate::error::{CliError, CliResult};
+use serde_json::{json, Value};
 
 pub fn entries(vault: &Value) -> Vec<Value> {
-    vault.get("api_keys").and_then(|v| v.as_array()).cloned().unwrap_or_default()
+    vault
+        .get("api_keys")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default()
 }
 
 pub fn projects(vault: &Value) -> Vec<Value> {
-    vault.get("projects").and_then(|v| v.as_array()).cloned().unwrap_or_default()
+    vault
+        .get("projects")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default()
 }
 
 pub fn categories(vault: &Value) -> Vec<String> {
     vault
         .get("user_categories")
         .and_then(|v| v.as_array())
-        .map(|a| a.iter().filter_map(|c| c.as_str().map(String::from)).collect())
+        .map(|a| {
+            a.iter()
+                .filter_map(|c| c.as_str().map(String::from))
+                .collect()
+        })
         .unwrap_or_default()
 }
 
@@ -39,7 +51,11 @@ pub fn projects_mut(vault: &mut Value) -> &mut Vec<Value> {
 }
 
 pub fn categories_mut(vault: &mut Value) -> &mut Vec<Value> {
-    if !vault.get("user_categories").map(|v| v.is_array()).unwrap_or(false) {
+    if !vault
+        .get("user_categories")
+        .map(|v| v.is_array())
+        .unwrap_or(false)
+    {
         vault["user_categories"] = json!([]);
     }
     vault["user_categories"].as_array_mut().unwrap()
@@ -62,7 +78,10 @@ pub fn find_entry_index(vault: &Value, query: &str) -> CliResult<usize> {
             .enumerate()
             .filter(|(_, e)| {
                 provider_of(e).eq_ignore_ascii_case(prov)
-                    && e.get("key_id").and_then(|v| v.as_str()).unwrap_or("").eq_ignore_ascii_case(kid)
+                    && e.get("key_id")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .eq_ignore_ascii_case(kid)
             })
             .map(|(i, _)| i)
             .collect();
@@ -70,7 +89,9 @@ pub fn find_entry_index(vault: &Value, query: &str) -> CliResult<usize> {
             return Ok(hits[0]);
         }
         if hits.is_empty() {
-            return Err(CliError::not_found(format!("No entry '{prov}' with key id '{kid}'")));
+            return Err(CliError::not_found(format!(
+                "No entry '{prov}' with key id '{kid}'"
+            )));
         }
     }
 
@@ -106,7 +127,11 @@ fn ambiguous(query: &str, hits: &[usize], list: &[Value]) -> CliError {
         .iter()
         .map(|i| {
             let e = &list[*i];
-            match e.get("key_id").and_then(|v| v.as_str()).filter(|s| !s.is_empty()) {
+            match e
+                .get("key_id")
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty())
+            {
                 Some(k) => format!("{}:{k}", provider_of(e)),
                 None => provider_of(e).to_string(),
             }
@@ -189,7 +214,9 @@ pub fn validate_slug(raw: &str, existing: &[Value], self_id: Option<&str>) -> Cl
         let id = p.get("id").and_then(|v| v.as_str());
         id == Some(slug.as_str()) && id != self_id
     }) {
-        return Err(CliError::conflict(format!("Slug '{slug}' is already taken")));
+        return Err(CliError::conflict(format!(
+            "Slug '{slug}' is already taken"
+        )));
     }
     Ok(slug)
 }
@@ -214,13 +241,19 @@ pub fn find_project_index(vault: &Value, query: &str) -> CliResult<usize> {
         .iter()
         .enumerate()
         .filter(|(_, p)| {
-            p.get("name").and_then(|v| v.as_str()).unwrap_or("").to_lowercase().contains(&q)
+            p.get("name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_lowercase()
+                .contains(&q)
         })
         .map(|(i, _)| i)
         .collect();
     match hits.len() {
         1 => Ok(hits[0]),
-        0 => Err(CliError::not_found(format!("No project matching '{query}'"))),
+        0 => Err(CliError::not_found(format!(
+            "No project matching '{query}'"
+        ))),
         _ => {
             let names: Vec<&str> = hits
                 .iter()
@@ -238,13 +271,20 @@ pub fn find_project_index(vault: &Value, query: &str) -> CliResult<usize> {
 
 /// Locate exactly one chunk inside a project, by id or by name.
 pub fn find_chunk_index(project: &Value, query: &str) -> CliResult<usize> {
-    let chunks = project.get("chunks").and_then(|v| v.as_array()).cloned().unwrap_or_default();
-    if let Some(i) = chunks.iter().position(|c| c.get("id").and_then(|v| v.as_str()) == Some(query))
+    let chunks = project
+        .get("chunks")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+    if let Some(i) = chunks
+        .iter()
+        .position(|c| c.get("id").and_then(|v| v.as_str()) == Some(query))
     {
         return Ok(i);
     }
-    if let Some(i) =
-        chunks.iter().position(|c| c.get("name").and_then(|v| v.as_str()) == Some(query))
+    if let Some(i) = chunks
+        .iter()
+        .position(|c| c.get("name").and_then(|v| v.as_str()) == Some(query))
     {
         return Ok(i);
     }
@@ -253,7 +293,11 @@ pub fn find_chunk_index(project: &Value, query: &str) -> CliResult<usize> {
         .iter()
         .enumerate()
         .filter(|(_, c)| {
-            c.get("name").and_then(|v| v.as_str()).unwrap_or("").to_lowercase().contains(&q)
+            c.get("name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_lowercase()
+                .contains(&q)
         })
         .map(|(i, _)| i)
         .collect();
@@ -263,7 +307,12 @@ pub fn find_chunk_index(project: &Value, query: &str) -> CliResult<usize> {
         _ => {
             let names: Vec<&str> = hits
                 .iter()
-                .map(|i| chunks[*i].get("name").and_then(|v| v.as_str()).unwrap_or(""))
+                .map(|i| {
+                    chunks[*i]
+                        .get("name")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                })
                 .collect();
             Err(CliError::ambiguous(format!(
                 "'{query}' matches {} chunks: {}",
@@ -279,8 +328,17 @@ pub fn find_chunk_index(project: &Value, query: &str) -> CliResult<usize> {
 pub const STABLE_PROJECT_TYPES: [&str; 4] = ["generic", "wireguard", "docker", "nginx"];
 
 pub const ALL_PROJECT_TYPES: [&str; 11] = [
-    "generic", "wireguard", "docker", "nginx", "kubernetes", "ssh_config", "traefik", "apache",
-    "haproxy", "ansible", "postgres",
+    "generic",
+    "wireguard",
+    "docker",
+    "nginx",
+    "kubernetes",
+    "ssh_config",
+    "traefik",
+    "apache",
+    "haproxy",
+    "ansible",
+    "postgres",
 ];
 
 pub fn is_experimental_project_type(t: &str) -> bool {

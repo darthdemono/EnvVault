@@ -33,12 +33,15 @@ pub fn render(template: &str, r: &Resolver) -> RenderResult {
     while i < bytes.len() {
         // `$${…}` → literal `${…}`, so a rendered file can still contain the
         // syntax (a compose file's own ${VAR}, for instance).
-        if bytes[i] == '$' && i + 1 < bytes.len() && bytes[i + 1] == '$' {
-            if i + 2 < bytes.len() && bytes[i + 2] == '{' {
-                out_text.push('$');
-                i += 2;
-                continue;
-            }
+        if bytes[i] == '$'
+            && i + 1 < bytes.len()
+            && bytes[i + 1] == '$'
+            && i + 2 < bytes.len()
+            && bytes[i + 2] == '{'
+        {
+            out_text.push('$');
+            i += 2;
+            continue;
         }
         if bytes[i] == '$' && i + 1 < bytes.len() && bytes[i + 1] == '{' {
             if let Some(end) = (i + 2..bytes.len()).find(|&j| bytes[j] == '}') {
@@ -63,7 +66,11 @@ pub fn render(template: &str, r: &Resolver) -> RenderResult {
         i += 1;
     }
 
-    RenderResult { text: out_text, resolved, unresolved }
+    RenderResult {
+        text: out_text,
+        resolved,
+        unresolved,
+    }
 }
 
 pub fn cmd_render(
@@ -105,7 +112,13 @@ pub fn cmd_render(
                 "bytes": result.text.len(),
                 "written": false,
             }),
-            || println!("Would write {} bytes to {}", result.text.len(), out_path.unwrap().display()),
+            || {
+                println!(
+                    "Would write {} bytes to {}",
+                    result.text.len(),
+                    out_path.unwrap().display()
+                )
+            },
         );
         return Ok(());
     }
@@ -124,7 +137,11 @@ pub fn cmd_render(
                     "written": true,
                 }),
                 || {
-                    eprintln!("Wrote {} ({} reference(s) resolved)", p.display(), result.resolved);
+                    eprintln!(
+                        "Wrote {} ({} reference(s) resolved)",
+                        p.display(),
+                        result.resolved
+                    );
                 },
             );
         }

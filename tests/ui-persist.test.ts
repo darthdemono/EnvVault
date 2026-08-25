@@ -10,13 +10,26 @@
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import {
-  st, Settings, applySidebarLayout, saveViewState, restoreViewState,
-  clearAllFilters, pushRecentSearch, resetViewState, RECENT_SEARCH_MAX,
-  SIDEBAR_MIN_W, SIDEBAR_MAX_W,
+  st,
+  Settings,
+  applySidebarLayout,
+  saveViewState,
+  restoreViewState,
+  clearAllFilters,
+  pushRecentSearch,
+  resetViewState,
+  RECENT_SEARCH_MAX,
+  SIDEBAR_MIN_W,
+  SIDEBAR_MAX_W,
 } from '../src/ts/state';
 import {
-  passwordStrength, relativeTime, openSearchHistory, closeSearchHistory,
-  wireRevealButtons, resetReveal, wireCapsLockHint,
+  passwordStrength,
+  relativeTime,
+  openSearchHistory,
+  closeSearchHistory,
+  wireRevealButtons,
+  resetReveal,
+  wireCapsLockHint,
 } from '../src/ts/ui-qol';
 import { updateActiveFilterBar, activeFilterLabels } from '../src/ts/render';
 import { loadRealIndexHtml, makeEntry, makeProject, makeVault } from './helpers';
@@ -25,7 +38,13 @@ const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getEleme
 
 beforeEach(() => {
   loadRealIndexHtml();
-  Settings.setAll({ rememberFilters: true, lastView: null, recentSearches: [], sidebarWidth: 0, sidebarCollapsed: false } as any);
+  Settings.setAll({
+    rememberFilters: true,
+    lastView: null,
+    recentSearches: [],
+    sidebarWidth: 0,
+    sidebarCollapsed: false,
+  } as any);
   resetViewState();
 });
 
@@ -83,10 +102,19 @@ describe('view persistence', () => {
   beforeEach(() => {
     st.vault = makeVault({
       api_keys: [
-        makeEntry({ provider: 'Stripe', environment: 'production', tags: ['billing'], price_type: 'paid', projectIds: ['Universal', 'p-web'] }),
+        makeEntry({
+          provider: 'Stripe',
+          environment: 'production',
+          tags: ['billing'],
+          price_type: 'paid',
+          projectIds: ['Universal', 'p-web'],
+        }),
       ],
       user_categories: ['payments'],
-      projects: [makeProject({ id: 'Universal', name: 'Universal' }), makeProject({ id: 'p-web', name: 'Web' })],
+      projects: [
+        makeProject({ id: 'Universal', name: 'Universal' }),
+        makeProject({ id: 'p-web', name: 'Web' }),
+      ],
     });
   });
 
@@ -111,8 +139,12 @@ describe('view persistence', () => {
     // present but invisible — and the filter that hid them is not one the user
     // set this session, so there is no obvious control to undo.
     Settings.set('lastView', {
-      filterType: 'all', filterValue: '', envFilter: '', tagFilter: null,
-      prefixFilter: null, projectIds: ['p-deleted'],
+      filterType: 'all',
+      filterValue: '',
+      envFilter: '',
+      tagFilter: null,
+      prefixFilter: null,
+      projectIds: ['p-deleted'],
     });
     restoreViewState();
     expect(st.currentSelectedProjectIds).toEqual(['Universal']);
@@ -120,8 +152,12 @@ describe('view persistence', () => {
 
   it('drops a category no longer in the vault', () => {
     Settings.set('lastView', {
-      filterType: 'category', filterValue: 'gone', envFilter: '', tagFilter: null,
-      prefixFilter: null, projectIds: [],
+      filterType: 'category',
+      filterValue: 'gone',
+      envFilter: '',
+      tagFilter: null,
+      prefixFilter: null,
+      projectIds: [],
     });
     restoreViewState();
     expect(st.filter.type).toBe('all');
@@ -129,8 +165,12 @@ describe('view persistence', () => {
 
   it('drops an environment no entry uses any more', () => {
     Settings.set('lastView', {
-      filterType: 'all', filterValue: '', envFilter: 'staging', tagFilter: null,
-      prefixFilter: null, projectIds: [],
+      filterType: 'all',
+      filterValue: '',
+      envFilter: 'staging',
+      tagFilter: null,
+      prefixFilter: null,
+      projectIds: [],
     });
     restoreViewState();
     expect(st.currentEnvFilter).toBe('');
@@ -138,8 +178,12 @@ describe('view persistence', () => {
 
   it('drops a tag no entry carries any more', () => {
     Settings.set('lastView', {
-      filterType: 'all', filterValue: '', envFilter: '', tagFilter: 'retired',
-      prefixFilter: null, projectIds: [],
+      filterType: 'all',
+      filterValue: '',
+      envFilter: '',
+      tagFilter: 'retired',
+      prefixFilter: null,
+      projectIds: [],
     });
     restoreViewState();
     expect(st.activeTagFilter).toBeNull();
@@ -150,8 +194,12 @@ describe('view persistence', () => {
     // stores "Acme/Web", and dropping it would clear a working filter.
     st.vault.user_categories = ['Acme/Web'];
     Settings.set('lastView', {
-      filterType: 'category', filterValue: 'Acme', envFilter: '', tagFilter: null,
-      prefixFilter: null, projectIds: [],
+      filterType: 'category',
+      filterValue: 'Acme',
+      envFilter: '',
+      tagFilter: null,
+      prefixFilter: null,
+      projectIds: [],
     });
     restoreViewState();
     expect(st.filter).toEqual({ type: 'category', value: 'Acme' });
@@ -166,8 +214,12 @@ describe('view persistence', () => {
 
   it('restores nothing while rememberFilters is off', () => {
     Settings.set('lastView', {
-      filterType: 'category', filterValue: 'payments', envFilter: '', tagFilter: null,
-      prefixFilter: null, projectIds: [],
+      filterType: 'category',
+      filterValue: 'payments',
+      envFilter: '',
+      tagFilter: null,
+      prefixFilter: null,
+      projectIds: [],
     });
     Settings.set('rememberFilters', false);
     expect(restoreViewState()).toBe(false);
@@ -183,8 +235,12 @@ describe('view persistence', () => {
     // Callers use the return value to decide whether to tell the user their
     // view was restored; the default view is not worth mentioning.
     Settings.set('lastView', {
-      filterType: 'all', filterValue: '', envFilter: '', tagFilter: null,
-      prefixFilter: null, projectIds: ['Universal'],
+      filterType: 'all',
+      filterValue: '',
+      envFilter: '',
+      tagFilter: null,
+      prefixFilter: null,
+      projectIds: ['Universal'],
     });
     expect(restoreViewState()).toBe(false);
   });
@@ -242,7 +298,10 @@ describe('clearAllFilters', () => {
 describe('active filter bar', () => {
   beforeEach(() => {
     st.vault = makeVault({
-      projects: [makeProject({ id: 'Universal', name: 'Universal' }), makeProject({ id: 'p-web', name: 'Web' })],
+      projects: [
+        makeProject({ id: 'Universal', name: 'Universal' }),
+        makeProject({ id: 'p-web', name: 'Web' }),
+      ],
     });
   });
 
@@ -380,7 +439,9 @@ describe('password reveal', () => {
 
     resetReveal('relock-password');
     expect(input.type).toBe('password');
-    expect(document.querySelector('[data-reveal="relock-password"]')!.classList.contains('active')).toBe(false);
+    expect(
+      document.querySelector('[data-reveal="relock-password"]')!.classList.contains('active'),
+    ).toBe(false);
   });
 });
 

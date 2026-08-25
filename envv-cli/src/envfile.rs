@@ -2,10 +2,10 @@
 
 use crate::access::Access;
 use crate::data::{self, entries_mut, find_project_index, projects};
+use crate::error::{CliError, CliResult};
 use crate::out;
 use serde_json::{json, Value};
 use std::path::PathBuf;
-use crate::error::{CliError, CliResult};
 
 pub struct EnvVar {
     pub name: String,
@@ -31,7 +31,9 @@ pub fn parse_env_file(text: &str) -> Vec<EnvVar> {
         if trimmed.is_empty() || trimmed.starts_with('#') {
             continue;
         }
-        let Some(eq) = trimmed.find('=') else { continue };
+        let Some(eq) = trimmed.find('=') else {
+            continue;
+        };
         let mut name = trimmed[..eq].trim().to_string();
         if name.to_uppercase().starts_with("EXPORT ") {
             name = name[7..].trim().to_string();
@@ -84,12 +86,19 @@ pub fn import(access: &Access, file: &PathBuf, opts: &ImportOpts<'_>) -> CliResu
                 .and_then(|v| v.as_str())
                 .unwrap_or("Universal")
                 .to_string();
-            if id == "Universal" { vec!["Universal".into()] } else { vec![id, "Universal".into()] }
+            if id == "Universal" {
+                vec!["Universal".into()]
+            } else {
+                vec![id, "Universal".into()]
+            }
         }
         None => vec!["Universal".into()],
     };
-    let categories: Vec<String> =
-        opts.category.filter(|c| !c.is_empty()).map(|c| vec![c.to_string()]).unwrap_or_default();
+    let categories: Vec<String> = opts
+        .category
+        .filter(|c| !c.is_empty())
+        .map(|c| vec![c.to_string()])
+        .unwrap_or_default();
 
     let mut added = 0usize;
     let mut updated = 0usize;
@@ -99,7 +108,10 @@ pub fn import(access: &Access, file: &PathBuf, opts: &ImportOpts<'_>) -> CliResu
         } else {
             data::entries(&vault).iter().position(|e| {
                 data::provider_of(e) == v.name
-                    && e.get("secretType").and_then(|s| s.as_str()).unwrap_or("api_key") == "env_var"
+                    && e.get("secretType")
+                        .and_then(|s| s.as_str())
+                        .unwrap_or("api_key")
+                        == "env_var"
             })
         };
         match existing {
@@ -152,13 +164,18 @@ pub fn watch(access: &Access, file: &PathBuf, opts: &ImportOpts<'_>) -> CliResul
     use std::sync::mpsc::channel;
 
     if !file.exists() {
-        return Err(CliError::not_found(format!("File not found: {}", file.display())));
+        return Err(CliError::not_found(format!(
+            "File not found: {}",
+            file.display()
+        )));
     }
     println!("Watching {} for changes (Ctrl-C to stop)…", file.display());
 
     let (tx, rx) = channel::<notify::Result<Event>>();
     let mut watcher = recommended_watcher(tx).map_err(|e| CliError::from(e.to_string()))?;
-    watcher.watch(file, RecursiveMode::NonRecursive).map_err(|e| CliError::from(e.to_string()))?;
+    watcher
+        .watch(file, RecursiveMode::NonRecursive)
+        .map_err(|e| CliError::from(e.to_string()))?;
 
     for event in rx {
         match event {
@@ -194,14 +211,17 @@ pub fn export_vault(
                 p.get("id").and_then(|i| i.as_str()) == Some(proj)
                     || p.get("name")
                         .and_then(|n| n.as_str())
-                        .map_or(false, |n| n.to_lowercase().contains(&proj_lc))
+                        .is_some_and(|n| n.to_lowercase().contains(&proj_lc))
             })
             .filter_map(|p| p.get("id").and_then(|i| i.as_str()).map(String::from))
             .collect();
         list.retain(|e| {
-            e.get("projectIds").and_then(|v| v.as_array()).map_or(false, |ids| {
-                ids.iter().any(|id| matching_ids.iter().any(|m| Some(m.as_str()) == id.as_str()))
-            })
+            e.get("projectIds")
+                .and_then(|v| v.as_array())
+                .is_some_and(|ids| {
+                    ids.iter()
+                        .any(|id| matching_ids.iter().any(|m| Some(m.as_str()) == id.as_str()))
+                })
         });
     }
 
@@ -258,7 +278,8 @@ pub fn export_vault(
 pub fn import_json(access: &Access, file: &PathBuf, yes: bool) -> CliResult {
     let raw = std::fs::read_to_string(file)
         .map_err(|e| CliError::from(format!("Cannot read {}: {e}", file.display())))?;
-    let data: Value = serde_json::from_str(&raw).map_err(|e| CliError::from(format!("Not valid JSON: {e}")))?;
+    let data: Value =
+        serde_json::from_str(&raw).map_err(|e| CliError::from(format!("Not valid JSON: {e}")))?;
     let list = data
         .get("api_keys")
         .and_then(|v| v.as_array())
@@ -289,8 +310,10 @@ pub fn import_json(access: &Access, file: &PathBuf, yes: bool) -> CliResult {
         }])),
     });
     access.save(&restored)?;
-    out::ok("import.json", json!({ "entries": list.len(), "replaced": true }), || {
-        println!("Imported {} entries", list.len())
-    });
+    out::ok(
+        "import.json",
+        json!({ "entries": list.len(), "replaced": true }),
+        || println!("Imported {} entries", list.len()),
+    );
     Ok(())
 }

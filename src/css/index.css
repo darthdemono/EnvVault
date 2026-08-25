@@ -3,26 +3,26 @@
    and renders correctly with no network at all. Latin subsets only — the full
    packages ship Greek/Cyrillic/Vietnamese we never render.
    Weights here must match those used in base.css. */
-@import '@fontsource/syne/latin-400.css';
-@import '@fontsource/syne/latin-600.css';
-@import '@fontsource/syne/latin-700.css';
-@import '@fontsource/syne/latin-800.css';
-@import '@fontsource/jetbrains-mono/latin-300.css';
-@import '@fontsource/jetbrains-mono/latin-400.css';
-@import '@fontsource/jetbrains-mono/latin-500.css';
-@import '@fontsource/jetbrains-mono/latin-600.css';
+@import "@fontsource/syne/latin-400.css";
+@import "@fontsource/syne/latin-600.css";
+@import "@fontsource/syne/latin-700.css";
+@import "@fontsource/syne/latin-800.css";
+@import "@fontsource/jetbrains-mono/latin-300.css";
+@import "@fontsource/jetbrains-mono/latin-400.css";
+@import "@fontsource/jetbrains-mono/latin-500.css";
+@import "@fontsource/jetbrains-mono/latin-600.css";
 
-@import './base.css';
-@import './header.css';
-@import './buttons.css';
-@import './search.css';
-@import './sidebar.css';
-@import './content.css';
-@import './cards.css';
-@import './modals.css';
-@import './settings.css';
-@import './feedback.css';
-@import './responsive.css';
-@import './sidebar-trees.css';
-@import './activity-tools.css';
-@import './config-view.css';
+@import "./base.css";
+@import "./header.css";
+@import "./buttons.css";
+@import "./search.css";
+@import "./sidebar.css";
+@import "./content.css";
+@import "./cards.css";
+@import "./modals.css";
+@import "./settings.css";
+@import "./feedback.css";
+@import "./responsive.css";
+@import "./sidebar-trees.css";
+@import "./activity-tools.css";
+@import "./config-view.css";

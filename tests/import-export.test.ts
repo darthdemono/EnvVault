@@ -27,12 +27,19 @@ async function importJson(vault: any): Promise<void> {
   });
   handleFileSelect(input);
   // FileReader resolves on a macrotask.
-  await new Promise(r => setTimeout(r, 50));
+  await new Promise((r) => setTimeout(r, 50));
 }
 
 const INCOMING = {
   api_keys: [
-    { id: 'shared-id', provider: 'NewKey', api_key: 'sk-new', price_type: 'free', categories: [], scopes: [] },
+    {
+      id: 'shared-id',
+      provider: 'NewKey',
+      api_key: 'sk-new',
+      price_type: 'free',
+      categories: [],
+      scopes: [],
+    },
     { provider: 'Second', api_key: 'sk-2', price_type: 'free', categories: [], scopes: [] },
   ],
   projects: [{ id: 'Universal', name: 'Universal' }],
@@ -77,15 +84,20 @@ describe('resetViewState', () => {
 describe('importing a vault', () => {
   beforeEach(() => {
     st.vault = makeVault({
-      projects: [makeProject({ id: 'Universal', name: 'Universal' }), makeProject({ id: 'old-proj', name: 'Old' })],
+      projects: [
+        makeProject({ id: 'Universal', name: 'Universal' }),
+        makeProject({ id: 'old-proj', name: 'Old' }),
+      ],
       user_categories: ['oldcat'],
-      api_keys: [makeEntry({ id: 'shared-id', provider: 'OldKey', projectIds: ['Universal', 'old-proj'] })],
+      api_keys: [
+        makeEntry({ id: 'shared-id', provider: 'OldKey', projectIds: ['Universal', 'old-proj'] }),
+      ],
     });
   });
 
   it('replaces the entries', async () => {
     await importJson(INCOMING);
-    expect(st.vault.api_keys.map(e => e.provider)).toEqual(['NewKey', 'Second']);
+    expect(st.vault.api_keys.map((e) => e.provider)).toEqual(['NewKey', 'Second']);
   });
 
   it('shows the imported entries instead of an empty grid', async () => {
@@ -142,14 +154,17 @@ describe('importing a vault', () => {
       value: [new File(['{"nope":1}'], 'bad.json', { type: 'application/json' })],
     });
     handleFileSelect(input);
-    await new Promise(r => setTimeout(r, 50));
-    expect(st.vault.api_keys.map(e => e.provider)).toEqual(['OldKey']);
+    await new Promise((r) => setTimeout(r, 50));
+    expect(st.vault.api_keys.map((e) => e.provider)).toEqual(['OldKey']);
   });
 });
 
 describe('parseEnvFile', () => {
   it('reads plain KEY=value pairs', () => {
-    expect(parseEnvFile('A=1\nB=2')).toEqual([{ name: 'A', value: '1' }, { name: 'B', value: '2' }]);
+    expect(parseEnvFile('A=1\nB=2')).toEqual([
+      { name: 'A', value: '1' },
+      { name: 'B', value: '2' },
+    ]);
   });
 
   it('skips comments and blank lines', () => {
@@ -161,11 +176,16 @@ describe('parseEnvFile', () => {
   });
 
   it('unwraps matching quotes', () => {
-    expect(parseEnvFile(`A="q"\nB='s'`)).toEqual([{ name: 'A', value: 'q' }, { name: 'B', value: 's' }]);
+    expect(parseEnvFile(`A="q"\nB='s'`)).toEqual([
+      { name: 'A', value: 'q' },
+      { name: 'B', value: 's' },
+    ]);
   });
 
   it('keeps an = inside the value', () => {
-    expect(parseEnvFile('URL=postgres://u:p@h/db?x=1')).toEqual([{ name: 'URL', value: 'postgres://u:p@h/db?x=1' }]);
+    expect(parseEnvFile('URL=postgres://u:p@h/db?x=1')).toEqual([
+      { name: 'URL', value: 'postgres://u:p@h/db?x=1' },
+    ]);
   });
 
   it('joins backslash continuations without inserting a separator', () => {

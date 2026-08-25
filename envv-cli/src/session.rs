@@ -50,7 +50,10 @@ pub fn session_path() -> PathBuf {
         );
         std::process::exit(crate::error::Code::Unavailable as i32);
     };
-    home.join(".local").join("state").join("envv").join("sessions.json")
+    home.join(".local")
+        .join("state")
+        .join("envv")
+        .join("sessions.json")
 }
 
 fn read_all() -> Value {
@@ -124,7 +127,10 @@ fn migrate(entry: &Value) -> Value {
     if entry.get("subjects").is_some() {
         return entry.clone();
     }
-    let subject = entry.get("subject").and_then(|s| s.as_str()).unwrap_or(OWNER_SUBJECT);
+    let subject = entry
+        .get("subject")
+        .and_then(|s| s.as_str())
+        .unwrap_or(OWNER_SUBJECT);
     json!({
         "default": subject,
         "subjects": {
@@ -176,7 +182,10 @@ pub fn list_all() -> Value {
 /// do the obvious thing.
 pub fn save(url: &str, token: &str, subject: &str) -> CliResult {
     let mut all = read_all();
-    let mut entry = all.get(url).map(migrate).unwrap_or_else(|| json!({ "subjects": {} }));
+    let mut entry = all
+        .get(url)
+        .map(migrate)
+        .unwrap_or_else(|| json!({ "subjects": {} }));
     entry["default"] = json!(subject);
     entry["subjects"][subject] = json!({
         "token": token,
@@ -245,7 +254,9 @@ pub fn read_dotenv(path: &std::path::Path) -> CliResult<Vec<(String, String)>> {
             continue;
         }
         let line = line.strip_prefix("export ").unwrap_or(line);
-        let Some((k, v)) = line.split_once('=') else { continue };
+        let Some((k, v)) = line.split_once('=') else {
+            continue;
+        };
         let mut value = v.trim().to_string();
         // compose keeps the quotes out of the value; so do we.
         if value.len() >= 2
@@ -261,7 +272,10 @@ pub fn read_dotenv(path: &std::path::Path) -> CliResult<Vec<(String, String)>> {
 
 /// Pull one variable out of a `.env` file.
 pub fn dotenv_var(path: &std::path::Path, key: &str) -> CliResult<Option<String>> {
-    Ok(read_dotenv(path)?.into_iter().find(|(k, _)| k == key).map(|(_, v)| v))
+    Ok(read_dotenv(path)?
+        .into_iter()
+        .find(|(k, _)| k == key)
+        .map(|(_, v)| v))
 }
 
 /// Resolve the password without ever putting it in argv.
@@ -289,7 +303,11 @@ pub fn resolve_password(
         // Run through the platform shell so the documented form
         // ("pass show envv") works without the caller splitting arguments —
         // and so the same flag works on Windows, where there is no `sh`.
-        let (shell, flag) = if cfg!(windows) { ("cmd", "/C") } else { ("sh", "-c") };
+        let (shell, flag) = if cfg!(windows) {
+            ("cmd", "/C")
+        } else {
+            ("sh", "-c")
+        };
         let out = std::process::Command::new(shell)
             .arg(flag)
             .arg(cmd)
@@ -302,7 +320,11 @@ pub fn resolve_password(
                 out.status.code().unwrap_or(-1)
             )));
         }
-        let pw = String::from_utf8_lossy(&out.stdout).lines().next().unwrap_or("").to_string();
+        let pw = String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .next()
+            .unwrap_or("")
+            .to_string();
         if pw.is_empty() {
             return Err(CliError::invalid("password command produced no output"));
         }

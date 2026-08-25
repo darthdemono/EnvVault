@@ -6,12 +6,14 @@ export function getDescendantProjectIds(projectId: string): string[] {
   if (projectId.startsWith('virtual:')) {
     projectName = projectId.slice(8);
   } else {
-    const project = st.vault.projects.find(p => p.id === projectId);
+    const project = st.vault.projects.find((p) => p.id === projectId);
     if (!project) return [projectId];
     projectName = project.name;
   }
   const prefix = projectName + '/';
-  return st.vault.projects.filter(p => p.name === projectName || p.name.startsWith(prefix)).map(p => p.id);
+  return st.vault.projects
+    .filter((p) => p.name === projectName || p.name.startsWith(prefix))
+    .map((p) => p.id);
 }
 
 export function buildProjectTree(projects: Project[]): any[] {
@@ -21,7 +23,14 @@ export function buildProjectTree(projects: Project[]): any[] {
     const parts = p.name.split('/');
     for (let i = 1; i < parts.length; i++) {
       const anc = parts.slice(0, i).join('/');
-      if (!byName.has(anc)) byName.set(anc, { id: 'virtual:' + anc, name: anc, description: '', children: [], virtual: true });
+      if (!byName.has(anc))
+        byName.set(anc, {
+          id: 'virtual:' + anc,
+          name: anc,
+          description: '',
+          children: [],
+          virtual: true,
+        });
     }
   }
   const tree: any[] = [];
@@ -30,7 +39,8 @@ export function buildProjectTree(projects: Project[]): any[] {
     if (parts.length === 1) tree.push(node);
     else byName.get(parts.slice(0, -1).join('/'))!.children.push(node);
   }
-  for (const [, node] of byName) node.children.sort((a: any, b: any) => a.name.localeCompare(b.name));
+  for (const [, node] of byName)
+    node.children.sort((a: any, b: any) => a.name.localeCompare(b.name));
   tree.sort((a, b) => a.name.localeCompare(b.name));
   return tree;
 }
@@ -50,7 +60,7 @@ const SEARCH_FILTER_KEYS = ['price', 'cat', 'env'];
 export function parseSearch(q: string): { filters: Record<string, string>; text: string } {
   const filters: Record<string, string> = {};
   const words: string[] = [];
-  q.split(/\s+/).forEach(t => {
+  q.split(/\s+/).forEach((t) => {
     const colon = t.indexOf(':');
     const k = colon > 0 ? t.slice(0, colon).toLowerCase() : '';
     const v = colon > 0 ? t.slice(colon + 1) : '';
@@ -65,32 +75,47 @@ export function getFiltered(): VaultEntry[] {
   // Fall back to the catch-all: an empty selection array would otherwise pass
   // undefined into getDescendantProjectIds and throw.
   const selectedProject = st.currentSelectedProjectIds[0] ?? 'Universal';
-  const projectFilterIds = selectedProject === 'Universal' ? null : getDescendantProjectIds(selectedProject);
-  return st.vault.api_keys.filter(k => {
-    if (projectFilterIds && !projectFilterIds.some(pid => (k.projectIds || []).includes(pid))) return false;
+  const projectFilterIds =
+    selectedProject === 'Universal' ? null : getDescendantProjectIds(selectedProject);
+  return st.vault.api_keys.filter((k) => {
+    if (projectFilterIds && !projectFilterIds.some((pid) => (k.projectIds || []).includes(pid)))
+      return false;
     if (filters.price && k.price_type !== filters.price) return false;
-    if (filters.cat && !(k.categories || []).some(c => c.includes(filters.cat))) return false;
+    if (filters.cat && !(k.categories || []).some((c) => c.includes(filters.cat))) return false;
     if (filters.env && k.environment !== filters.env) return false;
     // Sidebar environment filter (separate from st.filter so it stacks with other filters)
     if (st.currentEnvFilter && k.environment !== st.currentEnvFilter) return false;
     // Tag sidebar filter
     if (st.activeTagFilter && !(k.tags ?? []).includes(st.activeTagFilter)) return false;
     // Env-prefix sidebar filter
-    if (st.activePrefixFilter && !(k.env_prefixes ?? []).includes(st.activePrefixFilter)) return false;
+    if (st.activePrefixFilter && !(k.env_prefixes ?? []).includes(st.activePrefixFilter))
+      return false;
     if (text) {
-      const hay = [k.provider, k.account_name, k.key_id, k.api_description, k.description, k.details,
-                   ...(k.categories || []), ...((k as any).tags || [])].join(' ').toLowerCase();
+      const hay = [
+        k.provider,
+        k.account_name,
+        k.key_id,
+        k.api_description,
+        k.description,
+        k.details,
+        ...(k.categories || []),
+        ...((k as any).tags || []),
+      ]
+        .join(' ')
+        .toLowerCase();
       // Regex search (item 10): /pattern/flags syntax detected
-      const reMatch = text.match(/^\/(.+)\/([gimsuy]*)$/);
+      const reMatch = /^\/(.+)\/([gimsuy]*)$/.exec(text);
       if (reMatch) {
         try {
           const re = new RegExp(reMatch[1], reMatch[2] || 'i');
           if (!re.test(hay)) return false;
-        // Malformed regex: fall back to a literal substring search on the
-        // pattern itself. Matching against `text` instead would include the
-        // wrapping slashes, which are never in the haystack, so the fallback
-        // could never match anything.
-        } catch { if (!hay.includes(reMatch[1])) return false; }
+          // Malformed regex: fall back to a literal substring search on the
+          // pattern itself. Matching against `text` instead would include the
+          // wrapping slashes, which are never in the haystack, so the fallback
+          // could never match anything.
+        } catch {
+          if (!hay.includes(reMatch[1])) return false;
+        }
       } else {
         if (!hay.includes(text)) return false;
       }
@@ -98,7 +123,7 @@ export function getFiltered(): VaultEntry[] {
     if (st.filter.type === 'price') return k.price_type === st.filter.value;
     if (st.filter.type === 'category') {
       const pfx = st.filter.value + '/';
-      return (k.categories || []).some(c => c === st.filter.value || c.startsWith(pfx));
+      return (k.categories || []).some((c) => c === st.filter.value || c.startsWith(pfx));
     }
     if (st.filter.type === 'secret_type') return (k.secretType || 'api_key') === st.filter.value;
     return true;
@@ -114,8 +139,16 @@ export function sorted(arr: VaultEntry[]): VaultEntry[] {
     if (!a.pinned && b.pinned) return 1;
     // `??`, not `||`: `free` maps to 0, which `||` treats as missing and
     // replaces with 9 — sorting the free tier last instead of first.
-    if (by === 'price') return ((priceOrder[a.price_type] ?? 9) - (priceOrder[b.price_type] ?? 9)) || a.provider.localeCompare(b.provider);
-    if (by === 'category') return (a.categories?.[0] || 'zzz').localeCompare(b.categories?.[0] || 'zzz') || a.provider.localeCompare(b.provider);
+    if (by === 'price')
+      return (
+        (priceOrder[a.price_type] ?? 9) - (priceOrder[b.price_type] ?? 9) ||
+        a.provider.localeCompare(b.provider)
+      );
+    if (by === 'category')
+      return (
+        (a.categories?.[0] || 'zzz').localeCompare(b.categories?.[0] || 'zzz') ||
+        a.provider.localeCompare(b.provider)
+      );
     if (by === 'expiry') {
       const ae = a.expires_at ? new Date(a.expires_at).getTime() : Infinity;
       const be = b.expires_at ? new Date(b.expires_at).getTime() : Infinity;

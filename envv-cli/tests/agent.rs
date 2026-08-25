@@ -86,7 +86,11 @@ fn resolver(v: &Value, redact: bool) -> Resolver {
 #[test]
 fn fingerprints_are_stable_and_comparable() {
     let a = out::fingerprint("secret-one");
-    assert_eq!(a, out::fingerprint("secret-one"), "same value must fingerprint the same");
+    assert_eq!(
+        a,
+        out::fingerprint("secret-one"),
+        "same value must fingerprint the same"
+    );
     assert_ne!(a, out::fingerprint("secret-two"));
     assert!(a.starts_with("sha256:"));
     // 48 bits of hex: enough to compare, useless to authenticate with.
@@ -117,10 +121,16 @@ fn entry_redaction_masks_every_secret_field() {
     let safe = out::redact_entry(&v["api_keys"][0]);
     let text = serde_json::to_string(&safe).unwrap();
 
-    for leaked in
-        ["ghp_live_secret_value", "second_secret", "hidden_signing_key", "ghp_previous_secret"]
-    {
-        assert!(!text.contains(leaked), "redacted entry still contains {leaked}: {text}");
+    for leaked in [
+        "ghp_live_secret_value",
+        "second_secret",
+        "hidden_signing_key",
+        "ghp_previous_secret",
+    ] {
+        assert!(
+            !text.contains(leaked),
+            "redacted entry still contains {leaked}: {text}"
+        );
     }
     // Locating information survives, or the redacted view cannot tell you which
     // entry you are looking at.
@@ -129,7 +139,10 @@ fn entry_redaction_masks_every_secret_field() {
     // A non-secret extra_var is data, not a credential.
     assert!(text.contains("eu-west-1"));
     assert_eq!(safe["api_key"]["redacted"], json!(true));
-    assert_eq!(safe["api_key"]["length"], json!("ghp_live_secret_value".len()));
+    assert_eq!(
+        safe["api_key"]["length"],
+        json!("ghp_live_secret_value".len())
+    );
 }
 
 #[test]
@@ -148,10 +161,16 @@ fn project_redaction_keeps_references_visible() {
     let safe = out::redact_project(&project(&v, "stack"));
     let text = serde_json::to_string(&safe).unwrap();
 
-    assert!(!text.contains("literal_password_here"), "literal secret leaked: {text}");
+    assert!(
+        !text.contains("literal_password_here"),
+        "literal secret leaked: {text}"
+    );
     // A `${ref}` is a pointer, not a secret — leaving it readable is exactly
     // what lets an agent wire configs together blind.
-    assert!(text.contains("${GitHub}"), "reference was masked; the wiring is now invisible");
+    assert!(
+        text.contains("${GitHub}"),
+        "reference was masked; the wiring is now invisible"
+    );
 }
 
 #[test]
@@ -163,7 +182,10 @@ fn an_env_file_chunk_is_masked_whole_regardless_of_field_flags() {
     let v = vault();
     let safe = out::redact_project(&project(&v, "stack"));
     let text = serde_json::to_string(&safe).unwrap();
-    assert!(!text.contains("3000"), "an env_file value escaped redaction: {text}");
+    assert!(
+        !text.contains("3000"),
+        "an env_file value escaped redaction: {text}"
+    );
 }
 
 #[test]
@@ -172,7 +194,10 @@ fn ordinary_config_text_outside_a_env_file_stays_readable() {
     let v = vault();
     let safe = out::redact_project(&project(&v, "vpn"));
     let text = serde_json::to_string(&safe).unwrap();
-    assert!(text.contains("10.0.0.1/24"), "a non-secret wg field was masked: {text}");
+    assert!(
+        text.contains("10.0.0.1/24"),
+        "a non-secret wg field was masked: {text}"
+    );
     assert!(!text.contains("ghp_live_secret_value"));
 }
 
@@ -182,7 +207,10 @@ fn ordinary_config_text_outside_a_env_file_stays_readable() {
 fn a_redacting_export_carries_no_secret() {
     let v = vault();
     let wg = exporters::export_wireguard(&project(&v, "vpn"), &resolver(&v, true));
-    assert!(!wg.contains("ghp_live_secret_value"), "wg export leaked the key:\n{wg}");
+    assert!(
+        !wg.contains("ghp_live_secret_value"),
+        "wg export leaked the key:\n{wg}"
+    );
     assert!(wg.contains("sha256:"));
     // Structure stays legible, which is the point of masking rather than refusing.
     assert!(wg.contains("[Interface]"));
@@ -204,7 +232,11 @@ fn a_redacting_env_export_masks_literals_too() {
     // value gets the same treatment as a resolved reference.
     let v = vault();
     let env = exporters::export_project_env(&project(&v, "stack"), &resolver(&v, true));
-    assert!(!env.text.contains("literal_password_here"), "leaked:\n{}", env.text);
+    assert!(
+        !env.text.contains("literal_password_here"),
+        "leaked:\n{}",
+        env.text
+    );
     assert!(!env.text.contains("ghp_live_secret_value"));
     assert!(env.text.contains("TOKEN=sha256:"));
 }
@@ -280,19 +312,36 @@ fn describe_documents_every_exit_code_and_the_flags_that_exist() {
     use clap::CommandFactory;
     let doc = agentio::describe(&DummyCli::command());
 
-    let codes = doc["exit_codes"].as_object().expect("exit_codes is an object");
+    let codes = doc["exit_codes"]
+        .as_object()
+        .expect("exit_codes is an object");
     for expected in ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10"] {
-        assert!(codes.contains_key(expected), "exit code {expected} is undocumented");
+        assert!(
+            codes.contains_key(expected),
+            "exit code {expected} is undocumented"
+        );
     }
     assert!(doc["secret_handling"]["materialisation"].is_array());
     assert!(doc["envelope"]["success"].is_object());
 
-    let subs = doc["command"]["subcommands"].as_array().expect("subcommands");
-    let entry = subs.iter().find(|c| c["name"] == json!("entry")).expect("entry command");
+    let subs = doc["command"]["subcommands"]
+        .as_array()
+        .expect("subcommands");
+    let entry = subs
+        .iter()
+        .find(|c| c["name"] == json!("entry"))
+        .expect("entry command");
     assert_eq!(entry["path"], json!("envv entry"));
     let args = entry["args"].as_array().unwrap();
-    let kind = args.iter().find(|a| a["id"] == json!("kind")).expect("--kind described");
-    assert_eq!(kind["values"], json!(["a", "b"]), "possible values must reach the caller");
+    let kind = args
+        .iter()
+        .find(|a| a["id"] == json!("kind"))
+        .expect("--kind described");
+    assert_eq!(
+        kind["values"],
+        json!(["a", "b"]),
+        "possible values must reach the caller"
+    );
     assert_eq!(kind["takes_value"], json!(true));
     let provider = args.iter().find(|a| a["id"] == json!("provider")).unwrap();
     assert_eq!(provider["kind"], json!("positional"));

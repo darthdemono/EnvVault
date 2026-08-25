@@ -19,7 +19,12 @@ import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { st } from '../src/ts/state';
-import { exportWireGuard, exportDockerCompose, exportNginx, chunkToString } from '../src/ts/chunk-ops';
+import {
+  exportWireGuard,
+  exportDockerCompose,
+  exportNginx,
+  chunkToString,
+} from '../src/ts/chunk-ops';
 import { loadRealIndexHtml, resetState } from './helpers';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -74,12 +79,16 @@ describe('exporter parity fixtures', () => {
   });
 
   it('docker_service chunk', () => {
-    const chunk = (project('stack') as any).chunks.find((c: any) => c.chunk_type === 'docker_service');
+    const chunk = (project('stack') as any).chunks.find(
+      (c: any) => c.chunk_type === 'docker_service',
+    );
     golden('chunk-docker-service.txt', chunkToString(chunk));
   });
 
   it('nginx_upstream chunk', () => {
-    const chunk = (project('edge') as any).chunks.find((c: any) => c.chunk_type === 'nginx_upstream');
+    const chunk = (project('edge') as any).chunks.find(
+      (c: any) => c.chunk_type === 'nginx_upstream',
+    );
     golden('chunk-nginx-upstream.txt', chunkToString(chunk));
   });
 });

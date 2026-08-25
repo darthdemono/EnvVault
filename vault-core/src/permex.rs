@@ -71,12 +71,12 @@ pub enum Field {
 impl Field {
     fn parse(s: &str) -> Option<Field> {
         match s.to_ascii_lowercase().as_str() {
-            "vault"                => Some(Field::Vault),
-            "project"  | "proj"    => Some(Field::Project),
-            "category" | "cat"     => Some(Field::Category),
-            "tag"                  => Some(Field::Tag),
-            "env" | "environment"  => Some(Field::Env),
-            "type" | "secrettype"  => Some(Field::Type),
+            "vault" => Some(Field::Vault),
+            "project" | "proj" => Some(Field::Project),
+            "category" | "cat" => Some(Field::Category),
+            "tag" => Some(Field::Tag),
+            "env" | "environment" => Some(Field::Env),
+            "type" | "secrettype" => Some(Field::Type),
             _ => None,
         }
     }
@@ -108,7 +108,9 @@ impl fmt::Display for Expr {
         match self {
             Expr::Pred { field, glob } => {
                 let needs_quotes = glob.is_empty()
-                    || glob.chars().any(|c| c.is_whitespace() || c == '(' || c == ')' || c == '"');
+                    || glob
+                        .chars()
+                        .any(|c| c.is_whitespace() || c == '(' || c == ')' || c == '"');
                 if needs_quotes {
                     write!(f, "{}:\"{}\"", field.name(), glob.replace('"', "\\\""))
                 } else {
@@ -116,8 +118,8 @@ impl fmt::Display for Expr {
                 }
             }
             Expr::And(a, b) => write!(f, "({a} AND {b})"),
-            Expr::Or(a, b)  => write!(f, "({a} OR {b})"),
-            Expr::Not(a)    => write!(f, "NOT {a}"),
+            Expr::Or(a, b) => write!(f, "({a} OR {b})"),
+            Expr::Not(a) => write!(f, "NOT {a}"),
         }
     }
 }
@@ -130,13 +132,13 @@ impl fmt::Display for Expr {
 /// the source JSON already outlives it.
 #[derive(Debug, Default, Clone)]
 pub struct EntryView<'a> {
-    pub categories:    Vec<&'a str>,
-    pub project_ids:   Vec<&'a str>,
+    pub categories: Vec<&'a str>,
+    pub project_ids: Vec<&'a str>,
     /// Display names for `project_ids`, so rules can be written against either.
     pub project_names: Vec<String>,
-    pub tags:          Vec<&'a str>,
-    pub environment:   Option<&'a str>,
-    pub secret_type:   Option<&'a str>,
+    pub tags: Vec<&'a str>,
+    pub environment: Option<&'a str>,
+    pub secret_type: Option<&'a str>,
 }
 
 impl<'a> EntryView<'a> {
@@ -149,22 +151,29 @@ impl<'a> EntryView<'a> {
         project_names: &std::collections::HashMap<String, String>,
     ) -> EntryView<'a> {
         let strs = |key: &str| -> Vec<&'a str> {
-            entry.get(key)
+            entry
+                .get(key)
                 .and_then(|v| v.as_array())
                 .map(|a| a.iter().filter_map(|v| v.as_str()).collect())
                 .unwrap_or_default()
         };
         let project_ids = strs("projectIds");
-        let names = project_ids.iter()
-            .map(|id| project_names.get(*id).cloned().unwrap_or_else(|| (*id).to_string()))
+        let names = project_ids
+            .iter()
+            .map(|id| {
+                project_names
+                    .get(*id)
+                    .cloned()
+                    .unwrap_or_else(|| (*id).to_string())
+            })
             .collect();
         EntryView {
-            categories:    strs("categories"),
+            categories: strs("categories"),
             project_ids,
             project_names: names,
-            tags:          strs("tags"),
-            environment:   entry.get("environment").and_then(|v| v.as_str()),
-            secret_type:   entry.get("secretType").and_then(|v| v.as_str()),
+            tags: strs("tags"),
+            environment: entry.get("environment").and_then(|v| v.as_str()),
+            secret_type: entry.get("secretType").and_then(|v| v.as_str()),
         }
     }
 }
@@ -175,8 +184,8 @@ impl<'a> EntryView<'a> {
 pub fn eval(expr: &Expr, entry: &EntryView<'_>) -> bool {
     match expr {
         Expr::And(a, b) => eval(a, entry) && eval(b, entry),
-        Expr::Or(a, b)  => eval(a, entry) || eval(b, entry),
-        Expr::Not(a)    => !eval(a, entry),
+        Expr::Or(a, b) => eval(a, entry) || eval(b, entry),
+        Expr::Not(a) => !eval(a, entry),
         Expr::Pred { field, glob } => eval_pred(*field, glob, entry),
     }
 }
@@ -187,18 +196,24 @@ fn eval_pred(field: Field, glob: &str, e: &EntryView<'_>) -> bool {
     match field {
         Field::Vault => true,
         Field::Category => wildcard || e.categories.iter().any(|c| glob_matches(glob, c)),
-        Field::Tag      => wildcard || e.tags.iter().any(|t| glob_matches(glob, t)),
-        Field::Env      => wildcard || e.environment.map_or(false, |v| glob_matches(glob, v)),
+        Field::Tag => wildcard || e.tags.iter().any(|t| glob_matches(glob, t)),
+        Field::Env => wildcard || e.environment.is_some_and(|v| glob_matches(glob, v)),
         // Entries without an explicit type are api_key by convention.
-        Field::Type     => wildcard || glob_matches(glob, e.secret_type.unwrap_or("api_key")),
+        Field::Type => wildcard || glob_matches(glob, e.secret_type.unwrap_or("api_key")),
         Field::Project => {
-            if wildcard { return true; }
+            if wildcard {
+                return true;
+            }
             // Skip the catch-all: every entry carries it, so allowing it to
             // match would promote any project grant to vault-wide.
             e.project_ids.iter().enumerate().any(|(i, id)| {
-                if *id == UNIVERSAL { return false; }
+                if *id == UNIVERSAL {
+                    return false;
+                }
                 glob_matches(glob, id)
-                    || e.project_names.get(i).map_or(false, |n| glob_matches(glob, n))
+                    || e.project_names
+                        .get(i)
+                        .is_some_and(|n| glob_matches(glob, n))
             })
         }
     }
@@ -223,19 +238,42 @@ fn lex(src: &str) -> Result<Vec<Tok>, String> {
 
     while i < chars.len() {
         let c = chars[i];
-        if c.is_whitespace() { i += 1; continue; }
+        if c.is_whitespace() {
+            i += 1;
+            continue;
+        }
 
         match c {
-            '(' => { out.push(Tok::LParen); i += 1; continue; }
-            ')' => { out.push(Tok::RParen); i += 1; continue; }
-            '!' => { out.push(Tok::Not); i += 1; continue; }
+            '(' => {
+                out.push(Tok::LParen);
+                i += 1;
+                continue;
+            }
+            ')' => {
+                out.push(Tok::RParen);
+                i += 1;
+                continue;
+            }
+            '!' => {
+                out.push(Tok::Not);
+                i += 1;
+                continue;
+            }
             '&' => {
-                i += if i + 1 < chars.len() && chars[i + 1] == '&' { 2 } else { 1 };
+                i += if i + 1 < chars.len() && chars[i + 1] == '&' {
+                    2
+                } else {
+                    1
+                };
                 out.push(Tok::And);
                 continue;
             }
             '|' => {
-                i += if i + 1 < chars.len() && chars[i + 1] == '|' { 2 } else { 1 };
+                i += if i + 1 < chars.len() && chars[i + 1] == '|' {
+                    2
+                } else {
+                    1
+                };
                 out.push(Tok::Or);
                 continue;
             }
@@ -246,7 +284,9 @@ fn lex(src: &str) -> Result<Vec<Tok>, String> {
         let start = i;
         while i < chars.len()
             && !chars[i].is_whitespace()
-            && chars[i] != '(' && chars[i] != ')' && chars[i] != ':'
+            && chars[i] != '('
+            && chars[i] != ')'
+            && chars[i] != ':'
         {
             i += 1;
         }
@@ -259,11 +299,13 @@ fn lex(src: &str) -> Result<Vec<Tok>, String> {
         if i >= chars.len() || chars[i] != ':' {
             match word.to_ascii_uppercase().as_str() {
                 "AND" => out.push(Tok::And),
-                "OR"  => out.push(Tok::Or),
+                "OR" => out.push(Tok::Or),
                 "NOT" => out.push(Tok::Not),
-                _ => return Err(format!(
-                    "expected AND, OR, NOT or a `field:value` term, found '{word}'"
-                )),
+                _ => {
+                    return Err(format!(
+                        "expected AND, OR, NOT or a `field:value` term, found '{word}'"
+                    ))
+                }
             }
             continue;
         }
@@ -280,19 +322,28 @@ fn lex(src: &str) -> Result<Vec<Tok>, String> {
             i += 1;
             let mut v = String::new();
             loop {
-                if i >= chars.len() { return Err("unterminated quoted value".to_string()); }
+                if i >= chars.len() {
+                    return Err("unterminated quoted value".to_string());
+                }
                 match chars[i] {
-                    '\\' if i + 1 < chars.len() => { v.push(chars[i + 1]); i += 2; }
-                    '"' => { i += 1; break; }
-                    ch  => { v.push(ch); i += 1; }
+                    '\\' if i + 1 < chars.len() => {
+                        v.push(chars[i + 1]);
+                        i += 2;
+                    }
+                    '"' => {
+                        i += 1;
+                        break;
+                    }
+                    ch => {
+                        v.push(ch);
+                        i += 1;
+                    }
                 }
             }
             v
         } else {
             let vs = i;
-            while i < chars.len()
-                && !chars[i].is_whitespace()
-                && chars[i] != '(' && chars[i] != ')'
+            while i < chars.len() && !chars[i].is_whitespace() && chars[i] != '(' && chars[i] != ')'
             {
                 i += 1;
             }
@@ -300,7 +351,9 @@ fn lex(src: &str) -> Result<Vec<Tok>, String> {
         };
 
         if value.is_empty() {
-            return Err(format!("field '{word}' has no value — write {word}:* to match everything"));
+            return Err(format!(
+                "field '{word}' has no value — write {word}:* to match everything"
+            ));
         }
         out.push(Tok::Pred(field, value));
     }
@@ -312,12 +365,18 @@ fn lex(src: &str) -> Result<Vec<Tok>, String> {
 
 struct Parser {
     toks: Vec<Tok>,
-    pos:  usize,
+    pos: usize,
 }
 
 impl Parser {
-    fn peek(&self) -> Option<&Tok> { self.toks.get(self.pos) }
-    fn next(&mut self) -> Option<Tok> { let t = self.toks.get(self.pos).cloned(); self.pos += 1; t }
+    fn peek(&self) -> Option<&Tok> {
+        self.toks.get(self.pos)
+    }
+    fn next(&mut self) -> Option<Tok> {
+        let t = self.toks.get(self.pos).cloned();
+        self.pos += 1;
+        t
+    }
 
     fn parse_or(&mut self) -> Result<Expr, String> {
         let mut lhs = self.parse_and()?;
@@ -404,7 +463,10 @@ where
             Some(f) => f,
             None => continue, // unknown legacy scope type: ignore rather than over-grant
         };
-        let pred = Expr::Pred { field, glob: scope_value.to_string() };
+        let pred = Expr::Pred {
+            field,
+            glob: scope_value.to_string(),
+        };
         acc = Some(match acc {
             None => pred,
             Some(prev) => Expr::Or(Box::new(prev), Box::new(pred)),
@@ -434,9 +496,9 @@ pub fn any_of(a: Option<Expr>, b: Option<Expr>) -> Option<Expr> {
 pub fn combine(class: Option<Expr>, individual: Option<Expr>) -> Option<Expr> {
     match (class, individual) {
         (Some(c), Some(i)) => Some(Expr::And(Box::new(c), Box::new(i))),
-        (Some(c), None)    => Some(c),
-        (None, Some(i))    => Some(i),
-        (None, None)       => None,
+        (Some(c), None) => Some(c),
+        (None, Some(i)) => Some(i),
+        (None, None) => None,
     }
 }
 
@@ -449,7 +511,10 @@ mod tests {
     use std::collections::HashMap;
 
     fn names(pairs: &[(&str, &str)]) -> HashMap<String, String> {
-        pairs.iter().map(|(a, b)| (a.to_string(), b.to_string())).collect()
+        pairs
+            .iter()
+            .map(|(a, b)| (a.to_string(), b.to_string()))
+            .collect()
     }
 
     fn view<'a>(e: &'a serde_json::Value, pn: &HashMap<String, String>) -> EntryView<'a> {
@@ -490,34 +555,53 @@ mod tests {
 
     #[test]
     fn symbolic_operators_are_aliases() {
-        assert_eq!(parse("category:a && category:b").unwrap(),
-                   parse("category:a AND category:b").unwrap());
-        assert_eq!(parse("category:a || category:b").unwrap(),
-                   parse("category:a OR category:b").unwrap());
-        assert_eq!(parse("!category:a").unwrap(), parse("NOT category:a").unwrap());
+        assert_eq!(
+            parse("category:a && category:b").unwrap(),
+            parse("category:a AND category:b").unwrap()
+        );
+        assert_eq!(
+            parse("category:a || category:b").unwrap(),
+            parse("category:a OR category:b").unwrap()
+        );
+        assert_eq!(
+            parse("!category:a").unwrap(),
+            parse("NOT category:a").unwrap()
+        );
     }
 
     #[test]
     fn operators_are_case_insensitive() {
-        assert_eq!(parse("category:a and category:b").unwrap(),
-                   parse("category:a AND category:b").unwrap());
+        assert_eq!(
+            parse("category:a and category:b").unwrap(),
+            parse("category:a AND category:b").unwrap()
+        );
     }
 
     #[test]
     fn quoted_values_may_contain_spaces() {
         let e = parse(r#"project:"My Project""#).unwrap();
-        assert_eq!(e, Expr::Pred { field: Field::Project, glob: "My Project".into() });
+        assert_eq!(
+            e,
+            Expr::Pred {
+                field: Field::Project,
+                glob: "My Project".into()
+            }
+        );
     }
 
     #[test]
     fn field_aliases_resolve() {
         assert_eq!(parse("proj:a").unwrap(), parse("project:a").unwrap());
-        assert_eq!(parse("cat:a").unwrap(),  parse("category:a").unwrap());
+        assert_eq!(parse("cat:a").unwrap(), parse("category:a").unwrap());
     }
 
     #[test]
     fn expressions_round_trip_through_display() {
-        for src in ["project:a", "(project:a AND NOT category:b)", "((project:a OR tag:x) AND env:production)"] {
+        for src in [
+            "project:a",
+            "(project:a AND NOT category:b)",
+            "((project:a OR tag:x) AND env:production)",
+        ] {
             let once = parse(src).unwrap();
             let twice = parse(&once.to_string()).unwrap();
             assert_eq!(once, twice, "round-trip failed for {src}");
@@ -529,15 +613,15 @@ mod tests {
     #[test]
     fn malformed_expressions_are_rejected() {
         for bad in [
-            "",                        // empty
-            "category:",               // no value
-            "bogus:a",                 // unknown field
-            "category:a AND",          // dangling operator
-            "AND category:a",          // leading operator
-            "(category:a",             // unclosed paren
-            "category:a)",             // stray close
-            "category:a category:b",   // adjacency is not implicit AND
-            "just-a-word",             // not a term
+            "",                      // empty
+            "category:",             // no value
+            "bogus:a",               // unknown field
+            "category:a AND",        // dangling operator
+            "AND category:a",        // leading operator
+            "(category:a",           // unclosed paren
+            "category:a)",           // stray close
+            "category:a category:b", // adjacency is not implicit AND
+            "just-a-word",           // not a term
         ] {
             assert!(parse(bad).is_err(), "expected {bad:?} to be rejected");
         }
@@ -547,8 +631,10 @@ mod tests {
     fn eval_str_denies_on_malformed_input() {
         let pn = names(&[]);
         let e = entry();
-        assert!(!eval_str("category:a AND", &view(&e, &pn)),
-                "a broken expression must deny, not permit");
+        assert!(
+            !eval_str("category:a AND", &view(&e, &pn)),
+            "a broken expression must deny, not permit"
+        );
         assert!(!eval_str("", &view(&e, &pn)));
     }
 
@@ -560,7 +646,10 @@ mod tests {
         let e = entry();
         let v = view(&e, &pn);
         assert!(eval_str("category:dev", &v));
-        assert!(eval_str("project:Alpha", &v), "project matches by display name");
+        assert!(
+            eval_str("project:Alpha", &v),
+            "project matches by display name"
+        );
         assert!(eval_str("project:p1", &v), "project matches by id");
         assert!(eval_str("tag:team-a", &v));
         assert!(eval_str("env:production", &v));
@@ -588,7 +677,10 @@ mod tests {
         assert!(eval_str("category:nope OR tag:team-a", &v));
         assert!(eval_str("project:Alpha AND NOT category:secret", &v));
         assert!(!eval_str("project:Alpha AND NOT category:dev", &v));
-        assert!(eval_str("(category:nope OR project:Alpha) AND env:production", &v));
+        assert!(eval_str(
+            "(category:nope OR project:Alpha) AND env:production",
+            &v
+        ));
     }
 
     #[test]
@@ -606,7 +698,14 @@ mod tests {
         // Unfiled: no categories, no tags, no env, only the Universal project.
         let e = json!({ "provider": "X", "projectIds": ["Universal"] });
         let v = view(&e, &pn);
-        for src in ["project:*", "category:*", "tag:*", "env:*", "type:*", "vault:*"] {
+        for src in [
+            "project:*",
+            "category:*",
+            "tag:*",
+            "env:*",
+            "type:*",
+            "vault:*",
+        ] {
             assert!(eval_str(src, &v), "{src} must match an unfiled entry");
         }
     }
@@ -615,8 +714,10 @@ mod tests {
     fn a_specific_project_grant_is_never_satisfied_by_universal() {
         let pn = names(&[]);
         let e = json!({ "provider": "X", "projectIds": ["Universal"] });
-        assert!(!eval_str("project:Universal", &view(&e, &pn)),
-                "matching the catch-all would promote any project grant to vault-wide");
+        assert!(
+            !eval_str("project:Universal", &view(&e, &pn)),
+            "matching the catch-all would promote any project grant to vault-wide"
+        );
     }
 
     // ── Legacy compilation and composition ────────────────────────────────────
@@ -649,13 +750,17 @@ mod tests {
     #[test]
     fn a_class_exclusion_cannot_be_undone_individually() {
         let pn = names(&[("p1", "Alpha")]);
-        let secret = json!({ "provider": "S", "categories": ["secret"], "projectIds": ["Universal", "p1"] });
+        let secret =
+            json!({ "provider": "S", "categories": ["secret"], "projectIds": ["Universal", "p1"] });
         let combined = combine(
-            Some(parse("NOT category:secret").unwrap()),  // class says: never secrets
-            Some(parse("project:*").unwrap()),            // individual says: all projects
-        ).unwrap();
-        assert!(!eval(&combined, &view(&secret, &pn)),
-                "the class exclusion must win over the individual grant");
+            Some(parse("NOT category:secret").unwrap()), // class says: never secrets
+            Some(parse("project:*").unwrap()),           // individual says: all projects
+        )
+        .unwrap();
+        assert!(
+            !eval(&combined, &view(&secret, &pn)),
+            "the class exclusion must win over the individual grant"
+        );
     }
 
     #[test]

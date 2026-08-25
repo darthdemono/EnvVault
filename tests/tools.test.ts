@@ -73,10 +73,10 @@ describe('bulk selection identity', () => {
     // The bug: the selection was a set of indices, so removing an earlier entry
     // slid every higher selection onto its neighbour and bulk delete then
     // removed the wrong secrets.
-    bulkToggle(2);                                   // tick Charlie
-    st.vault.api_keys.splice(0, 1);                  // Alpha deleted elsewhere
-    const selected = st.vault.api_keys.filter(e => e.id && st.bulkSelected.has(e.id));
-    expect(selected.map(e => e.provider)).toEqual(['Charlie']);
+    bulkToggle(2); // tick Charlie
+    st.vault.api_keys.splice(0, 1); // Alpha deleted elsewhere
+    const selected = st.vault.api_keys.filter((e) => e.id && st.bulkSelected.has(e.id));
+    expect(selected.map((e) => e.provider)).toEqual(['Charlie']);
   });
 
   it('is cleared when the vault is replaced', () => {
@@ -108,21 +108,21 @@ describe('bulk delete', () => {
 
   async function clickDelete() {
     $('bulk-delete-btn').click();
-    await new Promise(r => setTimeout(r, 20));
+    await new Promise((r) => setTimeout(r, 20));
   }
 
   it('deletes exactly the ticked entries', async () => {
     st.bulkSelected.add('b');
     st.bulkSelected.add('d');
     await clickDelete();
-    expect(st.vault.api_keys.map(e => e.provider)).toEqual(['Alpha', 'Charlie']);
+    expect(st.vault.api_keys.map((e) => e.provider)).toEqual(['Alpha', 'Charlie']);
   });
 
   it('deletes the ticked entries even after the array shifted', async () => {
     st.bulkSelected.add('c');
-    st.vault.api_keys.splice(0, 1);   // Alpha removed after ticking
+    st.vault.api_keys.splice(0, 1); // Alpha removed after ticking
     await clickDelete();
-    expect(st.vault.api_keys.map(e => e.provider)).toEqual(['Bravo', 'Delta']);
+    expect(st.vault.api_keys.map((e) => e.provider)).toEqual(['Bravo', 'Delta']);
   });
 
   it('does nothing when the user cancels', async () => {
@@ -171,14 +171,14 @@ describe('bulk export', () => {
     confirmAnswer = false;
     st.bulkSelected.add('a');
     $('bulk-export-btn').click();
-    await new Promise(r => setTimeout(r, 20));
+    await new Promise((r) => setTimeout(r, 20));
     expect((URL as any).createObjectURL).not.toHaveBeenCalled();
   });
 
   it('exports only the ticked entries once confirmed', async () => {
     st.bulkSelected.add('a');
     $('bulk-export-btn').click();
-    await new Promise(r => setTimeout(r, 20));
+    await new Promise((r) => setTimeout(r, 20));
     const blob = (URL as any).createObjectURL.mock.calls[0][0] as Blob;
     const text = await blob.text();
     expect(text).toBe('ALPHA_CO=sk-a');
@@ -188,7 +188,7 @@ describe('bulk export', () => {
   it('does not revoke the object URL before the download can start', async () => {
     st.bulkSelected.add('a');
     $('bulk-export-btn').click();
-    await new Promise(r => setTimeout(r, 20));
+    await new Promise((r) => setTimeout(r, 20));
     // Revoking synchronously cancelled the download under WebKitGTK.
     expect((URL as any).revokeObjectURL).not.toHaveBeenCalled();
   });
@@ -229,7 +229,10 @@ describe('normalizeImported', () => {
   });
 
   it('always includes Universal in projectIds', () => {
-    expect(normalizeImported({ provider: 'S', projectIds: ['p1'] })!.projectIds).toEqual(['p1', 'Universal']);
+    expect(normalizeImported({ provider: 'S', projectIds: ['p1'] })!.projectIds).toEqual([
+      'p1',
+      'Universal',
+    ]);
   });
 
   it('replaces a bogus price_type with free', () => {
@@ -253,17 +256,22 @@ describe('normalizeImported', () => {
       .map(normalizeImported)
       .filter((e): e is NonNullable<typeof e> => e !== null);
     expect(() => sorted(entries)).not.toThrow();
-    expect(sorted(entries).map(e => e.provider)).toEqual(['Alpha', 'Zeta']);
+    expect(sorted(entries).map((e) => e.provider)).toEqual(['Alpha', 'Zeta']);
   });
 });
 
 describe('diff tool identity', () => {
   it('lists entries by id so a later delete cannot misdirect the diff', async () => {
     st.vault = makeVault({
-      api_keys: [makeEntry({ id: 'a', provider: 'Alpha' }), makeEntry({ id: 'b', provider: 'Bravo' })],
+      api_keys: [
+        makeEntry({ id: 'a', provider: 'Alpha' }),
+        makeEntry({ id: 'b', provider: 'Bravo' }),
+      ],
     });
     document.querySelector<HTMLElement>('.tool-nav-btn[data-tool="diff"]')?.click();
-    const values = [...$('diff-a').querySelectorAll('option')].map(o => (o as HTMLOptionElement).value);
+    const values = [...$('diff-a').querySelectorAll('option')].map(
+      (o) => (o as HTMLOptionElement).value,
+    );
     expect(values).toContain('a');
     expect(values).toContain('b');
     expect(values).not.toContain('0');

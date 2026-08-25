@@ -24,7 +24,11 @@ beforeEach(() => {
 
 describe('renderGrid', () => {
   it('renders one card per entry', () => {
-    st.vault.api_keys = [makeEntry({ provider: 'A' }), makeEntry({ provider: 'B' }), makeEntry({ provider: 'C' })];
+    st.vault.api_keys = [
+      makeEntry({ provider: 'A' }),
+      makeEntry({ provider: 'B' }),
+      makeEntry({ provider: 'C' }),
+    ];
     renderGrid();
     expect(cards()).toHaveLength(3);
   });
@@ -76,7 +80,7 @@ describe('renderGrid', () => {
       makeEntry({ provider: 'p', secretType: 'password' }),
     ];
     renderGrid();
-    const headers = [...grid().querySelectorAll('.type-group-header')].map(h => h.textContent);
+    const headers = [...grid().querySelectorAll('.type-group-header')].map((h) => h.textContent);
     expect(headers).toEqual(['API Keys', 'Passwords']);
     expect(cards()).toHaveLength(2);
   });
@@ -136,10 +140,15 @@ describe('secret masking', () => {
   });
 
   it('masks extra vars flagged secret and leaves the others readable', () => {
-    st.vault.api_keys = [makeEntry({
-      id: 'e1',
-      extra_vars: [{ key: 'PUBLIC', value: 'visible', secret: false }, { key: 'PRIVATE', value: 'hidden-value', secret: true }],
-    })];
+    st.vault.api_keys = [
+      makeEntry({
+        id: 'e1',
+        extra_vars: [
+          { key: 'PUBLIC', value: 'visible', secret: false },
+          { key: 'PRIVATE', value: 'hidden-value', secret: true },
+        ],
+      }),
+    ];
     st.expanded = new Set(['e1']);
     renderGrid();
     const text = grid().textContent!;
@@ -157,12 +166,14 @@ describe('untrusted entry content', () => {
   });
 
   it('does not execute markup in description, key_id or category names', () => {
-    st.vault.api_keys = [makeEntry({
-      id: 'e1',
-      key_id: '<script>a</script>',
-      description: '<iframe src=evil></iframe>',
-      categories: ['<b>cat</b>'],
-    })];
+    st.vault.api_keys = [
+      makeEntry({
+        id: 'e1',
+        key_id: '<script>a</script>',
+        description: '<iframe src=evil></iframe>',
+        categories: ['<b>cat</b>'],
+      }),
+    ];
     st.expanded = new Set(['e1']);
     renderGrid();
     expect(grid().querySelector('script')).toBeNull();
@@ -189,7 +200,9 @@ describe('untrusted entry content', () => {
   });
 
   it('refuses to link a data: URL', () => {
-    st.vault.api_keys = [makeEntry({ id: 'e1', callback_url: 'data:text/html,<script>alert(1)</script>' })];
+    st.vault.api_keys = [
+      makeEntry({ id: 'e1', callback_url: 'data:text/html,<script>alert(1)</script>' }),
+    ];
     st.expanded = new Set(['e1']);
     renderGrid();
     expect(grid().querySelector('a[href^="data:"]')).toBeNull();
@@ -219,7 +232,10 @@ describe('card badges', () => {
   });
 
   it('floats pinned entries to the top of the grid', () => {
-    st.vault.api_keys = [makeEntry({ provider: 'Aaa' }), makeEntry({ provider: 'Zzz', pinned: true })];
+    st.vault.api_keys = [
+      makeEntry({ provider: 'Aaa' }),
+      makeEntry({ provider: 'Zzz', pinned: true }),
+    ];
     renderGrid();
     expect(cards()[0].textContent).toContain('Zzz');
   });
@@ -238,7 +254,9 @@ describe('card badges', () => {
   });
 
   it('does not flag a rotation that is not yet due', () => {
-    st.vault.api_keys = [makeEntry({ rotation_days: 30, last_rotated_at: new Date().toISOString() })];
+    st.vault.api_keys = [
+      makeEntry({ rotation_days: 30, last_rotated_at: new Date().toISOString() }),
+    ];
     renderGrid();
     expect(grid().querySelector('.badge-rotation-due')).toBeNull();
   });
@@ -252,13 +270,10 @@ describe('card badges', () => {
 
 describe('tag sidebar section', () => {
   it('renders a chip per distinct tag, sorted, with counts', () => {
-    st.vault.api_keys = [
-      makeEntry({ tags: ['prod', 'db'] }),
-      makeEntry({ tags: ['prod'] }),
-    ];
+    st.vault.api_keys = [makeEntry({ tags: ['prod', 'db'] }), makeEntry({ tags: ['prod'] })];
     render();
     const btns = [...document.querySelectorAll<HTMLElement>('#tag-filter-list .tag-filter-btn')];
-    expect(btns.map(b => b.dataset.tag)).toEqual(['db', 'prod']);
+    expect(btns.map((b) => b.dataset.tag)).toEqual(['db', 'prod']);
     expect(btns[1].querySelector('.sidebar-count')!.textContent).toBe('2');
   });
 
@@ -272,7 +287,9 @@ describe('tag sidebar section', () => {
     st.vault.api_keys = [makeEntry({ tags: ['prod'] })];
     st.activeTagFilter = 'prod';
     render();
-    expect(document.querySelector('#tag-filter-list .tag-filter-btn')!.classList.contains('active')).toBe(true);
+    expect(
+      document.querySelector('#tag-filter-list .tag-filter-btn')!.classList.contains('active'),
+    ).toBe(true);
   });
 
   it('escapes a tag name containing markup', () => {
@@ -285,7 +302,10 @@ describe('tag sidebar section', () => {
 describe('render', () => {
   it('draws the grid for a generic project selection', () => {
     st.vault = makeVault({
-      projects: [makeProject({ id: 'Universal', name: 'Universal' }), makeProject({ id: 'p1', name: 'Acme', project_type: 'generic' })],
+      projects: [
+        makeProject({ id: 'Universal', name: 'Universal' }),
+        makeProject({ id: 'p1', name: 'Acme', project_type: 'generic' }),
+      ],
       api_keys: [makeEntry({ provider: 'A', projectIds: ['Universal', 'p1'] })],
     });
     st.currentSelectedProjectIds = ['p1'];
@@ -325,7 +345,7 @@ describe('card size', () => {
 
   it('stamps the chosen size onto the grid for CSS to select on', () => {
     st.vault.api_keys = [makeEntry()];
-    sizes.forEach(size => {
+    sizes.forEach((size) => {
       Settings.set('cardSize', size);
       renderGrid();
       expect(grid().dataset.cardSize).toBe(size);
@@ -368,7 +388,7 @@ describe('card-size stylesheet tokens', () => {
   const css = readFileSync(resolve(process.cwd(), 'src/css/cards.css'), 'utf8');
 
   it('gives every card size its own height', () => {
-    const heights = [...css.matchAll(/--cs-card-h:\s*(\d+)px/g)].map(m => Number(m[1]));
+    const heights = [...css.matchAll(/--cs-card-h:\s*(\d+)px/g)].map((m) => Number(m[1]));
     // Declared medium (the default block), then compact, then large.
     expect(heights).toHaveLength(3);
     const [medium, compact, large] = heights;
@@ -377,8 +397,9 @@ describe('card-size stylesheet tokens', () => {
   });
 
   it('defines a token block per size selector', () => {
-    ['compact', 'large'].forEach(size =>
-      expect(css).toContain(`#card-grid[data-card-size="${size}"]`));
+    ['compact', 'large'].forEach((size) =>
+      expect(css).toContain(`#card-grid[data-card-size="${size}"]`),
+    );
   });
 
   it('pins the footer to a fixed height at the bottom of a collapsed card', () => {

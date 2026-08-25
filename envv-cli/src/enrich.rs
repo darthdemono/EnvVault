@@ -46,7 +46,14 @@ const fn sig(
     api_url: Option<&'static str>,
     environment: Option<&'static str>,
 ) -> Signature {
-    Signature { prefix, issuer, secret_type, icon, api_url, environment }
+    Signature {
+        prefix,
+        issuer,
+        secret_type,
+        icon,
+        api_url,
+        environment,
+    }
 }
 
 /// Documented, public issuer prefixes.
@@ -54,45 +61,269 @@ const fn sig(
 /// Ordered longest-first where prefixes nest (`sk-ant-` before `sk-`), because
 /// the first match wins and the more specific one is the more useful answer.
 const SIGNATURES: &[Signature] = &[
-    sig("github_pat_", "GitHub", "api_key", "github", Some("https://api.github.com"), None),
-    sig("ghp_", "GitHub", "api_key", "github", Some("https://api.github.com"), None),
-    sig("gho_", "GitHub", "api_key", "github", Some("https://api.github.com"), None),
-    sig("ghs_", "GitHub", "api_key", "github", Some("https://api.github.com"), None),
-    sig("glpat-", "GitLab", "api_key", "gitlab", Some("https://gitlab.com/api/v4"), None),
-    sig("sk-ant-", "Anthropic", "api_key", "anthropic", Some("https://api.anthropic.com"), None),
-    sig("sk-proj-", "OpenAI", "api_key", "openai", Some("https://api.openai.com/v1"), None),
-    sig("sk-", "OpenAI", "api_key", "openai", Some("https://api.openai.com/v1"), None),
-    sig("xai-", "xAI", "api_key", "x", Some("https://api.x.ai/v1"), None),
-    sig("hf_", "HuggingFace", "api_key", "huggingface", Some("https://huggingface.co/api"), None),
+    sig(
+        "github_pat_",
+        "GitHub",
+        "api_key",
+        "github",
+        Some("https://api.github.com"),
+        None,
+    ),
+    sig(
+        "ghp_",
+        "GitHub",
+        "api_key",
+        "github",
+        Some("https://api.github.com"),
+        None,
+    ),
+    sig(
+        "gho_",
+        "GitHub",
+        "api_key",
+        "github",
+        Some("https://api.github.com"),
+        None,
+    ),
+    sig(
+        "ghs_",
+        "GitHub",
+        "api_key",
+        "github",
+        Some("https://api.github.com"),
+        None,
+    ),
+    sig(
+        "glpat-",
+        "GitLab",
+        "api_key",
+        "gitlab",
+        Some("https://gitlab.com/api/v4"),
+        None,
+    ),
+    sig(
+        "sk-ant-",
+        "Anthropic",
+        "api_key",
+        "anthropic",
+        Some("https://api.anthropic.com"),
+        None,
+    ),
+    sig(
+        "sk-proj-",
+        "OpenAI",
+        "api_key",
+        "openai",
+        Some("https://api.openai.com/v1"),
+        None,
+    ),
+    sig(
+        "sk-",
+        "OpenAI",
+        "api_key",
+        "openai",
+        Some("https://api.openai.com/v1"),
+        None,
+    ),
+    sig(
+        "xai-",
+        "xAI",
+        "api_key",
+        "x",
+        Some("https://api.x.ai/v1"),
+        None,
+    ),
+    sig(
+        "hf_",
+        "HuggingFace",
+        "api_key",
+        "huggingface",
+        Some("https://huggingface.co/api"),
+        None,
+    ),
     sig("AKIA", "AWS", "api_key", "amazonaws", None, None),
     sig("ASIA", "AWS", "api_key", "amazonaws", None, None),
     sig("AIza", "Google", "api_key", "google", None, None),
     sig("ya29.", "Google", "api_key", "google", None, None),
-    sig("xoxb-", "Slack", "api_key", "slack", Some("https://slack.com/api"), None),
-    sig("xoxp-", "Slack", "api_key", "slack", Some("https://slack.com/api"), None),
-    sig("xapp-", "Slack", "api_key", "slack", Some("https://slack.com/api"), None),
-    sig("sk_live_", "Stripe", "api_key", "stripe", Some("https://api.stripe.com"), Some("production")),
-    sig("sk_test_", "Stripe", "api_key", "stripe", Some("https://api.stripe.com"), Some("testing")),
-    sig("pk_live_", "Stripe", "api_key", "stripe", Some("https://api.stripe.com"), Some("production")),
-    sig("pk_test_", "Stripe", "api_key", "stripe", Some("https://api.stripe.com"), Some("testing")),
-    sig("rk_live_", "Stripe", "api_key", "stripe", Some("https://api.stripe.com"), Some("production")),
+    sig(
+        "xoxb-",
+        "Slack",
+        "api_key",
+        "slack",
+        Some("https://slack.com/api"),
+        None,
+    ),
+    sig(
+        "xoxp-",
+        "Slack",
+        "api_key",
+        "slack",
+        Some("https://slack.com/api"),
+        None,
+    ),
+    sig(
+        "xapp-",
+        "Slack",
+        "api_key",
+        "slack",
+        Some("https://slack.com/api"),
+        None,
+    ),
+    sig(
+        "sk_live_",
+        "Stripe",
+        "api_key",
+        "stripe",
+        Some("https://api.stripe.com"),
+        Some("production"),
+    ),
+    sig(
+        "sk_test_",
+        "Stripe",
+        "api_key",
+        "stripe",
+        Some("https://api.stripe.com"),
+        Some("testing"),
+    ),
+    sig(
+        "pk_live_",
+        "Stripe",
+        "api_key",
+        "stripe",
+        Some("https://api.stripe.com"),
+        Some("production"),
+    ),
+    sig(
+        "pk_test_",
+        "Stripe",
+        "api_key",
+        "stripe",
+        Some("https://api.stripe.com"),
+        Some("testing"),
+    ),
+    sig(
+        "rk_live_",
+        "Stripe",
+        "api_key",
+        "stripe",
+        Some("https://api.stripe.com"),
+        Some("production"),
+    ),
     sig("shpat_", "Shopify", "api_key", "shopify", None, None),
-    sig("dop_v1_", "DigitalOcean", "api_key", "digitalocean", Some("https://api.digitalocean.com/v2"), None),
-    sig("doo_v1_", "DigitalOcean", "api_key", "digitalocean", Some("https://api.digitalocean.com/v2"), None),
-    sig("dckr_pat_", "Docker Hub", "api_key", "docker", Some("https://hub.docker.com/v2"), None),
-    sig("npm_", "npm", "api_key", "npm", Some("https://registry.npmjs.org"), None),
-    sig("pypi-", "PyPI", "api_key", "pypi", Some("https://upload.pypi.org/legacy/"), None),
-    sig("SG.", "SendGrid", "api_key", "sendgrid", Some("https://api.sendgrid.com/v3"), None),
-    sig("key-", "Mailgun", "api_key", "mailgun", Some("https://api.mailgun.net/v3"), None),
+    sig(
+        "dop_v1_",
+        "DigitalOcean",
+        "api_key",
+        "digitalocean",
+        Some("https://api.digitalocean.com/v2"),
+        None,
+    ),
+    sig(
+        "doo_v1_",
+        "DigitalOcean",
+        "api_key",
+        "digitalocean",
+        Some("https://api.digitalocean.com/v2"),
+        None,
+    ),
+    sig(
+        "dckr_pat_",
+        "Docker Hub",
+        "api_key",
+        "docker",
+        Some("https://hub.docker.com/v2"),
+        None,
+    ),
+    sig(
+        "npm_",
+        "npm",
+        "api_key",
+        "npm",
+        Some("https://registry.npmjs.org"),
+        None,
+    ),
+    sig(
+        "pypi-",
+        "PyPI",
+        "api_key",
+        "pypi",
+        Some("https://upload.pypi.org/legacy/"),
+        None,
+    ),
+    sig(
+        "SG.",
+        "SendGrid",
+        "api_key",
+        "sendgrid",
+        Some("https://api.sendgrid.com/v3"),
+        None,
+    ),
+    sig(
+        "key-",
+        "Mailgun",
+        "api_key",
+        "mailgun",
+        Some("https://api.mailgun.net/v3"),
+        None,
+    ),
     sig("tvly-", "Tavily", "api_key", "tavily", None, None),
-    sig("fig_", "Figma", "api_key", "figma", Some("https://api.figma.com/v1"), None),
-    sig("atlasv1.", "MongoDB Atlas", "api_key", "mongodb", None, None),
-    sig("lin_api_", "Linear", "api_key", "linear", Some("https://api.linear.app/graphql"), None),
-    sig("ntn_", "Notion", "api_key", "notion", Some("https://api.notion.com/v1"), None),
-    sig("secret_", "Notion", "api_key", "notion", Some("https://api.notion.com/v1"), None),
+    sig(
+        "fig_",
+        "Figma",
+        "api_key",
+        "figma",
+        Some("https://api.figma.com/v1"),
+        None,
+    ),
+    sig(
+        "atlasv1.",
+        "MongoDB Atlas",
+        "api_key",
+        "mongodb",
+        None,
+        None,
+    ),
+    sig(
+        "lin_api_",
+        "Linear",
+        "api_key",
+        "linear",
+        Some("https://api.linear.app/graphql"),
+        None,
+    ),
+    sig(
+        "ntn_",
+        "Notion",
+        "api_key",
+        "notion",
+        Some("https://api.notion.com/v1"),
+        None,
+    ),
+    sig(
+        "secret_",
+        "Notion",
+        "api_key",
+        "notion",
+        Some("https://api.notion.com/v1"),
+        None,
+    ),
     sig("nvapi-", "NVIDIA", "api_key", "nvidia", None, None),
-    sig("gsk_", "Groq", "api_key", "groq", Some("https://api.groq.com/openai/v1"), None),
-    sig("r8_", "Replicate", "api_key", "replicate", Some("https://api.replicate.com/v1"), None),
+    sig(
+        "gsk_",
+        "Groq",
+        "api_key",
+        "groq",
+        Some("https://api.groq.com/openai/v1"),
+        None,
+    ),
+    sig(
+        "r8_",
+        "Replicate",
+        "api_key",
+        "replicate",
+        Some("https://api.replicate.com/v1"),
+        None,
+    ),
     sig("pcsk_", "Pinecone", "api_key", "pinecone", None, None),
 ];
 
@@ -114,8 +345,17 @@ fn structural_type(secret: &str) -> Option<(&'static str, &'static str)> {
         return Some(("api_key", "JWT (three base64url segments)"));
     }
     for scheme in [
-        "postgres://", "postgresql://", "mysql://", "mongodb://", "mongodb+srv://", "redis://",
-        "rediss://", "amqp://", "amqps://", "mssql://", "clickhouse://",
+        "postgres://",
+        "postgresql://",
+        "mysql://",
+        "mongodb://",
+        "mongodb+srv://",
+        "redis://",
+        "rediss://",
+        "amqp://",
+        "amqps://",
+        "mssql://",
+        "clickhouse://",
     ] {
         if t.starts_with(scheme) {
             return Some(("connection_string", "database URI scheme"));
@@ -162,7 +402,10 @@ fn is_blank(entry: &Value, field: &str) -> bool {
     // `postgres://` URL stayed classified as an API key forever, which is the
     // single most common thing an imported `.env` gets wrong.
     if field == "secretType" {
-        return matches!(entry.get(field).and_then(|v| v.as_str()), None | Some("") | Some("api_key"));
+        return matches!(
+            entry.get(field).and_then(|v| v.as_str()),
+            None | Some("") | Some("api_key")
+        );
     }
     match entry.get(field) {
         None | Some(Value::Null) => true,
@@ -198,23 +441,38 @@ pub fn plan_entry(entry: &Value, force: bool) -> EntryPlan {
     let matched = SIGNATURES.iter().find(|s| secret.starts_with(s.prefix));
 
     if let Some(s) = matched {
-        let why = format!("secret carries the public `{}` prefix used by {}", s.prefix, s.issuer);
+        let why = format!(
+            "secret carries the public `{}` prefix used by {}",
+            s.prefix, s.issuer
+        );
         propose!("secretType", json!(s.secret_type), why.clone());
         propose!("custom_icon", json!(s.icon), why.clone());
         if let Some(url) = s.api_url {
             propose!("api_url", json!(url), why.clone());
         }
         if let Some(env) = s.environment {
-            propose!("environment", json!(env), format!("`{}` is {env}-only at {}", s.prefix, s.issuer));
+            propose!(
+                "environment",
+                json!(env),
+                format!("`{}` is {env}-only at {}", s.prefix, s.issuer)
+            );
         }
-        propose!("api_description", json!(format!("{} credential", s.issuer)), why.clone());
+        propose!(
+            "api_description",
+            json!(format!("{} credential", s.issuer)),
+            why.clone()
+        );
         // A tag is the cheapest way to make a hundred imported variables
         // navigable, and it is derived, so re-running does not multiply it.
         let issuer_tag = s.issuer.to_lowercase().replace(' ', "-");
         let existing_tags: Vec<String> = entry
             .get("tags")
             .and_then(|v| v.as_array())
-            .map(|a| a.iter().filter_map(|t| t.as_str().map(String::from)).collect())
+            .map(|a| {
+                a.iter()
+                    .filter_map(|t| t.as_str().map(String::from))
+                    .collect()
+            })
             .unwrap_or_default();
         if !existing_tags.iter().any(|t| t == &issuer_tag) {
             let mut next = existing_tags.clone();
@@ -230,7 +488,11 @@ pub fn plan_entry(entry: &Value, force: bool) -> EntryPlan {
     }
 
     if let Some(env) = environment_from_name(&provider) {
-        propose!("environment", json!(env), format!("name contains a {env} marker"));
+        propose!(
+            "environment",
+            json!(env),
+            format!("name contains a {env} marker")
+        );
     }
 
     // An imported `.env` variable is named like a shell variable, and that name
@@ -259,7 +521,11 @@ pub fn plan_entry(entry: &Value, force: bool) -> EntryPlan {
         }
     });
 
-    EntryPlan { provider, fingerprint: out::fingerprint(secret), proposals }
+    EntryPlan {
+        provider,
+        fingerprint: out::fingerprint(secret),
+        proposals,
+    }
 }
 
 // ── Live enrichment ───────────────────────────────────────────────────────────
@@ -346,7 +612,7 @@ pub struct Live {
 }
 
 /// Pull the first string found at any of `paths` in a JSON body.
-fn pick<'a>(body: &'a Value, paths: &[&str]) -> Option<String> {
+fn pick(body: &Value, paths: &[&str]) -> Option<String> {
     for path in paths {
         let mut cur = body;
         for part in path.split('.') {
@@ -369,7 +635,9 @@ fn pick<'a>(body: &'a Value, paths: &[&str]) -> Option<String> {
 /// network calls because someone ran it out of habit.
 pub fn probe_entry(entry: &Value, timeout_secs: u64, force: bool) -> Option<Live> {
     let secret = entry.get("api_key").and_then(|v| v.as_str()).unwrap_or("");
-    let probe = PROBES.iter().find(|p| p.prefixes.iter().any(|pre| secret.starts_with(pre)))?;
+    let probe = PROBES
+        .iter()
+        .find(|p| p.prefixes.iter().any(|pre| secret.starts_with(pre)))?;
 
     let client = reqwest::blocking::Client::builder()
         .timeout(std::time::Duration::from_secs(timeout_secs))
@@ -382,7 +650,9 @@ pub fn probe_entry(entry: &Value, timeout_secs: u64, force: bool) -> Option<Live
     req = match probe.auth {
         Auth::Bearer => req.bearer_auth(secret),
         Auth::PrivateToken => req.header("PRIVATE-TOKEN", secret),
-        Auth::AnthropicKey => req.header("x-api-key", secret).header("anthropic-version", "2023-06-01"),
+        Auth::AnthropicKey => req
+            .header("x-api-key", secret)
+            .header("anthropic-version", "2023-06-01"),
         Auth::BasicUser => req.basic_auth(secret, None::<&str>),
     };
 
@@ -395,14 +665,18 @@ pub fn probe_entry(entry: &Value, timeout_secs: u64, force: bool) -> Option<Live
                 // The error can contain the URL but never the credential.
                 detail: e.to_string(),
                 proposals: Vec::new(),
-            })
+            });
         }
     };
 
     let status = resp.status();
     let headers = resp.headers().clone();
     let header = |name: &str| {
-        headers.get(name).and_then(|v| v.to_str().ok()).map(str::to_string).filter(|s| !s.is_empty())
+        headers
+            .get(name)
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_string)
+            .filter(|s| !s.is_empty())
     };
 
     if !status.is_success() {
@@ -429,13 +703,25 @@ pub fn probe_entry(entry: &Value, timeout_secs: u64, force: bool) -> Option<Live
     let mut proposals: Vec<Proposal> = Vec::new();
     let mut push = |field: &str, value: Value, reason: String| {
         if force || is_blank(entry, field) {
-            proposals.push(Proposal { field: field.to_string(), value, reason });
+            proposals.push(Proposal {
+                field: field.to_string(),
+                value,
+                reason,
+            });
         }
     };
 
     let identity = pick(
         &body,
-        &["login", "username", "user", "email", "account.email", "business_profile.name", "id"],
+        &[
+            "login",
+            "username",
+            "user",
+            "email",
+            "account.email",
+            "business_profile.name",
+            "id",
+        ],
     );
     if let Some(who) = &identity {
         push(
@@ -448,29 +734,51 @@ pub fn probe_entry(entry: &Value, timeout_secs: u64, force: bool) -> Option<Live
     // Scopes and expiry are the two facts a stored credential cannot tell you
     // about itself, and both are what a rotation policy actually needs.
     if let Some(scopes) = header("x-oauth-scopes") {
-        let list: Vec<String> =
-            scopes.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect();
+        let list: Vec<String> = scopes
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect();
         if !list.is_empty() {
-            push("scopes", json!(list), format!("{} reported the token's scopes", probe.issuer));
+            push(
+                "scopes",
+                json!(list),
+                format!("{} reported the token's scopes", probe.issuer),
+            );
         }
     }
     if let Some(exp) = header("github-authentication-token-expiration") {
         let day: String = exp.chars().take(10).collect();
-        push("expires_at", json!(day), "GitHub reported the token's expiry".into());
+        push(
+            "expires_at",
+            json!(day),
+            "GitHub reported the token's expiry".into(),
+        );
     }
     if let Some(limit) = header("x-ratelimit-limit") {
         push(
             "rate_limit",
             json!(format!("{limit} req/hour")),
-            format!("{} reported the rate limit for this credential", probe.issuer),
+            format!(
+                "{} reported the rate limit for this credential",
+                probe.issuer
+            ),
         );
     }
 
     let desc = match &identity {
         Some(who) => format!("{} credential — verified, {who}", probe.issuer),
-        None => format!("{} credential — verified {}", probe.issuer, vault_core::iso_now().chars().take(10).collect::<String>()),
+        None => format!(
+            "{} credential — verified {}",
+            probe.issuer,
+            vault_core::iso_now().chars().take(10).collect::<String>()
+        ),
     };
-    push("api_description", json!(desc), format!("confirmed live against {}", probe.url));
+    push(
+        "api_description",
+        json!(desc),
+        format!("confirmed live against {}", probe.url),
+    );
 
     Some(Live {
         issuer: probe.issuer,
@@ -499,7 +807,10 @@ pub fn cmd_enrich(access: &Access, opts: &EnrichOpts<'_>) -> CliResult {
     let mut live_rows: Vec<Value> = Vec::new();
     for entry in &entries {
         if let Some(q) = only {
-            if !data::provider_of(entry).to_lowercase().contains(&q.to_lowercase()) {
+            if !data::provider_of(entry)
+                .to_lowercase()
+                .contains(&q.to_lowercase())
+            {
                 continue;
             }
         }

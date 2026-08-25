@@ -1,6 +1,7 @@
 /**
- * @file Chunk edit modal — add, rename, retype and reorder the fields of a
- *       single config chunk.
+ * @file
+ * Chunk edit modal — add, rename, retype and reorder the fields of a
+ * single config chunk.
  */
 
 import type { Project, SecretChunk, ChunkField, ChunkFieldType } from '../types';
@@ -53,7 +54,7 @@ export function renderChunkEditFields(fields: ChunkField[]) {
     container.appendChild(row);
   });
 
-  container.querySelectorAll<HTMLButtonElement>('.chunk-field-delete').forEach(btn => {
+  container.querySelectorAll<HTMLButtonElement>('.chunk-field-delete').forEach((btn) => {
     btn.addEventListener('click', (e) => {
       e.stopPropagation();
       const idx = parseInt(btn.dataset.idx!);
@@ -66,13 +67,14 @@ export function renderChunkEditFields(fields: ChunkField[]) {
 
 export function readChunkEditFields(): ChunkField[] {
   const rows = document.querySelectorAll<HTMLElement>('#chunk-edit-fields .chunk-edit-row');
-  return Array.from(rows).map(row => {
-    const ft = (row.querySelector('.chunk-field-type-select') as HTMLSelectElement).value as ChunkFieldType;
+  return Array.from(rows).map((row) => {
+    const ft = (row.querySelector('.chunk-field-type-select') as HTMLSelectElement)
+      .value as ChunkFieldType;
     const field: ChunkField = {
-      key:        (row.querySelector('.chunk-field-key-input') as HTMLInputElement).value.trim(),
-      value:      (row.querySelector('.chunk-field-val-input') as HTMLInputElement).value,
+      key: (row.querySelector('.chunk-field-key-input') as HTMLInputElement).value.trim(),
+      value: (row.querySelector('.chunk-field-val-input') as HTMLInputElement).value,
       field_type: ft,
-      secret:     ft === 'secret',
+      secret: ft === 'secret',
     };
     if (row.dataset.description) field.description = row.dataset.description;
     return field;
@@ -83,18 +85,22 @@ export function saveChunkEdit() {
   const projId = (document.getElementById('chunk-edit-project-id') as HTMLInputElement).value;
   const chunkId = (document.getElementById('chunk-edit-chunk-id') as HTMLInputElement).value;
   const name = (document.getElementById('chunk-edit-name') as HTMLInputElement).value.trim();
-  if (!name) { showToast('Chunk name is required', 'err'); return; }
-  const project = st.vault.projects.find(p => p.id === projId);
-  if (!project || !project.chunks) return;
-  const chunk = project.chunks.find(c => c.id === chunkId);
+  if (!name) {
+    showToast('Chunk name is required', 'err');
+    return;
+  }
+  const project = st.vault.projects.find((p) => p.id === projId);
+  if (!project?.chunks) return;
+  const chunk = project.chunks.find((c) => c.id === chunkId);
   if (!chunk) return;
   chunk.name = name;
-  chunk.notes = (document.getElementById('chunk-edit-notes') as HTMLInputElement).value.trim() || undefined;
-  chunk.disabled = (document.getElementById('chunk-edit-disabled') as HTMLInputElement).checked || undefined;
+  chunk.notes =
+    (document.getElementById('chunk-edit-notes') as HTMLInputElement).value.trim() || undefined;
+  chunk.disabled =
+    (document.getElementById('chunk-edit-disabled') as HTMLInputElement).checked || undefined;
   chunk.fields = readChunkEditFields();
   persist();
   closeChunkEditModal();
   triggerRender();
   showToast('Chunk saved', 'ok');
 }
-

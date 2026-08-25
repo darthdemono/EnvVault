@@ -3,41 +3,40 @@
 //! Used by the Tauri desktop app, the HTTP server (`envv-server`), and the CLI
 //! (`envv-cli`).  Has no dependency on Tauri; accepts `&Path` for all I/O.
 
+use argon2::{Algorithm, Argon2, Params, Version};
+pub use rusqlite::Connection as SqlConnection;
+use rusqlite::{Connection, OpenFlags, OptionalExtension};
+use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::Path;
-use rusqlite::{Connection, OpenFlags, OptionalExtension};
-pub use rusqlite::Connection as SqlConnection;
-use argon2::{Argon2, Algorithm, Version, Params};
-use sha2::{Sha256, Digest};
 pub use zeroize::Zeroize;
 
 pub mod generators;
 pub use generators::{generate_certificate, generate_ssh_keypair};
 
 pub mod permex;
-pub use permex::{Expr as PermExpr, EntryView, Field as PermField, parse as parse_perm_expr, eval as eval_perm_expr};
+pub use permex::{
+    eval as eval_perm_expr, parse as parse_perm_expr, EntryView, Expr as PermExpr,
+    Field as PermField,
+};
 
 pub mod users;
 pub use users::{
-    UserRecord, TokenRecord, PermissionRecord, UserClass, ClassPermission,
-    init_users_schema, create_user, set_user_password,
-    verify_user_password, verify_user_token,
-    list_users, delete_user, rename_user,
-    create_user_token, revoke_user_token, list_user_tokens,
-    get_user_permissions, set_user_permissions,
-    list_user_classes, create_user_class, update_user_class, delete_user_class,
-    get_class_permissions, set_class_permissions, assign_user_class,
-    get_user_capabilities,
-    authority_tier, user_authority_tier, class_authority_tier, token_user_id,
-    seed_default_admin, AdminSeed, ensure_owner_user,
-    get_permission_expr, set_permission_expr, effective_permission_expr,
-    filter_vault_for_user, merge_user_vault_write, glob_matches,
+    assign_user_class, authority_tier, class_authority_tier, create_user, create_user_class,
+    create_user_token, delete_user, delete_user_class, effective_permission_expr,
+    ensure_owner_user, filter_vault_for_user, get_class_permissions, get_permission_expr,
+    get_user_capabilities, get_user_permissions, glob_matches, init_users_schema,
+    list_user_classes, list_user_tokens, list_users, merge_user_vault_write, rename_user,
+    revoke_user_token, seed_default_admin, set_class_permissions, set_permission_expr,
+    set_user_password, set_user_permissions, token_user_id, update_user_class, user_authority_tier,
+    verify_user_password, verify_user_token, AdminSeed, ClassPermission, PermissionRecord,
+    TokenRecord, UserClass, UserRecord,
 };
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
 pub const SALT_LEN: usize = 16;
-pub const KEY_LEN:  usize = 32;
+pub const KEY_LEN: usize = 32;
 
 const A2_M_COST: u32 = 65_536;
 const A2_T_COST: u32 = 3;
@@ -51,11 +50,12 @@ pub type VaultKey = [u8; KEY_LEN];
 /// Derives a 32-byte AES-256 key from `password` and `salt` using Argon2id
 /// (m=65536 KiB, t=3, p=1 — OWASP 2023 recommendation).
 pub fn derive_key(password: &str, salt: &[u8]) -> Result<VaultKey, String> {
-    let params = Params::new(A2_M_COST, A2_T_COST, A2_P_COST, Some(KEY_LEN))
-        .map_err(|e| e.to_string())?;
+    let params =
+        Params::new(A2_M_COST, A2_T_COST, A2_P_COST, Some(KEY_LEN)).map_err(|e| e.to_string())?;
     let argon2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
     let mut key = [0u8; KEY_LEN];
-    argon2.hash_password_into(password.as_bytes(), salt, &mut key)
+    argon2
+        .hash_password_into(password.as_bytes(), salt, &mut key)
         .map_err(|e| e.to_string())?;
     Ok(key)
 }
@@ -64,7 +64,8 @@ pub fn derive_key(password: &str, salt: &[u8]) -> Result<VaultKey, String> {
 pub fn read_or_create_salt(salt_path: &Path) -> Result<[u8; SALT_LEN], String> {
     if salt_path.exists() {
         let raw = fs::read(salt_path).map_err(|e| e.to_string())?;
-        raw.try_into().map_err(|_| "vault.salt is corrupt (wrong length)".to_string())
+        raw.try_into()
+            .map_err(|_| "vault.salt is corrupt (wrong length)".to_string())
     } else {
         use rand::RngCore;
         let mut s = [0u8; SALT_LEN];
@@ -90,7 +91,8 @@ pub fn open_db(db_path: &Path, key: &VaultKey) -> Result<Connection, String> {
     let conn = Connection::open_with_flags(
         db_path,
         OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_CREATE,
-    ).map_err(|e| e.to_string())?;
+    )
+    .map_err(|e| e.to_string())?;
     conn.execute_batch(&format!("PRAGMA key = \"x'{}'\";", hex::encode(key)))
         .map_err(|e| e.to_string())?;
     conn.execute_batch("SELECT count(*) FROM sqlite_master;")
@@ -120,8 +122,9 @@ pub fn init_schema(conn: &Connection) -> Result<(), String> {
          CREATE TABLE IF NOT EXISTS vault_meta (
              key   TEXT PRIMARY KEY,
              value TEXT NOT NULL
-         );"
-    ).map_err(|e| e.to_string())?;
+         );",
+    )
+    .map_err(|e| e.to_string())?;
     // Idempotent migration: add hash-chain columns if absent.
     let _ = conn.execute_batch("ALTER TABLE vault_audit ADD COLUMN entry_hash TEXT;");
     let _ = conn.execute_batch("ALTER TABLE vault_audit ADD COLUMN prev_hash  TEXT;");
@@ -170,8 +173,10 @@ pub fn load_vault(conn: &Connection) -> Result<Option<serde_json::Value>, String
         .optional()
         .map_err(|e| e.to_string())?;
     match raw {
-        None    => Ok(None),
-        Some(s) => serde_json::from_str(&s).map(Some).map_err(|e| e.to_string()),
+        None => Ok(None),
+        Some(s) => serde_json::from_str(&s)
+            .map(Some)
+            .map_err(|e| e.to_string()),
     }
 }
 
@@ -201,8 +206,13 @@ pub struct SaveCtx<'a> {
 /// the hash of exactly the bytes on disk — no re-serialisation, no assumptions
 /// about map ordering.
 pub fn vault_version(conn: &Connection) -> Result<Option<String>, String> {
-    conn.query_row("SELECT value FROM vault_meta WHERE key = 'data_hash'", [], |r| r.get(0))
-        .optional().map_err(|e| e.to_string())
+    conn.query_row(
+        "SELECT value FROM vault_meta WHERE key = 'data_hash'",
+        [],
+        |r| r.get(0),
+    )
+    .optional()
+    .map_err(|e| e.to_string())
 }
 
 /// Serialises `data` to the vault, updating `version_history` on key changes
@@ -229,7 +239,8 @@ pub fn save_vault(
     data: serde_json::Value,
     ctx: SaveCtx<'_>,
 ) -> Result<String, String> {
-    conn.execute_batch("BEGIN IMMEDIATE").map_err(|e| e.to_string())?;
+    conn.execute_batch("BEGIN IMMEDIATE")
+        .map_err(|e| e.to_string())?;
     match save_vault_txn(conn, data, ctx) {
         Ok(hash) => {
             conn.execute_batch("COMMIT").map_err(|e| e.to_string())?;
@@ -267,11 +278,9 @@ fn save_vault_txn(
     }
 
     let existing: Option<serde_json::Value> = conn
-        .query_row(
-            "SELECT data FROM vault WHERE id = 1",
-            [],
-            |row| row.get::<_, String>(0),
-        )
+        .query_row("SELECT data FROM vault WHERE id = 1", [], |row| {
+            row.get::<_, String>(0)
+        })
         .optional()
         .map_err(|e| e.to_string())?
         .and_then(|s| serde_json::from_str(&s).ok());
@@ -299,23 +308,47 @@ fn save_vault_txn(
     let mut new_data = data;
     if let Some(arr) = new_data.get_mut("api_keys").and_then(|v| v.as_array_mut()) {
         for entry in arr.iter_mut() {
-            let provider = entry.get("provider").and_then(|v| v.as_str()).unwrap_or("").to_string();
-            let ck       = entry_ck(entry);
+            let provider = entry
+                .get("provider")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let ck = entry_ck(entry);
 
             if let Some(old_e) = old_map.get(&ck) {
                 let new_val = entry.get("api_key").and_then(|v| v.as_str()).unwrap_or("");
                 let old_val = old_e.get("api_key").and_then(|v| v.as_str()).unwrap_or("");
                 if new_val != old_val && !old_val.is_empty() {
                     let mut history: Vec<serde_json::Value> = entry
-                        .get("version_history").and_then(|v| v.as_array()).cloned()
-                        .unwrap_or_else(|| old_e.get("version_history")
-                            .and_then(|v| v.as_array()).cloned().unwrap_or_default());
-                    history.insert(0, serde_json::json!({ "value": old_val, "saved_at": now_str }));
+                        .get("version_history")
+                        .and_then(|v| v.as_array())
+                        .cloned()
+                        .unwrap_or_else(|| {
+                            old_e
+                                .get("version_history")
+                                .and_then(|v| v.as_array())
+                                .cloned()
+                                .unwrap_or_default()
+                        });
+                    history.insert(
+                        0,
+                        serde_json::json!({ "value": old_val, "saved_at": now_str }),
+                    );
                     history.truncate(50);
                     if let Some(obj) = entry.as_object_mut() {
-                        obj.insert("version_history".to_string(), serde_json::Value::Array(history));
+                        obj.insert(
+                            "version_history".to_string(),
+                            serde_json::Value::Array(history),
+                        );
                     }
-                    append_audit(conn, "update", &provider, &now_str, Some("api_key rotated"), actor)?;
+                    append_audit(
+                        conn,
+                        "update",
+                        &provider,
+                        &now_str,
+                        Some("api_key rotated"),
+                        actor,
+                    )?;
                 }
             } else {
                 append_audit(conn, "add", &provider, &now_str, None, actor)?;
@@ -323,18 +356,20 @@ fn save_vault_txn(
         }
     }
 
-    let raw  = serde_json::to_string(&new_data).map_err(|e| e.to_string())?;
+    let raw = serde_json::to_string(&new_data).map_err(|e| e.to_string())?;
     let hash = format!("{:x}", Sha256::digest(raw.as_bytes()));
 
     // Data and hash move together, so the integrity check never sees a mismatch.
     conn.execute(
         "INSERT OR REPLACE INTO vault (id, data) VALUES (1, ?1)",
         rusqlite::params![raw],
-    ).map_err(|e| e.to_string())?;
+    )
+    .map_err(|e| e.to_string())?;
     conn.execute(
         "INSERT OR REPLACE INTO vault_meta (key, value) VALUES ('data_hash', ?1)",
         rusqlite::params![hash],
-    ).map_err(|e| e.to_string())?;
+    )
+    .map_err(|e| e.to_string())?;
 
     Ok(hash)
 }
@@ -344,16 +379,22 @@ fn save_vault_txn(
 pub fn verify_vault_integrity(conn: &Connection) -> Result<bool, String> {
     let raw: Option<String> = conn
         .query_row("SELECT data FROM vault WHERE id = 1", [], |r| r.get(0))
-        .optional().map_err(|e| e.to_string())?;
+        .optional()
+        .map_err(|e| e.to_string())?;
     let stored_hash: Option<String> = conn
-        .query_row("SELECT value FROM vault_meta WHERE key = 'data_hash'", [], |r| r.get(0))
-        .optional().map_err(|e| e.to_string())?;
+        .query_row(
+            "SELECT value FROM vault_meta WHERE key = 'data_hash'",
+            [],
+            |r| r.get(0),
+        )
+        .optional()
+        .map_err(|e| e.to_string())?;
     match (raw, stored_hash) {
         (Some(data), Some(expected)) => {
             let actual = format!("{:x}", Sha256::digest(data.as_bytes()));
             Ok(actual == expected)
         }
-        (None, _) => Ok(true),  // empty vault: trivially intact
+        (None, _) => Ok(true),       // empty vault: trivially intact
         (Some(_), None) => Ok(true), // no hash stored yet (pre-migration): trust it
     }
 }
@@ -362,7 +403,10 @@ pub fn verify_vault_integrity(conn: &Connection) -> Result<bool, String> {
 /// from today (inclusive of today, exclusive of entries already expired).
 ///
 /// Uses lexicographic YYYY-MM-DD comparison — no parsing feature required.
-pub fn get_expiring_entries(conn: &Connection, within_days: u32) -> Result<Vec<serde_json::Value>, String> {
+pub fn get_expiring_entries(
+    conn: &Connection,
+    within_days: u32,
+) -> Result<Vec<serde_json::Value>, String> {
     let data = load_vault(conn)?.unwrap_or_else(|| serde_json::json!({ "api_keys": [] }));
     Ok(expiring_from_value(&data, within_days))
 }
@@ -382,19 +426,24 @@ pub fn get_expiring_entries_for_user(
 
 /// Extracts the `api_keys` whose `expires_at` falls within `within_days` of today.
 fn expiring_from_value(data: &serde_json::Value, within_days: u32) -> Vec<serde_json::Value> {
-    let now    = time::OffsetDateTime::now_utc();
+    let now = time::OffsetDateTime::now_utc();
     let cutoff = now + time::Duration::days(within_days as i64);
-    let today_str  = fmt_date(&now);
+    let today_str = fmt_date(&now);
     let cutoff_str = fmt_date(&cutoff);
 
-    data.get("api_keys").and_then(|k| k.as_array()).cloned()
+    data.get("api_keys")
+        .and_then(|k| k.as_array())
+        .cloned()
         .unwrap_or_default()
         .into_iter()
         .filter(|entry| {
-            entry.get("expires_at").and_then(|v| v.as_str()).map_or(false, |s| {
-                let d = &s[..s.len().min(10)];
-                d >= today_str.as_str() && d <= cutoff_str.as_str()
-            })
+            entry
+                .get("expires_at")
+                .and_then(|v| v.as_str())
+                .is_some_and(|s| {
+                    let d = &s[..s.len().min(10)];
+                    d >= today_str.as_str() && d <= cutoff_str.as_str()
+                })
         })
         .collect()
 }
@@ -408,26 +457,26 @@ fn fmt_date(dt: &time::OffsetDateTime) -> String {
 /// A single audit log row, including the hash-chain fields.
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct AuditRow {
-    pub id:             i64,
-    pub action:         String,
+    pub id: i64,
+    pub action: String,
     pub entry_provider: Option<String>,
-    pub timestamp:      String,
-    pub details:        Option<String>,
-    pub entry_hash:     Option<String>,
-    pub prev_hash:      Option<String>,
+    pub timestamp: String,
+    pub details: Option<String>,
+    pub entry_hash: Option<String>,
+    pub prev_hash: Option<String>,
     /// User id that performed the action. `None` for rows written before actor
     /// tracking, and for local desktop edits where the owner is implicit.
-    pub actor:          Option<String>,
+    pub actor: Option<String>,
 }
 
 /// Appends an audit entry and computes `entry_hash = SHA256(action|provider|ts|prev_hash)`.
 fn append_audit(
-    conn:      &Connection,
-    action:    &str,
-    provider:  &str,
+    conn: &Connection,
+    action: &str,
+    provider: &str,
     timestamp: &str,
-    details:   Option<&str>,
-    actor:     Option<&str>,
+    details: Option<&str>,
+    actor: Option<&str>,
 ) -> Result<(), String> {
     let prev_hash: Option<String> = conn
         .query_row(
@@ -440,7 +489,10 @@ fn append_audit(
         .flatten();
 
     let entry_hash = compute_audit_hash(
-        action, provider, timestamp, actor,
+        action,
+        provider,
+        timestamp,
+        actor,
         prev_hash.as_deref().unwrap_or("genesis"),
     );
 
@@ -449,12 +501,19 @@ fn append_audit(
          (action, entry_provider, timestamp, details, entry_hash, prev_hash, actor) \
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
         rusqlite::params![action, provider, timestamp, details, entry_hash, prev_hash, actor],
-    ).map_err(|e| e.to_string())?;
+    )
+    .map_err(|e| e.to_string())?;
     Ok(())
 }
 
 /// Records a hash-chained audit event with the current timestamp.
-pub fn record_event(conn: &Connection, action: &str, provider: &str, details: Option<&str>, actor: Option<&str>) -> Result<(), String> {
+pub fn record_event(
+    conn: &Connection,
+    action: &str,
+    provider: &str,
+    details: Option<&str>,
+    actor: Option<&str>,
+) -> Result<(), String> {
     append_audit(conn, action, provider, &iso_now(), details, actor)
 }
 
@@ -467,40 +526,59 @@ pub fn record_event(conn: &Connection, action: &str, provider: &str, details: Op
 ///
 /// A row with no actor keeps using v1 so existing chains stay verifiable; the
 /// verifier tries v2 first and falls back to v1.
-fn compute_audit_hash(action: &str, provider: &str, timestamp: &str, actor: Option<&str>, prev_hash: &str) -> String {
-    use sha2::{Sha256, Digest};
+fn compute_audit_hash(
+    action: &str,
+    provider: &str,
+    timestamp: &str,
+    actor: Option<&str>,
+    prev_hash: &str,
+) -> String {
+    use sha2::{Digest, Sha256};
     let mut h = Sha256::new();
     match actor {
-        Some(a) => for part in [action, "|", provider, "|", timestamp, "|", a, "|", prev_hash] {
-            h.update(part.as_bytes());
-        },
-        None => for part in [action, "|", provider, "|", timestamp, "|", prev_hash] {
-            h.update(part.as_bytes());
-        },
+        Some(a) => {
+            for part in [
+                action, "|", provider, "|", timestamp, "|", a, "|", prev_hash,
+            ] {
+                h.update(part.as_bytes());
+            }
+        }
+        None => {
+            for part in [action, "|", provider, "|", timestamp, "|", prev_hash] {
+                h.update(part.as_bytes());
+            }
+        }
     }
     hex::encode(h.finalize())
 }
 
 /// Returns all audit rows ordered newest-first.
 pub fn load_audit(conn: &Connection) -> Result<Vec<AuditRow>, String> {
-    let mut stmt = conn.prepare(
-        "SELECT id, action, entry_provider, timestamp, details, entry_hash, prev_hash, actor \
-         FROM vault_audit ORDER BY id DESC"
-    ).map_err(|e| e.to_string())?;
+    let mut stmt = conn
+        .prepare(
+            "SELECT id, action, entry_provider, timestamp, details, entry_hash, prev_hash, actor \
+         FROM vault_audit ORDER BY id DESC",
+        )
+        .map_err(|e| e.to_string())?;
 
-    let rows: Vec<Result<AuditRow, _>> = stmt.query_map([], |row| Ok(AuditRow {
-        id:             row.get(0)?,
-        action:         row.get(1)?,
-        entry_provider: row.get(2)?,
-        timestamp:      row.get(3)?,
-        details:        row.get(4)?,
-        entry_hash:     row.get(5)?,
-        prev_hash:      row.get(6)?,
-        actor:          row.get(7)?,
-    }))
-    .map_err(|e| e.to_string())?
-    .collect();
-    rows.into_iter().map(|r| r.map_err(|e| e.to_string())).collect()
+    let rows: Vec<Result<AuditRow, _>> = stmt
+        .query_map([], |row| {
+            Ok(AuditRow {
+                id: row.get(0)?,
+                action: row.get(1)?,
+                entry_provider: row.get(2)?,
+                timestamp: row.get(3)?,
+                details: row.get(4)?,
+                entry_hash: row.get(5)?,
+                prev_hash: row.get(6)?,
+                actor: row.get(7)?,
+            })
+        })
+        .map_err(|e| e.to_string())?
+        .collect();
+    rows.into_iter()
+        .map(|r| r.map_err(|e| e.to_string()))
+        .collect()
 }
 
 // ── Migration helpers ─────────────────────────────────────────────────────────
@@ -511,7 +589,9 @@ pub fn migrate_legacy_json(conn: &Connection, raw_json: &str) -> Result<(), Stri
     conn.execute(
         "INSERT OR REPLACE INTO vault (id, data) VALUES (1, ?1)",
         rusqlite::params![raw_json],
-    ).map(|_| ()).map_err(|e| e.to_string())
+    )
+    .map(|_| ())
+    .map_err(|e| e.to_string())
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
@@ -519,9 +599,15 @@ pub fn migrate_legacy_json(conn: &Connection, raw_json: &str) -> Result<(), Stri
 /// Returns the current UTC time as an ISO-8601 string (`YYYY-MM-DDTHH:MM:SSZ`).
 pub fn iso_now() -> String {
     let t = time::OffsetDateTime::now_utc();
-    format!("{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z",
-        t.year(), t.month() as u8, t.day(),
-        t.hour(), t.minute(), t.second())
+    format!(
+        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z",
+        t.year(),
+        t.month() as u8,
+        t.day(),
+        t.hour(),
+        t.minute(),
+        t.second()
+    )
 }
 
 // ── Tests ──────────────────────────────────────────────────────────────────────
@@ -534,7 +620,9 @@ mod tests {
     /// Unique scratch path per test; SQLCipher needs a real file, not `:memory:`.
     fn scratch(tag: &str) -> std::path::PathBuf {
         let nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
         let dir = std::env::temp_dir().join(format!("envvault-test-{tag}-{nanos}"));
         fs::create_dir_all(&dir).unwrap();
         dir
@@ -592,7 +680,7 @@ mod tests {
     #[test]
     fn entry_ck_ignores_empty_id() {
         let with_empty = json!({ "id": "", "provider": "P" });
-        let without    = json!({ "provider": "P" });
+        let without = json!({ "provider": "P" });
         assert_eq!(entry_ck(&with_empty), entry_ck(&without));
     }
 
@@ -621,16 +709,30 @@ mod tests {
     #[test]
     fn changing_a_key_records_previous_value_in_history() {
         let (conn, _dir) = open_scratch("history");
-        save_vault(&conn, json!({
-            "api_keys": [{ "id": "1", "provider": "GitHub", "api_key": "old_value" }]
-        }), SaveCtx::default()).unwrap();
-        save_vault(&conn, json!({
-            "api_keys": [{ "id": "1", "provider": "GitHub", "api_key": "new_value" }]
-        }), SaveCtx::default()).unwrap();
+        save_vault(
+            &conn,
+            json!({
+                "api_keys": [{ "id": "1", "provider": "GitHub", "api_key": "old_value" }]
+            }),
+            SaveCtx::default(),
+        )
+        .unwrap();
+        save_vault(
+            &conn,
+            json!({
+                "api_keys": [{ "id": "1", "provider": "GitHub", "api_key": "new_value" }]
+            }),
+            SaveCtx::default(),
+        )
+        .unwrap();
 
         let loaded = load_vault(&conn).unwrap().unwrap();
         let history = loaded["api_keys"][0]["version_history"].as_array().unwrap();
-        assert_eq!(history.len(), 1, "one rotation should append one history entry");
+        assert_eq!(
+            history.len(),
+            1,
+            "one rotation should append one history entry"
+        );
         assert_eq!(history[0]["value"], "old_value");
     }
 
@@ -639,12 +741,22 @@ mod tests {
         // Renaming an entry must not look like "delete + create", which would
         // lose its history. This is exactly what the old provider|account key broke.
         let (conn, _dir) = open_scratch("rename");
-        save_vault(&conn, json!({
-            "api_keys": [{ "id": "1", "provider": "OldName", "api_key": "v1" }]
-        }), SaveCtx::default()).unwrap();
-        save_vault(&conn, json!({
-            "api_keys": [{ "id": "1", "provider": "NewName", "api_key": "v2" }]
-        }), SaveCtx::default()).unwrap();
+        save_vault(
+            &conn,
+            json!({
+                "api_keys": [{ "id": "1", "provider": "OldName", "api_key": "v1" }]
+            }),
+            SaveCtx::default(),
+        )
+        .unwrap();
+        save_vault(
+            &conn,
+            json!({
+                "api_keys": [{ "id": "1", "provider": "NewName", "api_key": "v2" }]
+            }),
+            SaveCtx::default(),
+        )
+        .unwrap();
 
         let loaded = load_vault(&conn).unwrap().unwrap();
         let history = loaded["api_keys"][0]["version_history"].as_array().unwrap();
@@ -661,15 +773,24 @@ mod tests {
     #[test]
     fn integrity_check_detects_tampering() {
         let (conn, _dir) = open_scratch("tamper");
-        save_vault(&conn, json!({
-            "api_keys": [{ "id": "1", "provider": "P", "api_key": "k" }]
-        }), SaveCtx::default()).unwrap();
+        save_vault(
+            &conn,
+            json!({
+                "api_keys": [{ "id": "1", "provider": "P", "api_key": "k" }]
+            }),
+            SaveCtx::default(),
+        )
+        .unwrap();
         // Rewrite the row behind save_vault's back, leaving the stored hash stale.
         conn.execute(
             "UPDATE vault SET data = ?1 WHERE id = 1",
             rusqlite::params![r#"{"api_keys":[{"id":"1","provider":"EVIL","api_key":"k"}]}"#],
-        ).unwrap();
-        assert!(!verify_vault_integrity(&conn).unwrap(), "tampered data must fail the hash check");
+        )
+        .unwrap();
+        assert!(
+            !verify_vault_integrity(&conn).unwrap(),
+            "tampered data must fail the hash check"
+        );
     }
 
     #[test]
@@ -683,11 +804,19 @@ mod tests {
     #[test]
     fn version_changes_with_every_write() {
         let (conn, _dir) = open_scratch("version");
-        assert!(vault_version(&conn).unwrap().is_none(), "empty vault has no version");
+        assert!(
+            vault_version(&conn).unwrap().is_none(),
+            "empty vault has no version"
+        );
         let v1 = save_vault(&conn, json!({ "api_keys": [] }), SaveCtx::default()).unwrap();
-        let v2 = save_vault(&conn, json!({
-            "api_keys": [{ "id": "1", "provider": "A", "api_key": "k" }]
-        }), SaveCtx::default()).unwrap();
+        let v2 = save_vault(
+            &conn,
+            json!({
+                "api_keys": [{ "id": "1", "provider": "A", "api_key": "k" }]
+            }),
+            SaveCtx::default(),
+        )
+        .unwrap();
         assert_ne!(v1, v2);
         assert_eq!(vault_version(&conn).unwrap().as_deref(), Some(v2.as_str()));
     }
@@ -705,9 +834,16 @@ mod tests {
     fn writing_at_the_expected_version_succeeds() {
         let (conn, _dir) = open_scratch("cas-ok");
         let v1 = save_vault(&conn, json!({ "api_keys": [] }), SaveCtx::default()).unwrap();
-        let res = save_vault(&conn, json!({
-            "api_keys": [{ "id": "1", "provider": "A", "api_key": "k" }]
-        }), SaveCtx { actor: None, expect_version: Some(&v1) });
+        let res = save_vault(
+            &conn,
+            json!({
+                "api_keys": [{ "id": "1", "provider": "A", "api_key": "k" }]
+            }),
+            SaveCtx {
+                actor: None,
+                expect_version: Some(&v1),
+            },
+        );
         assert!(res.is_ok());
     }
 
@@ -716,21 +852,44 @@ mod tests {
         // The lost-update scenario: two writers read v1, one saves, the other
         // must not be allowed to overwrite it.
         let (conn, _dir) = open_scratch("cas-stale");
-        let v1 = save_vault(&conn, json!({
-            "api_keys": [{ "id": "1", "provider": "original", "api_key": "k" }]
-        }), SaveCtx::default()).unwrap();
+        let v1 = save_vault(
+            &conn,
+            json!({
+                "api_keys": [{ "id": "1", "provider": "original", "api_key": "k" }]
+            }),
+            SaveCtx::default(),
+        )
+        .unwrap();
 
         // Writer A lands first.
-        save_vault(&conn, json!({
-            "api_keys": [{ "id": "1", "provider": "written-by-A", "api_key": "k" }]
-        }), SaveCtx { actor: None, expect_version: Some(&v1) }).unwrap();
+        save_vault(
+            &conn,
+            json!({
+                "api_keys": [{ "id": "1", "provider": "written-by-A", "api_key": "k" }]
+            }),
+            SaveCtx {
+                actor: None,
+                expect_version: Some(&v1),
+            },
+        )
+        .unwrap();
 
         // Writer B still holds v1.
-        let err = save_vault(&conn, json!({
-            "api_keys": [{ "id": "1", "provider": "written-by-B", "api_key": "k" }]
-        }), SaveCtx { actor: None, expect_version: Some(&v1) })
-            .expect_err("a stale write must be refused");
-        assert!(err.starts_with(CONFLICT_ERR), "callers match on this prefix, got: {err}");
+        let err = save_vault(
+            &conn,
+            json!({
+                "api_keys": [{ "id": "1", "provider": "written-by-B", "api_key": "k" }]
+            }),
+            SaveCtx {
+                actor: None,
+                expect_version: Some(&v1),
+            },
+        )
+        .expect_err("a stale write must be refused");
+        assert!(
+            err.starts_with(CONFLICT_ERR),
+            "callers match on this prefix, got: {err}"
+        );
 
         // A's data survived intact.
         let stored = load_vault(&conn).unwrap().unwrap();
@@ -742,31 +901,54 @@ mod tests {
         // The audit appends used to run before the transaction, so a rejected
         // write still logged changes that never happened.
         let (conn, _dir) = open_scratch("cas-clean");
-        let v1 = save_vault(&conn, json!({
-            "api_keys": [{ "id": "1", "provider": "A", "api_key": "k" }]
-        }), SaveCtx::default()).unwrap();
+        let v1 = save_vault(
+            &conn,
+            json!({
+                "api_keys": [{ "id": "1", "provider": "A", "api_key": "k" }]
+            }),
+            SaveCtx::default(),
+        )
+        .unwrap();
         save_vault(&conn, json!({ "api_keys": [] }), SaveCtx::default()).unwrap();
 
         let audit_before = load_audit(&conn).unwrap().len();
         let version_before = vault_version(&conn).unwrap();
 
-        let _ = save_vault(&conn, json!({
-            "api_keys": [{ "id": "9", "provider": "GHOST", "api_key": "k" }]
-        }), SaveCtx { actor: None, expect_version: Some(&v1) });
+        let _ = save_vault(
+            &conn,
+            json!({
+                "api_keys": [{ "id": "9", "provider": "GHOST", "api_key": "k" }]
+            }),
+            SaveCtx {
+                actor: None,
+                expect_version: Some(&v1),
+            },
+        );
 
-        assert_eq!(load_audit(&conn).unwrap().len(), audit_before,
-                   "a refused write must not append audit rows");
+        assert_eq!(
+            load_audit(&conn).unwrap().len(),
+            audit_before,
+            "a refused write must not append audit rows"
+        );
         assert_eq!(vault_version(&conn).unwrap(), version_before);
-        assert!(!load_audit(&conn).unwrap().iter()
-                    .any(|r| r.entry_provider.as_deref() == Some("GHOST")));
+        assert!(!load_audit(&conn)
+            .unwrap()
+            .iter()
+            .any(|r| r.entry_provider.as_deref() == Some("GHOST")));
     }
 
     #[test]
     fn expecting_a_version_against_an_empty_vault_is_refused() {
         let (conn, _dir) = open_scratch("cas-empty");
-        let err = save_vault(&conn, json!({ "api_keys": [] }),
-                             SaveCtx { actor: None, expect_version: Some("deadbeef") })
-            .expect_err("nothing is stored, so no version can match");
+        let err = save_vault(
+            &conn,
+            json!({ "api_keys": [] }),
+            SaveCtx {
+                actor: None,
+                expect_version: Some("deadbeef"),
+            },
+        )
+        .expect_err("nothing is stored, so no version can match");
         assert!(err.starts_with(CONFLICT_ERR));
     }
 
@@ -774,12 +956,22 @@ mod tests {
     fn omitting_the_version_writes_unconditionally() {
         // The explicit escape hatch, used when the user chooses to overwrite.
         let (conn, _dir) = open_scratch("cas-force");
-        save_vault(&conn, json!({
-            "api_keys": [{ "id": "1", "provider": "first", "api_key": "k" }]
-        }), SaveCtx::default()).unwrap();
-        save_vault(&conn, json!({
-            "api_keys": [{ "id": "1", "provider": "forced", "api_key": "k" }]
-        }), SaveCtx::default()).unwrap();
+        save_vault(
+            &conn,
+            json!({
+                "api_keys": [{ "id": "1", "provider": "first", "api_key": "k" }]
+            }),
+            SaveCtx::default(),
+        )
+        .unwrap();
+        save_vault(
+            &conn,
+            json!({
+                "api_keys": [{ "id": "1", "provider": "forced", "api_key": "k" }]
+            }),
+            SaveCtx::default(),
+        )
+        .unwrap();
         let stored = load_vault(&conn).unwrap().unwrap();
         assert_eq!(stored["api_keys"][0]["provider"], "forced");
     }
@@ -788,13 +980,26 @@ mod tests {
     fn integrity_still_holds_after_a_refused_write() {
         let (conn, _dir) = open_scratch("cas-integrity");
         let v1 = save_vault(&conn, json!({ "api_keys": [] }), SaveCtx::default()).unwrap();
-        save_vault(&conn, json!({
-            "api_keys": [{ "id": "1", "provider": "A", "api_key": "k" }]
-        }), SaveCtx::default()).unwrap();
-        let _ = save_vault(&conn, json!({ "api_keys": [] }),
-                           SaveCtx { actor: None, expect_version: Some(&v1) });
-        assert!(verify_vault_integrity(&conn).unwrap(),
-                "a rolled-back write must not desync data from its hash");
+        save_vault(
+            &conn,
+            json!({
+                "api_keys": [{ "id": "1", "provider": "A", "api_key": "k" }]
+            }),
+            SaveCtx::default(),
+        )
+        .unwrap();
+        let _ = save_vault(
+            &conn,
+            json!({ "api_keys": [] }),
+            SaveCtx {
+                actor: None,
+                expect_version: Some(&v1),
+            },
+        );
+        assert!(
+            verify_vault_integrity(&conn).unwrap(),
+            "a rolled-back write must not desync data from its hash"
+        );
     }
 
     // ── Audit chain ────────────────────────────────────────────────────────────
@@ -802,44 +1007,72 @@ mod tests {
     #[test]
     fn audit_rows_form_a_hash_chain() {
         let (conn, _dir) = open_scratch("audit");
-        save_vault(&conn, json!({
-            "api_keys": [{ "id": "1", "provider": "A", "api_key": "k" }]
-        }), SaveCtx::default()).unwrap();
-        save_vault(&conn, json!({
-            "api_keys": [
-                { "id": "1", "provider": "A", "api_key": "k" },
-                { "id": "2", "provider": "B", "api_key": "k2" }
-            ]
-        }), SaveCtx::default()).unwrap();
+        save_vault(
+            &conn,
+            json!({
+                "api_keys": [{ "id": "1", "provider": "A", "api_key": "k" }]
+            }),
+            SaveCtx::default(),
+        )
+        .unwrap();
+        save_vault(
+            &conn,
+            json!({
+                "api_keys": [
+                    { "id": "1", "provider": "A", "api_key": "k" },
+                    { "id": "2", "provider": "B", "api_key": "k2" }
+                ]
+            }),
+            SaveCtx::default(),
+        )
+        .unwrap();
 
         let mut rows = load_audit(&conn).unwrap();
         assert!(rows.len() >= 2, "expected an audit row per added entry");
-        rows.sort_by_key(|r| r.id);           // load_audit returns newest-first
+        rows.sort_by_key(|r| r.id); // load_audit returns newest-first
         assert!(rows[0].entry_hash.is_some());
         // Each row must link to its predecessor.
         for pair in rows.windows(2) {
-            assert_eq!(pair[1].prev_hash, pair[0].entry_hash,
-                       "row {} must chain to row {}", pair[1].id, pair[0].id);
+            assert_eq!(
+                pair[1].prev_hash, pair[0].entry_hash,
+                "row {} must chain to row {}",
+                pair[1].id, pair[0].id
+            );
         }
     }
 
     #[test]
     fn deleting_an_entry_is_audited() {
         let (conn, _dir) = open_scratch("audit-delete");
-        save_vault(&conn, json!({
-            "api_keys": [{ "id": "1", "provider": "Doomed", "api_key": "k" }]
-        }), SaveCtx::default()).unwrap();
+        save_vault(
+            &conn,
+            json!({
+                "api_keys": [{ "id": "1", "provider": "Doomed", "api_key": "k" }]
+            }),
+            SaveCtx::default(),
+        )
+        .unwrap();
         save_vault(&conn, json!({ "api_keys": [] }), SaveCtx::default()).unwrap();
         let rows = load_audit(&conn).unwrap();
-        assert!(rows.iter().any(|r| r.action == "delete" && r.entry_provider.as_deref() == Some("Doomed")));
+        assert!(rows
+            .iter()
+            .any(|r| r.action == "delete" && r.entry_provider.as_deref() == Some("Doomed")));
     }
 
     #[test]
     fn audit_rows_record_the_acting_user() {
         let (conn, _dir) = open_scratch("audit-actor");
-        save_vault(&conn, json!({
-            "api_keys": [{ "id": "1", "provider": "A", "api_key": "k" }]
-        }), SaveCtx { actor: Some("user-123"), ..Default::default() }).unwrap();
+        save_vault(
+            &conn,
+            json!({
+                "api_keys": [{ "id": "1", "provider": "A", "api_key": "k" }]
+            }),
+            SaveCtx {
+                actor: Some("user-123"),
+                ..Default::default()
+            },
+        )
+        .unwrap();
         let rows = load_audit(&conn).unwrap();
         let add = rows.iter().find(|r| r.action == "add").unwrap();
         assert_eq!(add.actor.as_deref(), Some("user-123"));
@@ -849,9 +1082,9 @@ mod tests {
     fn actor_is_bound_into_the_hash_chain() {
         // Rewriting who did something must invalidate the row hash, otherwise
         // attribution would be forgeable while the chain still "verified".
-        let with    = compute_audit_hash("add", "P", "T", Some("alice"), "prev");
-        let other   = compute_audit_hash("add", "P", "T", Some("bob"),   "prev");
-        let without = compute_audit_hash("add", "P", "T", None,          "prev");
+        let with = compute_audit_hash("add", "P", "T", Some("alice"), "prev");
+        let other = compute_audit_hash("add", "P", "T", Some("bob"), "prev");
+        let without = compute_audit_hash("add", "P", "T", None, "prev");
         assert_ne!(with, other, "different actor must give a different hash");
         assert_ne!(with, without);
     }
@@ -860,10 +1093,15 @@ mod tests {
     fn actorless_rows_keep_the_v1_hash_format() {
         // Existing chains were written before the actor column; their hashes
         // must still reproduce or every old log would read as tampered.
-        use sha2::{Sha256, Digest};
+        use sha2::{Digest, Sha256};
         let mut h = Sha256::new();
-        for part in ["add", "|", "P", "|", "T", "|", "prev"] { h.update(part.as_bytes()); }
-        assert_eq!(compute_audit_hash("add", "P", "T", None, "prev"), hex::encode(h.finalize()));
+        for part in ["add", "|", "P", "|", "T", "|", "prev"] {
+            h.update(part.as_bytes());
+        }
+        assert_eq!(
+            compute_audit_hash("add", "P", "T", None, "prev"),
+            hex::encode(h.finalize())
+        );
     }
 
     // ── Expiry ─────────────────────────────────────────────────────────────────
@@ -882,9 +1120,14 @@ mod tests {
             { "provider": "no-expiry" },
         ]});
         let found = expiring_from_value(&data, 30);
-        let names: Vec<&str> = found.iter()
-            .map(|e| e["provider"].as_str().unwrap()).collect();
-        assert_eq!(names, vec!["soon"],
-                   "already-expired, far-future and never-expiring entries are all excluded");
+        let names: Vec<&str> = found
+            .iter()
+            .map(|e| e["provider"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            names,
+            vec!["soon"],
+            "already-expired, far-future and never-expiring entries are all excluded"
+        );
     }
 }

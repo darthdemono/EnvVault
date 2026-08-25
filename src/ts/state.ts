@@ -17,16 +17,26 @@ export class LocalVaultStore implements VaultStore {
     return raw ? JSON.parse(raw) : null;
   }
   async save(data: VaultData): Promise<void> {
-    try { sessionStorage.setItem('envvault', JSON.stringify(data)); }
-    catch { showToast('Session storage full — export to save changes', 'err'); }
+    try {
+      sessionStorage.setItem('envvault', JSON.stringify(data));
+    } catch {
+      showToast('Session storage full — export to save changes', 'err');
+    }
   }
-  get isRemote() { return false; }
-  get vaultId()  { return 'local'; }
+  get isRemote() {
+    return false;
+  }
+  get vaultId() {
+    return 'local';
+  }
 }
 
 /** Thrown when a write was refused because someone else wrote first. */
 export class VaultConflictError extends Error {
-  constructor() { super('The vault changed since you last loaded it'); this.name = 'VaultConflictError'; }
+  constructor() {
+    super('The vault changed since you last loaded it');
+    this.name = 'VaultConflictError';
+  }
 }
 
 export class TauriVaultStore implements VaultStore {
@@ -40,15 +50,30 @@ export class TauriVaultStore implements VaultStore {
    */
   private lastVersion: string | null = null;
 
-  async unlock(password: string): Promise<boolean>  { return this.invoke('unlock_vault', { password }); }
-  async lock(): Promise<void>                       { return this.invoke('lock_vault'); }
-  async isUnlocked(): Promise<boolean>              { return this.invoke('vault_is_unlocked'); }
-  async exists(): Promise<boolean>                  { return this.invoke('vault_exists'); }
-  async reset(): Promise<void>                      { return this.invoke('reset_vault'); }
-  async vaultFilePath(): Promise<string>            { return this.invoke('get_vault_path').catch(() => ''); }
+  async unlock(password: string): Promise<boolean> {
+    return this.invoke('unlock_vault', { password });
+  }
+  async lock(): Promise<void> {
+    return this.invoke('lock_vault');
+  }
+  async isUnlocked(): Promise<boolean> {
+    return this.invoke('vault_is_unlocked');
+  }
+  async exists(): Promise<boolean> {
+    return this.invoke('vault_exists');
+  }
+  async reset(): Promise<void> {
+    return this.invoke('reset_vault');
+  }
+  async vaultFilePath(): Promise<string> {
+    return this.invoke('get_vault_path').catch(() => '');
+  }
 
   async load(): Promise<VaultData | null> {
-    const res = await this.invoke('load_vault') as { data: VaultData; version: string | null } | null;
+    const res = (await this.invoke('load_vault')) as {
+      data: VaultData;
+      version: string | null;
+    } | null;
     this.lastVersion = res?.version ?? null;
     return res?.data ?? null;
   }
@@ -73,8 +98,12 @@ export class TauriVaultStore implements VaultStore {
     this.lastVersion = await this.invoke('save_vault', { data, expectVersion: null });
   }
 
-  get isRemote() { return false; }
-  get vaultId()  { return 'local-native'; }
+  get isRemote() {
+    return false;
+  }
+  get vaultId() {
+    return 'local-native';
+  }
 }
 
 export const inTauri = !!(window as any).__TAURI__;
@@ -85,7 +114,10 @@ export class RemoteVaultStore implements VaultStore {
   /** ETag (vault content version) from the last successful load — sent as If-Match to detect drift. */
   private lastVersion = '';
   /** certFingerprint enables TOFU cert pinning when the server runs TLS with a self-signed cert. */
-  constructor(public readonly baseUrl: string, public fingerprint?: string) {}
+  constructor(
+    public readonly baseUrl: string,
+    public fingerprint?: string,
+  ) {}
 
   /**
    * Unified fetch that routes through the Tauri `remote_request` command when:
@@ -103,13 +135,13 @@ export class RemoteVaultStore implements VaultStore {
 
     if (useNative && _invoke) {
       // Tauri proxy does not surface response headers — ETag unavailable on this path.
-      const result = await _invoke('remote_request', {
+      const result = (await _invoke('remote_request', {
         url,
         method: opts.method ?? 'GET',
         headersJson: JSON.stringify(opts.headers ?? {}),
         body: opts.body ?? null,
         fingerprint: this.fingerprint ?? null,
-      }) as { status: number; body: string };
+      })) as { status: number; body: string };
       const ok = result.status >= 200 && result.status < 300;
       return { ok, status: result.status, json: async () => JSON.parse(result.body), etag: null };
     }
@@ -178,7 +210,9 @@ export class RemoteVaultStore implements VaultStore {
         method: 'DELETE',
         headers: { Authorization: `Bearer ${this.token}` },
       });
-    } catch { /* ignore */ }
+    } catch {
+      /* ignore */
+    }
     this.token = '';
   }
 
@@ -187,7 +221,9 @@ export class RemoteVaultStore implements VaultStore {
     try {
       const r = await this._apiFetch('/api/status');
       return r.ok && (await r.json()).unlocked === true;
-    } catch { return false; }
+    } catch {
+      return false;
+    }
   }
 
   async load(): Promise<VaultData | null> {
@@ -198,23 +234,40 @@ export class RemoteVaultStore implements VaultStore {
       });
       if (r.ok && r.etag) this.lastVersion = r.etag;
       return r.ok ? await r.json() : null;
-    } catch { return null; }
+    } catch {
+      return null;
+    }
   }
 
   async save(data: VaultData): Promise<void> {
     if (!this.token) return;
     try {
-      const headers: Record<string, string> = { 'Content-Type': 'application/json', Authorization: `Bearer ${this.token}` };
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${this.token}`,
+      };
       // Optimistic concurrency: prove we wrote against the version we last read.
       if (this.lastVersion) headers['If-Match'] = this.lastVersion;
-      const r = await this._apiFetch('/api/vault', { method: 'PUT', headers, body: JSON.stringify(data) });
+      const r = await this._apiFetch('/api/vault', {
+        method: 'PUT',
+        headers,
+        body: JSON.stringify(data),
+      });
       if (r.status === 409) {
-        showToast('Conflict: vault changed on server since you loaded it. Reconnect/reload before saving.', 'err', 6000);
+        showToast(
+          'Conflict: vault changed on server since you loaded it. Reconnect/reload before saving.',
+          'err',
+          6000,
+        );
         return;
       }
       if (!r.ok) {
         const body = await r.json().catch(() => ({}));
-        showToast(`Remote save failed (${r.status})${body?.error ? ': ' + body.error : ''}`, 'err', 4000);
+        showToast(
+          `Remote save failed (${r.status})${body?.error ? ': ' + body.error : ''}`,
+          'err',
+          4000,
+        );
         return;
       }
       // Saved cleanly — drop the token so the next write is unconditional until the next load refreshes it.
@@ -231,7 +284,9 @@ export class RemoteVaultStore implements VaultStore {
         headers: { Authorization: `Bearer ${this.token}` },
       });
       return r.ok ? await r.json() : [];
-    } catch { return []; }
+    } catch {
+      return [];
+    }
   }
 
   async getAuditLog(): Promise<any[]> {
@@ -241,7 +296,9 @@ export class RemoteVaultStore implements VaultStore {
         headers: { Authorization: `Bearer ${this.token}` },
       });
       return r.ok ? await r.json() : [];
-    } catch { return []; }
+    } catch {
+      return [];
+    }
   }
 
   /**
@@ -256,19 +313,31 @@ export class RemoteVaultStore implements VaultStore {
         headers: { Authorization: `Bearer ${this.token}` },
       });
       return r.ok;
-    } catch { return false; }
+    } catch {
+      return false;
+    }
   }
 
   /** Fetch server status including TLS cert fingerprint (no auth needed). */
-  async getStatus(): Promise<{ unlocked: boolean; vault_exists: boolean; cert_fingerprint?: string }> {
+  async getStatus(): Promise<{
+    unlocked: boolean;
+    vault_exists: boolean;
+    cert_fingerprint?: string;
+  }> {
     try {
       const r = await this._apiFetch('/api/status');
       return r.ok ? await r.json() : { unlocked: false, vault_exists: false };
-    } catch { return { unlocked: false, vault_exists: false }; }
+    } catch {
+      return { unlocked: false, vault_exists: false };
+    }
   }
 
-  get isRemote() { return true; }
-  get vaultId()  { return this.baseUrl; }
+  get isRemote() {
+    return true;
+  }
+  get vaultId() {
+    return this.baseUrl;
+  }
 }
 
 // ── Global mutable state bag ───────────────────────────────────────────────
@@ -279,7 +348,9 @@ export const st = {
   vault: {
     api_keys: [],
     user_categories: [],
-    projects: [{ id: 'Universal', name: 'Universal', description: 'All keys belong here by default' }],
+    projects: [
+      { id: 'Universal', name: 'Universal', description: 'All keys belong here by default' },
+    ],
   } as VaultData,
   schema: null as any,
   store: new LocalVaultStore() as VaultStore,
@@ -295,7 +366,7 @@ export const st = {
   expanded: new Set<string>(),
   allExpanded: false,
   lockTimer: null as ReturnType<typeof setTimeout> | null,
-  undoStack: [] as Array<{ fn: () => void; t: ReturnType<typeof setTimeout> }>,
+  undoStack: [] as { fn: () => void; t: ReturnType<typeof setTimeout> }[],
   /** Reveal state keyed `"<field>-<entryId>"` — index-independent, see `expanded`. */
   revealed: {} as Record<string, boolean>,
   currentSelectedProjectIds: ['Universal'] as string[],
@@ -452,9 +523,9 @@ async function resolveSaveConflict(): Promise<void> {
   const { showConfirm } = await import('./utils');
   const overwrite = await showConfirm(
     'Someone else changed this vault while you were editing — most likely a peer ' +
-    'connected to your LAN server.\n\n' +
-    'OK: keep your version and overwrite theirs.\n' +
-    'Cancel: discard your unsaved change and reload theirs.',
+      'connected to your LAN server.\n\n' +
+      'OK: keep your version and overwrite theirs.\n' +
+      'Cancel: discard your unsaved change and reload theirs.',
   );
 
   if (overwrite) {
@@ -474,9 +545,9 @@ async function resolveSaveConflict(): Promise<void> {
   // Reload: adopt what is now stored, dropping our unsaved edit.
   const fresh = await st.store.load();
   if (fresh) {
-    st.vault.api_keys        = fresh.api_keys;
+    st.vault.api_keys = fresh.api_keys;
     st.vault.user_categories = fresh.user_categories || [];
-    st.vault.projects        = fresh.projects || [{ id: 'Universal', name: 'Universal', description: '' }];
+    st.vault.projects = fresh.projects || [{ id: 'Universal', name: 'Universal', description: '' }];
     triggerRender();
     showToast('Reloaded the other version — your unsaved change was discarded', 'err', 5000);
   }
@@ -485,37 +556,75 @@ async function resolveSaveConflict(): Promise<void> {
 // ── Render callback (breaks potential circular deps) ───────────────────────
 
 let _renderFn: () => void = () => {};
-export function setRenderFn(fn: () => void): void { _renderFn = fn; }
-export function triggerRender(): void { _renderFn(); }
+export function setRenderFn(fn: () => void): void {
+  _renderFn = fn;
+}
+export function triggerRender(): void {
+  _renderFn();
+}
 
 // ── Settings ───────────────────────────────────────────────────────────────
 
 const DEFAULT_SETTINGS: AppSettings = {
-  theme: 'dark', accentColor: '#7364c9', cardSize: 'medium', gridColumns: 'auto',
-  defaultAccount: '', defaultExportFormat: 'dotenv', autoLockMinutes: 60, lockOnHide: false,
-  maskKeysByDefault: true, showExpiryWarning: true, expiryWarningDays: 30,
-  customCss: '', sidebarSections: ['all', 'price', 'env', 'category', 'project', 'tags', 'prefixes'],
-  groupByType: false, activityBarPosition: 'left' as const, activityBarStyle: 'icon' as const,
+  theme: 'dark',
+  accentColor: '#7364c9',
+  cardSize: 'medium',
+  gridColumns: 'auto',
+  defaultAccount: '',
+  defaultExportFormat: 'dotenv',
+  autoLockMinutes: 60,
+  lockOnHide: false,
+  maskKeysByDefault: true,
+  showExpiryWarning: true,
+  expiryWarningDays: 30,
+  customCss: '',
+  sidebarSections: ['all', 'price', 'env', 'category', 'project', 'tags', 'prefixes'],
+  groupByType: false,
+  activityBarPosition: 'left' as const,
+  activityBarStyle: 'icon' as const,
   collapsedSections: [] as ('all' | 'price' | 'env' | 'category' | 'project')[],
-  activePanel: 'secrets' as 'secrets' | 'tools' | 'users' | 'remote', activeTool: 'secret-gen',
+  activePanel: 'secrets' as 'secrets' | 'tools' | 'users' | 'remote',
+  activeTool: 'secret-gen',
   remoteSaved: [] as RemoteVaultConfig[],
   panelOrder: ['secrets', 'tools', 'remote', 'users'],
   envCopyField: 'api_key' as const,
-  sidebarWidth: 0, sidebarCollapsed: false, lastSortBy: 'provider',
-  recentSearches: [] as string[], rememberFilters: true, lastView: null as PersistedView | null,
+  sidebarWidth: 0,
+  sidebarCollapsed: false,
+  lastSortBy: 'provider',
+  recentSearches: [] as string[],
+  rememberFilters: true,
+  lastView: null as PersistedView | null,
   experimentalProjectTypes: false,
 };
 
 export const Settings = {
   _data: { ...DEFAULT_SETTINGS } as AppSettings,
-  get<K extends keyof AppSettings>(k: K): AppSettings[K] { return this._data[k]; },
-  set<K extends keyof AppSettings>(k: K, v: AppSettings[K]) { this._data[k] = v; this._persist(); },
-  setAll(o: Partial<AppSettings>) { Object.assign(this._data, o); this._persist(); },
-  getAll(): AppSettings { return { ...this._data }; },
-  _persist() { localStorage.setItem('envvault-settings', JSON.stringify(this._data)); },
+  get<K extends keyof AppSettings>(k: K): AppSettings[K] {
+    return this._data[k];
+  },
+  set<K extends keyof AppSettings>(k: K, v: AppSettings[K]) {
+    this._data[k] = v;
+    this._persist();
+  },
+  setAll(o: Partial<AppSettings>) {
+    Object.assign(this._data, o);
+    this._persist();
+  },
+  getAll(): AppSettings {
+    return { ...this._data };
+  },
+  _persist() {
+    localStorage.setItem('envvault-settings', JSON.stringify(this._data));
+  },
   async init() {
-    try { const r = await fetch('./settings.json'); if (r.ok) Object.assign(this._data, await r.json()); } catch {}
-    try { const s = localStorage.getItem('envvault-settings'); if (s) Object.assign(this._data, JSON.parse(s)); } catch {}
+    try {
+      const r = await fetch('./settings.json');
+      if (r.ok) Object.assign(this._data, await r.json());
+    } catch {}
+    try {
+      const s = localStorage.getItem('envvault-settings');
+      if (s) Object.assign(this._data, JSON.parse(s));
+    } catch {}
     // One-time migration: env/tags/prefixes became configurable sidebar sections.
     // Earlier installs persisted a list without them — merge them in once so they
     // don't silently vanish, while still honouring later user toggles.
@@ -525,10 +634,11 @@ export const Settings = {
         const insertAfter = (anchor: string, key: any) => {
           if (secs.includes(key)) return;
           const at = secs.indexOf(anchor as any);
-          if (at >= 0) secs.splice(at + 1, 0, key); else secs.push(key);
+          if (at >= 0) secs.splice(at + 1, 0, key);
+          else secs.push(key);
         };
         insertAfter('price', 'env');
-        if (!secs.includes('tags' as any))     secs.push('tags' as any);
+        if (!secs.includes('tags' as any)) secs.push('tags' as any);
         if (!secs.includes('prefixes' as any)) secs.push('prefixes' as any);
         this._data.sidebarSections = secs as any;
         localStorage.setItem('envvault-sb-migrated', '1');
@@ -540,15 +650,21 @@ export const Settings = {
   _apply() {
     const d = this._data;
     // OS theme auto-sync (item 21)
-    const resolvedTheme = d.theme === 'system'
-      ? (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')
-      : d.theme;
+    const resolvedTheme =
+      d.theme === 'system'
+        ? window.matchMedia('(prefers-color-scheme: dark)').matches
+          ? 'dark'
+          : 'light'
+        : d.theme;
     document.documentElement.setAttribute('data-theme', resolvedTheme);
     document.documentElement.style.setProperty('--accent', d.accentColor);
     document.documentElement.style.setProperty('--accent-dim', hexAlpha(d.accentColor, 0.14));
     document.documentElement.style.setProperty('--accent-mid', hexAlpha(d.accentColor, 0.3));
-    applyGridSettings(); applySidebarOrder(); applyActivityBar(); applySidebarLayout();
-    import('./settings-panel').then(m => m.applyPanelOrder()).catch(() => {});
+    applyGridSettings();
+    applySidebarOrder();
+    applyActivityBar();
+    applySidebarLayout();
+    import('./settings-panel').then((m) => m.applyPanelOrder()).catch(() => {});
     const styleEl = document.getElementById('custom-style') as HTMLStyleElement | null;
     if (styleEl) styleEl.textContent = d.customCss || '';
   },
@@ -572,7 +688,7 @@ document.addEventListener('visibilitychange', () => {
   // Serving the LAN: peers are mid-request, alt-tabbing must not cut them off.
   if (st.lanServerRunning) return;
   if (!Settings.get('lockOnHide')) return;
-  import('./lock').then(m => m.lockVault('visibility')).catch(() => {});
+  import('./lock').then((m) => m.lockVault('visibility')).catch(() => {});
 });
 
 // ── Layout helpers ─────────────────────────────────────────────────────────
@@ -592,13 +708,22 @@ export function applyGridSettings() {
   // sideways on any normal window — asking for 8 columns has to mean 8 narrower
   // columns, not a horizontal scrollbar. The `min(100%, …)` on the auto branch is
   // the same protection for a window narrower than one card.
-  grid.style.gridTemplateColumns = cols === 'auto'
-    ? `repeat(auto-fill, minmax(min(100%, ${minW}px), 1fr))`
-    : `repeat(${cols}, minmax(0, 1fr))`;
+  grid.style.gridTemplateColumns =
+    cols === 'auto'
+      ? `repeat(auto-fill, minmax(min(100%, ${minW}px), 1fr))`
+      : `repeat(${cols}, minmax(0, 1fr))`;
 }
 
 /** All toggleable/reorderable sidebar section keys, in default order. */
-export const ALL_SIDEBAR_SECTIONS = ['all', 'price', 'env', 'category', 'project', 'tags', 'prefixes'] as const;
+export const ALL_SIDEBAR_SECTIONS = [
+  'all',
+  'price',
+  'env',
+  'category',
+  'project',
+  'tags',
+  'prefixes',
+] as const;
 /** Sections whose visibility is also gated on having data (handled by render). */
 const DATA_GATED_SECTIONS = ['tags', 'prefixes'];
 
@@ -609,24 +734,30 @@ export function isSidebarSectionEnabled(key: string): boolean {
 
 export function applySidebarOrder() {
   const sections = Settings.get('sidebarSections') || [...ALL_SIDEBAR_SECTIONS];
-  ALL_SIDEBAR_SECTIONS.forEach(key => {
+  ALL_SIDEBAR_SECTIONS.forEach((key) => {
     const el = document.getElementById(`sidebar-section-${key}`) as HTMLElement | null;
     if (!el) return;
     const idx = (sections as string[]).indexOf(key);
     if (idx >= 0) {
       el.style.order = String(idx);
-      el.style.borderTop  = idx === 0 ? '' : '1px solid var(--border)';
-      el.style.marginTop  = idx === 0 ? '' : '6px';
+      el.style.borderTop = idx === 0 ? '' : '1px solid var(--border)';
+      el.style.marginTop = idx === 0 ? '' : '6px';
       el.style.paddingTop = idx === 0 ? '' : '6px';
       // Data-gated sections (tags/prefixes) are shown by render only when non-empty.
       if (!DATA_GATED_SECTIONS.includes(key)) el.style.display = '';
     } else {
-      el.style.display = 'none'; el.style.borderTop = ''; el.style.marginTop = ''; el.style.paddingTop = '';
+      el.style.display = 'none';
+      el.style.borderTop = '';
+      el.style.marginTop = '';
+      el.style.paddingTop = '';
     }
   });
   const collapsed = Settings.get('collapsedSections') || [];
-  (['all', 'price', 'env', 'category', 'project', 'tags', 'prefixes'] as const).forEach(key =>
-    document.getElementById(`sidebar-section-${key}`)?.classList.toggle('collapsed', collapsed.includes(key)));
+  (['all', 'price', 'env', 'category', 'project', 'tags', 'prefixes'] as const).forEach((key) =>
+    document
+      .getElementById(`sidebar-section-${key}`)
+      ?.classList.toggle('collapsed', collapsed.includes(key)),
+  );
 }
 
 // ── Sidebar width / collapse persistence ───────────────────────────────────
@@ -666,7 +797,7 @@ export function pushRecentSearch(q: string): void {
   const query = q.trim();
   if (!query) return;
   const prev = (Settings.get('recentSearches') || []).filter(
-    s => s.toLowerCase() !== query.toLowerCase(),
+    (s) => s.toLowerCase() !== query.toLowerCase(),
   );
   Settings.set('recentSearches', [query, ...prev].slice(0, RECENT_SEARCH_MAX));
 }
@@ -677,12 +808,12 @@ export function pushRecentSearch(q: string): void {
 export function saveViewState(): void {
   if (!Settings.get('rememberFilters')) return;
   Settings.set('lastView', {
-    filterType:   st.filter.type,
-    filterValue:  st.filter.value,
-    envFilter:    st.currentEnvFilter,
-    tagFilter:    st.activeTagFilter,
+    filterType: st.filter.type,
+    filterValue: st.filter.value,
+    envFilter: st.currentEnvFilter,
+    tagFilter: st.activeTagFilter,
     prefixFilter: st.activePrefixFilter,
-    projectIds:   [...st.currentSelectedProjectIds],
+    projectIds: [...st.currentSelectedProjectIds],
   });
 }
 
@@ -710,26 +841,30 @@ export function restoreViewState(): boolean {
   const categories = new Set(st.vault.user_categories || []);
   const okFilter =
     v.filterType === 'all' ||
-    (v.filterType === 'price' && entries.some(e => e.price_type === v.filterValue)) ||
-    (v.filterType === 'category' && (categories.has(v.filterValue) ||
-      [...categories].some(c => c.startsWith(v.filterValue + '/'))));
+    (v.filterType === 'price' && entries.some((e) => e.price_type === v.filterValue)) ||
+    (v.filterType === 'category' &&
+      (categories.has(v.filterValue) ||
+        [...categories].some((c) => c.startsWith(v.filterValue + '/'))));
   if (okFilter && typeof v.filterType === 'string') {
     st.filter = { type: v.filterType, value: String(v.filterValue ?? '') };
     applied = applied || v.filterType !== 'all';
   }
 
-  if (v.envFilter && entries.some(e => e.environment === v.envFilter)) {
-    st.currentEnvFilter = v.envFilter; applied = true;
+  if (v.envFilter && entries.some((e) => e.environment === v.envFilter)) {
+    st.currentEnvFilter = v.envFilter;
+    applied = true;
   }
-  if (v.tagFilter && entries.some(e => (e.tags || []).includes(v.tagFilter!))) {
-    st.activeTagFilter = v.tagFilter; applied = true;
+  if (v.tagFilter && entries.some((e) => (e.tags || []).includes(v.tagFilter!))) {
+    st.activeTagFilter = v.tagFilter;
+    applied = true;
   }
-  if (v.prefixFilter && entries.some(e => (e.provider || '').startsWith(v.prefixFilter!))) {
-    st.activePrefixFilter = v.prefixFilter; applied = true;
+  if (v.prefixFilter && entries.some((e) => (e.provider || '').startsWith(v.prefixFilter!))) {
+    st.activePrefixFilter = v.prefixFilter;
+    applied = true;
   }
 
-  const known = new Set((st.vault.projects || []).map(p => p.id));
-  const projects = (Array.isArray(v.projectIds) ? v.projectIds : []).filter(id => known.has(id));
+  const known = new Set((st.vault.projects || []).map((p) => p.id));
+  const projects = (Array.isArray(v.projectIds) ? v.projectIds : []).filter((id) => known.has(id));
   if (projects.length) {
     st.currentSelectedProjectIds = projects;
     applied = applied || !(projects.length === 1 && projects[0] === 'Universal');
@@ -739,10 +874,10 @@ export function restoreViewState(): boolean {
 }
 
 export function applyActivityBar() {
-  const pos   = Settings.get('activityBarPosition') || 'left';
-  const style = Settings.get('activityBarStyle')    || 'icon';
+  const pos = Settings.get('activityBarPosition') || 'left';
+  const style = Settings.get('activityBarStyle') || 'icon';
   const layout = document.getElementById('layout')!;
-  layout.classList.toggle('activity-bar-right',      pos   === 'right');
+  layout.classList.toggle('activity-bar-right', pos === 'right');
   layout.classList.toggle('activity-bar-icon-label', style === 'icon-label');
 }
 
@@ -771,31 +906,49 @@ export function applyUsersPanelVisibility(): void {
 export function switchPanel(panel: string) {
   const panelEls: Record<string, string[]> = {
     secrets: ['secrets-panel', 'vault-workspace'],
-    tools:   ['tools-panel',   'tools-workspace'],
-    users:   ['users-panel',   'users-workspace'],
-    remote:  ['remote-panel',  'remote-workspace'],
+    tools: ['tools-panel', 'tools-workspace'],
+    users: ['users-panel', 'users-workspace'],
+    remote: ['remote-panel', 'remote-workspace'],
   };
-  const allSidebars   = ['secrets-panel', 'tools-panel', 'users-panel', 'remote-panel'];
-  const allWorkspaces = ['vault-workspace', 'tools-workspace', 'users-workspace', 'remote-workspace'];
-  allSidebars.forEach(id => { const el = document.getElementById(id); if (el) el.style.display = 'none'; });
-  allWorkspaces.forEach(id => { const el = document.getElementById(id); if (el) el.style.display = 'none'; });
+  const allSidebars = ['secrets-panel', 'tools-panel', 'users-panel', 'remote-panel'];
+  const allWorkspaces = [
+    'vault-workspace',
+    'tools-workspace',
+    'users-workspace',
+    'remote-workspace',
+  ];
+  allSidebars.forEach((id) => {
+    const el = document.getElementById(id);
+    if (el) el.style.display = 'none';
+  });
+  allWorkspaces.forEach((id) => {
+    const el = document.getElementById(id);
+    if (el) el.style.display = 'none';
+  });
 
   const active = panelEls[panel] ?? panelEls.secrets;
-  active.forEach(id => { const el = document.getElementById(id); if (el) el.style.display = ''; });
+  active.forEach((id) => {
+    const el = document.getElementById(id);
+    if (el) el.style.display = '';
+  });
 
-  document.querySelectorAll<HTMLButtonElement>('.activity-btn')
-    .forEach(btn => btn.classList.toggle('active', btn.dataset.panel === panel));
+  document
+    .querySelectorAll<HTMLButtonElement>('.activity-btn')
+    .forEach((btn) => btn.classList.toggle('active', btn.dataset.panel === panel));
   Settings.set('activePanel', panel as any);
 
-  if (panel === 'users')  import('./users').then(m => m.renderUsersPanel()).catch(() => {});
-  if (panel === 'remote') import('./remote-panel').then(m => m.renderRemotePanel()).catch(() => {});
+  if (panel === 'users') import('./users').then((m) => m.renderUsersPanel()).catch(() => {});
+  if (panel === 'remote')
+    import('./remote-panel').then((m) => m.renderRemotePanel()).catch(() => {});
 }
 
 export function switchTool(toolId: string) {
-  document.querySelectorAll<HTMLElement>('.tool-pane')
-    .forEach(p => p.style.display = p.id === `tool-${toolId}` ? '' : 'none');
-  document.querySelectorAll<HTMLButtonElement>('.tool-nav-btn')
-    .forEach(btn => btn.classList.toggle('active', btn.dataset.tool === toolId));
+  document
+    .querySelectorAll<HTMLElement>('.tool-pane')
+    .forEach((p) => (p.style.display = p.id === `tool-${toolId}` ? '' : 'none'));
+  document
+    .querySelectorAll<HTMLButtonElement>('.tool-nav-btn')
+    .forEach((btn) => btn.classList.toggle('active', btn.dataset.tool === toolId));
   Settings.set('activeTool', toolId);
 }
 
@@ -809,13 +962,15 @@ export function dotenvKey(entry: VaultEntry): string {
 
 export const Exporter = {
   dotenv(keys: VaultEntry[]): string {
-    return keys.map(k => {
-      const b = dotenvKey(k);
-      let out = `# ${k.provider}${k.account_name ? ' — ' + k.account_name : ''}\n${b}=${k.api_key}`;
-      if (k.api_secret) out += `\n${b}_SECRET=${k.api_secret}`;
-      if (k.api_url)    out += `\n${b}_URL=${k.api_url}`;
-      return out;
-    }).join('\n\n');
+    return keys
+      .map((k) => {
+        const b = dotenvKey(k);
+        let out = `# ${k.provider}${k.account_name ? ' — ' + k.account_name : ''}\n${b}=${k.api_key}`;
+        if (k.api_secret) out += `\n${b}_SECRET=${k.api_secret}`;
+        if (k.api_url) out += `\n${b}_URL=${k.api_url}`;
+        return out;
+      })
+      .join('\n\n');
   },
   /**
    * YAML export.
@@ -827,14 +982,16 @@ export const Exporter = {
    */
   yaml(keys: VaultEntry[]): string {
     const doc: Record<string, string> = {};
-    keys.forEach(k => {
+    keys.forEach((k) => {
       const b = dotenvKey(k);
       doc[b] = k.api_key;
       if (k.api_secret) doc[`${b}_SECRET`] = k.api_secret;
-      if (k.api_url)    doc[`${b}_URL`]    = k.api_url;
+      if (k.api_url) doc[`${b}_URL`] = k.api_url;
     });
     const header = `# EnvVault Export\n# Generated: ${new Date().toISOString()}\n\n`;
     return header + yamlDump(doc, { indent: 2, lineWidth: -1, noRefs: true });
   },
-  json(keys: VaultEntry[]): string { return JSON.stringify({ api_keys: keys }, null, 2); },
+  json(keys: VaultEntry[]): string {
+    return JSON.stringify({ api_keys: keys }, null, 2);
+  },
 };

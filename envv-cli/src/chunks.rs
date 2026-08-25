@@ -2,33 +2,70 @@
 
 use crate::access::Access;
 use crate::data::{find_chunk_index, find_project_index, projects, projects_mut};
+use crate::error::{CliError, CliResult};
 use crate::exporters;
 use crate::fmt::{cell, confirm, emit};
-use crate::error::{CliError, CliResult};
 use crate::out;
 use crate::refs::Resolver;
 use serde_json::json;
 use std::path::{Path, PathBuf};
 
 pub const CHUNK_TYPES: [&str; 29] = [
-    "wg_interface", "wg_peer", "docker_service", "docker_network", "docker_volume", "env_file",
-    "nginx_server", "nginx_upstream", "nginx_location", "nginx_key", "k8s_deployment",
-    "k8s_service", "k8s_configmap", "k8s_secret", "k8s_ingress", "ssh_host", "traefik_router",
-    "traefik_service", "traefik_middleware", "apache_vhost", "apache_directory", "haproxy_global",
-    "haproxy_frontend", "haproxy_backend", "ansible_vars", "ansible_task", "pg_connection",
-    "pg_role", "generic",
+    "wg_interface",
+    "wg_peer",
+    "docker_service",
+    "docker_network",
+    "docker_volume",
+    "env_file",
+    "nginx_server",
+    "nginx_upstream",
+    "nginx_location",
+    "nginx_key",
+    "k8s_deployment",
+    "k8s_service",
+    "k8s_configmap",
+    "k8s_secret",
+    "k8s_ingress",
+    "ssh_host",
+    "traefik_router",
+    "traefik_service",
+    "traefik_middleware",
+    "apache_vhost",
+    "apache_directory",
+    "haproxy_global",
+    "haproxy_frontend",
+    "haproxy_backend",
+    "ansible_vars",
+    "ansible_task",
+    "pg_connection",
+    "pg_role",
+    "generic",
 ];
 
 pub const FIELD_TYPES: [&str; 12] = [
-    "var", "env_var", "secret", "list", "multiline", "port", "user_id", "subnet", "ip", "endpoint",
-    "volume_mount", "cert",
+    "var",
+    "env_var",
+    "secret",
+    "list",
+    "multiline",
+    "port",
+    "user_id",
+    "subnet",
+    "ip",
+    "endpoint",
+    "volume_mount",
+    "cert",
 ];
 
 pub fn ls(access: &Access, project: &str) -> CliResult {
     let vault = access.load_vault()?;
     let pi = find_project_index(&vault, project)?;
     let p = &projects(&vault)[pi];
-    let chunks = p.get("chunks").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+    let chunks = p
+        .get("chunks")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
     if out::is_json() {
         let rows: Vec<serde_json::Value> = chunks
             .iter()
@@ -42,22 +79,34 @@ pub fn ls(access: &Access, project: &str) -> CliResult {
                 })
             })
             .collect();
-        out::ok("project.chunk.ls", json!({ "count": rows.len(), "chunks": rows }), || {});
+        out::ok(
+            "project.chunk.ls",
+            json!({ "count": rows.len(), "chunks": rows }),
+            || {},
+        );
         return Ok(());
     }
     if chunks.is_empty() {
-        println!("Project '{}' has no chunks.", p.get("name").and_then(|v| v.as_str()).unwrap_or(""));
+        println!(
+            "Project '{}' has no chunks.",
+            p.get("name").and_then(|v| v.as_str()).unwrap_or("")
+        );
         return Ok(());
     }
-    println!("{:<30} {:<18} {:>7}  {}", "Name", "Type", "Fields", "State");
+    println!("{:<30} {:<18} {:>7}  State", "Name", "Type", "Fields");
     println!("{}", "-".repeat(70));
     for c in &chunks {
         let disabled = c.get("disabled").and_then(|d| d.as_bool()).unwrap_or(false);
         println!(
             "{} {} {:>7}  {}",
             cell(c.get("name").and_then(|v| v.as_str()).unwrap_or(""), 30),
-            cell(c.get("chunk_type").and_then(|v| v.as_str()).unwrap_or(""), 18),
-            c.get("fields").and_then(|v| v.as_array()).map_or(0, |a| a.len()),
+            cell(
+                c.get("chunk_type").and_then(|v| v.as_str()).unwrap_or(""),
+                18
+            ),
+            c.get("fields")
+                .and_then(|v| v.as_array())
+                .map_or(0, |a| a.len()),
             if disabled { "disabled" } else { "enabled" }
         );
     }
@@ -81,7 +130,10 @@ pub fn show(access: &Access, project: &str, chunk: &str, raw: bool) -> CliResult
             .cloned()
             .unwrap_or_else(|| c.clone());
         out::ok("project.chunk.show", safe.clone(), || {
-            println!("{}", serde_json::to_string_pretty(&safe).unwrap_or_default())
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&safe).unwrap_or_default()
+            )
         });
         return Ok(());
     }
@@ -103,12 +155,21 @@ pub fn add(access: &Access, project: &str, name: &str, ctype: &str) -> CliResult
     if projects(&vault)[pi]
         .get("chunks")
         .and_then(|v| v.as_array())
-        .map_or(false, |a| a.iter().any(|c| c.get("name").and_then(|n| n.as_str()) == Some(name)))
+        .is_some_and(|a| {
+            a.iter()
+                .any(|c| c.get("name").and_then(|n| n.as_str()) == Some(name))
+        })
     {
-        return Err(CliError::conflict(format!("Chunk '{name}' already exists in this project")));
+        return Err(CliError::conflict(format!(
+            "Chunk '{name}' already exists in this project"
+        )));
     }
     let list = projects_mut(&mut vault);
-    if !list[pi].get("chunks").map(|c| c.is_array()).unwrap_or(false) {
+    if !list[pi]
+        .get("chunks")
+        .map(|c| c.is_array())
+        .unwrap_or(false)
+    {
         list[pi]["chunks"] = json!([]);
     }
     list[pi]["chunks"].as_array_mut().unwrap().push(json!({
@@ -118,9 +179,11 @@ pub fn add(access: &Access, project: &str, name: &str, ctype: &str) -> CliResult
         "fields": [],
     }));
     access.save(&vault)?;
-    out::ok("project.chunk.add", json!({ "name": name, "chunk_type": ctype, "created": true }), || {
-        println!("Added chunk '{name}' ({ctype})")
-    });
+    out::ok(
+        "project.chunk.add",
+        json!({ "name": name, "chunk_type": ctype, "created": true }),
+        || println!("Added chunk '{name}' ({ctype})"),
+    );
     Ok(())
 }
 
@@ -137,11 +200,16 @@ pub fn rm(access: &Access, project: &str, chunk: &str, yes: bool) -> CliResult {
         println!("Cancelled.");
         return Ok(());
     }
-    projects_mut(&mut vault)[pi]["chunks"].as_array_mut().unwrap().remove(ci);
+    projects_mut(&mut vault)[pi]["chunks"]
+        .as_array_mut()
+        .unwrap()
+        .remove(ci);
     access.save(&vault)?;
-    out::ok("project.chunk.rm", json!({ "name": name, "deleted": true }), || {
-        println!("Deleted chunk '{name}'")
-    });
+    out::ok(
+        "project.chunk.rm",
+        json!({ "name": name, "deleted": true }),
+        || println!("Deleted chunk '{name}'"),
+    );
     Ok(())
 }
 
@@ -174,8 +242,12 @@ pub fn set(
         if secret {
             field["secret"] = json!(true);
         }
-        match (append, fields.iter().position(|f| f.get("key").and_then(|k| k.as_str()) == Some(key)))
-        {
+        match (
+            append,
+            fields
+                .iter()
+                .position(|f| f.get("key").and_then(|k| k.as_str()) == Some(key)),
+        ) {
             (false, Some(idx)) => {
                 // Preserve the existing field_type unless the caller named one.
                 if field_type == "var" {
@@ -191,9 +263,11 @@ pub fn set(
     let n = pairs.len();
     let keys: Vec<&str> = pairs.iter().filter_map(|p| p.split('=').next()).collect();
     access.save(&vault)?;
-    out::ok("project.chunk.set", json!({ "fields": n, "keys": keys }), || {
-        println!("Set {n} field(s)")
-    });
+    out::ok(
+        "project.chunk.set",
+        json!({ "fields": n, "keys": keys }),
+        || println!("Set {n} field(s)"),
+    );
     Ok(())
 }
 
@@ -207,7 +281,9 @@ pub fn unset(access: &Access, project: &str, chunk: &str, keys: &[String]) -> Cl
         .ok_or("Chunk has no fields array")?;
     let before = fields.len();
     fields.retain(|f| {
-        !keys.iter().any(|k| f.get("key").and_then(|x| x.as_str()) == Some(k.as_str()))
+        !keys
+            .iter()
+            .any(|k| f.get("key").and_then(|x| x.as_str()) == Some(k.as_str()))
     });
     let removed = before - fields.len();
     access.save(&vault)?;
@@ -225,7 +301,9 @@ pub fn toggle(access: &Access, project: &str, chunk: &str, disable: bool) -> Cli
     if disable {
         list[pi]["chunks"][ci]["disabled"] = json!(true);
     } else {
-        list[pi]["chunks"][ci].as_object_mut().map(|o| o.remove("disabled"));
+        list[pi]["chunks"][ci]
+            .as_object_mut()
+            .map(|o| o.remove("disabled"));
     }
     let name = list[pi]["chunks"][ci]
         .get("name")
@@ -233,9 +311,16 @@ pub fn toggle(access: &Access, project: &str, chunk: &str, disable: bool) -> Cli
         .unwrap_or("")
         .to_string();
     access.save(&vault)?;
-    out::ok("project.chunk.toggle", json!({ "name": name, "disabled": disable }), || {
-        println!("Chunk '{name}' {}", if disable { "disabled" } else { "enabled" })
-    });
+    out::ok(
+        "project.chunk.toggle",
+        json!({ "name": name, "disabled": disable }),
+        || {
+            println!(
+                "Chunk '{name}' {}",
+                if disable { "disabled" } else { "enabled" }
+            )
+        },
+    );
     Ok(())
 }
 
@@ -255,11 +340,17 @@ pub fn rename(access: &Access, project: &str, chunk: &str, new_name: &str) -> Cl
     let old_prefix = format!("${{chunk:{old}/");
     let mut rewritten = 0usize;
     for p in projects_mut(&mut vault).iter_mut() {
-        let Some(chunks) = p.get_mut("chunks").and_then(|c| c.as_array_mut()) else { continue };
+        let Some(chunks) = p.get_mut("chunks").and_then(|c| c.as_array_mut()) else {
+            continue;
+        };
         for c in chunks.iter_mut() {
-            let Some(fields) = c.get_mut("fields").and_then(|f| f.as_array_mut()) else { continue };
+            let Some(fields) = c.get_mut("fields").and_then(|f| f.as_array_mut()) else {
+                continue;
+            };
             for f in fields.iter_mut() {
-                let Some(val) = f.get("value").and_then(|v| v.as_str()) else { continue };
+                let Some(val) = f.get("value").and_then(|v| v.as_str()) else {
+                    continue;
+                };
                 if let Some(rest) = val.strip_prefix(&old_prefix) {
                     f["value"] = json!(format!("${{chunk:{new_name}/{rest}"));
                     rewritten += 1;
@@ -299,9 +390,16 @@ pub fn export(
     // The one rule that makes this safe to hand to an agent: a file gets real
     // values, stdout gets fingerprints. An orchestrator can therefore write a
     // deployable config it is never able to read out of its own tool output.
-    let r = if out.is_some() { Resolver::materialising(&vault) } else { Resolver::for_output(&vault) };
+    let r = if out.is_some() {
+        Resolver::materialising(&vault)
+    } else {
+        Resolver::for_output(&vault)
+    };
 
-    let ptype = p.get("project_type").and_then(|v| v.as_str()).unwrap_or("generic");
+    let ptype = p
+        .get("project_type")
+        .and_then(|v| v.as_str())
+        .unwrap_or("generic");
     let fmt = format.unwrap_or(match ptype {
         "wireguard" => "wireguard",
         "docker" => "compose",
@@ -350,11 +448,17 @@ pub fn export(
             }
             emit(&e.text, out)?;
             if !e.unresolved.is_empty() {
-                eprintln!("\n{} unresolved ref(s) emitted as literal ${{...}}", e.unresolved.len());
+                eprintln!(
+                    "\n{} unresolved ref(s) emitted as literal ${{...}}",
+                    e.unresolved.len()
+                );
             }
             Ok(())
         }
-        "json" => emit(&serde_json::to_string_pretty(&out::redact_project(&p)).unwrap_or_default(), out),
+        "json" => emit(
+            &serde_json::to_string_pretty(&out::redact_project(&p)).unwrap_or_default(),
+            out,
+        ),
         other => Err(CliError::invalid(format!(
             "Unknown format '{other}'. Supported: wireguard, compose, nginx, env, json.\n\
              The experimental project types (kubernetes, traefik, apache, haproxy, ansible, \

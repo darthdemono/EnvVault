@@ -15,6 +15,13 @@ src-tauri/target/
 # Rust build (same as src-tauri/target/ but kept for any Cargo workspace root)
 target/
 
+# Generated API references. `npm run docs` writes docs/ts/ (Doxygen), `cargo doc`
+# writes target/doc, and the Docs workflow assembles both into site/ for Pages.
+# None of it is source; Pages serves the artefact the workflow builds, not a
+# committed copy.
+docs/
+site/
+
 # Environment
 .env
 .env.*

@@ -1,9 +1,9 @@
 /* ── BUTTONS ───────────────────────────────────────── */
 .btn {
-  font-family: 'Syne', sans-serif;
+  font-family: "Syne", sans-serif;
   font-size: 12px;
   font-weight: 600;
-  letter-spacing: .03em;
+  letter-spacing: 0.03em;
   border: none;
   border-radius: 7px;
   padding: 7px 13px;
@@ -11,13 +11,13 @@
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  transition: all .12s;
-  white-space: nowrap
+  transition: all 0.12s;
+  white-space: nowrap;
 }
 
 .btn-sm {
   padding: 5px 10px;
-  font-size: 11px
+  font-size: 11px;
 }
 
 .btn-xs {
@@ -29,82 +29,82 @@
   background: transparent;
   color: var(--text2);
   cursor: pointer;
-  font-family: 'Syne', sans-serif;
-  transition: all .12s
+  font-family: "Syne", sans-serif;
+  transition: all 0.12s;
 }
 
 .btn-xs:hover {
   background: var(--surface2);
-  color: var(--text)
+  color: var(--text);
 }
 
 .btn-xs.accent {
   background: var(--accent);
   color: #fff;
-  border-color: var(--accent)
+  border-color: var(--accent);
 }
 
 .btn-xs.accent:hover {
-  filter: brightness(1.1)
+  filter: brightness(1.1);
 }
 
 .btn-xs.danger {
-  background: rgba(201, 100, 100, .12);
+  background: rgba(201, 100, 100, 0.12);
   color: var(--price-paid);
-  border-color: rgba(201, 100, 100, .35)
+  border-color: rgba(201, 100, 100, 0.35);
 }
 
 .btn-xs.danger:hover {
-  background: rgba(201, 100, 100, .25);
-  border-color: var(--price-paid)
+  background: rgba(201, 100, 100, 0.25);
+  border-color: var(--price-paid);
 }
 
 .btn-sm.danger {
-  background: rgba(201, 100, 100, .12);
+  background: rgba(201, 100, 100, 0.12);
   color: var(--price-paid);
-  border: 1px solid rgba(201, 100, 100, .35)
+  border: 1px solid rgba(201, 100, 100, 0.35);
 }
 
 .btn-sm.danger:hover {
-  background: rgba(201, 100, 100, .25)
+  background: rgba(201, 100, 100, 0.25);
 }
 
 .btn-ghost {
   background: transparent;
   color: var(--text2);
-  border: 1px solid var(--border2)
+  border: 1px solid var(--border2);
 }
 
 .btn-ghost:hover {
   background: var(--surface2);
   color: var(--text);
-  border-color: var(--border3)
+  border-color: var(--border3);
 }
 
 .btn-accent {
   background: var(--accent);
-  color: #fff
+  color: #fff;
 }
 
 .btn-accent:hover {
-  filter: brightness(1.12)
+  filter: brightness(1.12);
 }
 
 .btn-icon-only {
-  padding: 5px 7px
+  padding: 5px 7px;
 }
 
 .btn-group {
-  display: flex
+  display: flex;
 }
 
 .btn-group .btn:first-child {
-  border-radius: 7px 0 0 7px
+  border-radius: 7px 0 0 7px;
 }
 
 .btn-group .btn:last-child {
   border-radius: 0 7px 7px 0;
-  border-left: none
+  border-left: none;
 }
 
 .icon-btn {
@@ -118,29 +118,28 @@
   display: grid;
   place-items: center;
   flex-shrink: 0;
-  transition: all .12s;
-  font-size: 13px
+  transition: all 0.12s;
+  font-size: 13px;
 }
 
 .icon-btn:hover {
   background: var(--surface2);
-  color: var(--text)
+  color: var(--text);
 }
 
 .icon-btn.active {
   background: var(--accent-dim);
   border-color: var(--accent);
-  color: var(--accent)
+  color: var(--accent);
 }
 
 .icon-btn.danger:hover {
   border-color: var(--price-paid);
-  color: var(--price-paid)
+  color: var(--price-paid);
 }
 
 .icon-btn.sm {
   width: 24px;
   height: 24px;
-  border-radius: 5px
+  border-radius: 5px;
 }
-

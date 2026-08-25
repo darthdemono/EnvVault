@@ -7,7 +7,7 @@
 //! proc-macro namespace collision.
 
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use tauri::{AppHandle, Manager};
 use vault_core::VaultKey;
@@ -21,10 +21,10 @@ pub struct VaultState(pub Mutex<Option<VaultKey>>);
 /// A running "Open to LAN" server.
 pub struct LanServer {
     /// Firing this asks axum to shut down gracefully.
-    shutdown:    Option<tokio::sync::oneshot::Sender<()>>,
-    state:       envv_server::AppState,
-    port:        u16,
-    url:         String,
+    shutdown: Option<tokio::sync::oneshot::Sender<()>>,
+    state: envv_server::AppState,
+    port: u16,
+    url: String,
     fingerprint: Option<String>,
 }
 
@@ -38,25 +38,37 @@ pub struct LanState(pub Mutex<Option<LanServer>>);
 /// the peer — so this works offline and needs no interface-enumeration crate.
 fn local_ip() -> Option<String> {
     let sock = std::net::UdpSocket::bind("0.0.0.0:0").ok()?;
-    sock.connect("192.0.2.1:80").ok()?;      // TEST-NET-1: reserved, never routed
+    sock.connect("192.0.2.1:80").ok()?; // TEST-NET-1: reserved, never routed
     Some(sock.local_addr().ok()?.ip().to_string())
 }
 
 // ── Path helpers ──────────────────────────────────────────────────────────────
 
 fn db_path(app: &AppHandle) -> Result<PathBuf, String> {
-    app.path().app_data_dir().map(|d| d.join("vault.db")).map_err(|e| e.to_string())
+    app.path()
+        .app_data_dir()
+        .map(|d| d.join("vault.db"))
+        .map_err(|e| e.to_string())
 }
 fn salt_path(app: &AppHandle) -> Result<PathBuf, String> {
-    app.path().app_data_dir().map(|d| d.join("vault.salt")).map_err(|e| e.to_string())
+    app.path()
+        .app_data_dir()
+        .map(|d| d.join("vault.salt"))
+        .map_err(|e| e.to_string())
 }
 fn legacy_json_path(app: &AppHandle) -> Result<PathBuf, String> {
-    app.path().app_data_dir().map(|d| d.join("vault.json")).map_err(|e| e.to_string())
+    app.path()
+        .app_data_dir()
+        .map(|d| d.join("vault.json"))
+        .map_err(|e| e.to_string())
 }
 fn settings_path(app: &AppHandle) -> Result<PathBuf, String> {
-    app.path().app_config_dir().map(|d| d.join("settings.json")).map_err(|e| e.to_string())
+    app.path()
+        .app_config_dir()
+        .map(|d| d.join("settings.json"))
+        .map_err(|e| e.to_string())
 }
-fn ensure_parent(path: &PathBuf) -> Result<(), String> {
+fn ensure_parent(path: &Path) -> Result<(), String> {
     if let Some(p) = path.parent() {
         fs::create_dir_all(p).map_err(|e| e.to_string())?;
     }
@@ -77,12 +89,12 @@ mod commands {
         state: State<VaultState>,
         password: String,
     ) -> Result<bool, String> {
-        let db        = db_path(&app)?;
+        let db = db_path(&app)?;
         let salt_file = salt_path(&app)?;
         ensure_parent(&db)?;
 
         let salt = vault_core::read_or_create_salt(&salt_file)?;
-        let key  = vault_core::derive_key(&password, &salt)?;
+        let key = vault_core::derive_key(&password, &salt)?;
         let conn = vault_core::open_db(&db, &key)?;
         vault_core::init_schema(&conn)?;
 
@@ -117,7 +129,9 @@ mod commands {
     pub fn lock_vault(state: State<VaultState>, lan: State<LanState>) -> Result<(), String> {
         lan_stop(lan)?;
         let mut g = state.0.lock().map_err(|_| "State lock poisoned")?;
-        if let Some(mut k) = g.take() { k.zeroize(); }
+        if let Some(mut k) = g.take() {
+            k.zeroize();
+        }
         Ok(())
     }
 
@@ -132,10 +146,16 @@ mod commands {
     }
 
     #[tauri::command]
-    pub fn reset_vault(app: AppHandle, state: State<VaultState>, lan: State<LanState>) -> Result<(), String> {
+    pub fn reset_vault(
+        app: AppHandle,
+        state: State<VaultState>,
+        lan: State<LanState>,
+    ) -> Result<(), String> {
         lan_stop(lan)?;
         let mut g = state.0.lock().map_err(|_| "State lock poisoned")?;
-        if let Some(mut k) = g.take() { k.zeroize(); }
+        if let Some(mut k) = g.take() {
+            k.zeroize();
+        }
         let _ = fs::remove_file(db_path(&app)?);
         let _ = fs::remove_file(salt_path(&app)?);
         Ok(())
@@ -144,17 +164,17 @@ mod commands {
     /// Vault contents plus the version they were read at.
     #[derive(serde::Serialize)]
     pub struct VersionedVault {
-        pub data:    serde_json::Value,
+        pub data: serde_json::Value,
         /// Pass back to `save_vault` so a concurrent write cannot be clobbered.
         pub version: Option<String>,
     }
 
     #[tauri::command]
     pub fn load_vault(
-        app:   AppHandle,
+        app: AppHandle,
         state: State<VaultState>,
     ) -> Result<Option<VersionedVault>, String> {
-        let g   = state.0.lock().map_err(|_| "State lock poisoned")?;
+        let g = state.0.lock().map_err(|_| "State lock poisoned")?;
         let key = g.as_ref().ok_or("Vault is locked")?;
         let conn = vault_core::open_db(&db_path(&app)?, key)?;
         // Version first, then data — see the same ordering note in the server's
@@ -171,21 +191,25 @@ mod commands {
     /// they had just saved.
     #[tauri::command]
     pub fn save_vault(
-        app:            AppHandle,
-        state:          State<VaultState>,
-        data:           serde_json::Value,
+        app: AppHandle,
+        state: State<VaultState>,
+        data: serde_json::Value,
         expect_version: Option<String>,
     ) -> Result<String, String> {
-        let g   = state.0.lock().map_err(|_| "State lock poisoned")?;
+        let g = state.0.lock().map_err(|_| "State lock poisoned")?;
         let key = g.as_ref().ok_or("Vault is locked")?;
         let conn = vault_core::open_db(&db_path(&app)?, key)?;
         // Local desktop edits are always the owner acting directly; attribute
         // them to the owner row so the audit log is uniform with the server's.
         let actor = vault_core::ensure_owner_user(&conn).ok();
-        vault_core::save_vault(&conn, data, vault_core::SaveCtx {
-            actor: actor.as_deref(),
-            expect_version: expect_version.as_deref(),
-        })
+        vault_core::save_vault(
+            &conn,
+            data,
+            vault_core::SaveCtx {
+                actor: actor.as_deref(),
+                expect_version: expect_version.as_deref(),
+            },
+        )
     }
 
     #[tauri::command]
@@ -196,26 +220,32 @@ mod commands {
     #[tauri::command]
     pub fn load_settings(app: AppHandle) -> Result<Option<serde_json::Value>, String> {
         let path = settings_path(&app)?;
-        if !path.exists() { return Ok(None); }
+        if !path.exists() {
+            return Ok(None);
+        }
         serde_json::from_str(&fs::read_to_string(&path).map_err(|e| e.to_string())?)
-            .map(Some).map_err(|e| e.to_string())
+            .map(Some)
+            .map_err(|e| e.to_string())
     }
 
     #[tauri::command]
     pub fn save_settings(app: AppHandle, data: serde_json::Value) -> Result<(), String> {
         let path = settings_path(&app)?;
         ensure_parent(&path)?;
-        fs::write(path, serde_json::to_string_pretty(&data).map_err(|e| e.to_string())?)
-            .map_err(|e| e.to_string())
+        fs::write(
+            path,
+            serde_json::to_string_pretty(&data).map_err(|e| e.to_string())?,
+        )
+        .map_err(|e| e.to_string())
     }
 
     #[tauri::command]
     pub fn get_expiring(
-        app:   AppHandle,
+        app: AppHandle,
         state: State<VaultState>,
-        days:  u32,
+        days: u32,
     ) -> Result<Vec<serde_json::Value>, String> {
-        let g   = state.0.lock().map_err(|_| "State lock poisoned")?;
+        let g = state.0.lock().map_err(|_| "State lock poisoned")?;
         let key = g.as_ref().ok_or("Vault is locked")?;
         let conn = vault_core::open_db(&db_path(&app)?, key)?;
         vault_core::get_expiring_entries(&conn, days)
@@ -223,10 +253,10 @@ mod commands {
 
     #[tauri::command]
     pub fn get_audit_log(
-        app:   AppHandle,
+        app: AppHandle,
         state: State<VaultState>,
     ) -> Result<Vec<vault_core::AuditRow>, String> {
-        let g   = state.0.lock().map_err(|_| "State lock poisoned")?;
+        let g = state.0.lock().map_err(|_| "State lock poisoned")?;
         let key = g.as_ref().ok_or("Vault is locked")?;
         let conn = vault_core::open_db(&db_path(&app)?, key)?;
         vault_core::load_audit(&conn)
@@ -234,7 +264,7 @@ mod commands {
 
     #[tauri::command]
     pub fn generate_certificate(
-        common_name:   String,
+        common_name: String,
         validity_days: u32,
     ) -> Result<serde_json::Value, String> {
         vault_core::generate_certificate(&common_name, validity_days)
@@ -249,10 +279,10 @@ mod commands {
 
     #[tauri::command]
     pub fn list_users(
-        app:   AppHandle,
+        app: AppHandle,
         state: State<VaultState>,
     ) -> Result<Vec<vault_core::UserRecord>, String> {
-        let g   = state.0.lock().map_err(|_| "State lock poisoned")?;
+        let g = state.0.lock().map_err(|_| "State lock poisoned")?;
         let key = g.as_ref().ok_or("Vault is locked")?;
         let conn = vault_core::open_db(&db_path(&app)?, key)?;
         vault_core::list_users(&conn)
@@ -260,12 +290,12 @@ mod commands {
 
     #[tauri::command]
     pub fn create_user(
-        app:      AppHandle,
-        state:    State<VaultState>,
+        app: AppHandle,
+        state: State<VaultState>,
         username: String,
         password: Option<String>,
     ) -> Result<vault_core::UserRecord, String> {
-        let g   = state.0.lock().map_err(|_| "State lock poisoned")?;
+        let g = state.0.lock().map_err(|_| "State lock poisoned")?;
         let key = g.as_ref().ok_or("Vault is locked")?;
         let conn = vault_core::open_db(&db_path(&app)?, key)?;
         vault_core::create_user(&conn, &username, password.as_deref(), false)
@@ -275,7 +305,8 @@ mod commands {
 
     #[tauri::command]
     pub fn list_user_classes(
-        app: AppHandle, state: State<VaultState>,
+        app: AppHandle,
+        state: State<VaultState>,
     ) -> Result<Vec<vault_core::UserClass>, String> {
         let g = state.0.lock().map_err(|_| "State lock poisoned")?;
         let key = g.as_ref().ok_or("Vault is locked")?;
@@ -284,35 +315,55 @@ mod commands {
 
     #[tauri::command]
     pub fn create_user_class(
-        app: AppHandle, state: State<VaultState>,
-        name: String, description: String,
-        cap_manage_users: bool, cap_manage_classes: bool, cap_delete_projects: bool,
+        app: AppHandle,
+        state: State<VaultState>,
+        name: String,
+        description: String,
+        cap_manage_users: bool,
+        cap_manage_classes: bool,
+        cap_delete_projects: bool,
     ) -> Result<vault_core::UserClass, String> {
         let g = state.0.lock().map_err(|_| "State lock poisoned")?;
         let key = g.as_ref().ok_or("Vault is locked")?;
         vault_core::create_user_class(
             &vault_core::open_db(&db_path(&app)?, key)?,
-            &name, &description, cap_manage_users, cap_manage_classes, cap_delete_projects,
+            &name,
+            &description,
+            cap_manage_users,
+            cap_manage_classes,
+            cap_delete_projects,
         )
     }
 
     #[tauri::command]
     pub fn update_user_class(
-        app: AppHandle, state: State<VaultState>,
-        class_id: String, name: String, description: String,
-        cap_manage_users: bool, cap_manage_classes: bool, cap_delete_projects: bool,
+        app: AppHandle,
+        state: State<VaultState>,
+        class_id: String,
+        name: String,
+        description: String,
+        cap_manage_users: bool,
+        cap_manage_classes: bool,
+        cap_delete_projects: bool,
     ) -> Result<(), String> {
         let g = state.0.lock().map_err(|_| "State lock poisoned")?;
         let key = g.as_ref().ok_or("Vault is locked")?;
         vault_core::update_user_class(
             &vault_core::open_db(&db_path(&app)?, key)?,
-            &class_id, &name, &description, cap_manage_users, cap_manage_classes, cap_delete_projects,
+            &class_id,
+            &name,
+            &description,
+            cap_manage_users,
+            cap_manage_classes,
+            cap_delete_projects,
         )
     }
 
     #[tauri::command]
     pub fn delete_user_class(
-        app: AppHandle, state: State<VaultState>, class_id: String,
+        app: AppHandle,
+        state: State<VaultState>,
+        class_id: String,
     ) -> Result<(), String> {
         let g = state.0.lock().map_err(|_| "State lock poisoned")?;
         let key = g.as_ref().ok_or("Vault is locked")?;
@@ -321,61 +372,89 @@ mod commands {
 
     /// Read/write permission expressions for one subject (user or class).
     #[derive(serde::Serialize, serde::Deserialize, Default)]
-    pub struct PermissionExprs { pub read: String, pub write: String }
+    pub struct PermissionExprs {
+        pub read: String,
+        pub write: String,
+    }
 
-    fn load_exprs(conn: &vault_core::SqlConnection, kind: &str, id: &str) -> Result<PermissionExprs, String> {
+    fn load_exprs(
+        conn: &vault_core::SqlConnection,
+        kind: &str,
+        id: &str,
+    ) -> Result<PermissionExprs, String> {
         Ok(PermissionExprs {
-            read:  vault_core::get_permission_expr(conn, kind, id, "read")?.unwrap_or_default(),
+            read: vault_core::get_permission_expr(conn, kind, id, "read")?.unwrap_or_default(),
             write: vault_core::get_permission_expr(conn, kind, id, "write")?.unwrap_or_default(),
         })
     }
 
-    fn store_exprs(conn: &vault_core::SqlConnection, kind: &str, id: &str, e: &PermissionExprs) -> Result<(), String> {
-        vault_core::set_permission_expr(conn, kind, id, "read",  &e.read)?;
+    fn store_exprs(
+        conn: &vault_core::SqlConnection,
+        kind: &str,
+        id: &str,
+        e: &PermissionExprs,
+    ) -> Result<(), String> {
+        vault_core::set_permission_expr(conn, kind, id, "read", &e.read)?;
         vault_core::set_permission_expr(conn, kind, id, "write", &e.write)?;
         Ok(())
     }
 
     #[tauri::command]
     pub fn get_class_permissions(
-        app: AppHandle, state: State<VaultState>, class_id: String,
+        app: AppHandle,
+        state: State<VaultState>,
+        class_id: String,
     ) -> Result<PermissionExprs, String> {
         let g = state.0.lock().map_err(|_| "State lock poisoned")?;
         let key = g.as_ref().ok_or("Vault is locked")?;
-        load_exprs(&vault_core::open_db(&db_path(&app)?, key)?, "class", &class_id)
+        load_exprs(
+            &vault_core::open_db(&db_path(&app)?, key)?,
+            "class",
+            &class_id,
+        )
     }
 
     #[tauri::command]
     pub fn set_class_permissions(
-        app: AppHandle, state: State<VaultState>,
-        class_id: String, permissions: PermissionExprs,
+        app: AppHandle,
+        state: State<VaultState>,
+        class_id: String,
+        permissions: PermissionExprs,
     ) -> Result<(), String> {
         let g = state.0.lock().map_err(|_| "State lock poisoned")?;
         let key = g.as_ref().ok_or("Vault is locked")?;
-        store_exprs(&vault_core::open_db(&db_path(&app)?, key)?, "class", &class_id, &permissions)
+        store_exprs(
+            &vault_core::open_db(&db_path(&app)?, key)?,
+            "class",
+            &class_id,
+            &permissions,
+        )
     }
 
     #[tauri::command]
     pub fn assign_user_class(
-        app: AppHandle, state: State<VaultState>,
-        user_id: String, class_id: Option<String>,
+        app: AppHandle,
+        state: State<VaultState>,
+        user_id: String,
+        class_id: Option<String>,
     ) -> Result<(), String> {
         let g = state.0.lock().map_err(|_| "State lock poisoned")?;
         let key = g.as_ref().ok_or("Vault is locked")?;
         vault_core::assign_user_class(
             &vault_core::open_db(&db_path(&app)?, key)?,
-            &user_id, class_id.as_deref(),
+            &user_id,
+            class_id.as_deref(),
         )
     }
 
     #[tauri::command]
     pub fn set_user_password(
-        app:      AppHandle,
-        state:    State<VaultState>,
-        user_id:  String,
+        app: AppHandle,
+        state: State<VaultState>,
+        user_id: String,
         password: Option<String>,
     ) -> Result<(), String> {
-        let g   = state.0.lock().map_err(|_| "State lock poisoned")?;
+        let g = state.0.lock().map_err(|_| "State lock poisoned")?;
         let key = g.as_ref().ok_or("Vault is locked")?;
         let conn = vault_core::open_db(&db_path(&app)?, key)?;
         vault_core::set_user_password(&conn, &user_id, password.as_deref())
@@ -383,12 +462,12 @@ mod commands {
 
     #[tauri::command]
     pub fn rename_user(
-        app:          AppHandle,
-        state:        State<VaultState>,
-        user_id:      String,
+        app: AppHandle,
+        state: State<VaultState>,
+        user_id: String,
         new_username: String,
     ) -> Result<(), String> {
-        let g   = state.0.lock().map_err(|_| "State lock poisoned")?;
+        let g = state.0.lock().map_err(|_| "State lock poisoned")?;
         let key = g.as_ref().ok_or("Vault is locked")?;
         let conn = vault_core::open_db(&db_path(&app)?, key)?;
         vault_core::rename_user(&conn, &user_id, &new_username)
@@ -396,11 +475,11 @@ mod commands {
 
     #[tauri::command]
     pub fn delete_user(
-        app:     AppHandle,
-        state:   State<VaultState>,
+        app: AppHandle,
+        state: State<VaultState>,
         user_id: String,
     ) -> Result<(), String> {
-        let g   = state.0.lock().map_err(|_| "State lock poisoned")?;
+        let g = state.0.lock().map_err(|_| "State lock poisoned")?;
         let key = g.as_ref().ok_or("Vault is locked")?;
         let conn = vault_core::open_db(&db_path(&app)?, key)?;
         vault_core::delete_user(&conn, &user_id)
@@ -409,17 +488,22 @@ mod commands {
     /// Creates a token and returns the plaintext (shown once only).
     #[tauri::command]
     pub fn create_user_token(
-        app:         AppHandle,
-        state:       State<VaultState>,
-        user_id:     String,
+        app: AppHandle,
+        state: State<VaultState>,
+        user_id: String,
         description: String,
     ) -> Result<serde_json::Value, String> {
-        let g   = state.0.lock().map_err(|_| "State lock poisoned")?;
+        let g = state.0.lock().map_err(|_| "State lock poisoned")?;
         let key = g.as_ref().ok_or("Vault is locked")?;
         let conn = vault_core::open_db(&db_path(&app)?, key)?;
         let (token_id, plaintext) = vault_core::create_user_token(
-            &conn, &user_id,
-            if description.is_empty() { None } else { Some(description.as_str()) },
+            &conn,
+            &user_id,
+            if description.is_empty() {
+                None
+            } else {
+                Some(description.as_str())
+            },
             None,
         )?;
         Ok(serde_json::json!({ "token_id": token_id, "token": plaintext }))
@@ -427,11 +511,11 @@ mod commands {
 
     #[tauri::command]
     pub fn revoke_user_token(
-        app:      AppHandle,
-        state:    State<VaultState>,
+        app: AppHandle,
+        state: State<VaultState>,
         token_id: String,
     ) -> Result<(), String> {
-        let g   = state.0.lock().map_err(|_| "State lock poisoned")?;
+        let g = state.0.lock().map_err(|_| "State lock poisoned")?;
         let key = g.as_ref().ok_or("Vault is locked")?;
         let conn = vault_core::open_db(&db_path(&app)?, key)?;
         vault_core::revoke_user_token(&conn, &token_id)
@@ -439,11 +523,11 @@ mod commands {
 
     #[tauri::command]
     pub fn list_user_tokens(
-        app:     AppHandle,
-        state:   State<VaultState>,
+        app: AppHandle,
+        state: State<VaultState>,
         user_id: String,
     ) -> Result<Vec<vault_core::TokenRecord>, String> {
-        let g   = state.0.lock().map_err(|_| "State lock poisoned")?;
+        let g = state.0.lock().map_err(|_| "State lock poisoned")?;
         let key = g.as_ref().ok_or("Vault is locked")?;
         let conn = vault_core::open_db(&db_path(&app)?, key)?;
         vault_core::list_user_tokens(&conn, &user_id)
@@ -451,11 +535,11 @@ mod commands {
 
     #[tauri::command]
     pub fn get_user_permissions(
-        app:     AppHandle,
-        state:   State<VaultState>,
+        app: AppHandle,
+        state: State<VaultState>,
         user_id: String,
     ) -> Result<PermissionExprs, String> {
-        let g   = state.0.lock().map_err(|_| "State lock poisoned")?;
+        let g = state.0.lock().map_err(|_| "State lock poisoned")?;
         let key = g.as_ref().ok_or("Vault is locked")?;
         let conn = vault_core::open_db(&db_path(&app)?, key)?;
         load_exprs(&conn, "user", &user_id)
@@ -463,12 +547,12 @@ mod commands {
 
     #[tauri::command]
     pub fn set_user_permissions(
-        app:         AppHandle,
-        state:       State<VaultState>,
-        user_id:     String,
+        app: AppHandle,
+        state: State<VaultState>,
+        user_id: String,
         permissions: PermissionExprs,
     ) -> Result<(), String> {
-        let g   = state.0.lock().map_err(|_| "State lock poisoned")?;
+        let g = state.0.lock().map_err(|_| "State lock poisoned")?;
         let key = g.as_ref().ok_or("Vault is locked")?;
         let conn = vault_core::open_db(&db_path(&app)?, key)?;
         store_exprs(&conn, "user", &user_id, &permissions)
@@ -479,13 +563,13 @@ mod commands {
     /// What the UI needs to render the LAN card.
     #[derive(serde::Serialize, Default)]
     pub struct LanStatus {
-        pub running:     bool,
-        pub port:        u16,
-        pub url:         String,
+        pub running: bool,
+        pub port: u16,
+        pub url: String,
         pub fingerprint: Option<String>,
-        pub peers:       usize,
+        pub peers: usize,
         /// Seconds since a peer last made a request; drives the idle shutdown.
-        pub idle_secs:   u64,
+        pub idle_secs: u64,
     }
 
     /// Serve this vault to the local network.
@@ -499,11 +583,11 @@ mod commands {
     /// its own RBAC scope and audit trail.
     #[tauri::command]
     pub async fn lan_start(
-        app:      AppHandle,
-        vault:    State<'_, VaultState>,
-        lan:      State<'_, LanState>,
-        port:     Option<u16>,
-        tls:      Option<bool>,
+        app: AppHandle,
+        vault: State<'_, VaultState>,
+        lan: State<'_, LanState>,
+        port: Option<u16>,
+        tls: Option<bool>,
     ) -> Result<LanStatus, String> {
         if lan.0.lock().map_err(|_| "State lock poisoned")?.is_some() {
             return Err("The LAN server is already running".into());
@@ -511,10 +595,11 @@ mod commands {
 
         let key = {
             let g = vault.0.lock().map_err(|_| "State lock poisoned")?;
-            *g.as_ref().ok_or("Unlock the vault before opening it to the LAN")?
+            *g.as_ref()
+                .ok_or("Unlock the vault before opening it to the LAN")?
         };
 
-        let db   = db_path(&app)?;
+        let db = db_path(&app)?;
         let salt = salt_path(&app)?;
         let conn = vault_core::open_db(&db, &key)?;
 
@@ -532,7 +617,11 @@ mod commands {
         drop(conn);
 
         let use_tls = tls.unwrap_or(true);
-        let cert_dir = app.path().app_data_dir().map_err(|e| e.to_string())?.join("lan");
+        let cert_dir = app
+            .path()
+            .app_data_dir()
+            .map_err(|e| e.to_string())?
+            .join("lan");
         let (tls_files, fingerprint) = if use_tls {
             let (files, fp) = envv_server::ensure_self_signed_cert(&cert_dir)?;
             (Some(files), Some(fp))
@@ -546,12 +635,19 @@ mod commands {
         let bound = envv_server::find_free_port("0.0.0.0", start_port, 20)
             .ok_or_else(|| format!("No free port in {start_port}..{}", start_port + 20))?;
 
-        let state = envv_server::AppState::new(db, salt, fingerprint.clone(), 480, /* lan_mode */ true);
+        let state = envv_server::AppState::new(
+            db,
+            salt,
+            fingerprint.clone(),
+            480,
+            /* lan_mode */ true,
+        );
         // Hand the server the key we already hold: nobody re-enters a password.
         state.adopt_owner_key(key, owner_id);
 
         let addr: std::net::SocketAddr = format!("0.0.0.0:{bound}")
-            .parse().map_err(|e| format!("invalid bind address: {e}"))?;
+            .parse()
+            .map_err(|e| format!("invalid bind address: {e}"))?;
         let (tx, rx) = tokio::sync::oneshot::channel();
 
         let serve_state = state.clone();
@@ -562,8 +658,8 @@ mod commands {
         });
 
         let scheme = if use_tls { "https" } else { "http" };
-        let host   = local_ip().unwrap_or_else(|| "127.0.0.1".to_string());
-        let url    = format!("{scheme}://{host}:{bound}");
+        let host = local_ip().unwrap_or_else(|| "127.0.0.1".to_string());
+        let url = format!("{scheme}://{host}:{bound}");
 
         let status = LanStatus {
             running: true,
@@ -591,7 +687,9 @@ mod commands {
         if let Some(mut server) = g.take() {
             // Zeroize the keys held by peer sessions before dropping the state.
             server.state.shutdown_all_sessions();
-            if let Some(tx) = server.shutdown.take() { let _ = tx.send(()); }
+            if let Some(tx) = server.shutdown.take() {
+                let _ = tx.send(());
+            }
         }
         Ok(())
     }
@@ -602,12 +700,12 @@ mod commands {
         Ok(match g.as_ref() {
             None => LanStatus::default(),
             Some(s) => LanStatus {
-                running:     true,
-                port:        s.port,
-                url:         s.url.clone(),
+                running: true,
+                port: s.port,
+                url: s.url.clone(),
                 fingerprint: s.fingerprint.clone(),
-                peers:       s.state.peer_count(),
-                idle_secs:   s.state.idle_secs(),
+                peers: s.state.peer_count(),
+                idle_secs: s.state.idle_secs(),
             },
         })
     }
@@ -616,7 +714,10 @@ mod commands {
 
     /// Response type returned by `remote_request`.
     #[derive(serde::Serialize)]
-    pub struct RemoteResponse { pub status: u16, pub body: String }
+    pub struct RemoteResponse {
+        pub status: u16,
+        pub body: String,
+    }
 
     /// Rustls verifier that pins the server's leaf certificate to a SHA-256
     /// fingerprint (hex of the DER encoding).  This enforces the pin **during the
@@ -640,7 +741,7 @@ mod commands {
             _ocsp_response: &[u8],
             _now: rustls_pki_types::UnixTime,
         ) -> Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
-            use sha2::{Sha256, Digest};
+            use sha2::{Digest, Sha256};
             let actual = hex::encode(Sha256::digest(end_entity.as_ref()));
             if actual.eq_ignore_ascii_case(&self.expected) {
                 Ok(rustls::client::danger::ServerCertVerified::assertion())
@@ -658,7 +759,10 @@ mod commands {
             dss: &rustls::DigitallySignedStruct,
         ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
             rustls::crypto::verify_tls12_signature(
-                message, cert, dss, &self.provider.signature_verification_algorithms,
+                message,
+                cert,
+                dss,
+                &self.provider.signature_verification_algorithms,
             )
         }
 
@@ -669,12 +773,17 @@ mod commands {
             dss: &rustls::DigitallySignedStruct,
         ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
             rustls::crypto::verify_tls13_signature(
-                message, cert, dss, &self.provider.signature_verification_algorithms,
+                message,
+                cert,
+                dss,
+                &self.provider.signature_verification_algorithms,
             )
         }
 
         fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
-            self.provider.signature_verification_algorithms.supported_schemes()
+            self.provider
+                .signature_verification_algorithms
+                .supported_schemes()
         }
     }
 
@@ -702,7 +811,7 @@ mod commands {
             _ocsp_response: &[u8],
             _now: rustls_pki_types::UnixTime,
         ) -> Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
-            use sha2::{Sha256, Digest};
+            use sha2::{Digest, Sha256};
             *self.seen.lock().unwrap() = Some(hex::encode(Sha256::digest(end_entity.as_ref())));
             Ok(rustls::client::danger::ServerCertVerified::assertion())
         }
@@ -714,7 +823,10 @@ mod commands {
             dss: &rustls::DigitallySignedStruct,
         ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
             rustls::crypto::verify_tls12_signature(
-                message, cert, dss, &self.provider.signature_verification_algorithms,
+                message,
+                cert,
+                dss,
+                &self.provider.signature_verification_algorithms,
             )
         }
 
@@ -725,12 +837,17 @@ mod commands {
             dss: &rustls::DigitallySignedStruct,
         ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
             rustls::crypto::verify_tls13_signature(
-                message, cert, dss, &self.provider.signature_verification_algorithms,
+                message,
+                cert,
+                dss,
+                &self.provider.signature_verification_algorithms,
             )
         }
 
         fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
-            self.provider.signature_verification_algorithms.supported_schemes()
+            self.provider
+                .signature_verification_algorithms
+                .supported_schemes()
         }
     }
 
@@ -762,7 +879,11 @@ mod commands {
             .map_err(|e| e.to_string())?;
 
         let status_url = format!("{}/api/status", url.trim_end_matches('/'));
-        client.get(&status_url).send().await.map_err(|e| e.to_string())?;
+        client
+            .get(&status_url)
+            .send()
+            .await
+            .map_err(|e| e.to_string())?;
 
         let fp = seen.lock().unwrap().clone();
         fp.ok_or_else(|| "Server did not present a TLS certificate".to_string())
@@ -774,10 +895,10 @@ mod commands {
     /// (pinning); when absent, normal CA validation applies.
     #[tauri::command]
     pub async fn remote_request(
-        url:         String,
-        method:      String,
+        url: String,
+        method: String,
         headers_json: String,
-        body:        Option<String>,
+        body: Option<String>,
         fingerprint: Option<String>,
     ) -> Result<RemoteResponse, String> {
         let mut builder = reqwest::ClientBuilder::new();
@@ -800,18 +921,25 @@ mod commands {
             serde_json::from_str(&headers_json).unwrap_or_default();
 
         let mut req = client.request(
-            method.parse::<reqwest::Method>().map_err(|e| e.to_string())?,
+            method
+                .parse::<reqwest::Method>()
+                .map_err(|e| e.to_string())?,
             &url,
         );
         for (k, v) in &headers {
             req = req.header(k.as_str(), v.as_str());
         }
-        if let Some(b) = body { req = req.body(b); }
+        if let Some(b) = body {
+            req = req.body(b);
+        }
 
         let resp = req.send().await.map_err(|e| e.to_string())?;
         let status = resp.status().as_u16();
         let body_text = resp.text().await.unwrap_or_default();
-        Ok(RemoteResponse { status, body: body_text })
+        Ok(RemoteResponse {
+            status,
+            body: body_text,
+        })
     }
 }
 
@@ -842,7 +970,9 @@ fn configure_linux_webkit() {
     // Native Wayland is the better path where it exists; X11 stays the default
     // only when the session is not Wayland to begin with.
     let wayland = std::env::var_os("WAYLAND_DISPLAY").is_some()
-        || std::env::var("XDG_SESSION_TYPE").map(|v| v == "wayland").unwrap_or(false);
+        || std::env::var("XDG_SESSION_TYPE")
+            .map(|v| v == "wayland")
+            .unwrap_or(false);
     if !wayland {
         default_env("GDK_BACKEND", "x11");
     }

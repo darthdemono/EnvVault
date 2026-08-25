@@ -15,7 +15,9 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { st, Settings } from '../src/ts/state';
 import { STABLE_PROJECT_TYPES, isExperimentalProjectType } from '../src/ts/types';
 import {
-  openProjectCreateModal, saveProjectCreate, setProjectCreateType,
+  openProjectCreateModal,
+  saveProjectCreate,
+  setProjectCreateType,
   applyExperimentalTypeVisibility,
 } from '../src/ts/projects';
 import { openSettings, saveSettings } from '../src/ts/settings-panel';
@@ -30,7 +32,15 @@ const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getEleme
 const typeBtn = (t: string) =>
   document.querySelector<HTMLButtonElement>(`.project-type-btn[data-ptype="${t}"]`);
 
-const EXPERIMENTAL = ['kubernetes', 'ssh_config', 'traefik', 'apache', 'haproxy', 'ansible', 'postgres'];
+const EXPERIMENTAL = [
+  'kubernetes',
+  'ssh_config',
+  'traefik',
+  'apache',
+  'haproxy',
+  'ansible',
+  'postgres',
+];
 
 beforeEach(() => {
   loadRealIndexHtml();
@@ -45,11 +55,11 @@ describe('type classification', () => {
   });
 
   it('classifies every untested type as experimental', () => {
-    EXPERIMENTAL.forEach(t => expect(isExperimentalProjectType(t as any), t).toBe(true));
+    EXPERIMENTAL.forEach((t) => expect(isExperimentalProjectType(t as any), t).toBe(true));
   });
 
   it('does not classify the tested types as experimental', () => {
-    STABLE_PROJECT_TYPES.forEach(t => expect(isExperimentalProjectType(t), t).toBe(false));
+    STABLE_PROJECT_TYPES.forEach((t) => expect(isExperimentalProjectType(t), t).toBe(false));
   });
 
   it('treats a missing type as non-experimental', () => {
@@ -63,18 +73,18 @@ describe('type classification', () => {
 describe('create picker', () => {
   it('hides every experimental type by default', () => {
     openProjectCreateModal();
-    EXPERIMENTAL.forEach(t => expect(typeBtn(t)!.style.display, t).toBe('none'));
+    EXPERIMENTAL.forEach((t) => expect(typeBtn(t)!.style.display, t).toBe('none'));
   });
 
   it('always offers the four tested types', () => {
     openProjectCreateModal();
-    STABLE_PROJECT_TYPES.forEach(t => expect(typeBtn(t)!.style.display, t).not.toBe('none'));
+    STABLE_PROJECT_TYPES.forEach((t) => expect(typeBtn(t)!.style.display, t).not.toBe('none'));
   });
 
   it('reveals the experimental types once the setting is on', () => {
     Settings.set('experimentalProjectTypes', true);
     openProjectCreateModal();
-    EXPERIMENTAL.forEach(t => expect(typeBtn(t)!.style.display, t).not.toBe('none'));
+    EXPERIMENTAL.forEach((t) => expect(typeBtn(t)!.style.display, t).not.toBe('none'));
   });
 
   it('marks the revealed types so they do not look proven', () => {
@@ -107,7 +117,7 @@ describe('setProjectCreateType guard', () => {
     ($('project-create-name') as HTMLInputElement).value = 'k8s-test';
     saveProjectCreate();
 
-    const created = st.vault.projects.find(p => p.name === 'k8s-test')!;
+    const created = st.vault.projects.find((p) => p.name === 'k8s-test')!;
     expect(created).toBeTruthy();
     expect(created.project_type).toBeUndefined();
   });
@@ -119,7 +129,7 @@ describe('setProjectCreateType guard', () => {
     ($('project-create-name') as HTMLInputElement).value = 'k8s-test';
     saveProjectCreate();
 
-    expect(st.vault.projects.find(p => p.name === 'k8s-test')!.project_type).toBe('kubernetes');
+    expect(st.vault.projects.find((p) => p.name === 'k8s-test')!.project_type).toBe('kubernetes');
   });
 
   it('still accepts a tested type while the setting is off', () => {
@@ -128,7 +138,7 @@ describe('setProjectCreateType guard', () => {
     ($('project-create-name') as HTMLInputElement).value = 'wg0';
     saveProjectCreate();
 
-    expect(st.vault.projects.find(p => p.name === 'wg0')!.project_type).toBe('wireguard');
+    expect(st.vault.projects.find((p) => p.name === 'wg0')!.project_type).toBe('wireguard');
   });
 });
 
@@ -140,7 +150,7 @@ describe('existing experimental projects', () => {
     st.vault.projects.push(makeProject({ id: 'k8s', name: 'k8s', project_type: 'kubernetes' }));
     Settings.set('experimentalProjectTypes', false);
     applyExperimentalTypeVisibility();
-    expect(st.vault.projects.find(p => p.id === 'k8s')!.project_type).toBe('kubernetes');
+    expect(st.vault.projects.find((p) => p.id === 'k8s')!.project_type).toBe('kubernetes');
   });
 });
 
@@ -168,7 +178,7 @@ describe('settings', () => {
   it('every remaining settings tab still has a matching pane', () => {
     // Removing a tab and leaving its pane (or vice versa) yields a tab that
     // switches to nothing.
-    document.querySelectorAll<HTMLElement>('.settings-tab').forEach(tab => {
+    document.querySelectorAll<HTMLElement>('.settings-tab').forEach((tab) => {
       const pane = document.querySelector(`.settings-tab-pane[data-spane="${tab.dataset.stab}"]`);
       expect(pane, `no pane for tab ${tab.dataset.stab}`).toBeTruthy();
     });

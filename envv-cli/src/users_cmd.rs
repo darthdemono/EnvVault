@@ -5,17 +5,21 @@
 //! authority-tier guards a scoped session is subject to in the UI.
 
 use crate::access::Access;
+use crate::error::{CliError, CliResult};
 use crate::fmt::{cell, confirm};
 use crate::out;
 use reqwest::Method;
 use serde_json::{json, Value};
-use crate::error::{CliError, CliResult};
 
 // ── Users ─────────────────────────────────────────────────────────────────────
 
 pub fn user_ls(access: &Access, json_out: bool) -> CliResult {
     let rows: Vec<Value> = match access {
-        Access::Remote(c) => c.get_json("/api/users")?.as_array().cloned().unwrap_or_default(),
+        Access::Remote(c) => c
+            .get_json("/api/users")?
+            .as_array()
+            .cloned()
+            .unwrap_or_default(),
         Access::Local(_) => {
             let conn = access.conn()?;
             vault_core::list_users(&conn)?
@@ -25,23 +29,43 @@ pub fn user_ls(access: &Access, json_out: bool) -> CliResult {
         }
     };
     if json_out || out::is_json() {
-        out::ok("user.ls", json!({ "count": rows.len(), "users": rows }), || {});
+        out::ok(
+            "user.ls",
+            json!({ "count": rows.len(), "users": rows }),
+            || {},
+        );
         return Ok(());
     }
     if rows.is_empty() {
         println!("No users.");
         return Ok(());
     }
-    println!("{:<38} {:<20} {:<8} {:<6} {}", "Id", "Username", "Password", "Owner", "Last seen");
+    println!(
+        "{:<38} {:<20} {:<8} {:<6} Last seen",
+        "Id", "Username", "Password", "Owner"
+    );
     println!("{}", "-".repeat(96));
     for u in &rows {
         println!(
             "{} {} {:<8} {:<6} {}",
             cell(u.get("id").and_then(|v| v.as_str()).unwrap_or(""), 38),
             cell(u.get("username").and_then(|v| v.as_str()).unwrap_or(""), 20),
-            if u.get("has_password").and_then(|v| v.as_bool()).unwrap_or(false) { "yes" } else { "no" },
-            if u.get("is_owner").and_then(|v| v.as_bool()).unwrap_or(false) { "yes" } else { "no" },
-            u.get("last_seen_at").and_then(|v| v.as_str()).unwrap_or("—"),
+            if u.get("has_password")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false)
+            {
+                "yes"
+            } else {
+                "no"
+            },
+            if u.get("is_owner").and_then(|v| v.as_bool()).unwrap_or(false) {
+                "yes"
+            } else {
+                "no"
+            },
+            u.get("last_seen_at")
+                .and_then(|v| v.as_str())
+                .unwrap_or("—"),
         );
     }
     Ok(())
@@ -50,7 +74,11 @@ pub fn user_ls(access: &Access, json_out: bool) -> CliResult {
 /// Resolve a username or id to a user id.
 fn resolve_user(access: &Access, query: &str) -> CliResult<String> {
     let rows: Vec<Value> = match access {
-        Access::Remote(c) => c.get_json("/api/users")?.as_array().cloned().unwrap_or_default(),
+        Access::Remote(c) => c
+            .get_json("/api/users")?
+            .as_array()
+            .cloned()
+            .unwrap_or_default(),
         Access::Local(_) => {
             let conn = access.conn()?;
             vault_core::list_users(&conn)?
@@ -59,7 +87,10 @@ fn resolve_user(access: &Access, query: &str) -> CliResult<String> {
                 .collect()
         }
     };
-    if let Some(u) = rows.iter().find(|u| u.get("id").and_then(|v| v.as_str()) == Some(query)) {
+    if let Some(u) = rows
+        .iter()
+        .find(|u| u.get("id").and_then(|v| v.as_str()) == Some(query))
+    {
         return Ok(u["id"].as_str().unwrap_or("").to_string());
     }
     let hits: Vec<&Value> = rows
@@ -67,13 +98,16 @@ fn resolve_user(access: &Access, query: &str) -> CliResult<String> {
         .filter(|u| {
             u.get("username")
                 .and_then(|v| v.as_str())
-                .map_or(false, |n| n.eq_ignore_ascii_case(query))
+                .is_some_and(|n| n.eq_ignore_ascii_case(query))
         })
         .collect();
     match hits.len() {
         1 => Ok(hits[0]["id"].as_str().unwrap_or("").to_string()),
         0 => Err(CliError::not_found(format!("No user '{query}'"))),
-        _ => Err(CliError::ambiguous(format!("'{query}' matches {} users — use the id", hits.len()))),
+        _ => Err(CliError::ambiguous(format!(
+            "'{query}' matches {} users — use the id",
+            hits.len()
+        ))),
     }
 }
 
@@ -100,10 +134,16 @@ pub fn user_add(
         Access::Remote(c) => {
             let body = json!({ "username": username, "password": pw });
             let created = c.send_json(Method::POST, "/api/users", Some(&body))?;
-            let id = created.get("id").and_then(|v| v.as_str()).unwrap_or("?").to_string();
-            out::ok("user.add", json!({ "username": username, "id": id, "created": true }), || {
-                println!("Created user '{username}' ({id})")
-            });
+            let id = created
+                .get("id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("?")
+                .to_string();
+            out::ok(
+                "user.add",
+                json!({ "username": username, "id": id, "created": true }),
+                || println!("Created user '{username}' ({id})"),
+            );
         }
         Access::Local(_) => {
             let conn = access.conn()?;
@@ -133,9 +173,11 @@ pub fn user_rm(access: &Access, query: &str, yes: bool) -> CliResult {
             vault_core::delete_user(&conn, &id)?;
         }
     }
-    out::ok("user.rm", json!({ "user": query, "id": id, "deleted": true }), || {
-        println!("Deleted user '{query}'")
-    });
+    out::ok(
+        "user.rm",
+        json!({ "user": query, "id": id, "deleted": true }),
+        || println!("Deleted user '{query}'"),
+    );
     Ok(())
 }
 
@@ -154,9 +196,11 @@ pub fn user_rename(access: &Access, query: &str, new_name: &str) -> CliResult {
             vault_core::rename_user(&conn, &id, new_name)?;
         }
     }
-    out::ok("user.rename", json!({ "from": query, "to": new_name }), || {
-        println!("Renamed user '{query}' → '{new_name}'")
-    });
+    out::ok(
+        "user.rename",
+        json!({ "from": query, "to": new_name }),
+        || println!("Renamed user '{query}' → '{new_name}'"),
+    );
     Ok(())
 }
 
@@ -165,8 +209,10 @@ pub fn user_passwd(access: &Access, query: &str, clear: bool) -> CliResult {
     let pw: Option<String> = if clear {
         None
     } else {
-        let p = rpassword::prompt_password("New password: ").map_err(|e| CliError::from(e.to_string()))?;
-        let again = rpassword::prompt_password("Repeat: ").map_err(|e| CliError::from(e.to_string()))?;
+        let p = rpassword::prompt_password("New password: ")
+            .map_err(|e| CliError::from(e.to_string()))?;
+        let again =
+            rpassword::prompt_password("Repeat: ").map_err(|e| CliError::from(e.to_string()))?;
         if p != again {
             return Err("Passwords do not match".into());
         }
@@ -185,9 +231,20 @@ pub fn user_passwd(access: &Access, query: &str, clear: bool) -> CliResult {
             vault_core::set_user_password(&conn, &id, pw.as_deref())?;
         }
     }
-    out::ok("user.passwd", json!({ "user": query, "has_password": !clear }), || {
-        println!("{}", if clear { "Password cleared (token-only auth)" } else { "Password set" })
-    });
+    out::ok(
+        "user.passwd",
+        json!({ "user": query, "has_password": !clear }),
+        || {
+            println!(
+                "{}",
+                if clear {
+                    "Password cleared (token-only auth)"
+                } else {
+                    "Password set"
+                }
+            )
+        },
+    );
     Ok(())
 }
 
@@ -210,15 +267,19 @@ pub fn user_class(access: &Access, query: &str, class: Option<&str>) -> CliResul
             vault_core::assign_user_class(&conn, &id, class_id.as_deref())?;
         }
     }
-    out::ok("user.class", json!({ "user": query, "class": class }), || {
-        println!(
-            "{}",
-            match class {
-                Some(c) => format!("Assigned '{query}' to class '{c}'"),
-                None => format!("Removed '{query}' from its class"),
-            }
-        )
-    });
+    out::ok(
+        "user.class",
+        json!({ "user": query, "class": class }),
+        || {
+            println!(
+                "{}",
+                match class {
+                    Some(c) => format!("Assigned '{query}' to class '{c}'"),
+                    None => format!("Removed '{query}' from its class"),
+                }
+            )
+        },
+    );
     Ok(())
 }
 
@@ -241,22 +302,37 @@ pub fn token_ls(access: &Access, query: &str) -> CliResult {
         }
     };
     if out::is_json() {
-        out::ok("user.token.ls", json!({ "count": rows.len(), "tokens": rows }), || {});
+        out::ok(
+            "user.token.ls",
+            json!({ "count": rows.len(), "tokens": rows }),
+            || {},
+        );
         return Ok(());
     }
     if rows.is_empty() {
         println!("No tokens for '{query}'.");
         return Ok(());
     }
-    println!("{:<38} {:<26} {:<22} {}", "Token id", "Description", "Created", "Expires");
+    println!(
+        "{:<38} {:<26} {:<22} Expires",
+        "Token id", "Description", "Created"
+    );
     println!("{}", "-".repeat(100));
     for t in &rows {
         println!(
             "{} {} {} {}",
             cell(t.get("id").and_then(|v| v.as_str()).unwrap_or(""), 38),
-            cell(t.get("description").and_then(|v| v.as_str()).unwrap_or("—"), 26),
-            cell(t.get("created_at").and_then(|v| v.as_str()).unwrap_or(""), 22),
-            t.get("expires_at").and_then(|v| v.as_str()).unwrap_or("never"),
+            cell(
+                t.get("description").and_then(|v| v.as_str()).unwrap_or("—"),
+                26
+            ),
+            cell(
+                t.get("created_at").and_then(|v| v.as_str()).unwrap_or(""),
+                22
+            ),
+            t.get("expires_at")
+                .and_then(|v| v.as_str())
+                .unwrap_or("never"),
         );
     }
     Ok(())
@@ -284,11 +360,22 @@ pub fn token_new(
     let (token_id, plaintext) = match access {
         Access::Remote(c) => {
             let body = json!({ "description": description, "expires_at": expires });
-            let created =
-                c.send_json(Method::POST, &format!("/api/users/{id}/tokens"), Some(&body))?;
+            let created = c.send_json(
+                Method::POST,
+                &format!("/api/users/{id}/tokens"),
+                Some(&body),
+            )?;
             (
-                created.get("token_id").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-                created.get("token").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                created
+                    .get("token_id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+                created
+                    .get("token")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string(),
             )
         }
         Access::Local(_) => {
@@ -349,16 +436,22 @@ pub fn token_revoke(access: &Access, query: &str, token_id: &str, yes: bool) -> 
     }
     match access {
         Access::Remote(c) => {
-            c.send_json(Method::DELETE, &format!("/api/users/{id}/tokens/{token_id}"), None)?;
+            c.send_json(
+                Method::DELETE,
+                &format!("/api/users/{id}/tokens/{token_id}"),
+                None,
+            )?;
         }
         Access::Local(_) => {
             let conn = access.conn()?;
             vault_core::revoke_user_token(&conn, token_id)?;
         }
     }
-    out::ok("user.token.revoke", json!({ "token_id": token_id, "revoked": true }), || {
-        println!("Revoked {token_id}")
-    });
+    out::ok(
+        "user.token.revoke",
+        json!({ "token_id": token_id, "revoked": true }),
+        || println!("Revoked {token_id}"),
+    );
     Ok(())
 }
 
@@ -366,7 +459,11 @@ pub fn token_revoke(access: &Access, query: &str, token_id: &str, yes: bool) -> 
 
 fn class_rows(access: &Access) -> CliResult<Vec<Value>> {
     match access {
-        Access::Remote(c) => Ok(c.get_json("/api/classes")?.as_array().cloned().unwrap_or_default()),
+        Access::Remote(c) => Ok(c
+            .get_json("/api/classes")?
+            .as_array()
+            .cloned()
+            .unwrap_or_default()),
         Access::Local(_) => {
             let conn = access.conn()?;
             Ok(vault_core::list_user_classes(&conn)?
@@ -379,35 +476,56 @@ fn class_rows(access: &Access) -> CliResult<Vec<Value>> {
 
 fn resolve_class(access: &Access, query: &str) -> CliResult<String> {
     let rows = class_rows(access)?;
-    if let Some(c) = rows.iter().find(|c| c.get("id").and_then(|v| v.as_str()) == Some(query)) {
+    if let Some(c) = rows
+        .iter()
+        .find(|c| c.get("id").and_then(|v| v.as_str()) == Some(query))
+    {
         return Ok(c["id"].as_str().unwrap_or("").to_string());
     }
     let hits: Vec<&Value> = rows
         .iter()
         .filter(|c| {
-            c.get("name").and_then(|v| v.as_str()).map_or(false, |n| n.eq_ignore_ascii_case(query))
+            c.get("name")
+                .and_then(|v| v.as_str())
+                .is_some_and(|n| n.eq_ignore_ascii_case(query))
         })
         .collect();
     match hits.len() {
         1 => Ok(hits[0]["id"].as_str().unwrap_or("").to_string()),
         0 => Err(CliError::not_found(format!("No class '{query}'"))),
-        _ => Err(CliError::ambiguous(format!("'{query}' matches {} classes — use the id", hits.len()))),
+        _ => Err(CliError::ambiguous(format!(
+            "'{query}' matches {} classes — use the id",
+            hits.len()
+        ))),
     }
 }
 
 pub fn class_ls(access: &Access, json_out: bool) -> CliResult {
     let rows = class_rows(access)?;
     if json_out || out::is_json() {
-        out::ok("class.ls", json!({ "count": rows.len(), "classes": rows }), || {});
+        out::ok(
+            "class.ls",
+            json!({ "count": rows.len(), "classes": rows }),
+            || {},
+        );
         return Ok(());
     }
     if rows.is_empty() {
         println!("No classes.");
         return Ok(());
     }
-    println!("{:<38} {:<20} {:<7} {:<7} {:<7} {}", "Id", "Name", "Users", "Classes", "DelProj", "Description");
+    println!(
+        "{:<38} {:<20} {:<7} {:<7} {:<7} Description",
+        "Id", "Name", "Users", "Classes", "DelProj"
+    );
     println!("{}", "-".repeat(110));
-    let b = |c: &Value, k: &str| if c.get(k).and_then(|v| v.as_bool()).unwrap_or(false) { "yes" } else { "—" };
+    let b = |c: &Value, k: &str| {
+        if c.get(k).and_then(|v| v.as_bool()).unwrap_or(false) {
+            "yes"
+        } else {
+            "—"
+        }
+    };
     for c in &rows {
         println!(
             "{} {} {:<7} {:<7} {:<7} {}",
@@ -428,12 +546,7 @@ pub struct ClassCaps {
     pub delete_projects: bool,
 }
 
-pub fn class_add(
-    access: &Access,
-    name: &str,
-    description: &str,
-    caps: &ClassCaps,
-) -> CliResult {
+pub fn class_add(access: &Access, name: &str, description: &str, caps: &ClassCaps) -> CliResult {
     match access {
         Access::Remote(c) => {
             let body = json!({
@@ -443,10 +556,16 @@ pub fn class_add(
                 "cap_delete_projects": caps.delete_projects,
             });
             let created = c.send_json(Method::POST, "/api/classes", Some(&body))?;
-            let id = created.get("id").and_then(|v| v.as_str()).unwrap_or("?").to_string();
-            out::ok("class.add", json!({ "name": name, "id": id, "created": true }), || {
-                println!("Created class '{name}' ({id})")
-            });
+            let id = created
+                .get("id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("?")
+                .to_string();
+            out::ok(
+                "class.add",
+                json!({ "name": name, "id": id, "created": true }),
+                || println!("Created class '{name}' ({id})"),
+            );
         }
         Access::Local(_) => {
             let conn = access.conn()?;
@@ -458,9 +577,11 @@ pub fn class_add(
                 caps.manage_classes,
                 caps.delete_projects,
             )?;
-            out::ok("class.add", json!({ "name": cls.name, "id": cls.id, "created": true }), || {
-                println!("Created class '{}' ({})", cls.name, cls.id)
-            });
+            out::ok(
+                "class.add",
+                json!({ "name": cls.name, "id": cls.id, "created": true }),
+                || println!("Created class '{}' ({})", cls.name, cls.id),
+            );
         }
     }
     Ok(())
@@ -479,8 +600,12 @@ pub fn class_set(
         .find(|c| c.get("id").and_then(|v| v.as_str()) == Some(id.as_str()))
         .ok_or("Class vanished")?;
     let name = name.unwrap_or_else(|| existing.get("name").and_then(|v| v.as_str()).unwrap_or(""));
-    let description = description
-        .unwrap_or_else(|| existing.get("description").and_then(|v| v.as_str()).unwrap_or(""));
+    let description = description.unwrap_or_else(|| {
+        existing
+            .get("description")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+    });
 
     match access {
         Access::Remote(c) => {
@@ -520,7 +645,10 @@ pub fn class_set(
 
 pub fn class_rm(access: &Access, query: &str, yes: bool) -> CliResult {
     let id = resolve_class(access, query)?;
-    if !confirm(&format!("Delete class '{query}'? Members are unassigned."), yes)? {
+    if !confirm(
+        &format!("Delete class '{query}'? Members are unassigned."),
+        yes,
+    )? {
         println!("Cancelled.");
         return Ok(());
     }
@@ -533,9 +661,11 @@ pub fn class_rm(access: &Access, query: &str, yes: bool) -> CliResult {
             vault_core::delete_user_class(&conn, &id)?;
         }
     }
-    out::ok("class.rm", json!({ "class": query, "id": id, "deleted": true }), || {
-        println!("Deleted class '{query}'")
-    });
+    out::ok(
+        "class.rm",
+        json!({ "class": query, "id": id, "deleted": true }),
+        || println!("Deleted class '{query}'"),
+    );
     Ok(())
 }
 
@@ -557,14 +687,26 @@ pub fn perm_show(access: &Access, subject_kind: &str, query: &str) -> CliResult 
             })
         }
     };
-    let read = exprs.get("read").and_then(|x| x.as_str()).unwrap_or("").to_string();
-    let write = exprs.get("write").and_then(|x| x.as_str()).unwrap_or("").to_string();
+    let read = exprs
+        .get("read")
+        .and_then(|x| x.as_str())
+        .unwrap_or("")
+        .to_string();
+    let write = exprs
+        .get("write")
+        .and_then(|x| x.as_str())
+        .unwrap_or("")
+        .to_string();
     out::ok(
         "perm.show",
         json!({ "subject_kind": subject_kind, "subject": query, "read": read, "write": write }),
         || {
             let show = |v: &str| {
-                if v.is_empty() { "(none — denies everything)".to_string() } else { v.to_string() }
+                if v.is_empty() {
+                    "(none — denies everything)".to_string()
+                } else {
+                    v.to_string()
+                }
             };
             println!("read   {}", show(&read));
             println!("write  {}", show(&write));
@@ -605,7 +747,8 @@ pub fn perm_set(
             })
         }
     };
-    let next_read = read.unwrap_or_else(|| current.get("read").and_then(|v| v.as_str()).unwrap_or(""));
+    let next_read =
+        read.unwrap_or_else(|| current.get("read").and_then(|v| v.as_str()).unwrap_or(""));
     let next_write =
         write.unwrap_or_else(|| current.get("write").and_then(|v| v.as_str()).unwrap_or(""));
 
@@ -636,8 +779,10 @@ pub fn perm_set(
 /// Check a permission expression parses, without storing it.
 pub fn perm_check(expr: &str) -> CliResult {
     let parsed = vault_core::parse_perm_expr(expr).map_err(CliError::invalid)?;
-    out::ok("perm.check", json!({ "valid": true, "normalized": parsed.to_string() }), || {
-        println!("OK: {parsed}")
-    });
+    out::ok(
+        "perm.check",
+        json!({ "valid": true, "normalized": parsed.to_string() }),
+        || println!("OK: {parsed}"),
+    );
     Ok(())
 }

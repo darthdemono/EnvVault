@@ -1,6 +1,7 @@
 /**
- * @file Audit log viewer — reads the append-only, hash-chained `vault_audit`
- *       table and lets the user verify that the chain is intact.
+ * @file
+ * Audit log viewer — reads the append-only, hash-chained `vault_audit`
+ * table and lets the user verify that the chain is intact.
  *
  * The backend has written this chain since Phase 3 but nothing ever displayed
  * it, so the tamper-evidence it provides was invisible. Each row stores
@@ -29,7 +30,9 @@ async function loadRows(): Promise<AuditRow[]> {
 /** Hex SHA-256 of a UTF-8 string, matching the Rust side byte for byte. */
 async function sha256Hex(input: string): Promise<string> {
   const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(input));
-  return Array.from(new Uint8Array(digest)).map(b => b.toString(16).padStart(2, '0')).join('');
+  return Array.from(new Uint8Array(digest))
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('');
 }
 
 export interface ChainResult {
@@ -52,9 +55,14 @@ export async function verifyChain(rows: AuditRow[]): Promise<ChainResult> {
   const ordered = [...rows].sort((a, b) => a.id - b.id);
   // Pre-hash-chain rows (written before the columns existed) carry no hashes;
   // skip them rather than reporting a false tamper.
-  const chained = ordered.filter(r => r.entry_hash);
+  const chained = ordered.filter((r) => r.entry_hash);
   if (!chained.length) {
-    return { ok: true, checked: 0, brokenAt: null, reason: 'No hash-chained rows yet — nothing to verify.' };
+    return {
+      ok: true,
+      checked: 0,
+      brokenAt: null,
+      reason: 'No hash-chained rows yet — nothing to verify.',
+    };
   }
 
   // The first chained row must anchor to genesis.
@@ -67,7 +75,9 @@ export async function verifyChain(rows: AuditRow[]): Promise<ChainResult> {
   const first = chained[0];
   if (first.prev_hash && first.prev_hash !== 'genesis') {
     return {
-      ok: false, checked: 0, brokenAt: 1,
+      ok: false,
+      checked: 0,
+      brokenAt: 1,
       reason: `Row #${first.id} is the oldest hashed row but links to an earlier hash — rows before it were removed.`,
     };
   }
@@ -81,21 +91,41 @@ export async function verifyChain(rows: AuditRow[]): Promise<ChainResult> {
     //   v1  action|provider|timestamp|prev         (rows predating actor tracking)
     // Try v2 when an actor is present, else v1, so existing logs still verify.
     const expected = r.actor
-      ? await sha256Hex(`${r.action}|${r.entry_provider ?? ''}|${r.timestamp}|${r.actor}|${prevForHash}`)
+      ? await sha256Hex(
+          `${r.action}|${r.entry_provider ?? ''}|${r.timestamp}|${r.actor}|${prevForHash}`,
+        )
       : await sha256Hex(`${r.action}|${r.entry_provider ?? ''}|${r.timestamp}|${prevForHash}`);
     if (expected !== r.entry_hash) {
-      return { ok: false, checked: i + 1, brokenAt: i + 1, reason: `Row #${r.id} contents do not match its stored hash.` };
+      return {
+        ok: false,
+        checked: i + 1,
+        brokenAt: i + 1,
+        reason: `Row #${r.id} contents do not match its stored hash.`,
+      };
     }
     if (prev !== null && r.prev_hash !== prev) {
-      return { ok: false, checked: i + 1, brokenAt: i + 1, reason: `Row #${r.id} does not link to the previous row — a row was altered or removed.` };
+      return {
+        ok: false,
+        checked: i + 1,
+        brokenAt: i + 1,
+        reason: `Row #${r.id} does not link to the previous row — a row was altered or removed.`,
+      };
     }
     prev = r.entry_hash!;
   }
-  return { ok: true, checked: chained.length, brokenAt: null, reason: `All ${chained.length} chained rows verified.` };
+  return {
+    ok: true,
+    checked: chained.length,
+    brokenAt: null,
+    reason: `All ${chained.length} chained rows verified.`,
+  };
 }
 
 const ACTION_CLASS: Record<string, string> = {
-  add: 'audit-add', update: 'audit-update', delete: 'audit-delete', read: 'audit-read',
+  add: 'audit-add',
+  update: 'audit-update',
+  delete: 'audit-delete',
+  read: 'audit-read',
 };
 
 /** Usernames by id, so audit rows show a name instead of a raw UUID. */
@@ -122,11 +152,14 @@ export function resetAuditPanel(): void {
 
 async function loadUserNames(): Promise<void> {
   try {
-    const users = st.store instanceof RemoteVaultStore
-      ? await (st.store as RemoteVaultStore).api('/api/users')
-      : await invoke('list_users');
+    const users =
+      st.store instanceof RemoteVaultStore
+        ? await (st.store as RemoteVaultStore).api('/api/users')
+        : await invoke('list_users');
     _userNames = new Map((users ?? []).map((u: any) => [u.id, u.username]));
-  } catch { /* not permitted to list users — fall back to raw ids */ }
+  } catch {
+    /* not permitted to list users — fall back to raw ids */
+  }
 }
 
 function actorLabel(actor: string | null): string {
@@ -150,7 +183,9 @@ function render(rows: AuditRow[]) {
         <tr><th>#</th><th>Action</th><th>Target</th><th>By</th><th>When</th><th>Details</th><th>Hash</th></tr>
       </thead>
       <tbody>
-        ${rows.map(r => `
+        ${rows
+          .map(
+            (r) => `
           <tr>
             <td class="audit-id">${esc(r.id)}</td>
             <td><span class="audit-action ${ACTION_CLASS[r.action] ?? ''}">${esc(r.action)}</span></td>
@@ -159,7 +194,9 @@ function render(rows: AuditRow[]) {
             <td class="audit-ts">${esc(r.timestamp)}</td>
             <td class="audit-details">${esc(r.details ?? '')}</td>
             <td class="audit-hash" title="${esc(r.entry_hash ?? '')}">${esc((r.entry_hash ?? '—').slice(0, 12))}</td>
-          </tr>`).join('')}
+          </tr>`,
+          )
+          .join('')}
       </tbody>
     </table>`;
 }
@@ -185,18 +222,29 @@ export function initAuditPanel() {
 
   document.getElementById('audit-verify')?.addEventListener('click', async () => {
     if (!_rows.length) {
-      try { _rows = await loadRows(); render(_rows); }
-      catch (e: any) { setStatus(`Could not load audit log: ${e?.message ?? e}`, 'err'); return; }
+      try {
+        _rows = await loadRows();
+        render(_rows);
+      } catch (e: any) {
+        setStatus(`Could not load audit log: ${e?.message ?? e}`, 'err');
+        return;
+      }
     }
     setStatus('Verifying…', 'warn');
     const result = await verifyChain(_rows);
-    setStatus(result.ok ? `✓ Chain intact — ${result.reason}` : `✗ Chain broken — ${result.reason}`,
-              result.ok ? 'ok' : 'err');
+    setStatus(
+      result.ok ? `✓ Chain intact — ${result.reason}` : `✗ Chain broken — ${result.reason}`,
+      result.ok ? 'ok' : 'err',
+    );
   });
 
   document.getElementById('audit-export')?.addEventListener('click', () => {
-    if (!_rows.length) { showToast('Load the log first', 'err'); return; }
-    clipboardWrite(JSON.stringify(_rows, null, 2))
-      .then(() => showToast('Audit log copied ✓', 'ok', 1500));
+    if (!_rows.length) {
+      showToast('Load the log first', 'err');
+      return;
+    }
+    clipboardWrite(JSON.stringify(_rows, null, 2)).then(() =>
+      showToast('Audit log copied ✓', 'ok', 1500),
+    );
   });
 }

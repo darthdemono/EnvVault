@@ -9,17 +9,19 @@
   display: flex;
   flex-direction: column;
   padding: 10px 7px 14px;
-  transition: width .15s, padding .15s
+  transition:
+    width 0.15s,
+    padding 0.15s;
 }
 
 #sidebar.collapsed {
   width: 0;
   padding: 0;
-  overflow: hidden
+  overflow: hidden;
 }
 
 .sidebar-section {
-  margin-bottom: 4px
+  margin-bottom: 4px;
 }
 
 /* Separator handled by applySidebarOrder() inline styles (flex order != DOM order) */
@@ -27,13 +29,13 @@
 .sidebar-heading {
   font-size: 9.5px;
   font-weight: 700;
-  letter-spacing: .1em;
+  letter-spacing: 0.1em;
   text-transform: uppercase;
   color: var(--text3);
   padding: 8px 8px 4px;
   display: flex;
   align-items: center;
-  justify-content: space-between
+  justify-content: space-between;
 }
 
 .sidebar-add-btn {
@@ -47,14 +49,14 @@
   font-size: 13px;
   display: grid;
   place-items: center;
-  transition: all .12s;
-  line-height: 1
+  transition: all 0.12s;
+  line-height: 1;
 }
 
 .sidebar-add-btn:hover {
   background: var(--surface3);
   color: var(--accent);
-  border-color: var(--accent)
+  border-color: var(--accent);
 }
 
 .sidebar-item {
@@ -68,39 +70,39 @@
   gap: 7px;
   cursor: pointer;
   color: var(--text2);
-  font-family: 'Syne', sans-serif;
+  font-family: "Syne", sans-serif;
   font-size: 12px;
   font-weight: 500;
-  transition: all .12s;
-  text-align: left
+  transition: all 0.12s;
+  text-align: left;
 }
 
 .sidebar-item:hover {
   background: var(--surface2);
-  color: var(--text)
+  color: var(--text);
 }
 
 .sidebar-item.active {
   background: var(--accent-dim);
-  color: var(--accent)
+  color: var(--accent);
 }
 
 .sidebar-item .sidebar-icon {
   font-size: 13px;
   flex-shrink: 0;
   width: 14px;
-  text-align: center
+  text-align: center;
 }
 
 .sidebar-item .sidebar-label {
   flex: 1;
   white-space: nowrap;
   overflow: hidden;
-  text-overflow: ellipsis
+  text-overflow: ellipsis;
 }
 
 .sidebar-count {
-  font-family: 'JetBrains Mono', monospace;
+  font-family: "JetBrains Mono", monospace;
   font-size: 9.5px;
   color: var(--text3);
   background: var(--surface3);
@@ -108,24 +110,24 @@
   padding: 1px 5px;
   min-width: 18px;
   text-align: center;
-  flex-shrink: 0
+  flex-shrink: 0;
 }
 
 .sidebar-item.active .sidebar-count {
   background: var(--accent-dim);
-  color: var(--accent)
+  color: var(--accent);
 }
 
 .sidebar-cat-row {
   display: flex;
   align-items: center;
   border-radius: 7px;
-  overflow: hidden
+  overflow: hidden;
 }
 
 .sidebar-cat-row .sidebar-item {
   flex: 1;
-  min-width: 0
+  min-width: 0;
 }
 
 .sidebar-cat-del {
@@ -139,28 +141,28 @@
   place-items: center;
   flex-shrink: 0;
   opacity: 0;
-  transition: opacity .12s;
+  transition: opacity 0.12s;
   border-radius: 4px;
-  margin-right: 2px
+  margin-right: 2px;
 }
 
 .sidebar-cat-row:hover .sidebar-cat-del {
-  opacity: 1
+  opacity: 1;
 }
 
 .sidebar-cat-del:hover {
-  color: var(--price-paid)
+  color: var(--price-paid);
 }
 
 .sidebar-cat-del.rename-cat:hover,
 .sidebar-cat-del.rename-proj:hover {
-  color: var(--accent)
+  color: var(--accent);
 }
 
 .new-category-form {
   display: flex;
   gap: 4px;
-  padding: 3px 8px
+  padding: 3px 8px;
 }
 
 .sidebar-input {
@@ -169,38 +171,38 @@
   border: 1px solid var(--border2);
   border-radius: 6px;
   color: var(--text);
-  font-family: 'Syne', sans-serif;
+  font-family: "Syne", sans-serif;
   font-size: 12px;
   padding: 4px 8px;
   outline: none;
-  min-width: 0
+  min-width: 0;
 }
 
 .sidebar-input:focus {
-  border-color: var(--accent)
+  border-color: var(--accent);
 }
 
 .price-dot {
   width: 7px;
   height: 7px;
   border-radius: 50%;
-  flex-shrink: 0
+  flex-shrink: 0;
 }
 
 .price-dot[data-price="free"] {
-  background: var(--price-free)
+  background: var(--price-free);
 }
 
 .price-dot[data-price="local"] {
-  background: var(--price-local)
+  background: var(--price-local);
 }
 
 .price-dot[data-price="paid"] {
-  background: var(--price-paid)
+  background: var(--price-paid);
 }
 
 .price-dot[data-price="conditional"] {
-  background: var(--price-cond)
+  background: var(--price-cond);
 }
 
 /* ── SIDEBAR RESIZE HANDLE ──────────────────────────── */
@@ -209,14 +211,14 @@
   flex-shrink: 0;
   cursor: col-resize;
   background: transparent;
-  transition: background .15s;
+  transition: background 0.15s;
   position: relative;
-  z-index: 2
+  z-index: 2;
 }
 
 #sidebar-resizer:hover,
 #sidebar-resizer.dragging {
-  background: var(--accent)
+  background: var(--accent);
 }
 
 .sidebar-footer {
@@ -227,9 +229,8 @@
 }
 
 .lock-status {
-  font-family: 'JetBrains Mono', monospace;
+  font-family: "JetBrains Mono", monospace;
   font-size: 9.5px;
   color: var(--text3);
-  padding: 4px 9px
+  padding: 4px 9px;
 }
-

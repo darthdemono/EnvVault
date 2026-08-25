@@ -1,5 +1,6 @@
 /**
- * @file Data models for EnvVault.
+ * @file
+ * Data models for EnvVault.
  * @description Defines the structure of vault entries, projects, and application settings
  *              shared between the TypeScript frontend and the persisted JSON format.
  *              These types mirror the JSON blob stored in the SQLCipher `vault` table.
@@ -27,7 +28,6 @@ export type SecretType =
   | 'connection_string'
   | 'ssh_key'
   | 'file_blob';
-
 
 /**
  * A single stored secret entry.
@@ -93,7 +93,7 @@ export interface VaultEntry {
   /** Additional metadata or usage notes. */
   details?: string | null;
   /** Snapshots of previous `api_key` values. Prepended automatically on save when the value changes. */
-  version_history?: Array<{ value: string; saved_at: string }>;
+  version_history?: { value: string; saved_at: string }[];
   /**
    * Ids of the projects this entry belongs to. Backed by `VaultData.projects`,
    * shown in the sidebar's "Projects" section, and matched by RBAC
@@ -118,7 +118,18 @@ export interface VaultEntry {
   /** File-system path or reference to a credential file. `file_blob` entries only. */
   blob_ref?: string | null;
   /** Sub-type hint for env_var entries (used for display and filtering). */
-  env_var_subtype?: 'string' | 'multiline' | 'secret' | 'boolean' | 'number' | 'ip' | 'cidr' | 'port' | 'url' | 'date' | 'json';
+  env_var_subtype?:
+    | 'string'
+    | 'multiline'
+    | 'secret'
+    | 'boolean'
+    | 'number'
+    | 'ip'
+    | 'cidr'
+    | 'port'
+    | 'url'
+    | 'date'
+    | 'json';
   /** ISO-8601 timestamp of the last manual rotation (set via "Mark as rotated"). */
   last_rotated_at?: string | null;
   /** Rotation cadence in days. When set, health scan flags entries overdue since `last_rotated_at`. */
@@ -130,7 +141,7 @@ export interface VaultEntry {
   /** When true the entry floats to the top of all filtered views. */
   pinned?: boolean;
   /** Extra named fields beyond the fixed schema (e.g. db, port, host for database entries). */
-  extra_vars?: Array<{ key: string; value: string; secret?: boolean }>;
+  extra_vars?: { key: string; value: string; secret?: boolean }[];
   /**
    * Env-var prefixes added by services that consume this credential.
    * For Key type: e.g. ["ND", "SPOTIFYD"] means Navidrome uses ND_LASTFM_APIKEY.
@@ -159,7 +170,19 @@ export interface Project {
 }
 
 /** Sub-type of a field in a structured config chunk. */
-export type ChunkFieldType = 'var' | 'env_var' | 'secret' | 'list' | 'multiline' | 'port' | 'user_id' | 'subnet' | 'ip' | 'endpoint' | 'volume_mount' | 'cert';
+export type ChunkFieldType =
+  | 'var'
+  | 'env_var'
+  | 'secret'
+  | 'list'
+  | 'multiline'
+  | 'port'
+  | 'user_id'
+  | 'subnet'
+  | 'ip'
+  | 'endpoint'
+  | 'volume_mount'
+  | 'cert';
 
 /** A single field within a structured config chunk (WireGuard section, Docker service, etc.). */
 export interface ChunkField {
@@ -231,7 +254,18 @@ export interface SecretChunk {
 }
 
 /** High-level type of a project — drives the special config view. */
-export type ProjectType = 'generic' | 'wireguard' | 'docker' | 'nginx' | 'kubernetes' | 'ssh_config' | 'traefik' | 'apache' | 'haproxy' | 'ansible' | 'postgres';
+export type ProjectType =
+  | 'generic'
+  | 'wireguard'
+  | 'docker'
+  | 'nginx'
+  | 'kubernetes'
+  | 'ssh_config'
+  | 'traefik'
+  | 'apache'
+  | 'haproxy'
+  | 'ansible'
+  | 'postgres';
 
 /**
  * Project types that have actually been exercised end to end.
@@ -241,7 +275,12 @@ export type ProjectType = 'generic' | 'wireguard' | 'docker' | 'nginx' | 'kubern
  * exporters exist but have never been run against a real deployment, and a
  * config this app writes wrong is a broken deploy rather than a cosmetic bug.
  */
-export const STABLE_PROJECT_TYPES: readonly ProjectType[] = ['generic', 'wireguard', 'docker', 'nginx'];
+export const STABLE_PROJECT_TYPES: readonly ProjectType[] = [
+  'generic',
+  'wireguard',
+  'docker',
+  'nginx',
+];
 
 /** Whether a project type is gated behind the experimental setting. */
 export function isExperimentalProjectType(t: ProjectType | undefined | null): boolean {
@@ -268,22 +307,22 @@ export interface VaultData {
 
 /** A vault user record returned by the user management API. */
 export interface UserInfo {
-  id:           string;
-  username:     string;
+  id: string;
+  username: string;
   has_password: boolean;
-  is_owner:     boolean;
-  created_at:   string;
+  is_owner: boolean;
+  created_at: string;
   last_seen_at: string | null;
-  class_id:     string | null;
+  class_id: string | null;
 }
 
 /** A stored API token descriptor (actual token shown only on creation). */
 export interface TokenInfo {
-  id:          string;
-  user_id:     string;
+  id: string;
+  user_id: string;
   description: string | null;
-  created_at:  string;
-  expires_at:  string | null;
+  created_at: string;
+  expires_at: string | null;
 }
 
 /**
@@ -294,55 +333,55 @@ export interface TokenInfo {
  * - `permission`:  `"read"` | `"write"` (write implies read)
  */
 export interface PermissionEntry {
-  user_id:     string;
-  scope_type:  'vault' | 'project' | 'category';
+  user_id: string;
+  scope_type: 'vault' | 'project' | 'category';
   scope_value: string;
-  permission:  'read' | 'write';
+  permission: 'read' | 'write';
 }
 
 /** A named user class (role template) with capabilities and permissions. */
 export interface UserClass {
-  id:                  string;
-  name:                string;
-  description:         string;
-  cap_manage_users:    boolean;
-  cap_manage_classes:  boolean;
+  id: string;
+  name: string;
+  description: string;
+  cap_manage_users: boolean;
+  cap_manage_classes: boolean;
   cap_delete_projects: boolean;
-  created_at:          string;
+  created_at: string;
 }
 
 /** A permission row scoped to a user class (applies to all members of the class). */
 export interface ClassPermission {
-  class_id:    string;
-  scope_type:  'vault' | 'project' | 'category';
+  class_id: string;
+  scope_type: 'vault' | 'project' | 'category';
   scope_value: string;
-  permission:  'read' | 'write';
+  permission: 'read' | 'write';
 }
 
 /** A single row from the append-only vault audit log. */
 export interface AuditRow {
-  id:             number;
-  action:         'add' | 'update' | 'delete' | string;
+  id: number;
+  action: 'add' | 'update' | 'delete' | string;
   entry_provider: string | null;
-  timestamp:      string;
-  details:        string | null;
-  entry_hash:     string | null;
-  prev_hash:      string | null;
+  timestamp: string;
+  details: string | null;
+  entry_hash: string | null;
+  prev_hash: string | null;
   /** User id that performed the action; null for rows written before actor tracking. */
-  actor:          string | null;
+  actor: string | null;
 }
 
 /** Remote vault server configuration stored in AppSettings. */
 export interface RemoteConfig {
-  enabled:    boolean;
-  serverUrl:  string;
+  enabled: boolean;
+  serverUrl: string;
 }
 
 /** A saved remote vault connection (persisted in AppSettings). */
 export interface RemoteVaultConfig {
-  id:       string;
-  name:     string;
-  url:      string;
+  id: string;
+  name: string;
+  url: string;
   username: string;
   /** SHA-256 hex fingerprint of the server TLS cert (TOFU pinning). Present only for HTTPS servers. */
   certFingerprint?: string;
@@ -365,12 +404,12 @@ export interface RemoteVaultConfig {
  * `restoreViewState()`.
  */
 export interface PersistedView {
-  filterType:     string;
-  filterValue:    string;
-  envFilter:      string;
-  tagFilter:      string | null;
-  prefixFilter:   string | null;
-  projectIds:     string[];
+  filterType: string;
+  filterValue: string;
+  envFilter: string;
+  tagFilter: string | null;
+  prefixFilter: string | null;
+  projectIds: string[];
 }
 
 /**

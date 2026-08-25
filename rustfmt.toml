@@ -1,0 +1,19 @@
+# rustfmt, stable options only.
+#
+# Nightly-gated options (imports_granularity, group_imports, wrap_comments,
+# format_code_in_doc_comments) are deliberately absent: on a stable toolchain
+# rustfmt prints a warning for each and then ignores it, so CI would emit noise
+# for settings that are not being applied. If the workspace ever moves to a
+# nightly fmt, they are worth revisiting.
+
+edition = "2021"
+max_width = 100
+tab_spaces = 4
+hard_tabs = false
+newline_style = "Unix"
+use_small_heuristics = "Default"
+reorder_imports = true
+reorder_modules = true
+merge_derives = true
+use_field_init_shorthand = true
+use_try_shorthand = true

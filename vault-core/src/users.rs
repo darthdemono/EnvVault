@@ -16,71 +16,90 @@
 //!
 //! Glob rules: `*` matches any sequence of characters (including empty); `?` matches one char.
 
-use std::collections::{HashMap, HashSet};
+use crate::iso_now;
+use rand::RngCore;
 use rusqlite::{Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
-use sha2::{Sha256, Digest};
-use rand::RngCore;
-use crate::iso_now;
+use sha2::{Digest, Sha256};
+use std::collections::{HashMap, HashSet};
+
+/// One `(scope_type, scope_value)` pair from the `user_permissions` table.
+///
+/// Named because it appears three deep inside `PermissionsBySubject` below, and
+/// clippy's `type_complexity` is right that the nested form is unreadable.
+type Scope = (String, String);
+
+/// `subject id -> (read scopes, write scopes)`.
+///
+/// A write scope also grants read, so the read vector is the superset; see
+/// `load_all_permissions`, which pushes into both.
+type PermissionsBySubject = HashMap<String, (Vec<Scope>, Vec<Scope>)>;
+
+/// The `users` columns every lookup selects, in `SELECT` order:
+/// `id, username, password_hash, is_owner, created_at, last_seen_at`.
+///
+/// `password_hash` and `last_seen_at` are nullable — a user created by an
+/// administrator has no hash until first login, and has never been seen.
+type UserRow = (String, String, Option<String>, i32, String, Option<String>);
 
 // ── Public types ──────────────────────────────────────────────────────────────
 
 /// A named user class (role template) with capabilities and permissions.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UserClass {
-    pub id:                   String,
-    pub name:                 String,
-    pub description:          String,
+    pub id: String,
+    pub name: String,
+    pub description: String,
     /// Can create/delete users and assign classes.
-    pub cap_manage_users:     bool,
+    pub cap_manage_users: bool,
     /// Can create/edit/delete user classes (admin-level).
-    pub cap_manage_classes:   bool,
+    pub cap_manage_classes: bool,
     /// Can delete projects.
-    pub cap_delete_projects:  bool,
-    pub created_at:           String,
+    pub cap_delete_projects: bool,
+    pub created_at: String,
 }
 
 /// A single permission row scoped to a user class (no user_id — applies to all class members).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ClassPermission {
-    pub class_id:    String,
-    pub scope_type:  String,
+    pub class_id: String,
+    pub scope_type: String,
     pub scope_value: String,
-    pub permission:  String,
+    pub permission: String,
 }
 
 /// A vault user (password hash is never exposed via this struct).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UserRecord {
-    pub id:           String,
-    pub username:     String,
+    pub id: String,
+    pub username: String,
     /// True when the user has a password set (can use username+password auth).
     pub has_password: bool,
-    pub is_owner:     bool,
-    pub created_at:   String,
+    pub is_owner: bool,
+    pub created_at: String,
     pub last_seen_at: Option<String>,
 }
 
 /// A stored API token descriptor.  The actual token is returned only on creation.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TokenRecord {
-    pub id:          String,
-    pub user_id:     String,
+    pub id: String,
+    pub user_id: String,
     pub description: Option<String>,
-    pub created_at:  String,
-    pub expires_at:  Option<String>,
+    pub created_at: String,
+    pub expires_at: Option<String>,
 }
 
 /// A single RBAC permission row.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PermissionRecord {
-    pub user_id:     String,
+    pub user_id: String,
     /// `"vault"` | `"project"` | `"category"`
-    pub scope_type:  String,
+    pub scope_type: String,
     /// Glob pattern: `"*"`, `"wg0-*"`, `"Cloud/AWS"`, etc.
     pub scope_value: String,
     /// `"read"` | `"write"` (write implies read)
-    pub permission:  String,
+    pub permission: String,
 }
 
 // ── Schema ────────────────────────────────────────────────────────────────────
@@ -133,11 +152,13 @@ pub fn init_users_schema(conn: &Connection) -> Result<(), String> {
              permission   TEXT NOT NULL,   -- 'read' | 'write'
              expression   TEXT NOT NULL,
              PRIMARY KEY (subject_kind, subject_id, permission)
-         );"
-    ).map_err(|e| e.to_string())?;
+         );",
+    )
+    .map_err(|e| e.to_string())?;
 
     // Idempotent migrations
-    conn.execute("ALTER TABLE users ADD COLUMN class_id TEXT", []).ok();
+    conn.execute("ALTER TABLE users ADD COLUMN class_id TEXT", [])
+        .ok();
 
     // Seed default classes if none exist
     let class_count: i32 = conn
@@ -166,12 +187,19 @@ pub fn init_users_schema(conn: &Connection) -> Result<(), String> {
 /// every expression does not resurrect the old rules on the next start.
 fn migrate_rows_to_expressions(conn: &Connection) -> Result<(), String> {
     let done: Option<String> = conn
-        .query_row("SELECT value FROM vault_meta WHERE key = 'perm_expr_migrated'", [], |r| r.get(0))
-        .optional().map_err(|e| e.to_string())?;
-    if done.is_some() { return Ok(()); }
+        .query_row(
+            "SELECT value FROM vault_meta WHERE key = 'perm_expr_migrated'",
+            [],
+            |r| r.get(0),
+        )
+        .optional()
+        .map_err(|e| e.to_string())?;
+    if done.is_some() {
+        return Ok(());
+    }
 
     for (kind, table, id_col) in [
-        ("user",  "user_permissions",       "user_id"),
+        ("user", "user_permissions", "user_id"),
         ("class", "user_class_permissions", "class_id"),
     ] {
         let sql = format!("SELECT {id_col}, scope_type, scope_value, permission FROM {table}");
@@ -183,16 +211,21 @@ fn migrate_rows_to_expressions(conn: &Connection) -> Result<(), String> {
             .collect();
 
         // subject -> (read scopes, write scopes). Write also grants read.
-        let mut by_subject: HashMap<String, (Vec<(String, String)>, Vec<(String, String)>)> = HashMap::new();
+        let mut by_subject: PermissionsBySubject = HashMap::new();
         for (sid, scope_type, scope_value, permission) in rows {
             let e = by_subject.entry(sid).or_default();
             e.0.push((scope_type.clone(), scope_value.clone()));
-            if permission == "write" { e.1.push((scope_type, scope_value)); }
+            if permission == "write" {
+                e.1.push((scope_type, scope_value));
+            }
         }
 
         for (sid, (read_scopes, write_scopes)) in by_subject {
             for (perm, scopes) in [("read", read_scopes), ("write", write_scopes)] {
-                let refs: Vec<(&str, &str)> = scopes.iter().map(|(a, b)| (a.as_str(), b.as_str())).collect();
+                let refs: Vec<(&str, &str)> = scopes
+                    .iter()
+                    .map(|(a, b)| (a.as_str(), b.as_str()))
+                    .collect();
                 if let Some(expr) = crate::permex::compile_scopes(refs) {
                     conn.execute(
                         "INSERT OR REPLACE INTO permission_expressions \
@@ -207,20 +240,26 @@ fn migrate_rows_to_expressions(conn: &Connection) -> Result<(), String> {
     conn.execute(
         "INSERT OR REPLACE INTO vault_meta (key, value) VALUES ('perm_expr_migrated', ?1)",
         rusqlite::params![iso_now()],
-    ).map_err(|e| e.to_string())?;
+    )
+    .map_err(|e| e.to_string())?;
     Ok(())
 }
 
 /// Reads a stored expression for a subject, if any.
 pub fn get_permission_expr(
-    conn: &Connection, subject_kind: &str, subject_id: &str, permission: &str,
+    conn: &Connection,
+    subject_kind: &str,
+    subject_id: &str,
+    permission: &str,
 ) -> Result<Option<String>, String> {
     conn.query_row(
         "SELECT expression FROM permission_expressions \
          WHERE subject_kind = ?1 AND subject_id = ?2 AND permission = ?3",
         rusqlite::params![subject_kind, subject_id, permission],
         |r| r.get(0),
-    ).optional().map_err(|e| e.to_string())
+    )
+    .optional()
+    .map_err(|e| e.to_string())
 }
 
 /// Stores an expression, or clears it when `expression` is empty/blank.
@@ -228,7 +267,11 @@ pub fn get_permission_expr(
 /// Validates by parsing first: an unparseable expression denies everything at
 /// evaluation time, so letting one be saved would silently lock a user out.
 pub fn set_permission_expr(
-    conn: &Connection, subject_kind: &str, subject_id: &str, permission: &str, expression: &str,
+    conn: &Connection,
+    subject_kind: &str,
+    subject_id: &str,
+    permission: &str,
+    expression: &str,
 ) -> Result<(), String> {
     if !matches!(subject_kind, "user" | "class") {
         return Err(format!("unknown subject kind '{subject_kind}'"));
@@ -241,7 +284,8 @@ pub fn set_permission_expr(
             "DELETE FROM permission_expressions \
              WHERE subject_kind = ?1 AND subject_id = ?2 AND permission = ?3",
             rusqlite::params![subject_kind, subject_id, permission],
-        ).map_err(|e| e.to_string())?;
+        )
+        .map_err(|e| e.to_string())?;
         return Ok(());
     }
     let parsed = crate::permex::parse(expression)?;
@@ -249,7 +293,8 @@ pub fn set_permission_expr(
         "INSERT OR REPLACE INTO permission_expressions \
          (subject_kind, subject_id, permission, expression) VALUES (?1, ?2, ?3, ?4)",
         rusqlite::params![subject_kind, subject_id, permission, parsed.to_string()],
-    ).map_err(|e| e.to_string())?;
+    )
+    .map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -262,11 +307,18 @@ pub fn set_permission_expr(
 ///   user with no permissions whatsoever full access.
 /// - Write implies read, so the effective read rule is `read OR write`.
 pub fn effective_permission_expr(
-    conn: &Connection, user_id: &str, permission: &str,
+    conn: &Connection,
+    user_id: &str,
+    permission: &str,
 ) -> Result<Option<crate::permex::Expr>, String> {
     let class_id: Option<String> = conn
-        .query_row("SELECT class_id FROM users WHERE id = ?1", rusqlite::params![user_id], |r| r.get(0))
-        .optional().map_err(|e| e.to_string())?
+        .query_row(
+            "SELECT class_id FROM users WHERE id = ?1",
+            rusqlite::params![user_id],
+            |r| r.get(0),
+        )
+        .optional()
+        .map_err(|e| e.to_string())?
         .flatten();
 
     // Stored text is always re-parsed rather than trusted: a row edited outside
@@ -287,8 +339,8 @@ pub fn effective_permission_expr(
 
     match permission {
         "write" => raw("write"),
-        "read"  => Ok(crate::permex::any_of(raw("read")?, raw("write")?)),
-        other   => Err(format!("unknown permission '{other}'")),
+        "read" => Ok(crate::permex::any_of(raw("read")?, raw("write")?)),
+        other => Err(format!("unknown permission '{other}'")),
     }
 }
 
@@ -297,28 +349,41 @@ fn seed_default_classes(conn: &Connection) -> Result<(), String> {
     let now = iso_now();
 
     struct ClassSeed<'a> {
-        id: &'a str, name: &'a str, description: &'a str,
-        cap_manage_users: i32, cap_manage_classes: i32, cap_delete_projects: i32,
+        id: &'a str,
+        name: &'a str,
+        description: &'a str,
+        cap_manage_users: i32,
+        cap_manage_classes: i32,
+        cap_delete_projects: i32,
         perms: &'a [(&'a str, &'a str, &'a str)], // (scope_type, scope_value, permission)
     }
 
     let seeds = [
         ClassSeed {
-            id: "cls-admin", name: "Admin",
+            id: "cls-admin",
+            name: "Admin",
             description: "Full vault access. Can manage users and classes.",
-            cap_manage_users: 1, cap_manage_classes: 1, cap_delete_projects: 1,
+            cap_manage_users: 1,
+            cap_manage_classes: 1,
+            cap_delete_projects: 1,
             perms: &[("vault", "*", "write")],
         },
         ClassSeed {
-            id: "cls-moderator", name: "Moderator",
+            id: "cls-moderator",
+            name: "Moderator",
             description: "Full vault access. Can manage users but not classes or project deletion.",
-            cap_manage_users: 1, cap_manage_classes: 0, cap_delete_projects: 0,
+            cap_manage_users: 1,
+            cap_manage_classes: 0,
+            cap_delete_projects: 0,
             perms: &[("vault", "*", "write")],
         },
         ClassSeed {
-            id: "cls-viewer", name: "Viewer",
+            id: "cls-viewer",
+            name: "Viewer",
             description: "Read-only access to the entire vault.",
-            cap_manage_users: 0, cap_manage_classes: 0, cap_delete_projects: 0,
+            cap_manage_users: 0,
+            cap_manage_classes: 0,
+            cap_delete_projects: 0,
             perms: &[("vault", "*", "read")],
         },
     ];
@@ -362,13 +427,14 @@ fn new_uuid() -> String {
 /// Uses lower cost params than the vault KDF to keep interactive login fast
 /// while still providing >200ms hash time on modern hardware.
 fn hash_password(password: &str) -> String {
-    use argon2::{Argon2, Algorithm, Version, Params, PasswordHasher};
-    use argon2::password_hash::{SaltString, rand_core::OsRng};
+    use argon2::password_hash::{rand_core::OsRng, SaltString};
+    use argon2::{Algorithm, Argon2, Params, PasswordHasher, Version};
 
-    let salt   = SaltString::generate(&mut OsRng);
+    let salt = SaltString::generate(&mut OsRng);
     let params = Params::new(32_768, 2, 1, None).expect("valid argon2 params");
     let argon2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
-    argon2.hash_password(password.as_bytes(), &salt)
+    argon2
+        .hash_password(password.as_bytes(), &salt)
         .expect("argon2 hash")
         .to_string()
 }
@@ -383,23 +449,37 @@ fn hash_password(password: &str) -> String {
 /// `hash_password` after a successful legacy verification to upgrade the stored hash.
 fn verify_password_hash(password: &str, stored: &str) -> bool {
     if stored.starts_with("$argon2") {
-        use argon2::{Argon2, PasswordVerifier};
         use argon2::password_hash::PasswordHash;
-        let Ok(parsed) = PasswordHash::new(stored) else { return false; };
-        Argon2::default().verify_password(password.as_bytes(), &parsed).is_ok()
+        use argon2::{Argon2, PasswordVerifier};
+        let Ok(parsed) = PasswordHash::new(stored) else {
+            return false;
+        };
+        Argon2::default()
+            .verify_password(password.as_bytes(), &parsed)
+            .is_ok()
     } else {
         // Legacy: "<salt_hex>:<sha256_hex>" — upgrade on next login
         let mut parts = stored.splitn(2, ':');
-        let (Some(salt_hex), Some(hash_hex)) = (parts.next(), parts.next()) else { return false; };
-        let Ok(salt) = hex::decode(salt_hex) else { return false; };
-        let Ok(expected) = hex::decode(hash_hex) else { return false; };
+        let (Some(salt_hex), Some(hash_hex)) = (parts.next(), parts.next()) else {
+            return false;
+        };
+        let Ok(salt) = hex::decode(salt_hex) else {
+            return false;
+        };
+        let Ok(expected) = hex::decode(hash_hex) else {
+            return false;
+        };
         let mut h = Sha256::new();
         h.update(&salt);
         h.update(password.as_bytes());
         let computed = h.finalize();
         // Constant-time comparison — avoids timing side-channel on legacy hashes.
         computed.len() == expected.len()
-            && computed.iter().zip(expected.iter()).fold(0u8, |acc, (a, b)| acc | (a ^ b)) == 0
+            && computed
+                .iter()
+                .zip(expected.iter())
+                .fold(0u8, |acc, (a, b)| acc | (a ^ b))
+                == 0
     }
 }
 
@@ -413,32 +493,35 @@ fn touch_last_seen(conn: &Connection, user_id: &str) -> Result<(), String> {
     conn.execute(
         "UPDATE users SET last_seen_at = ?1 WHERE id = ?2",
         rusqlite::params![iso_now(), user_id],
-    ).map(|_| ()).map_err(|e| e.to_string())
+    )
+    .map(|_| ())
+    .map_err(|e| e.to_string())
 }
 
 // ── User CRUD ─────────────────────────────────────────────────────────────────
 
 /// Creates a new user.  Pass `password = None` for token-only auth.
 pub fn create_user(
-    conn:     &Connection,
+    conn: &Connection,
     username: &str,
     password: Option<&str>,
     is_owner: bool,
 ) -> Result<UserRecord, String> {
-    let id            = new_uuid();
-    let now           = iso_now();
+    let id = new_uuid();
+    let now = iso_now();
     let password_hash = password.map(hash_password);
     conn.execute(
         "INSERT INTO users (id, username, password_hash, is_owner, created_at) \
          VALUES (?1, ?2, ?3, ?4, ?5)",
         rusqlite::params![id, username, password_hash, is_owner as i32, now],
-    ).map_err(|e| e.to_string())?;
+    )
+    .map_err(|e| e.to_string())?;
     Ok(UserRecord {
         id,
-        username:     username.to_string(),
+        username: username.to_string(),
         has_password: password.is_some(),
         is_owner,
-        created_at:   now,
+        created_at: now,
         last_seen_at: None,
     })
 }
@@ -448,30 +531,53 @@ pub fn rename_user(conn: &Connection, user_id: &str, new_username: &str) -> Resu
     conn.execute(
         "UPDATE users SET username = ?1 WHERE id = ?2",
         rusqlite::params![new_username, user_id],
-    ).map(|_| ()).map_err(|e| e.to_string())
+    )
+    .map(|_| ())
+    .map_err(|e| e.to_string())
 }
 
 /// Updates (or clears) a user's password.
-pub fn set_user_password(conn: &Connection, user_id: &str, password: Option<&str>) -> Result<(), String> {
+pub fn set_user_password(
+    conn: &Connection,
+    user_id: &str,
+    password: Option<&str>,
+) -> Result<(), String> {
     conn.execute(
         "UPDATE users SET password_hash = ?1 WHERE id = ?2",
         rusqlite::params![password.map(hash_password), user_id],
-    ).map(|_| ()).map_err(|e| e.to_string())
+    )
+    .map(|_| ())
+    .map_err(|e| e.to_string())
 }
 
 /// Verifies username + password.  Returns `None` on invalid credentials.
-pub fn verify_user_password(conn: &Connection, username: &str, password: &str) -> Result<Option<UserRecord>, String> {
-    let row: Option<(String, String, Option<String>, i32, String, Option<String>)> = conn
+pub fn verify_user_password(
+    conn: &Connection,
+    username: &str,
+    password: &str,
+) -> Result<Option<UserRecord>, String> {
+    let row: Option<UserRow> = conn
         .query_row(
             "SELECT id, username, password_hash, is_owner, created_at, last_seen_at \
              FROM users WHERE username = ?1",
             rusqlite::params![username],
-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?)),
+            |r| {
+                Ok((
+                    r.get(0)?,
+                    r.get(1)?,
+                    r.get(2)?,
+                    r.get(3)?,
+                    r.get(4)?,
+                    r.get(5)?,
+                ))
+            },
         )
         .optional()
         .map_err(|e| e.to_string())?;
 
-    let Some((id, uname, hash_opt, is_owner_i, created_at, last_seen)) = row else { return Ok(None); };
+    let Some((id, uname, hash_opt, is_owner_i, created_at, last_seen)) = row else {
+        return Ok(None);
+    };
     // A user with no password (token-only, or the owner row) simply cannot
     // authenticate this way — that is an ordinary credential failure, not a
     // server error.
@@ -480,8 +586,12 @@ pub fn verify_user_password(conn: &Connection, username: &str, password: &str) -
     // nonexistent username returned 401, and only the 401 path incremented the
     // rate limiter. The 500-vs-401 difference was an unthrottled username
     // enumeration oracle.
-    let Some(stored) = hash_opt else { return Ok(None); };
-    if !verify_password_hash(password, &stored) { return Ok(None); }
+    let Some(stored) = hash_opt else {
+        return Ok(None);
+    };
+    if !verify_password_hash(password, &stored) {
+        return Ok(None);
+    }
     // Transparent upgrade: rehash with Argon2id when the stored hash is legacy SHA-256.
     if !stored.starts_with("$argon2") {
         let new_hash = hash_password(password);
@@ -492,64 +602,108 @@ pub fn verify_user_password(conn: &Connection, username: &str, password: &str) -
     }
     touch_last_seen(conn, &id)?;
     Ok(Some(UserRecord {
-        id, username: uname, has_password: true,
-        is_owner: is_owner_i != 0, created_at, last_seen_at: last_seen,
+        id,
+        username: uname,
+        has_password: true,
+        is_owner: is_owner_i != 0,
+        created_at,
+        last_seen_at: last_seen,
     }))
 }
 
 /// Verifies a raw 64-char hex token.  Returns `None` if invalid or expired.
 pub fn verify_user_token(conn: &Connection, token: &str) -> Result<Option<UserRecord>, String> {
     let token_hash = sha256_hex(token);
-    let now        = iso_now();
-    let row: Option<(String, String, Option<String>, i32, String, Option<String>)> = conn
+    let now = iso_now();
+    let row: Option<UserRow> = conn
         .query_row(
             "SELECT u.id, u.username, u.password_hash, u.is_owner, u.created_at, u.last_seen_at \
              FROM user_tokens t JOIN users u ON u.id = t.user_id \
              WHERE t.token_hash = ?1 AND (t.expires_at IS NULL OR t.expires_at > ?2)",
             rusqlite::params![token_hash, now],
-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?)),
+            |r| {
+                Ok((
+                    r.get(0)?,
+                    r.get(1)?,
+                    r.get(2)?,
+                    r.get(3)?,
+                    r.get(4)?,
+                    r.get(5)?,
+                ))
+            },
         )
         .optional()
         .map_err(|e| e.to_string())?;
 
-    let Some((id, uname, hash_opt, is_owner_i, created_at, last_seen)) = row else { return Ok(None); };
+    let Some((id, uname, hash_opt, is_owner_i, created_at, last_seen)) = row else {
+        return Ok(None);
+    };
     touch_last_seen(conn, &id)?;
     Ok(Some(UserRecord {
-        id, username: uname, has_password: hash_opt.is_some(),
-        is_owner: is_owner_i != 0, created_at, last_seen_at: last_seen,
+        id,
+        username: uname,
+        has_password: hash_opt.is_some(),
+        is_owner: is_owner_i != 0,
+        created_at,
+        last_seen_at: last_seen,
     }))
 }
 
 /// Lists all users, owners first, then by creation date.
 pub fn list_users(conn: &Connection) -> Result<Vec<UserRecord>, String> {
-    let mut stmt = conn.prepare(
-        "SELECT id, username, password_hash, is_owner, created_at, last_seen_at \
-         FROM users ORDER BY is_owner DESC, created_at ASC"
-    ).map_err(|e| e.to_string())?;
-    let rows: Vec<Result<UserRecord, _>> = stmt.query_map([], |r| Ok(UserRecord {
-        id:           r.get(0)?,
-        username:     r.get(1)?,
-        has_password: r.get::<_, Option<String>>(2)?.is_some(),
-        is_owner:     r.get::<_, i32>(3)? != 0,
-        created_at:   r.get(4)?,
-        last_seen_at: r.get(5)?,
-    }))
-    .map_err(|e| e.to_string())?
-    .collect();
-    rows.into_iter().map(|r| r.map_err(|e| e.to_string())).collect()
+    let mut stmt = conn
+        .prepare(
+            "SELECT id, username, password_hash, is_owner, created_at, last_seen_at \
+         FROM users ORDER BY is_owner DESC, created_at ASC",
+        )
+        .map_err(|e| e.to_string())?;
+    let rows: Vec<Result<UserRecord, _>> = stmt
+        .query_map([], |r| {
+            Ok(UserRecord {
+                id: r.get(0)?,
+                username: r.get(1)?,
+                has_password: r.get::<_, Option<String>>(2)?.is_some(),
+                is_owner: r.get::<_, i32>(3)? != 0,
+                created_at: r.get(4)?,
+                last_seen_at: r.get(5)?,
+            })
+        })
+        .map_err(|e| e.to_string())?
+        .collect();
+    rows.into_iter()
+        .map(|r| r.map_err(|e| e.to_string()))
+        .collect()
 }
 
 /// Deletes a user plus all their tokens and permissions.
 /// Returns `Err` if `user_id` belongs to the owner account.
 pub fn delete_user(conn: &Connection, user_id: &str) -> Result<(), String> {
     let is_owner: Option<i32> = conn
-        .query_row("SELECT is_owner FROM users WHERE id = ?1", rusqlite::params![user_id], |r| r.get(0))
+        .query_row(
+            "SELECT is_owner FROM users WHERE id = ?1",
+            rusqlite::params![user_id],
+            |r| r.get(0),
+        )
         .optional()
         .map_err(|e| e.to_string())?;
-    if is_owner == Some(1) { return Err("Cannot delete the owner account".to_string()); }
-    conn.execute("DELETE FROM user_permissions WHERE user_id = ?1", rusqlite::params![user_id]).map_err(|e| e.to_string())?;
-    conn.execute("DELETE FROM user_tokens WHERE user_id = ?1",      rusqlite::params![user_id]).map_err(|e| e.to_string())?;
-    conn.execute("DELETE FROM users WHERE id = ?1",                 rusqlite::params![user_id]).map_err(|e| e.to_string())?;
+    if is_owner == Some(1) {
+        return Err("Cannot delete the owner account".to_string());
+    }
+    conn.execute(
+        "DELETE FROM user_permissions WHERE user_id = ?1",
+        rusqlite::params![user_id],
+    )
+    .map_err(|e| e.to_string())?;
+    conn.execute(
+        "DELETE FROM user_tokens WHERE user_id = ?1",
+        rusqlite::params![user_id],
+    )
+    .map_err(|e| e.to_string())?;
+    conn.execute(
+        "DELETE FROM users WHERE id = ?1",
+        rusqlite::params![user_id],
+    )
+    .map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -560,14 +714,23 @@ pub fn list_user_classes(conn: &Connection) -> Result<Vec<UserClass>, String> {
         "SELECT id, name, description, cap_manage_users, cap_manage_classes, cap_delete_projects, created_at \
          FROM user_classes ORDER BY created_at ASC"
     ).map_err(|e| e.to_string())?;
-    let rows: Vec<Result<UserClass, _>> = stmt.query_map([], |r| Ok(UserClass {
-        id: r.get(0)?, name: r.get(1)?, description: r.get(2)?,
-        cap_manage_users:    r.get::<_, i32>(3)? != 0,
-        cap_manage_classes:  r.get::<_, i32>(4)? != 0,
-        cap_delete_projects: r.get::<_, i32>(5)? != 0,
-        created_at: r.get(6)?,
-    })).map_err(|e| e.to_string())?.collect();
-    rows.into_iter().map(|r| r.map_err(|e| e.to_string())).collect()
+    let rows: Vec<Result<UserClass, _>> = stmt
+        .query_map([], |r| {
+            Ok(UserClass {
+                id: r.get(0)?,
+                name: r.get(1)?,
+                description: r.get(2)?,
+                cap_manage_users: r.get::<_, i32>(3)? != 0,
+                cap_manage_classes: r.get::<_, i32>(4)? != 0,
+                cap_delete_projects: r.get::<_, i32>(5)? != 0,
+                created_at: r.get(6)?,
+            })
+        })
+        .map_err(|e| e.to_string())?
+        .collect();
+    rows.into_iter()
+        .map(|r| r.map_err(|e| e.to_string()))
+        .collect()
 }
 
 pub fn create_user_class(
@@ -578,15 +741,22 @@ pub fn create_user_class(
     cap_manage_classes: bool,
     cap_delete_projects: bool,
 ) -> Result<UserClass, String> {
-    let id  = new_uuid();
+    let id = new_uuid();
     let now = iso_now();
     conn.execute(
         "INSERT INTO user_classes (id, name, description, cap_manage_users, cap_manage_classes, cap_delete_projects, created_at) \
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
         rusqlite::params![id, name, description, cap_manage_users as i32, cap_manage_classes as i32, cap_delete_projects as i32, now],
     ).map_err(|e| e.to_string())?;
-    Ok(UserClass { id, name: name.to_string(), description: description.to_string(),
-        cap_manage_users, cap_manage_classes, cap_delete_projects, created_at: now })
+    Ok(UserClass {
+        id,
+        name: name.to_string(),
+        description: description.to_string(),
+        cap_manage_users,
+        cap_manage_classes,
+        cap_delete_projects,
+        created_at: now,
+    })
 }
 
 pub fn update_user_class(
@@ -606,27 +776,57 @@ pub fn update_user_class(
 
 pub fn delete_user_class(conn: &Connection, class_id: &str) -> Result<(), String> {
     // Unassign users first
-    conn.execute("UPDATE users SET class_id = NULL WHERE class_id = ?1", rusqlite::params![class_id])
-        .map_err(|e| e.to_string())?;
-    conn.execute("DELETE FROM user_class_permissions WHERE class_id = ?1", rusqlite::params![class_id])
-        .map_err(|e| e.to_string())?;
-    conn.execute("DELETE FROM user_classes WHERE id = ?1", rusqlite::params![class_id])
-        .map(|_| ()).map_err(|e| e.to_string())
+    conn.execute(
+        "UPDATE users SET class_id = NULL WHERE class_id = ?1",
+        rusqlite::params![class_id],
+    )
+    .map_err(|e| e.to_string())?;
+    conn.execute(
+        "DELETE FROM user_class_permissions WHERE class_id = ?1",
+        rusqlite::params![class_id],
+    )
+    .map_err(|e| e.to_string())?;
+    conn.execute(
+        "DELETE FROM user_classes WHERE id = ?1",
+        rusqlite::params![class_id],
+    )
+    .map(|_| ())
+    .map_err(|e| e.to_string())
 }
 
-pub fn get_class_permissions(conn: &Connection, class_id: &str) -> Result<Vec<ClassPermission>, String> {
+pub fn get_class_permissions(
+    conn: &Connection,
+    class_id: &str,
+) -> Result<Vec<ClassPermission>, String> {
     let mut stmt = conn.prepare(
         "SELECT class_id, scope_type, scope_value, permission FROM user_class_permissions WHERE class_id = ?1"
     ).map_err(|e| e.to_string())?;
-    let rows: Vec<Result<ClassPermission, _>> = stmt.query_map(rusqlite::params![class_id], |r| Ok(ClassPermission {
-        class_id: r.get(0)?, scope_type: r.get(1)?, scope_value: r.get(2)?, permission: r.get(3)?,
-    })).map_err(|e| e.to_string())?.collect();
-    rows.into_iter().map(|r| r.map_err(|e| e.to_string())).collect()
+    let rows: Vec<Result<ClassPermission, _>> = stmt
+        .query_map(rusqlite::params![class_id], |r| {
+            Ok(ClassPermission {
+                class_id: r.get(0)?,
+                scope_type: r.get(1)?,
+                scope_value: r.get(2)?,
+                permission: r.get(3)?,
+            })
+        })
+        .map_err(|e| e.to_string())?
+        .collect();
+    rows.into_iter()
+        .map(|r| r.map_err(|e| e.to_string()))
+        .collect()
 }
 
-pub fn set_class_permissions(conn: &Connection, class_id: &str, permissions: &[ClassPermission]) -> Result<(), String> {
-    conn.execute("DELETE FROM user_class_permissions WHERE class_id = ?1", rusqlite::params![class_id])
-        .map_err(|e| e.to_string())?;
+pub fn set_class_permissions(
+    conn: &Connection,
+    class_id: &str,
+    permissions: &[ClassPermission],
+) -> Result<(), String> {
+    conn.execute(
+        "DELETE FROM user_class_permissions WHERE class_id = ?1",
+        rusqlite::params![class_id],
+    )
+    .map_err(|e| e.to_string())?;
     for p in permissions {
         conn.execute(
             "INSERT INTO user_class_permissions (class_id, scope_type, scope_value, permission) VALUES (?1, ?2, ?3, ?4)",
@@ -636,17 +836,32 @@ pub fn set_class_permissions(conn: &Connection, class_id: &str, permissions: &[C
     Ok(())
 }
 
-pub fn assign_user_class(conn: &Connection, user_id: &str, class_id: Option<&str>) -> Result<(), String> {
-    conn.execute("UPDATE users SET class_id = ?1 WHERE id = ?2", rusqlite::params![class_id, user_id])
-        .map(|_| ()).map_err(|e| e.to_string())
+pub fn assign_user_class(
+    conn: &Connection,
+    user_id: &str,
+    class_id: Option<&str>,
+) -> Result<(), String> {
+    conn.execute(
+        "UPDATE users SET class_id = ?1 WHERE id = ?2",
+        rusqlite::params![class_id, user_id],
+    )
+    .map(|_| ())
+    .map_err(|e| e.to_string())
 }
 
-
 /// Returns the capabilities of the user's class (None values mean no class = no extra capabilities).
-pub fn get_user_capabilities(conn: &Connection, user_id: &str) -> Result<(bool, bool, bool), String> {
+pub fn get_user_capabilities(
+    conn: &Connection,
+    user_id: &str,
+) -> Result<(bool, bool, bool), String> {
     let class_id: Option<String> = conn
-        .query_row("SELECT class_id FROM users WHERE id = ?1", rusqlite::params![user_id], |r| r.get(0))
-        .optional().map_err(|e| e.to_string())?
+        .query_row(
+            "SELECT class_id FROM users WHERE id = ?1",
+            rusqlite::params![user_id],
+            |r| r.get(0),
+        )
+        .optional()
+        .map_err(|e| e.to_string())?
         .flatten();
     if let Some(cid) = class_id {
         let row: Option<(i32, i32, i32)> = conn
@@ -670,7 +885,15 @@ pub fn get_user_capabilities(conn: &Connection, user_id: &str) -> Result<(bool, 
 /// - 1 = moderator (`cap_manage_users` only)
 /// - 0 = user      (no management capabilities)
 pub fn authority_tier(is_owner: bool, cap_manage_users: bool, cap_manage_classes: bool) -> i32 {
-    if is_owner { 3 } else if cap_manage_classes { 2 } else if cap_manage_users { 1 } else { 0 }
+    if is_owner {
+        3
+    } else if cap_manage_classes {
+        2
+    } else if cap_manage_users {
+        1
+    } else {
+        0
+    }
 }
 
 /// Authority tier implied by a class's stored capabilities. Returns 0 if unknown.
@@ -680,8 +903,12 @@ pub fn class_authority_tier(conn: &Connection, class_id: &str) -> Result<i32, St
             "SELECT cap_manage_users, cap_manage_classes FROM user_classes WHERE id = ?1",
             rusqlite::params![class_id],
             |r| Ok((r.get(0)?, r.get(1)?)),
-        ).optional().map_err(|e| e.to_string())?;
-    Ok(row.map(|(u, c)| authority_tier(false, u != 0, c != 0)).unwrap_or(0))
+        )
+        .optional()
+        .map_err(|e| e.to_string())?;
+    Ok(row
+        .map(|(u, c)| authority_tier(false, u != 0, c != 0))
+        .unwrap_or(0))
 }
 
 /// Returns the owning user id of a token, or `None` if the token id is unknown.
@@ -690,16 +917,25 @@ pub fn token_user_id(conn: &Connection, token_id: &str) -> Result<Option<String>
         "SELECT user_id FROM user_tokens WHERE id = ?1",
         rusqlite::params![token_id],
         |r| r.get(0),
-    ).optional().map_err(|e| e.to_string())
+    )
+    .optional()
+    .map_err(|e| e.to_string())
 }
 
 /// Authority tier of a stored user (by their class capabilities, or the `is_owner` flag).
 /// Returns 0 for an unknown user id.
 pub fn user_authority_tier(conn: &Connection, user_id: &str) -> Result<i32, String> {
     let is_owner: Option<i32> = conn
-        .query_row("SELECT is_owner FROM users WHERE id = ?1", rusqlite::params![user_id], |r| r.get(0))
-        .optional().map_err(|e| e.to_string())?;
-    let Some(owner_flag) = is_owner else { return Ok(0); };
+        .query_row(
+            "SELECT is_owner FROM users WHERE id = ?1",
+            rusqlite::params![user_id],
+            |r| r.get(0),
+        )
+        .optional()
+        .map_err(|e| e.to_string())?;
+    let Some(owner_flag) = is_owner else {
+        return Ok(0);
+    };
     let (mu, mc, _) = get_user_capabilities(conn, user_id)?;
     Ok(authority_tier(owner_flag != 0, mu, mc))
 }
@@ -719,25 +955,36 @@ pub fn user_authority_tier(conn: &Connection, user_id: &str) -> Result<i32, Stri
 /// be logged into via `/api/auth`.
 pub fn ensure_owner_user(conn: &Connection) -> Result<String, String> {
     if let Some(id) = conn
-        .query_row("SELECT id FROM users WHERE is_owner = 1 LIMIT 1", [], |r| r.get::<_, String>(0))
-        .optional().map_err(|e| e.to_string())?
+        .query_row("SELECT id FROM users WHERE is_owner = 1 LIMIT 1", [], |r| {
+            r.get::<_, String>(0)
+        })
+        .optional()
+        .map_err(|e| e.to_string())?
     {
         return Ok(id);
     }
 
     // `username` is UNIQUE, so fall back if a normal user already took "owner".
     let taken: bool = conn
-        .query_row("SELECT 1 FROM users WHERE username = 'owner'", [], |r| r.get::<_, i32>(0))
-        .optional().map_err(|e| e.to_string())?
+        .query_row("SELECT 1 FROM users WHERE username = 'owner'", [], |r| {
+            r.get::<_, i32>(0)
+        })
+        .optional()
+        .map_err(|e| e.to_string())?
         .is_some();
     let id = new_uuid();
-    let username = if taken { format!("owner-{}", &id[..8]) } else { "owner".to_string() };
+    let username = if taken {
+        format!("owner-{}", &id[..8])
+    } else {
+        "owner".to_string()
+    };
 
     conn.execute(
         "INSERT INTO users (id, username, password_hash, is_owner, created_at) \
          VALUES (?1, ?2, NULL, 1, ?3)",
         rusqlite::params![id, username, iso_now()],
-    ).map_err(|e| e.to_string())?;
+    )
+    .map_err(|e| e.to_string())?;
     Ok(id)
 }
 
@@ -754,11 +1001,19 @@ pub enum AdminSeed {
 /// Idempotently seeds a default `admin` user assigned to the built-in `cls-admin`
 /// class. Never hardcodes a credential: uses `env_password` when present, otherwise
 /// generates a 128-bit random password the caller is responsible for displaying once.
-pub fn seed_default_admin(conn: &Connection, env_password: Option<&str>) -> Result<AdminSeed, String> {
+pub fn seed_default_admin(
+    conn: &Connection,
+    env_password: Option<&str>,
+) -> Result<AdminSeed, String> {
     let exists: Option<String> = conn
-        .query_row("SELECT id FROM users WHERE username = 'admin'", [], |r| r.get(0))
-        .optional().map_err(|e| e.to_string())?;
-    if exists.is_some() { return Ok(AdminSeed::Exists); }
+        .query_row("SELECT id FROM users WHERE username = 'admin'", [], |r| {
+            r.get(0)
+        })
+        .optional()
+        .map_err(|e| e.to_string())?;
+    if exists.is_some() {
+        return Ok(AdminSeed::Exists);
+    }
 
     let (password, generated) = match env_password {
         Some(p) if !p.is_empty() => (p.to_string(), None),
@@ -772,7 +1027,9 @@ pub fn seed_default_admin(conn: &Connection, env_password: Option<&str>) -> Resu
 
     let user = create_user(conn, "admin", Some(&password), false)?;
     assign_user_class(conn, &user.id, Some("cls-admin"))?;
-    Ok(AdminSeed::Created { generated_password: generated })
+    Ok(AdminSeed::Created {
+        generated_password: generated,
+    })
 }
 
 // ── Token management ──────────────────────────────────────────────────────────
@@ -780,73 +1037,115 @@ pub fn seed_default_admin(conn: &Connection, env_password: Option<&str>) -> Resu
 /// Creates a token for `user_id`.
 /// Returns `(token_id, plaintext_token)` — the plaintext is shown **once**.
 pub fn create_user_token(
-    conn:        &Connection,
-    user_id:     &str,
+    conn: &Connection,
+    user_id: &str,
     description: Option<&str>,
-    expires_at:  Option<&str>,
+    expires_at: Option<&str>,
 ) -> Result<(String, String), String> {
     let token_id = new_uuid();
-    let mut raw  = [0u8; 32];
+    let mut raw = [0u8; 32];
     rand::thread_rng().fill_bytes(&mut raw);
-    let plaintext  = hex::encode(raw);
+    let plaintext = hex::encode(raw);
     let token_hash = sha256_hex(&plaintext);
     conn.execute(
         "INSERT INTO user_tokens (id, token_hash, user_id, description, created_at, expires_at) \
          VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-        rusqlite::params![token_id, token_hash, user_id, description, iso_now(), expires_at],
-    ).map_err(|e| e.to_string())?;
+        rusqlite::params![
+            token_id,
+            token_hash,
+            user_id,
+            description,
+            iso_now(),
+            expires_at
+        ],
+    )
+    .map_err(|e| e.to_string())?;
     Ok((token_id, plaintext))
 }
 
 /// Revokes a token by its UUID.
 pub fn revoke_user_token(conn: &Connection, token_id: &str) -> Result<(), String> {
-    conn.execute("DELETE FROM user_tokens WHERE id = ?1", rusqlite::params![token_id])
-        .map(|_| ()).map_err(|e| e.to_string())
+    conn.execute(
+        "DELETE FROM user_tokens WHERE id = ?1",
+        rusqlite::params![token_id],
+    )
+    .map(|_| ())
+    .map_err(|e| e.to_string())
 }
 
 /// Lists all tokens for a user (no hashes).
 pub fn list_user_tokens(conn: &Connection, user_id: &str) -> Result<Vec<TokenRecord>, String> {
-    let mut stmt = conn.prepare(
-        "SELECT id, user_id, description, created_at, expires_at \
-         FROM user_tokens WHERE user_id = ?1 ORDER BY created_at"
-    ).map_err(|e| e.to_string())?;
-    let rows: Vec<Result<TokenRecord, _>> = stmt.query_map(rusqlite::params![user_id], |r| Ok(TokenRecord {
-        id: r.get(0)?, user_id: r.get(1)?,
-        description: r.get(2)?, created_at: r.get(3)?, expires_at: r.get(4)?,
-    }))
-    .map_err(|e| e.to_string())?
-    .collect();
-    rows.into_iter().map(|r| r.map_err(|e| e.to_string())).collect()
+    let mut stmt = conn
+        .prepare(
+            "SELECT id, user_id, description, created_at, expires_at \
+         FROM user_tokens WHERE user_id = ?1 ORDER BY created_at",
+        )
+        .map_err(|e| e.to_string())?;
+    let rows: Vec<Result<TokenRecord, _>> = stmt
+        .query_map(rusqlite::params![user_id], |r| {
+            Ok(TokenRecord {
+                id: r.get(0)?,
+                user_id: r.get(1)?,
+                description: r.get(2)?,
+                created_at: r.get(3)?,
+                expires_at: r.get(4)?,
+            })
+        })
+        .map_err(|e| e.to_string())?
+        .collect();
+    rows.into_iter()
+        .map(|r| r.map_err(|e| e.to_string()))
+        .collect()
 }
 
 // ── Permission management ─────────────────────────────────────────────────────
 
 /// Returns all permissions for a user.
-pub fn get_user_permissions(conn: &Connection, user_id: &str) -> Result<Vec<PermissionRecord>, String> {
-    let mut stmt = conn.prepare(
-        "SELECT user_id, scope_type, scope_value, permission \
+pub fn get_user_permissions(
+    conn: &Connection,
+    user_id: &str,
+) -> Result<Vec<PermissionRecord>, String> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT user_id, scope_type, scope_value, permission \
          FROM user_permissions WHERE user_id = ?1 \
-         ORDER BY scope_type, scope_value"
-    ).map_err(|e| e.to_string())?;
-    let rows: Vec<Result<PermissionRecord, _>> = stmt.query_map(rusqlite::params![user_id], |r| Ok(PermissionRecord {
-        user_id: r.get(0)?, scope_type: r.get(1)?,
-        scope_value: r.get(2)?, permission: r.get(3)?,
-    }))
-    .map_err(|e| e.to_string())?
-    .collect();
-    rows.into_iter().map(|r| r.map_err(|e| e.to_string())).collect()
+         ORDER BY scope_type, scope_value",
+        )
+        .map_err(|e| e.to_string())?;
+    let rows: Vec<Result<PermissionRecord, _>> = stmt
+        .query_map(rusqlite::params![user_id], |r| {
+            Ok(PermissionRecord {
+                user_id: r.get(0)?,
+                scope_type: r.get(1)?,
+                scope_value: r.get(2)?,
+                permission: r.get(3)?,
+            })
+        })
+        .map_err(|e| e.to_string())?
+        .collect();
+    rows.into_iter()
+        .map(|r| r.map_err(|e| e.to_string()))
+        .collect()
 }
 
 /// Atomically replaces all permissions for a user.
-pub fn set_user_permissions(conn: &Connection, user_id: &str, permissions: &[PermissionRecord]) -> Result<(), String> {
-    conn.execute("DELETE FROM user_permissions WHERE user_id = ?1", rusqlite::params![user_id])
-        .map_err(|e| e.to_string())?;
+pub fn set_user_permissions(
+    conn: &Connection,
+    user_id: &str,
+    permissions: &[PermissionRecord],
+) -> Result<(), String> {
+    conn.execute(
+        "DELETE FROM user_permissions WHERE user_id = ?1",
+        rusqlite::params![user_id],
+    )
+    .map_err(|e| e.to_string())?;
     for p in permissions {
         conn.execute(
             "INSERT INTO user_permissions (user_id, scope_type, scope_value, permission) \
              VALUES (?1, ?2, ?3, ?4)",
             rusqlite::params![user_id, p.scope_type, p.scope_value, p.permission],
-        ).map_err(|e| e.to_string())?;
+        )
+        .map_err(|e| e.to_string())?;
     }
     Ok(())
 }
@@ -860,25 +1159,40 @@ pub fn glob_matches(pattern: &str, value: &str) -> bool {
     let (mut star_pi, mut star_vi) = (usize::MAX, 0usize);
     while vi < vb.len() {
         if pi < pb.len() && pb[pi] == b'*' {
-            star_pi = pi; star_vi = vi; pi += 1;
+            star_pi = pi;
+            star_vi = vi;
+            pi += 1;
         } else if pi < pb.len() && (pb[pi] == vb[vi] || pb[pi] == b'?') {
-            pi += 1; vi += 1;
+            pi += 1;
+            vi += 1;
         } else if star_pi != usize::MAX {
-            pi = star_pi + 1; star_vi += 1; vi = star_vi;
+            pi = star_pi + 1;
+            star_vi += 1;
+            vi = star_vi;
         } else {
             return false;
         }
     }
-    while pi < pb.len() && pb[pi] == b'*' { pi += 1; }
+    while pi < pb.len() && pb[pi] == b'*' {
+        pi += 1;
+    }
     pi == pb.len()
 }
 
 fn build_project_names(vault: &serde_json::Value) -> HashMap<String, String> {
-    vault.get("projects")
+    vault
+        .get("projects")
         .and_then(|v| v.as_array())
-        .map(|arr| arr.iter().filter_map(|p| {
-            Some((p.get("id")?.as_str()?.to_string(), p.get("name")?.as_str()?.to_string()))
-        }).collect())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|p| {
+                    Some((
+                        p.get("id")?.as_str()?.to_string(),
+                        p.get("name")?.as_str()?.to_string(),
+                    ))
+                })
+                .collect()
+        })
         .unwrap_or_default()
 }
 
@@ -897,40 +1211,73 @@ pub fn filter_vault_for_user(
 
     let project_names = build_project_names(&vault);
     let empty = vec![];
-    let api_keys = vault.get("api_keys").and_then(|v| v.as_array()).unwrap_or(&empty);
+    let api_keys = vault
+        .get("api_keys")
+        .and_then(|v| v.as_array())
+        .unwrap_or(&empty);
 
-    let visible: Vec<serde_json::Value> = api_keys.iter()
-        .filter(|e| crate::permex::eval(expr, &crate::permex::EntryView::from_entry(e, &project_names)))
-        .cloned().collect();
-
-    let visible_pids: HashSet<String> = visible.iter()
-        .flat_map(|e| e.get("projectIds").and_then(|v| v.as_array()).unwrap_or(&empty)
-            .iter().filter_map(|v| v.as_str().map(|s| s.to_string())))
+    let visible: Vec<serde_json::Value> = api_keys
+        .iter()
+        .filter(|e| {
+            crate::permex::eval(
+                expr,
+                &crate::permex::EntryView::from_entry(e, &project_names),
+            )
+        })
+        .cloned()
         .collect();
 
-    let projects = vault.get("projects").and_then(|v| v.as_array()).unwrap_or(&empty);
-    let visible_projects: Vec<serde_json::Value> = projects.iter()
-        .filter(|p| p.get("id").and_then(|v| v.as_str())
-            .map_or(false, |id| id == "Universal" || visible_pids.contains(id)))
-        .cloned().collect();
+    let visible_pids: HashSet<String> = visible
+        .iter()
+        .flat_map(|e| {
+            e.get("projectIds")
+                .and_then(|v| v.as_array())
+                .unwrap_or(&empty)
+                .iter()
+                .filter_map(|v| v.as_str().map(|s| s.to_string()))
+        })
+        .collect();
+
+    let projects = vault
+        .get("projects")
+        .and_then(|v| v.as_array())
+        .unwrap_or(&empty);
+    let visible_projects: Vec<serde_json::Value> = projects
+        .iter()
+        .filter(|p| {
+            p.get("id")
+                .and_then(|v| v.as_str())
+                .is_some_and(|id| id == "Universal" || visible_pids.contains(id))
+        })
+        .cloned()
+        .collect();
 
     // Don't leak the full category taxonomy: expose only category tags that a
     // visible entry actually carries (plus their slash-hierarchy parents so the
     // sidebar tree still renders).
-    let visible_cats: HashSet<String> = visible.iter()
-        .flat_map(|e| e.get("categories").and_then(|v| v.as_array()).unwrap_or(&empty)
-            .iter().filter_map(|v| v.as_str()))
+    let visible_cats: HashSet<String> = visible
+        .iter()
+        .flat_map(|e| {
+            e.get("categories")
+                .and_then(|v| v.as_array())
+                .unwrap_or(&empty)
+                .iter()
+                .filter_map(|v| v.as_str())
+        })
         .flat_map(|c| {
             // "Cloud/AWS/Prod" -> ["Cloud", "Cloud/AWS", "Cloud/AWS/Prod"]
             let parts: Vec<&str> = c.split('/').collect();
             (1..=parts.len()).map(move |n| parts[..n].join("/"))
         })
         .collect();
-    let user_categories: Vec<serde_json::Value> = vault.get("user_categories")
-        .and_then(|v| v.as_array()).unwrap_or(&empty)
+    let user_categories: Vec<serde_json::Value> = vault
+        .get("user_categories")
+        .and_then(|v| v.as_array())
+        .unwrap_or(&empty)
         .iter()
-        .filter(|c| c.as_str().map_or(false, |s| visible_cats.contains(s)))
-        .cloned().collect();
+        .filter(|c| c.as_str().is_some_and(|s| visible_cats.contains(s)))
+        .cloned()
+        .collect();
 
     serde_json::json!({
         "api_keys":        visible,
@@ -948,20 +1295,29 @@ pub fn filter_vault_for_user(
 /// Returns `Err` if the user's submission contains an entry outside their write scope.
 pub fn merge_user_vault_write(
     full_vault: serde_json::Value,
-    user_data:  serde_json::Value,
-    write:      Option<&crate::permex::Expr>,
+    user_data: serde_json::Value,
+    write: Option<&crate::permex::Expr>,
 ) -> Result<serde_json::Value, String> {
     let project_names = build_project_names(&full_vault);
     let Some(write_expr) = write else {
         return Err("No write permissions".to_string());
     };
     let writable = |e: &serde_json::Value| {
-        crate::permex::eval(write_expr, &crate::permex::EntryView::from_entry(e, &project_names))
+        crate::permex::eval(
+            write_expr,
+            &crate::permex::EntryView::from_entry(e, &project_names),
+        )
     };
 
     let empty = vec![];
-    let full_keys = full_vault.get("api_keys").and_then(|v| v.as_array()).unwrap_or(&empty);
-    let user_keys = user_data.get("api_keys").and_then(|v| v.as_array()).unwrap_or(&empty);
+    let full_keys = full_vault
+        .get("api_keys")
+        .and_then(|v| v.as_array())
+        .unwrap_or(&empty);
+    let user_keys = user_data
+        .get("api_keys")
+        .and_then(|v| v.as_array())
+        .unwrap_or(&empty);
 
     // Identity comes from the shared `crate::entry_ck` so this merge and
     // `save_vault` can never disagree about what "the same entry" means. A
@@ -974,7 +1330,10 @@ pub fn merge_user_vault_write(
         if !writable(entry) {
             return Err(format!(
                 "Write permission denied for '{}'",
-                entry.get("provider").and_then(|v| v.as_str()).unwrap_or("?")
+                entry
+                    .get("provider")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("?")
             ));
         }
     }
@@ -982,12 +1341,13 @@ pub fn merge_user_vault_write(
     let user_map: HashMap<String, &serde_json::Value> =
         user_keys.iter().map(|e| (entry_ck(e), e)).collect();
 
-    let user_writable_cks: HashSet<String> = full_keys.iter()
+    let user_writable_cks: HashSet<String> = full_keys
+        .iter()
         .filter(|e| writable(e))
-        .map(|e| entry_ck(e))
+        .map(entry_ck)
         .collect();
 
-    let full_cks: HashSet<String> = full_keys.iter().map(|e| entry_ck(e)).collect();
+    let full_cks: HashSet<String> = full_keys.iter().map(entry_ck).collect();
 
     let mut result: Vec<serde_json::Value> = Vec::new();
 
@@ -1053,15 +1413,21 @@ mod tests {
     #[test]
     fn argon2_hash_roundtrips_and_rejects_wrong_password() {
         let stored = hash_password("correct horse");
-        assert!(stored.starts_with("$argon2id$"), "must emit PHC format, got {stored}");
+        assert!(
+            stored.starts_with("$argon2id$"),
+            "must emit PHC format, got {stored}"
+        );
         assert!(verify_password_hash("correct horse", &stored));
         assert!(!verify_password_hash("wrong horse", &stored));
     }
 
     #[test]
     fn hashes_are_salted_per_call() {
-        assert_ne!(hash_password("same"), hash_password("same"),
-                   "identical passwords must not produce identical hashes");
+        assert_ne!(
+            hash_password("same"),
+            hash_password("same"),
+            "identical passwords must not produce identical hashes"
+        );
     }
 
     #[test]
@@ -1088,12 +1454,14 @@ mod tests {
 
     #[test]
     fn authority_tiers_are_ordered() {
-        let owner = authority_tier(true,  false, false);
-        let admin = authority_tier(false, true,  true);
-        let moder = authority_tier(false, true,  false);
-        let user  = authority_tier(false, false, false);
-        assert!(owner > admin && admin > moder && moder > user,
-                "owner {owner} > admin {admin} > moderator {moder} > user {user}");
+        let owner = authority_tier(true, false, false);
+        let admin = authority_tier(false, true, true);
+        let moder = authority_tier(false, true, false);
+        let user = authority_tier(false, false, false);
+        assert!(
+            owner > admin && admin > moder && moder > user,
+            "owner {owner} > admin {admin} > moderator {moder} > user {user}"
+        );
     }
 
     // ── Write scoping ─────────────────────────────────────────────────────────
@@ -1101,13 +1469,17 @@ mod tests {
     // Predicate-level semantics (wildcards, Universal, globs) are covered by the
     // permex tests. What matters here is that the merge honours the expression.
 
-    fn ex(src: &str) -> crate::permex::Expr { crate::permex::parse(src).unwrap() }
+    fn ex(src: &str) -> crate::permex::Expr {
+        crate::permex::parse(src).unwrap()
+    }
 
     // ── Owner row ─────────────────────────────────────────────────────────────
 
     fn scratch_conn(tag: &str) -> Connection {
         let nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
         let dir = std::env::temp_dir().join(format!("envvault-users-{tag}-{nanos}"));
         std::fs::create_dir_all(&dir).unwrap();
         let key = crate::derive_key("pw", b"0123456789abcdef").unwrap();
@@ -1123,7 +1495,10 @@ mod tests {
         let b = ensure_owner_user(&conn).unwrap();
         assert_eq!(a, b, "must not create a second owner");
         let owners: i32 = conn
-            .query_row("SELECT COUNT(*) FROM users WHERE is_owner = 1", [], |r| r.get(0)).unwrap();
+            .query_row("SELECT COUNT(*) FROM users WHERE is_owner = 1", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
         assert_eq!(owners, 1);
     }
 
@@ -1134,9 +1509,16 @@ mod tests {
         // Storing a hash of the master password here would be an offline oracle
         // for the vault key, so the row must never have one.
         let hash: Option<String> = conn
-            .query_row("SELECT password_hash FROM users WHERE is_owner = 1", [], |r| r.get(0)).unwrap();
+            .query_row(
+                "SELECT password_hash FROM users WHERE is_owner = 1",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
         assert!(hash.is_none(), "owner row must have a NULL password_hash");
-        assert!(verify_user_password(&conn, "owner", "anything").unwrap().is_none());
+        assert!(verify_user_password(&conn, "owner", "anything")
+            .unwrap()
+            .is_none());
         assert!(verify_user_password(&conn, "owner", "").unwrap().is_none());
     }
 
@@ -1147,9 +1529,9 @@ mod tests {
         let conn = scratch_conn("nopw");
         create_user(&conn, "tokenonly", None, false).unwrap();
         let existing = verify_user_password(&conn, "tokenonly", "guess");
-        let missing  = verify_user_password(&conn, "ghost", "guess");
+        let missing = verify_user_password(&conn, "ghost", "guess");
         assert!(existing.is_ok() && existing.unwrap().is_none());
-        assert!(missing.is_ok()  && missing.unwrap().is_none());
+        assert!(missing.is_ok() && missing.unwrap().is_none());
     }
 
     #[test]
@@ -1158,8 +1540,16 @@ mod tests {
         create_user(&conn, "owner", Some("pw"), false).unwrap();
         let id = ensure_owner_user(&conn).unwrap();
         let uname: String = conn
-            .query_row("SELECT username FROM users WHERE id = ?1", rusqlite::params![id], |r| r.get(0)).unwrap();
-        assert_ne!(uname, "owner", "must not collide with the existing UNIQUE username");
+            .query_row(
+                "SELECT username FROM users WHERE id = ?1",
+                rusqlite::params![id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_ne!(
+            uname, "owner",
+            "must not collide with the existing UNIQUE username"
+        );
         assert!(uname.starts_with("owner-"));
     }
 
@@ -1176,22 +1566,47 @@ mod tests {
     fn legacy_rows_are_migrated_into_expressions() {
         let conn = scratch_conn("permmig");
         let u = create_user(&conn, "u1", Some("pw"), false).unwrap();
-        set_user_permissions(&conn, &u.id, &[
-            PermissionRecord { user_id: u.id.clone(), scope_type: "project".into(),
-                               scope_value: "Alpha".into(), permission: "write".into() },
-            PermissionRecord { user_id: u.id.clone(), scope_type: "category".into(),
-                               scope_value: "dev".into(), permission: "read".into() },
-        ]).unwrap();
+        set_user_permissions(
+            &conn,
+            &u.id,
+            &[
+                PermissionRecord {
+                    user_id: u.id.clone(),
+                    scope_type: "project".into(),
+                    scope_value: "Alpha".into(),
+                    permission: "write".into(),
+                },
+                PermissionRecord {
+                    user_id: u.id.clone(),
+                    scope_type: "category".into(),
+                    scope_value: "dev".into(),
+                    permission: "read".into(),
+                },
+            ],
+        )
+        .unwrap();
         // Re-run the migration as a fresh database would.
-        conn.execute("DELETE FROM vault_meta WHERE key = 'perm_expr_migrated'", []).unwrap();
+        conn.execute(
+            "DELETE FROM vault_meta WHERE key = 'perm_expr_migrated'",
+            [],
+        )
+        .unwrap();
         migrate_rows_to_expressions(&conn).unwrap();
 
-        let read  = get_permission_expr(&conn, "user", &u.id, "read").unwrap().unwrap();
-        let write = get_permission_expr(&conn, "user", &u.id, "write").unwrap().unwrap();
-        assert!(read.contains("project:Alpha") && read.contains("category:dev"),
-                "read should be the OR of every row, got {read}");
-        assert!(write.contains("project:Alpha") && !write.contains("category:dev"),
-                "write should only include write rows, got {write}");
+        let read = get_permission_expr(&conn, "user", &u.id, "read")
+            .unwrap()
+            .unwrap();
+        let write = get_permission_expr(&conn, "user", &u.id, "write")
+            .unwrap()
+            .unwrap();
+        assert!(
+            read.contains("project:Alpha") && read.contains("category:dev"),
+            "read should be the OR of every row, got {read}"
+        );
+        assert!(
+            write.contains("project:Alpha") && !write.contains("category:dev"),
+            "write should only include write rows, got {write}"
+        );
     }
 
     #[test]
@@ -1199,14 +1614,26 @@ mod tests {
         let conn = scratch_conn("permmig-once");
         let u = create_user(&conn, "u1", Some("pw"), false).unwrap();
         set_permission_expr(&conn, "user", &u.id, "read", "tag:mine").unwrap();
-        set_user_permissions(&conn, &u.id, &[
-            PermissionRecord { user_id: u.id.clone(), scope_type: "vault".into(),
-                               scope_value: "*".into(), permission: "write".into() },
-        ]).unwrap();
+        set_user_permissions(
+            &conn,
+            &u.id,
+            &[PermissionRecord {
+                user_id: u.id.clone(),
+                scope_type: "vault".into(),
+                scope_value: "*".into(),
+                permission: "write".into(),
+            }],
+        )
+        .unwrap();
         migrate_rows_to_expressions(&conn).unwrap();
         // Already migrated at schema init, so the legacy rows must not clobber
         // an expression an admin has since written.
-        assert_eq!(get_permission_expr(&conn, "user", &u.id, "read").unwrap().unwrap(), "tag:mine");
+        assert_eq!(
+            get_permission_expr(&conn, "user", &u.id, "read")
+                .unwrap()
+                .unwrap(),
+            "tag:mine"
+        );
     }
 
     #[test]
@@ -1218,8 +1645,12 @@ mod tests {
         let viewer_read = get_permission_expr(&conn, "class", "cls-viewer", "read").unwrap();
         assert_eq!(admin.as_deref(), Some("vault:*"));
         assert_eq!(viewer_read.as_deref(), Some("vault:*"));
-        assert!(get_permission_expr(&conn, "class", "cls-viewer", "write").unwrap().is_none(),
-                "Viewer is read-only");
+        assert!(
+            get_permission_expr(&conn, "class", "cls-viewer", "write")
+                .unwrap()
+                .is_none(),
+            "Viewer is read-only"
+        );
     }
 
     #[test]
@@ -1228,8 +1659,12 @@ mod tests {
         let u = create_user(&conn, "u1", Some("pw"), false).unwrap();
         assert!(set_permission_expr(&conn, "user", &u.id, "read", "project:a AND").is_err());
         assert!(set_permission_expr(&conn, "user", &u.id, "read", "bogus:a").is_err());
-        assert!(get_permission_expr(&conn, "user", &u.id, "read").unwrap().is_none(),
-                "a rejected expression must not be stored");
+        assert!(
+            get_permission_expr(&conn, "user", &u.id, "read")
+                .unwrap()
+                .is_none(),
+            "a rejected expression must not be stored"
+        );
     }
 
     #[test]
@@ -1238,7 +1673,9 @@ mod tests {
         let u = create_user(&conn, "u1", Some("pw"), false).unwrap();
         set_permission_expr(&conn, "user", &u.id, "read", "tag:x").unwrap();
         set_permission_expr(&conn, "user", &u.id, "read", "   ").unwrap();
-        assert!(get_permission_expr(&conn, "user", &u.id, "read").unwrap().is_none());
+        assert!(get_permission_expr(&conn, "user", &u.id, "read")
+            .unwrap()
+            .is_none());
     }
 
     #[test]
@@ -1246,7 +1683,8 @@ mod tests {
         let conn = scratch_conn("permeff");
         let u = create_user(&conn, "u1", Some("pw"), false).unwrap();
         set_permission_expr(&conn, "user", &u.id, "write", "project:Alpha").unwrap();
-        let read = effective_permission_expr(&conn, &u.id, "read").unwrap()
+        let read = effective_permission_expr(&conn, &u.id, "read")
+            .unwrap()
             .expect("write should imply read");
         assert!(read.to_string().contains("project:Alpha"));
     }
@@ -1258,23 +1696,36 @@ mod tests {
         let cls = create_user_class(&conn, "Contractor", "", false, false, false).unwrap();
         assign_user_class(&conn, &u.id, Some(&cls.id)).unwrap();
         set_permission_expr(&conn, "class", &cls.id, "read", "NOT category:secret").unwrap();
-        set_permission_expr(&conn, "user",  &u.id,  "read", "vault:*").unwrap();
+        set_permission_expr(&conn, "user", &u.id, "read", "vault:*").unwrap();
 
-        let expr = effective_permission_expr(&conn, &u.id, "read").unwrap().unwrap();
+        let expr = effective_permission_expr(&conn, &u.id, "read")
+            .unwrap()
+            .unwrap();
         let pn: HashMap<String, String> = HashMap::new();
-        let secret = json!({ "provider": "S", "categories": ["secret"], "projectIds": ["Universal"] });
-        let plain  = json!({ "provider": "P", "categories": ["dev"],    "projectIds": ["Universal"] });
-        assert!(!crate::permex::eval(&expr, &crate::permex::EntryView::from_entry(&secret, &pn)),
-                "the class exclusion must survive the individual grant");
-        assert!(crate::permex::eval(&expr, &crate::permex::EntryView::from_entry(&plain, &pn)));
+        let secret =
+            json!({ "provider": "S", "categories": ["secret"], "projectIds": ["Universal"] });
+        let plain =
+            json!({ "provider": "P", "categories": ["dev"],    "projectIds": ["Universal"] });
+        assert!(
+            !crate::permex::eval(&expr, &crate::permex::EntryView::from_entry(&secret, &pn)),
+            "the class exclusion must survive the individual grant"
+        );
+        assert!(crate::permex::eval(
+            &expr,
+            &crate::permex::EntryView::from_entry(&plain, &pn)
+        ));
     }
 
     #[test]
     fn a_user_with_no_rules_gets_nothing() {
         let conn = scratch_conn("permnone");
         let u = create_user(&conn, "u1", Some("pw"), false).unwrap();
-        assert!(effective_permission_expr(&conn, &u.id, "read").unwrap().is_none());
-        assert!(effective_permission_expr(&conn, &u.id, "write").unwrap().is_none());
+        assert!(effective_permission_expr(&conn, &u.id, "read")
+            .unwrap()
+            .is_none());
+        assert!(effective_permission_expr(&conn, &u.id, "write")
+            .unwrap()
+            .is_none());
     }
 
     // ── Vault filtering ───────────────────────────────────────────────────────
@@ -1311,11 +1762,24 @@ mod tests {
     #[test]
     fn filtering_does_not_leak_the_category_taxonomy() {
         let out = filter_vault_for_user(sample_vault(), Some(&ex("project:Alpha")));
-        let cats: Vec<&str> = out["user_categories"].as_array().unwrap()
-            .iter().filter_map(|c| c.as_str()).collect();
-        assert!(cats.contains(&"dev"), "categories on visible entries are kept");
-        assert!(!cats.contains(&"ops"), "categories only on hidden entries must not leak");
-        assert!(!cats.contains(&"secret/taxonomy"), "unused category names must not leak");
+        let cats: Vec<&str> = out["user_categories"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|c| c.as_str())
+            .collect();
+        assert!(
+            cats.contains(&"dev"),
+            "categories on visible entries are kept"
+        );
+        assert!(
+            !cats.contains(&"ops"),
+            "categories only on hidden entries must not leak"
+        );
+        assert!(
+            !cats.contains(&"secret/taxonomy"),
+            "unused category names must not leak"
+        );
     }
 
     // ── Write merge ───────────────────────────────────────────────────────────
@@ -1328,7 +1792,10 @@ mod tests {
         ]});
         let err = merge_user_vault_write(full, submitted, Some(&ex("project:Alpha")))
             .expect_err("writing an out-of-scope entry must be refused");
-        assert!(err.contains("Theirs"), "error should name the offending entry, got: {err}");
+        assert!(
+            err.contains("Theirs"),
+            "error should name the offending entry, got: {err}"
+        );
     }
 
     #[test]
@@ -1341,24 +1808,32 @@ mod tests {
     /// Write coverage for entry "Mine" — under ANY-match the project grant alone
     /// is sufficient, since the entry belongs to project Alpha.
 
-
     #[test]
     fn merge_applies_in_scope_edits_and_preserves_the_rest() {
         let submitted = json!({ "api_keys": [
             { "id": "1", "provider": "Mine", "api_key": "updated",
               "categories": ["dev"], "projectIds": ["Universal", "p1"] }
         ]});
-        let out = merge_user_vault_write(sample_vault(), submitted, Some(&ex("project:Alpha"))).unwrap();
+        let out =
+            merge_user_vault_write(sample_vault(), submitted, Some(&ex("project:Alpha"))).unwrap();
         let keys = out["api_keys"].as_array().unwrap();
         assert_eq!(keys.len(), 2, "the out-of-scope entry must survive");
         let mine = keys.iter().find(|e| e["id"] == "1").unwrap();
         assert_eq!(mine["api_key"], "updated");
-        assert!(keys.iter().any(|e| e["id"] == "2"), "Theirs must be untouched");
+        assert!(
+            keys.iter().any(|e| e["id"] == "2"),
+            "Theirs must be untouched"
+        );
     }
 
     #[test]
     fn merge_deletes_in_scope_entries_omitted_from_the_submission() {
-        let out = merge_user_vault_write(sample_vault(), json!({ "api_keys": [] }), Some(&ex("project:Alpha"))).unwrap();
+        let out = merge_user_vault_write(
+            sample_vault(),
+            json!({ "api_keys": [] }),
+            Some(&ex("project:Alpha")),
+        )
+        .unwrap();
         let keys = out["api_keys"].as_array().unwrap();
         assert_eq!(keys.len(), 1, "the in-scope entry is deleted");
         assert_eq!(keys[0]["id"], "2", "the out-of-scope entry is not");
@@ -1383,6 +1858,9 @@ mod tests {
         let out = merge_user_vault_write(full, submitted, Some(&ex("project:Alpha"))).unwrap();
         let keys = out["api_keys"].as_array().unwrap();
         let locked = keys.iter().find(|e| e["key_id"] == "locked").unwrap();
-        assert_eq!(locked["api_key"], "secret", "the out-of-scope key must be untouched");
+        assert_eq!(
+            locked["api_key"], "secret",
+            "the out-of-scope key must be untouched"
+        );
     }
 }

@@ -12,7 +12,11 @@ use serde_json::{json, Value};
 fn arg_json(arg: &clap::Arg) -> Value {
     let takes_value = !matches!(
         arg.get_action(),
-        ArgAction::SetTrue | ArgAction::SetFalse | ArgAction::Help | ArgAction::Version | ArgAction::Count
+        ArgAction::SetTrue
+            | ArgAction::SetFalse
+            | ArgAction::Help
+            | ArgAction::Version
+            | ArgAction::Count
     );
     let possible: Vec<String> = arg
         .get_possible_values()
@@ -50,13 +54,20 @@ fn arg_json(arg: &clap::Arg) -> Value {
 
 fn command_json(cmd: &Command, path: &str) -> Value {
     let name = cmd.get_name().to_string();
-    let full = if path.is_empty() { name.clone() } else { format!("{path} {name}") };
+    let full = if path.is_empty() {
+        name.clone()
+    } else {
+        format!("{path} {name}")
+    };
     let args: Vec<Value> = cmd
         .get_arguments()
         .filter(|a| a.get_id() != "help" && a.get_id() != "version")
         .map(arg_json)
         .collect();
-    let subs: Vec<Value> = cmd.get_subcommands().map(|c| command_json(c, &full)).collect();
+    let subs: Vec<Value> = cmd
+        .get_subcommands()
+        .map(|c| command_json(c, &full))
+        .collect();
 
     let mut v = json!({ "name": name, "path": full, "args": args });
     if let Some(about) = cmd.get_about() {

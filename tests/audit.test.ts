@@ -12,11 +12,15 @@ import { loadRealIndexHtml } from './helpers';
 
 async function sha256Hex(input: string): Promise<string> {
   const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(input));
-  return Array.from(new Uint8Array(digest)).map(b => b.toString(16).padStart(2, '0')).join('');
+  return Array.from(new Uint8Array(digest))
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('');
 }
 
 /** Builds a valid chain the way `compute_audit_hash` in vault-core does. */
-async function buildChain(specs: Array<{ action: string; provider: string; actor?: string }>): Promise<AuditRow[]> {
+async function buildChain(
+  specs: { action: string; provider: string; actor?: string }[],
+): Promise<AuditRow[]> {
   const rows: AuditRow[] = [];
   let prev: string | null = null;
   for (let i = 0; i < specs.length; i++) {
@@ -27,8 +31,14 @@ async function buildChain(specs: Array<{ action: string; provider: string; actor
       ? await sha256Hex(`${s.action}|${s.provider}|${timestamp}|${s.actor}|${prevForHash}`)
       : await sha256Hex(`${s.action}|${s.provider}|${timestamp}|${prevForHash}`);
     rows.push({
-      id: i + 1, action: s.action, entry_provider: s.provider, timestamp,
-      details: null, actor: s.actor ?? null, prev_hash: prev, entry_hash,
+      id: i + 1,
+      action: s.action,
+      entry_provider: s.provider,
+      timestamp,
+      details: null,
+      actor: s.actor ?? null,
+      prev_hash: prev,
+      entry_hash,
     } as AuditRow);
     prev = entry_hash;
   }
@@ -59,7 +69,7 @@ describe('verifyChain — intact chains', () => {
   });
 
   it('accepts a chain that binds an actor into each row', async () => {
-    const rows = await buildChain(FIVE.map(s => ({ ...s, actor: 'alice' })));
+    const rows = await buildChain(FIVE.map((s) => ({ ...s, actor: 'alice' })));
     expect((await verifyChain(rows)).ok).toBe(true);
   });
 
@@ -69,7 +79,18 @@ describe('verifyChain — intact chains', () => {
   });
 
   it('reports nothing to verify when no row carries a hash', async () => {
-    const legacy = [{ id: 1, action: 'add', entry_provider: 'X', timestamp: 't', details: null, actor: null, prev_hash: null, entry_hash: null }] as any;
+    const legacy = [
+      {
+        id: 1,
+        action: 'add',
+        entry_provider: 'X',
+        timestamp: 't',
+        details: null,
+        actor: null,
+        prev_hash: null,
+        entry_hash: null,
+      },
+    ] as any;
     const result = await verifyChain(legacy);
     expect(result.ok).toBe(true);
     expect(result.checked).toBe(0);
@@ -118,20 +139,26 @@ describe('verifyChain — tampering', () => {
   it('catches an appended row that was not properly chained', async () => {
     const rows = await buildChain(FIVE);
     rows.push({
-      id: 6, action: 'delete', entry_provider: 'Charlie', timestamp: '2024-02-01T00:00:00Z',
-      details: null, actor: null, prev_hash: 'made-up', entry_hash: 'also-made-up',
+      id: 6,
+      action: 'delete',
+      entry_provider: 'Charlie',
+      timestamp: '2024-02-01T00:00:00Z',
+      details: null,
+      actor: null,
+      prev_hash: 'made-up',
+      entry_hash: 'also-made-up',
     } as AuditRow);
     expect((await verifyChain(rows)).ok).toBe(false);
   });
 
   it('catches an actor swapped out of a row', async () => {
-    const rows = await buildChain(FIVE.map(s => ({ ...s, actor: 'alice' })));
+    const rows = await buildChain(FIVE.map((s) => ({ ...s, actor: 'alice' })));
     rows[3].actor = 'mallory';
     expect((await verifyChain(rows)).ok).toBe(false);
   });
 
   it('catches stripping the actor to fall back to the older hash format', async () => {
-    const rows = await buildChain(FIVE.map(s => ({ ...s, actor: 'alice' })));
+    const rows = await buildChain(FIVE.map((s) => ({ ...s, actor: 'alice' })));
     rows[3].actor = null;
     expect((await verifyChain(rows)).ok).toBe(false);
   });

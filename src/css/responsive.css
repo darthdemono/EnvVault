@@ -1,7 +1,7 @@
 /* ── RESPONSIVE ────────────────────────────────────── */
-@media(max-width:700px) {
+@media (max-width: 700px) {
   #sidebar {
-    display: none
+    display: none;
   }
 
   #sidebar.mobile-open {
@@ -11,24 +11,24 @@
     top: 52px;
     bottom: 0;
     z-index: 50;
-    width: 220px
+    width: 220px;
   }
 
   #content {
-    padding: 12px
+    padding: 12px;
   }
 
   .form-row-2,
   .form-row-3 {
-    grid-template-columns: 1fr
+    grid-template-columns: 1fr;
   }
 
   .header-center {
-    display: none
+    display: none;
   }
 
   .vault-pill {
-    display: none
+    display: none;
   }
 }
 
@@ -76,6 +76,3 @@ select option {
   background-position: right 8px center;
   background-size: 12px;
 }
-
-
-

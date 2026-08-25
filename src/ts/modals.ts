@@ -1,10 +1,32 @@
 /**
- * @file Modals, dropdowns, card interactions, and form helpers.
+ * @file
+ * Modals, dropdowns, card interactions, and form helpers.
  */
 
 import type { VaultEntry, SecretType } from './types';
-import { st, Settings, triggerRender, Exporter, dotenvKey, persist, entryId, newEntryId } from './state';
-import { esc, escAttr, maskKey, showToast, showConfirm, clipboardWrite, eyeSVG, copySVG, dupSVG, editSVG, delSVG } from './utils';
+import {
+  st,
+  Settings,
+  triggerRender,
+  Exporter,
+  dotenvKey,
+  persist,
+  entryId,
+  newEntryId,
+} from './state';
+import {
+  esc,
+  escAttr,
+  maskKey,
+  showToast,
+  showConfirm,
+  clipboardWrite,
+  eyeSVG,
+  copySVG,
+  dupSVG,
+  editSVG,
+  delSVG,
+} from './utils';
 import { iconHTML, openIconPicker, iconPicker, setIconField, readIconField } from './icons';
 import { renameProviderRefs } from './chunk-ops';
 
@@ -13,7 +35,7 @@ import { renameProviderRefs } from './chunk-ops';
 export function applySchemaTooltips() {
   if (!st.schema) return;
   const props = st.schema.properties?.api_keys?.items?.properties || {};
-  document.querySelectorAll<HTMLElement>('.form-label[data-field]').forEach(el => {
+  document.querySelectorAll<HTMLElement>('.form-label[data-field]').forEach((el) => {
     const d = props[el.dataset.field!]?.description;
     if (d) el.title = d;
   });
@@ -26,7 +48,7 @@ export function buildCatChips(selected: string[] = []) {
     wrap.innerHTML = `<span style="font-size:10px;color:var(--text3)">No categories — add in sidebar</span>`;
     return;
   }
-  st.vault.user_categories.forEach(cat => {
+  st.vault.user_categories.forEach((cat) => {
     const chip = document.createElement('button');
     chip.type = 'button';
     chip.className = `cat-chip${selected.includes(cat) ? ' selected' : ''}`;
@@ -47,13 +69,55 @@ export type TypeConfig = {
 };
 
 export const TYPE_CONFIG: Record<SecretType, TypeConfig> = {
-  api_key:           { providerLabel: 'Provider',         providerPlaceholder: 'e.g. GitHub',          showAccount: true,  keyLabel: 'API Key',           keyPlaceholder: 'Your API key or access token' },
-  password:          { providerLabel: 'Service / App',    providerPlaceholder: 'e.g. Gmail',            showAccount: false, keyLabel: 'Password',          keyPlaceholder: 'Your password' },
-  env_var:           { providerLabel: 'Variable Name',    providerPlaceholder: 'e.g. DATABASE_URL',     showAccount: false, keyLabel: 'Value',             keyPlaceholder: 'Variable value' },
-  connection_string: { providerLabel: 'Service',          providerPlaceholder: 'e.g. PostgreSQL',       showAccount: false, keyLabel: 'Connection String', keyPlaceholder: 'postgresql://user:pass@host/db' },
-  ssh_key:           { providerLabel: 'Host / Service',   providerPlaceholder: 'e.g. github.com',       showAccount: true,  keyLabel: 'SSH Key',           keyPlaceholder: '-----BEGIN OPENSSH PRIVATE KEY-----' },
-  certificate:       { providerLabel: 'Site / Domain',    providerPlaceholder: 'e.g. darthdemono.com',  showAccount: false, keyLabel: 'Fullchain',         keyPlaceholder: '' },
-  file_blob:         { providerLabel: 'Name',             providerPlaceholder: 'e.g. config.yaml',      showAccount: false, keyLabel: 'File Reference',    keyPlaceholder: '' },
+  api_key: {
+    providerLabel: 'Provider',
+    providerPlaceholder: 'e.g. GitHub',
+    showAccount: true,
+    keyLabel: 'API Key',
+    keyPlaceholder: 'Your API key or access token',
+  },
+  password: {
+    providerLabel: 'Service / App',
+    providerPlaceholder: 'e.g. Gmail',
+    showAccount: false,
+    keyLabel: 'Password',
+    keyPlaceholder: 'Your password',
+  },
+  env_var: {
+    providerLabel: 'Variable Name',
+    providerPlaceholder: 'e.g. DATABASE_URL',
+    showAccount: false,
+    keyLabel: 'Value',
+    keyPlaceholder: 'Variable value',
+  },
+  connection_string: {
+    providerLabel: 'Service',
+    providerPlaceholder: 'e.g. PostgreSQL',
+    showAccount: false,
+    keyLabel: 'Connection String',
+    keyPlaceholder: 'postgresql://user:pass@host/db',
+  },
+  ssh_key: {
+    providerLabel: 'Host / Service',
+    providerPlaceholder: 'e.g. github.com',
+    showAccount: true,
+    keyLabel: 'SSH Key',
+    keyPlaceholder: '-----BEGIN OPENSSH PRIVATE KEY-----',
+  },
+  certificate: {
+    providerLabel: 'Site / Domain',
+    providerPlaceholder: 'e.g. darthdemono.com',
+    showAccount: false,
+    keyLabel: 'Fullchain',
+    keyPlaceholder: '',
+  },
+  file_blob: {
+    providerLabel: 'Name',
+    providerPlaceholder: 'e.g. config.yaml',
+    showAccount: false,
+    keyLabel: 'File Reference',
+    keyPlaceholder: '',
+  },
 };
 
 // ── Dynamic form fields ───────────────────────────────────────────────────
@@ -62,32 +126,32 @@ export function dynamicSecretFields() {
   const type = (document.getElementById('f-secret-type') as HTMLSelectElement).value as SecretType;
   const cfg = TYPE_CONFIG[type] || TYPE_CONFIG.api_key;
 
-  const keyGroup          = document.getElementById('f-key-group');
-  const keyLabelEl        = document.getElementById('f-key-label');
-  const secretGroup       = document.getElementById('f-secret-group');
-  const usernameRow       = document.getElementById('f-username-row');
-  const certGroup         = document.getElementById('f-cert-group');
-  const certKeyGroup      = document.getElementById('f-cert-key-group');
-  const certIssuerGroup   = document.getElementById('f-cert-issuer-group');
-  const blobGroup         = document.getElementById('f-blob-group');
-  const accountGroup      = document.getElementById('f-account-group');
-  const providerLabel     = document.getElementById('f-provider-label');
-  const providerInput     = document.getElementById('f-provider') as HTMLInputElement | null;
+  const keyGroup = document.getElementById('f-key-group');
+  const keyLabelEl = document.getElementById('f-key-label');
+  const secretGroup = document.getElementById('f-secret-group');
+  const usernameRow = document.getElementById('f-username-row');
+  const certGroup = document.getElementById('f-cert-group');
+  const certKeyGroup = document.getElementById('f-cert-key-group');
+  const certIssuerGroup = document.getElementById('f-cert-issuer-group');
+  const blobGroup = document.getElementById('f-blob-group');
+  const accountGroup = document.getElementById('f-account-group');
+  const providerLabel = document.getElementById('f-provider-label');
+  const providerInput = document.getElementById('f-provider') as HTMLInputElement | null;
   const envvarSubtypeGroup = document.getElementById('f-envvar-subtype-group');
 
-  const showKey    = type !== 'certificate' && type !== 'file_blob';
+  const showKey = type !== 'certificate' && type !== 'file_blob';
   const showSecret = type === 'api_key';
-  const showUser   = type === 'password' || type === 'ssh_key';
+  const showUser = type === 'password' || type === 'ssh_key';
 
-  if (keyGroup)           keyGroup.style.display           = showKey                    ? 'flex' : 'none';
-  if (secretGroup)        secretGroup.style.display        = showSecret                 ? 'flex' : 'none';
-  if (usernameRow)        usernameRow.style.display        = showUser                   ? 'grid' : 'none';
-  if (certGroup)          certGroup.style.display          = type === 'certificate'     ? 'flex' : 'none';
-  if (certKeyGroup)       certKeyGroup.style.display       = type === 'certificate'     ? 'flex' : 'none';
-  if (certIssuerGroup)    certIssuerGroup.style.display    = type === 'certificate'     ? 'flex' : 'none';
-  if (blobGroup)          blobGroup.style.display          = type === 'file_blob'       ? 'flex' : 'none';
-  if (accountGroup)       accountGroup.style.display       = cfg.showAccount            ? ''     : 'none';
-  if (envvarSubtypeGroup) envvarSubtypeGroup.style.display = type === 'env_var'         ? 'flex' : 'none';
+  if (keyGroup) keyGroup.style.display = showKey ? 'flex' : 'none';
+  if (secretGroup) secretGroup.style.display = showSecret ? 'flex' : 'none';
+  if (usernameRow) usernameRow.style.display = showUser ? 'grid' : 'none';
+  if (certGroup) certGroup.style.display = type === 'certificate' ? 'flex' : 'none';
+  if (certKeyGroup) certKeyGroup.style.display = type === 'certificate' ? 'flex' : 'none';
+  if (certIssuerGroup) certIssuerGroup.style.display = type === 'certificate' ? 'flex' : 'none';
+  if (blobGroup) blobGroup.style.display = type === 'file_blob' ? 'flex' : 'none';
+  if (accountGroup) accountGroup.style.display = cfg.showAccount ? '' : 'none';
+  if (envvarSubtypeGroup) envvarSubtypeGroup.style.display = type === 'env_var' ? 'flex' : 'none';
 
   if (providerLabel) providerLabel.innerHTML = `${cfg.providerLabel} <span class="req">*</span>`;
   if (providerInput) providerInput.placeholder = cfg.providerPlaceholder;
@@ -99,17 +163,25 @@ export function dynamicSecretFields() {
 // ── Form to entry & fill form ─────────────────────────────────────────────
 
 export function formToEntry(): VaultEntry {
-  const getVal = (id: string, fallback: string = '') => {
+  const getVal = (id: string, fallback = '') => {
     const el = document.getElementById(id) as HTMLInputElement | HTMLSelectElement | null;
     return el?.value?.trim?.() ?? fallback;
   };
 
-  const scopes = getVal('f-scopes').split(',').map(s => s.trim()).filter(Boolean);
-  const cats = [...document.querySelectorAll<HTMLElement>('#f-categories .cat-chip.selected')].map(c => c.textContent!);
+  const scopes = getVal('f-scopes')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+  const cats = [...document.querySelectorAll<HTMLElement>('#f-categories .cat-chip.selected')].map(
+    (c) => c.textContent!,
+  );
   const secretType = (getVal('f-secret-type') || 'api_key') as SecretType;
 
-  const selectedProjectIds = [...document.querySelectorAll<HTMLElement>('#f-project .project-pick-item.selected')]
-    .map(el => el.dataset.value!).filter(Boolean);
+  const selectedProjectIds = [
+    ...document.querySelectorAll<HTMLElement>('#f-project .project-pick-item.selected'),
+  ]
+    .map((el) => el.dataset.value!)
+    .filter(Boolean);
 
   return {
     provider: getVal('f-provider'),
@@ -120,7 +192,7 @@ export function formToEntry(): VaultEntry {
     api_secret: getVal('f-secret') || undefined,
     key_id: getVal('f-keyid') || undefined,
     price_type: getVal('f-price', 'free') as VaultEntry['price_type'],
-    environment: getVal('f-env') as VaultEntry['environment'] || undefined,
+    environment: (getVal('f-env') as VaultEntry['environment']) || undefined,
     projectIds: selectedProjectIds.includes('Universal')
       ? selectedProjectIds
       : ['Universal', ...selectedProjectIds],
@@ -129,8 +201,11 @@ export function formToEntry(): VaultEntry {
     version: getVal('f-version') || undefined,
     rate_limit: getVal('f-ratelimit') || undefined,
     expires_at: getVal('f-expires') || undefined,
-    rotation_days: getVal('f-rotation-days') ? parseInt(getVal('f-rotation-days')) || undefined : undefined,
-    compromised: (document.getElementById('f-compromised') as HTMLInputElement | null)?.checked || undefined,
+    rotation_days: getVal('f-rotation-days')
+      ? parseInt(getVal('f-rotation-days')) || undefined
+      : undefined,
+    compromised:
+      (document.getElementById('f-compromised') as HTMLInputElement | null)?.checked || undefined,
     scopes,
     api_description: getVal('f-apidesc') || undefined,
     description: getVal('f-desc') || undefined,
@@ -142,22 +217,30 @@ export function formToEntry(): VaultEntry {
       : undefined,
     secretType,
     certificate_data: secretType === 'certificate' ? getVal('f-cert') : undefined,
-    cert_key_data: secretType === 'certificate' ? (getVal('f-cert-key') || undefined) : undefined,
-    cert_issuer: secretType === 'certificate' ? (getVal('f-cert-issuer') || undefined) : undefined,
+    cert_key_data: secretType === 'certificate' ? getVal('f-cert-key') || undefined : undefined,
+    cert_issuer: secretType === 'certificate' ? getVal('f-cert-issuer') || undefined : undefined,
     blob_ref: secretType === 'file_blob' ? getVal('f-blob') : undefined,
-    env_var_subtype: secretType === 'env_var' ? (getVal('f-envvar-subtype') as VaultEntry['env_var_subtype'] || undefined) : undefined,
+    env_var_subtype:
+      secretType === 'env_var'
+        ? (getVal('f-envvar-subtype') as VaultEntry['env_var_subtype']) || undefined
+        : undefined,
     extra_vars: (() => {
       const rows = [...document.querySelectorAll<HTMLElement>('#f-extra-vars-list .extra-var-row')];
-      const result = rows.map(row => ({
-        key: (row.querySelector<HTMLInputElement>('.extra-var-key')?.value.trim()) || '',
-        value: (row.querySelector<HTMLInputElement>('.extra-var-value')?.value.trim()) || '',
-        secret: (row.querySelector<HTMLInputElement>('.extra-var-secret')?.checked) || false,
-      })).filter(v => v.key);
+      const result = rows
+        .map((row) => ({
+          key: row.querySelector<HTMLInputElement>('.extra-var-key')?.value.trim() || '',
+          value: row.querySelector<HTMLInputElement>('.extra-var-value')?.value.trim() || '',
+          secret: row.querySelector<HTMLInputElement>('.extra-var-secret')?.checked || false,
+        }))
+        .filter((v) => v.key);
       return result.length ? result : undefined;
     })(),
     env_prefixes: (() => {
       const raw = getVal('f-env-prefixes');
-      const parts = raw.split(/[,\s]+/).map(p => p.trim().replace(/_+$/, '')).filter(Boolean);
+      const parts = raw
+        .split(/[,\s]+/)
+        .map((p) => p.trim().replace(/_+$/, ''))
+        .filter(Boolean);
       return parts.length ? parts : undefined;
     })(),
   };
@@ -165,7 +248,8 @@ export function formToEntry(): VaultEntry {
 
 export function fillForm(entry: Partial<VaultEntry>) {
   (document.getElementById('f-provider') as HTMLInputElement).value = entry.provider || '';
-  (document.getElementById('f-account') as HTMLInputElement).value = entry.account_name || Settings.get('defaultAccount') || '';
+  (document.getElementById('f-account') as HTMLInputElement).value =
+    entry.account_name || Settings.get('defaultAccount') || '';
   (document.getElementById('f-username') as HTMLInputElement).value = entry.username || '';
   (document.getElementById('f-email') as HTMLInputElement).value = entry.email || '';
   (document.getElementById('f-key') as HTMLInputElement).value = entry.api_key || '';
@@ -178,7 +262,7 @@ export function fillForm(entry: Partial<VaultEntry>) {
   fEnv.value = entry.environment || '';
   st.formCustomSelects.get('f-env')?.setValue(entry.environment || '');
   if (entry.projectIds) {
-    document.querySelectorAll<HTMLElement>('#f-project .project-pick-item').forEach(el => {
+    document.querySelectorAll<HTMLElement>('#f-project .project-pick-item').forEach((el) => {
       el.classList.toggle('selected', entry.projectIds!.includes(el.dataset.value!));
     });
   }
@@ -198,7 +282,9 @@ export function fillForm(entry: Partial<VaultEntry>) {
   setIconField(document.getElementById('f-icon') as HTMLInputElement | null, entry.custom_icon);
   const tagsInput = document.getElementById('f-tags-input') as HTMLInputElement | null;
   if (tagsInput) tagsInput.value = (entry.tags || []).join(' ');
-  (document.getElementById('f-icon-preview')!).innerHTML = entry.custom_icon ? iconHTML('', entry.custom_icon) : '';
+  document.getElementById('f-icon-preview')!.innerHTML = entry.custom_icon
+    ? iconHTML('', entry.custom_icon)
+    : '';
   const stVal = entry.secretType || 'api_key';
   (document.getElementById('f-secret-type') as HTMLSelectElement).value = stVal;
   st.formCustomSelects.get('f-secret-type')?.setValue(stVal);
@@ -207,7 +293,8 @@ export function fillForm(entry: Partial<VaultEntry>) {
     (document.getElementById('f-cert-key') as HTMLInputElement).value = entry.cert_key_data || '';
     (document.getElementById('f-cert-issuer') as HTMLInputElement).value = entry.cert_issuer || '';
   }
-  if (entry.secretType === 'file_blob') (document.getElementById('f-blob') as HTMLInputElement).value = entry.blob_ref || '';
+  if (entry.secretType === 'file_blob')
+    (document.getElementById('f-blob') as HTMLInputElement).value = entry.blob_ref || '';
   if (entry.secretType === 'env_var') {
     const envSubtype = document.getElementById('f-envvar-subtype') as HTMLSelectElement | null;
     if (envSubtype) envSubtype.value = entry.env_var_subtype || 'string';
@@ -215,7 +302,7 @@ export function fillForm(entry: Partial<VaultEntry>) {
   const extraList = document.getElementById('f-extra-vars-list');
   if (extraList) {
     extraList.innerHTML = '';
-    for (const xv of (entry.extra_vars || [])) {
+    for (const xv of entry.extra_vars || []) {
       extraList.appendChild(_makeExtraVarRow(xv.key, xv.value, xv.secret));
     }
   }
@@ -226,11 +313,11 @@ export function fillForm(entry: Partial<VaultEntry>) {
 
 export function populateProjectSelect() {
   const container = document.getElementById('f-project')!;
-  const cats = st.vault.projects.filter(p => p.id !== 'Universal');
-  container.innerHTML = cats.map(p =>
-    `<div class="project-pick-item" data-value="${escAttr(p.id)}">${esc(p.name)}</div>`
-  ).join('');
-  container.querySelectorAll<HTMLElement>('.project-pick-item').forEach(item => {
+  const cats = st.vault.projects.filter((p) => p.id !== 'Universal');
+  container.innerHTML = cats
+    .map((p) => `<div class="project-pick-item" data-value="${escAttr(p.id)}">${esc(p.name)}</div>`)
+    .join('');
+  container.querySelectorAll<HTMLElement>('.project-pick-item').forEach((item) => {
     item.addEventListener('click', () => item.classList.toggle('selected'));
   });
 }
@@ -250,7 +337,9 @@ export function openModal(title: string, idx: number) {
 const DRAFT_KEY = 'envvault-form-draft';
 
 function _saveDraft() {
-  try { sessionStorage.setItem(DRAFT_KEY, JSON.stringify(formToEntry())); } catch {}
+  try {
+    sessionStorage.setItem(DRAFT_KEY, JSON.stringify(formToEntry()));
+  } catch {}
 }
 let _draftBound = false;
 
@@ -264,7 +353,7 @@ function _makeExtraVarRow(key = '', value = '', secret = false): HTMLElement {
     <button type="button" class="icon-btn sm extra-var-remove" title="Remove">×</button>
   `;
   const inp = row.querySelector<HTMLInputElement>('.extra-var-value')!;
-  row.querySelector<HTMLInputElement>('.extra-var-secret')!.addEventListener('change', ev => {
+  row.querySelector<HTMLInputElement>('.extra-var-secret')!.addEventListener('change', (ev) => {
     inp.type = (ev.target as HTMLInputElement).checked ? 'password' : 'text';
   });
   row.querySelector('.extra-var-remove')!.addEventListener('click', () => row.remove());
@@ -292,7 +381,7 @@ export function openAdd(e?: Event) {
   // Bind auto-save draft listeners once — the overlay and its inputs are permanent DOM nodes.
   if (!_draftBound) {
     const overlay = document.getElementById('modal-overlay')!;
-    overlay.querySelectorAll('input, textarea, select').forEach(el => {
+    overlay.querySelectorAll('input, textarea, select').forEach((el) => {
       el.addEventListener('input', _saveDraft);
       el.addEventListener('change', _saveDraft);
     });
@@ -305,7 +394,9 @@ export function openAdd(e?: Event) {
   }
 }
 
-function clearDraft() { sessionStorage.removeItem(DRAFT_KEY); }
+function clearDraft() {
+  sessionStorage.removeItem(DRAFT_KEY);
+}
 
 export function openEdit(e: Event, idx: number) {
   e.stopPropagation();
@@ -323,11 +414,21 @@ export function saveModal() {
   try {
     const entry = formToEntry();
     const t = entry.secretType || 'api_key';
-    if (!entry.provider) { showToast(`${TYPE_CONFIG[t]?.providerLabel || 'Provider'} is required`, 'err'); return; }
-    if (t === 'certificate' && !entry.certificate_data) { showToast('Certificate data is required', 'err'); return; }
-    if (t === 'file_blob'   && !entry.blob_ref)         { showToast('File path/reference is required', 'err'); return; }
+    if (!entry.provider) {
+      showToast(`${TYPE_CONFIG[t]?.providerLabel || 'Provider'} is required`, 'err');
+      return;
+    }
+    if (t === 'certificate' && !entry.certificate_data) {
+      showToast('Certificate data is required', 'err');
+      return;
+    }
+    if (t === 'file_blob' && !entry.blob_ref) {
+      showToast('File path/reference is required', 'err');
+      return;
+    }
     if (t !== 'certificate' && t !== 'file_blob' && !entry.api_key) {
-      showToast(`${TYPE_CONFIG[t]?.keyLabel || 'Value'} is required`, 'err'); return;
+      showToast(`${TYPE_CONFIG[t]?.keyLabel || 'Value'} is required`, 'err');
+      return;
     }
     const idx = parseInt((document.getElementById('edit-index') as HTMLInputElement).value);
     if (idx >= 0) {
@@ -347,7 +448,8 @@ export function saveModal() {
       // carry them or every `${Provider/field}` pointing here goes stale.
       if (old.provider !== entry.provider || (old.key_id ?? '') !== (entry.key_id ?? '')) {
         const moved = renameProviderRefs(old.provider, old.key_id, entry.provider, entry.key_id);
-        if (moved) showToast(`Updated ${moved} project reference${moved === 1 ? '' : 's'}`, 'ok', 2500);
+        if (moved)
+          showToast(`Updated ${moved} project reference${moved === 1 ? '' : 's'}`, 'ok', 2500);
       }
     } else {
       st.vault.api_keys.push({ ...entry, id: newEntryId() });
@@ -383,7 +485,11 @@ export function markAsRotated(idx: number) {
   };
   persist();
   triggerRender();
-  showToast(`Rotated ${today}${entry.compromised ? ' — compromised flag cleared' : ''}`, 'ok', 2500);
+  showToast(
+    `Rotated ${today}${entry.compromised ? ' — compromised flag cleared' : ''}`,
+    'ok',
+    2500,
+  );
 }
 
 export function duplicateKey(e: Event, idx: number) {
@@ -422,7 +528,7 @@ export function deleteKey(e: Event, idx: number) {
   }
   triggerRender();
   pushUndo(`Deleted "${removed.provider}"`, () => {
-    const at = anchorId ? st.vault.api_keys.findIndex(k => k.id === anchorId) : -1;
+    const at = anchorId ? st.vault.api_keys.findIndex((k) => k.id === anchorId) : -1;
     st.vault.api_keys.splice(at >= 0 ? at : st.vault.api_keys.length, 0, removed);
     persist();
     triggerRender();
@@ -450,8 +556,11 @@ export function pushUndo(msg: string, fn: () => void) {
 
 export function injectIntoForm(value: string) {
   const fKey = document.getElementById('f-key') as HTMLInputElement | null;
-  if (fKey) { fKey.value = value; fKey.focus(); showToast('Injected into form', 'ok'); }
-  else showToast('Open Add/Edit form first', 'err');
+  if (fKey) {
+    fKey.value = value;
+    fKey.focus();
+    showToast('Injected into form', 'ok');
+  } else showToast('Open Add/Edit form first', 'err');
 }
 
 export async function quickGenerate() {
@@ -460,45 +569,75 @@ export async function quickGenerate() {
   const type = typeEl?.value || 'api_key';
 
   if (type === 'password') {
-    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*()-_=+[]{}|;:,.<>?';
+    const chars =
+      'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*()-_=+[]{}|;:,.<>?';
     const buf = new Uint32Array(20);
     crypto.getRandomValues(buf);
     const fKey = document.getElementById('f-key') as HTMLInputElement | null;
-    if (fKey) { fKey.value = Array.from(buf).map(n => chars[n % chars.length]).join(''); fKey.focus(); }
+    if (fKey) {
+      fKey.value = Array.from(buf)
+        .map((n) => chars[n % chars.length])
+        .join('');
+      fKey.focus();
+    }
     showToast('Password generated', 'ok');
     return;
   }
 
   if (type === 'ssh_key') {
-    if (!invoke) { showToast('Tauri not available', 'err'); return; }
+    if (!invoke) {
+      showToast('Tauri not available', 'err');
+      return;
+    }
     try {
-      const result: { public_key: string; private_key: string } = await invoke('generate_ssh_keypair', { comment: '' });
+      const result: { public_key: string; private_key: string } = await invoke(
+        'generate_ssh_keypair',
+        { comment: '' },
+      );
       const fKey = document.getElementById('f-key') as HTMLInputElement | null;
-      if (fKey) { fKey.value = result.private_key; fKey.focus(); }
+      if (fKey) {
+        fKey.value = result.private_key;
+        fKey.focus();
+      }
       showToast('SSH key pair generated (private key inserted)', 'ok');
-    } catch (e) { showToast(String(e), 'err'); }
+    } catch (e) {
+      showToast(String(e), 'err');
+    }
     return;
   }
 
   if (type === 'certificate') {
-    if (!invoke) { showToast('Tauri not available', 'err'); return; }
+    if (!invoke) {
+      showToast('Tauri not available', 'err');
+      return;
+    }
     try {
-      const result: { cert_pem: string; key_pem: string } = await invoke('generate_certificate', { commonName: 'localhost', validityDays: 365 });
+      const result: { cert_pem: string; key_pem: string } = await invoke('generate_certificate', {
+        commonName: 'localhost',
+        validityDays: 365,
+      });
       const fCert = document.getElementById('f-cert') as HTMLTextAreaElement | null;
       const fCertKey = document.getElementById('f-cert-key') as HTMLTextAreaElement | null;
       if (fCert) fCert.value = result.cert_pem;
       if (fCertKey) fCertKey.value = result.key_pem;
       showToast('Certificate generated', 'ok');
-    } catch (e) { showToast(String(e), 'err'); }
+    } catch (e) {
+      showToast(String(e), 'err');
+    }
     return;
   }
 
   // Default: 32 random bytes hex
   const buf = new Uint8Array(32);
   crypto.getRandomValues(buf);
-  const hex = Array.from(buf).map(b => b.toString(16).padStart(2, '0')).join('');
+  const hex = Array.from(buf)
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('');
   const fKey = document.getElementById('f-key') as HTMLInputElement | null;
-  if (fKey) { fKey.value = hex; fKey.focus(); }
+  if (fKey) {
+    fKey.value = hex;
+    fKey.focus();
+  }
   showToast('Value generated', 'ok');
 }
 
@@ -530,11 +669,13 @@ export function toggleReveal(e: Event, field: string, idx: number, value: string
 
 export function copyField(e: Event, value: string, btn?: HTMLElement) {
   e.stopPropagation();
-  clipboardWrite(value).then(() => {
-    btn?.classList.add('active');
-    setTimeout(() => btn?.classList.remove('active'), 1200);
-    showToast('Copied ✓', 'ok', 1500);
-  }).catch(() => showToast('Copy failed', 'err'));
+  clipboardWrite(value)
+    .then(() => {
+      btn?.classList.add('active');
+      setTimeout(() => btn?.classList.remove('active'), 1200);
+      showToast('Copied ✓', 'ok', 1500);
+    })
+    .catch(() => showToast('Copy failed', 'err'));
 }
 
 export function doCopyEnv(e: Event, idx: number) {
@@ -581,15 +722,21 @@ let _dropdownItemId = 0;
 let _ddCleanup: (() => void) | null = null;
 
 function _ddClose() {
-  if (_ddCleanup) { _ddCleanup(); _ddCleanup = null; }
+  if (_ddCleanup) {
+    _ddCleanup();
+    _ddCleanup = null;
+  }
   const dd = document.getElementById('dropdown');
   if (dd) dd.style.display = 'none';
 }
 
-export function showDropdown(anchorEl: HTMLElement, items: Array<DropdownItem | '---'>) {
+export function showDropdown(anchorEl: HTMLElement, items: (DropdownItem | '---')[]) {
   const dd = document.getElementById('dropdown')!;
   // Remove any listeners from a previously open dropdown that was not explicitly closed.
-  if (_ddCleanup) { _ddCleanup(); _ddCleanup = null; }
+  if (_ddCleanup) {
+    _ddCleanup();
+    _ddCleanup = null;
+  }
 
   const r = anchorEl.getBoundingClientRect();
   _dropdownCallbacks.clear();
@@ -633,22 +780,27 @@ export function showDropdown(anchorEl: HTMLElement, items: Array<DropdownItem | 
   setTimeout(() => document.addEventListener('click', close), 50);
 }
 
-export function showContextMenu(x: number, y: number, items: Array<DropdownItem | '---'>) {
+export function showContextMenu(x: number, y: number, items: (DropdownItem | '---')[]) {
   const dd = document.getElementById('dropdown')!;
-  if (_ddCleanup) { _ddCleanup(); _ddCleanup = null; }
+  if (_ddCleanup) {
+    _ddCleanup();
+    _ddCleanup = null;
+  }
 
   _dropdownCallbacks.clear();
-  dd.innerHTML = items.map(item => {
-    if (item === '---') return '<div class="dropdown-sep"></div>';
-    const id = _dropdownItemId++;
-    _dropdownCallbacks.set(id, item.fn);
-    return `<div class="dropdown-item${item.active ? ' active' : ''}" data-ddid="${id}">${item.label}</div>`;
-  }).join('');
+  dd.innerHTML = items
+    .map((item) => {
+      if (item === '---') return '<div class="dropdown-sep"></div>';
+      const id = _dropdownItemId++;
+      _dropdownCallbacks.set(id, item.fn);
+      return `<div class="dropdown-item${item.active ? ' active' : ''}" data-ddid="${id}">${item.label}</div>`;
+    })
+    .join('');
   dd.style.cssText = `display:block;top:${y}px;left:${x}px;right:auto`;
   requestAnimationFrame(() => {
     const r = dd.getBoundingClientRect();
-    if (r.right  > window.innerWidth)  dd.style.left = `${x - r.width}px`;
-    if (r.bottom > window.innerHeight) dd.style.top  = `${y - r.height}px`;
+    if (r.right > window.innerWidth) dd.style.left = `${x - r.width}px`;
+    if (r.bottom > window.innerHeight) dd.style.top = `${y - r.height}px`;
   });
   const onClick = (e: MouseEvent) => {
     const item = (e.target as HTMLElement).closest<HTMLElement>('[data-ddid]');
@@ -713,7 +865,7 @@ export class CustomSelect {
   }
 
   setValue(v: string) {
-    const idx = Array.from(this.select.options).findIndex(o => o.value === v);
+    const idx = Array.from(this.select.options).findIndex((o) => o.value === v);
     if (idx >= 0) {
       this.select.selectedIndex = idx;
       this._btn.textContent = this.select.options[idx].text;

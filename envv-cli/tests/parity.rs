@@ -15,7 +15,11 @@ use serde_json::Value;
 use std::path::PathBuf;
 
 fn fixtures() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..").join("tests").join("fixtures").join("parity")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("tests")
+        .join("fixtures")
+        .join("parity")
 }
 
 fn vault() -> Value {
@@ -109,7 +113,10 @@ fn chunk_text_matches_the_app() {
 fn disabled_chunks_are_never_exported() {
     let v = vault();
     let out = exporters::export_wireguard(&project(&v, "vpn"), &resolver(&v));
-    assert!(!out.contains("NEVER_EXPORTED"), "disabled peer leaked into wg0.conf:\n{out}");
+    assert!(
+        !out.contains("NEVER_EXPORTED"),
+        "disabled peer leaked into wg0.conf:\n{out}"
+    );
 }
 
 /// Every `${…}` must be resolved by the time a config file is written; a literal
@@ -118,12 +125,18 @@ fn disabled_chunks_are_never_exported() {
 fn no_placeholders_survive_export() {
     let v = vault();
     let r = resolver(&v);
-    for (p, label) in [(project(&v, "vpn"), "wireguard"), (project(&v, "edge"), "nginx")] {
+    for (p, label) in [
+        (project(&v, "vpn"), "wireguard"),
+        (project(&v, "edge"), "nginx"),
+    ] {
         let out = if label == "wireguard" {
             exporters::export_wireguard(&p, &r)
         } else {
             exporters::export_nginx(&p, &r)
         };
-        assert!(!out.contains("${"), "{label} export still holds a placeholder:\n{out}");
+        assert!(
+            !out.contains("${"),
+            "{label} export still holds a placeholder:\n{out}"
+        );
     }
 }

@@ -1,7 +1,16 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
-  esc, escAttr, maskKey, hexAlpha, generateULID,
-  showToast, showConfirm, showPrompt, showPasswordPrompt, clipboardWrite, execCopy,
+  esc,
+  escAttr,
+  maskKey,
+  hexAlpha,
+  generateULID,
+  showToast,
+  showConfirm,
+  showPrompt,
+  showPasswordPrompt,
+  clipboardWrite,
+  execCopy,
 } from '../src/ts/utils';
 import { loadRealIndexHtml } from './helpers';
 
@@ -289,7 +298,9 @@ describe('clipboard', () => {
   });
 
   it('removes the scratch textarea even when the copy throws', async () => {
-    vi.spyOn(document, 'execCommand').mockImplementation(() => { throw new Error('nope'); });
+    vi.spyOn(document, 'execCommand').mockImplementation(() => {
+      throw new Error('nope');
+    });
     const before = document.querySelectorAll('textarea').length;
     await expect(execCopy('secret')).rejects.toThrow();
     expect(document.querySelectorAll('textarea').length).toBe(before);

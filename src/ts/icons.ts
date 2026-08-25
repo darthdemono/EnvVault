@@ -1,5 +1,6 @@
 /**
- * @file Icon resolution and picker for EnvVault.
+ * @file
+ * Icon resolution and picker for EnvVault.
  * @description Provides Simple Icons CDN integration, provider-name-to-slug auto-detection,
  *              and an interactive icon-picker overlay for custom icon assignment.
  */
@@ -17,177 +18,307 @@ import { esc, escAttr, showToast } from './utils';
  */
 const SI_REGISTRY: [string, string, string][] = [
   // ── Languages ──────────────────────────────────────────────────────────────
-  ['javascript', 'JavaScript', 'Dev'], ['typescript', 'TypeScript', 'Dev'],
-  ['python', 'Python', 'Dev'], ['rust', 'Rust', 'Dev'],
-  ['go', 'Go', 'Dev'], ['java', 'Java', 'Dev'],
-  ['kotlin', 'Kotlin', 'Dev'], ['swift', 'Swift', 'Dev'],
-  ['cplusplus', 'C++', 'Dev'], ['csharp', 'C#', 'Dev'],
-  ['ruby', 'Ruby', 'Dev'], ['php', 'PHP', 'Dev'],
-  ['scala', 'Scala', 'Dev'], ['elixir', 'Elixir', 'Dev'],
-  ['haskell', 'Haskell', 'Dev'], ['lua', 'Lua', 'Dev'],
-  ['perl', 'Perl', 'Dev'], ['dart', 'Dart', 'Dev'],
-  ['flutter', 'Flutter', 'Dev'], ['erlang', 'Erlang', 'Dev'],
-  ['clojure', 'Clojure', 'Dev'], ['julia', 'Julia', 'Dev'],
-  ['zig', 'Zig', 'Dev'], ['ocaml', 'OCaml', 'Dev'],
-  ['groovy', 'Groovy', 'Dev'], ['r', 'R', 'Dev'],
+  ['javascript', 'JavaScript', 'Dev'],
+  ['typescript', 'TypeScript', 'Dev'],
+  ['python', 'Python', 'Dev'],
+  ['rust', 'Rust', 'Dev'],
+  ['go', 'Go', 'Dev'],
+  ['java', 'Java', 'Dev'],
+  ['kotlin', 'Kotlin', 'Dev'],
+  ['swift', 'Swift', 'Dev'],
+  ['cplusplus', 'C++', 'Dev'],
+  ['csharp', 'C#', 'Dev'],
+  ['ruby', 'Ruby', 'Dev'],
+  ['php', 'PHP', 'Dev'],
+  ['scala', 'Scala', 'Dev'],
+  ['elixir', 'Elixir', 'Dev'],
+  ['haskell', 'Haskell', 'Dev'],
+  ['lua', 'Lua', 'Dev'],
+  ['perl', 'Perl', 'Dev'],
+  ['dart', 'Dart', 'Dev'],
+  ['flutter', 'Flutter', 'Dev'],
+  ['erlang', 'Erlang', 'Dev'],
+  ['clojure', 'Clojure', 'Dev'],
+  ['julia', 'Julia', 'Dev'],
+  ['zig', 'Zig', 'Dev'],
+  ['ocaml', 'OCaml', 'Dev'],
+  ['groovy', 'Groovy', 'Dev'],
+  ['r', 'R', 'Dev'],
   ['dotnet', '.NET', 'Dev'],
   // ── Runtimes & Package Managers ────────────────────────────────────────────
-  ['nodedotjs', 'Node.js', 'Dev'], ['bun', 'Bun', 'Dev'],
-  ['deno', 'Deno', 'Dev'], ['npm', 'npm', 'Dev'],
-  ['pnpm', 'pnpm', 'Dev'], ['yarn', 'Yarn', 'Dev'],
-  ['pypi', 'PyPI', 'Dev'], ['rubygems', 'RubyGems', 'Dev'],
-  ['nuget', 'NuGet', 'Dev'], ['homebrew', 'Homebrew', 'Dev'],
+  ['nodedotjs', 'Node.js', 'Dev'],
+  ['bun', 'Bun', 'Dev'],
+  ['deno', 'Deno', 'Dev'],
+  ['npm', 'npm', 'Dev'],
+  ['pnpm', 'pnpm', 'Dev'],
+  ['yarn', 'Yarn', 'Dev'],
+  ['pypi', 'PyPI', 'Dev'],
+  ['rubygems', 'RubyGems', 'Dev'],
+  ['nuget', 'NuGet', 'Dev'],
+  ['homebrew', 'Homebrew', 'Dev'],
   ['chocolatey', 'Chocolatey', 'Dev'],
   // ── Web Frameworks ─────────────────────────────────────────────────────────
-  ['react', 'React', 'Dev'], ['vuedotjs', 'Vue.js', 'Dev'],
-  ['svelte', 'Svelte', 'Dev'], ['angular', 'Angular', 'Dev'],
-  ['nextdotjs', 'Next.js', 'Dev'], ['nuxtdotjs', 'Nuxt.js', 'Dev'],
-  ['gatsby', 'Gatsby', 'Dev'], ['astro', 'Astro', 'Dev'],
-  ['lit', 'Lit', 'Dev'], ['alpinedotjs', 'Alpine.js', 'Dev'],
-  ['nestjs', 'NestJS', 'Dev'], ['express', 'Express', 'Dev'],
-  ['fastapi', 'FastAPI', 'Dev'], ['flask', 'Flask', 'Dev'],
-  ['django', 'Django', 'Dev'], ['rubyonrails', 'Rails', 'Dev'],
-  ['laravel', 'Laravel', 'Dev'], ['symfony', 'Symfony', 'Dev'],
-  ['spring', 'Spring', 'Dev'], ['fastify', 'Fastify', 'Dev'],
+  ['react', 'React', 'Dev'],
+  ['vuedotjs', 'Vue.js', 'Dev'],
+  ['svelte', 'Svelte', 'Dev'],
+  ['angular', 'Angular', 'Dev'],
+  ['nextdotjs', 'Next.js', 'Dev'],
+  ['nuxtdotjs', 'Nuxt.js', 'Dev'],
+  ['gatsby', 'Gatsby', 'Dev'],
+  ['astro', 'Astro', 'Dev'],
+  ['lit', 'Lit', 'Dev'],
+  ['alpinedotjs', 'Alpine.js', 'Dev'],
+  ['nestjs', 'NestJS', 'Dev'],
+  ['express', 'Express', 'Dev'],
+  ['fastapi', 'FastAPI', 'Dev'],
+  ['flask', 'Flask', 'Dev'],
+  ['django', 'Django', 'Dev'],
+  ['rubyonrails', 'Rails', 'Dev'],
+  ['laravel', 'Laravel', 'Dev'],
+  ['symfony', 'Symfony', 'Dev'],
+  ['spring', 'Spring', 'Dev'],
+  ['fastify', 'Fastify', 'Dev'],
   // ── CSS & UI ───────────────────────────────────────────────────────────────
-  ['tailwindcss', 'Tailwind CSS', 'Dev'], ['bootstrap', 'Bootstrap', 'Dev'],
-  ['sass', 'Sass', 'Dev'], ['jquery', 'jQuery', 'Dev'],
+  ['tailwindcss', 'Tailwind CSS', 'Dev'],
+  ['bootstrap', 'Bootstrap', 'Dev'],
+  ['sass', 'Sass', 'Dev'],
+  ['jquery', 'jQuery', 'Dev'],
   // ── Build Tools & Bundlers ─────────────────────────────────────────────────
-  ['webpack', 'webpack', 'Dev'], ['vite', 'Vite', 'Dev'],
-  ['parcel', 'Parcel', 'Dev'], ['rollup', 'Rollup', 'Dev'],
-  ['gradle', 'Gradle', 'Dev'], ['apachemaven', 'Maven', 'Dev'],
-  ['cmake', 'CMake', 'Dev'], ['bazel', 'Bazel', 'Dev'],
+  ['webpack', 'webpack', 'Dev'],
+  ['vite', 'Vite', 'Dev'],
+  ['parcel', 'Parcel', 'Dev'],
+  ['rollup', 'Rollup', 'Dev'],
+  ['gradle', 'Gradle', 'Dev'],
+  ['apachemaven', 'Maven', 'Dev'],
+  ['cmake', 'CMake', 'Dev'],
+  ['bazel', 'Bazel', 'Dev'],
   // ── Testing ────────────────────────────────────────────────────────────────
-  ['jest', 'Jest', 'Dev'], ['mocha', 'Mocha', 'Dev'],
-  ['playwright', 'Playwright', 'Dev'], ['cypress', 'Cypress', 'Dev'],
-  ['selenium', 'Selenium', 'Dev'], ['vitest', 'Vitest', 'Dev'],
-  ['storybook', 'Storybook', 'Dev'], ['eslint', 'ESLint', 'Dev'],
+  ['jest', 'Jest', 'Dev'],
+  ['mocha', 'Mocha', 'Dev'],
+  ['playwright', 'Playwright', 'Dev'],
+  ['cypress', 'Cypress', 'Dev'],
+  ['selenium', 'Selenium', 'Dev'],
+  ['vitest', 'Vitest', 'Dev'],
+  ['storybook', 'Storybook', 'Dev'],
+  ['eslint', 'ESLint', 'Dev'],
   // ── State & Misc Frontend ──────────────────────────────────────────────────
   ['redux', 'Redux', 'Dev'],
   // ── Databases ─────────────────────────────────────────────────────────────
-  ['postgresql', 'PostgreSQL', 'Dev'], ['mysql', 'MySQL', 'Dev'],
-  ['redis', 'Redis', 'Dev'], ['mongodb', 'MongoDB', 'Dev'],
-  ['sqlite', 'SQLite', 'Dev'], ['mariadb', 'MariaDB', 'Dev'],
-  ['neo4j', 'Neo4j', 'Dev'], ['influxdb', 'InfluxDB', 'Dev'],
-  ['supabase', 'Supabase', 'Dev'], ['prisma', 'Prisma', 'Dev'],
-  ['firebase', 'Firebase', 'Dev'], ['appwrite', 'Appwrite', 'Dev'],
-  ['planetscale', 'PlanetScale', 'Dev'], ['cockroachdb', 'CockroachDB', 'Dev'],
-  ['clickhouse', 'ClickHouse', 'Dev'], ['minio', 'MinIO', 'Dev'],
+  ['postgresql', 'PostgreSQL', 'Dev'],
+  ['mysql', 'MySQL', 'Dev'],
+  ['redis', 'Redis', 'Dev'],
+  ['mongodb', 'MongoDB', 'Dev'],
+  ['sqlite', 'SQLite', 'Dev'],
+  ['mariadb', 'MariaDB', 'Dev'],
+  ['neo4j', 'Neo4j', 'Dev'],
+  ['influxdb', 'InfluxDB', 'Dev'],
+  ['supabase', 'Supabase', 'Dev'],
+  ['prisma', 'Prisma', 'Dev'],
+  ['firebase', 'Firebase', 'Dev'],
+  ['appwrite', 'Appwrite', 'Dev'],
+  ['planetscale', 'PlanetScale', 'Dev'],
+  ['cockroachdb', 'CockroachDB', 'Dev'],
+  ['clickhouse', 'ClickHouse', 'Dev'],
+  ['minio', 'MinIO', 'Dev'],
   // ── API ────────────────────────────────────────────────────────────────────
-  ['graphql', 'GraphQL', 'Dev'], ['swagger', 'Swagger', 'Dev'],
-  ['postman', 'Postman', 'Dev'], ['insomnia', 'Insomnia', 'Dev'],
+  ['graphql', 'GraphQL', 'Dev'],
+  ['swagger', 'Swagger', 'Dev'],
+  ['postman', 'Postman', 'Dev'],
+  ['insomnia', 'Insomnia', 'Dev'],
   // ── Messaging & Queues ─────────────────────────────────────────────────────
-  ['apachekafka', 'Kafka', 'Dev'], ['rabbitmq', 'RabbitMQ', 'Dev'],
+  ['apachekafka', 'Kafka', 'Dev'],
+  ['rabbitmq', 'RabbitMQ', 'Dev'],
   // ── VCS & Collaboration ────────────────────────────────────────────────────
-  ['git', 'Git', 'Dev'], ['github', 'GitHub', 'Dev'],
-  ['gitlab', 'GitLab', 'Dev'], ['bitbucket', 'Bitbucket', 'Dev'],
+  ['git', 'Git', 'Dev'],
+  ['github', 'GitHub', 'Dev'],
+  ['gitlab', 'GitLab', 'Dev'],
+  ['bitbucket', 'Bitbucket', 'Dev'],
   ['gitkraken', 'GitKraken', 'Dev'],
   // ── Containers ────────────────────────────────────────────────────────────
-  ['docker', 'Docker', 'Dev'], ['kubernetes', 'Kubernetes', 'Dev'],
+  ['docker', 'Docker', 'Dev'],
+  ['kubernetes', 'Kubernetes', 'Dev'],
   // ── ML / AI Dev ───────────────────────────────────────────────────────────
-  ['tensorflow', 'TensorFlow', 'Dev'], ['pytorch', 'PyTorch', 'Dev'],
-  ['jupyter', 'Jupyter', 'Dev'], ['anaconda', 'Anaconda', 'Dev'],
+  ['tensorflow', 'TensorFlow', 'Dev'],
+  ['pytorch', 'PyTorch', 'Dev'],
+  ['jupyter', 'Jupyter', 'Dev'],
+  ['anaconda', 'Anaconda', 'Dev'],
   ['numpy', 'NumPy', 'Dev'],
   // ── Editors & IDEs ────────────────────────────────────────────────────────
-  ['visualstudiocode', 'VS Code', 'Dev'], ['visualstudio', 'Visual Studio', 'Dev'],
-  ['vim', 'Vim', 'Dev'], ['neovim', 'Neovim', 'Dev'],
+  ['visualstudiocode', 'VS Code', 'Dev'],
+  ['visualstudio', 'Visual Studio', 'Dev'],
+  ['vim', 'Vim', 'Dev'],
+  ['neovim', 'Neovim', 'Dev'],
   ['sublimetext', 'Sublime Text', 'Dev'],
-  ['jetbrains', 'JetBrains', 'Dev'], ['intellijidea', 'IntelliJ IDEA', 'Dev'],
-  ['pycharm', 'PyCharm', 'Dev'], ['webstorm', 'WebStorm', 'Dev'],
-  ['phpstorm', 'PhpStorm', 'Dev'], ['goland', 'GoLand', 'Dev'],
-  ['rubymine', 'RubyMine', 'Dev'], ['clion', 'CLion', 'Dev'],
-  ['rider', 'Rider', 'Dev'], ['datagrip', 'DataGrip', 'Dev'],
+  ['jetbrains', 'JetBrains', 'Dev'],
+  ['intellijidea', 'IntelliJ IDEA', 'Dev'],
+  ['pycharm', 'PyCharm', 'Dev'],
+  ['webstorm', 'WebStorm', 'Dev'],
+  ['phpstorm', 'PhpStorm', 'Dev'],
+  ['goland', 'GoLand', 'Dev'],
+  ['rubymine', 'RubyMine', 'Dev'],
+  ['clion', 'CLion', 'Dev'],
+  ['rider', 'Rider', 'Dev'],
+  ['datagrip', 'DataGrip', 'Dev'],
   ['androidstudio', 'Android Studio', 'Dev'],
-  ['xcode', 'Xcode', 'Dev'], ['emacs', 'Emacs', 'Dev'],
-  ['eclipseide', 'Eclipse', 'Dev'], ['notepadplusplus', 'Notepad++', 'Dev'],
+  ['xcode', 'Xcode', 'Dev'],
+  ['emacs', 'Emacs', 'Dev'],
+  ['eclipseide', 'Eclipse', 'Dev'],
+  ['notepadplusplus', 'Notepad++', 'Dev'],
   ['obsidian', 'Obsidian', 'Dev'],
 
   // ── Cloud & Infra ──────────────────────────────────────────────────────────
-  ['amazonaws', 'AWS', 'Cloud'], ['googlecloud', 'GCP', 'Cloud'],
-  ['microsoftazure', 'Azure', 'Cloud'], ['digitalocean', 'DigitalOcean', 'Cloud'],
-  ['linode', 'Linode', 'Cloud'], ['vultr', 'Vultr', 'Cloud'],
-  ['hetzner', 'Hetzner', 'Cloud'], ['ovh', 'OVH', 'Cloud'],
-  ['scaleway', 'Scaleway', 'Cloud'], ['oracle', 'Oracle', 'Cloud'],
-  ['cloudflare', 'Cloudflare', 'Cloud'], ['fastly', 'Fastly', 'Cloud'],
+  ['amazonaws', 'AWS', 'Cloud'],
+  ['googlecloud', 'GCP', 'Cloud'],
+  ['microsoftazure', 'Azure', 'Cloud'],
+  ['digitalocean', 'DigitalOcean', 'Cloud'],
+  ['linode', 'Linode', 'Cloud'],
+  ['vultr', 'Vultr', 'Cloud'],
+  ['hetzner', 'Hetzner', 'Cloud'],
+  ['ovh', 'OVH', 'Cloud'],
+  ['scaleway', 'Scaleway', 'Cloud'],
+  ['oracle', 'Oracle', 'Cloud'],
+  ['cloudflare', 'Cloudflare', 'Cloud'],
+  ['fastly', 'Fastly', 'Cloud'],
   ['akamai', 'Akamai', 'Cloud'],
-  ['netlify', 'Netlify', 'Cloud'], ['vercel', 'Vercel', 'Cloud'],
-  ['heroku', 'Heroku', 'Cloud'], ['railway', 'Railway', 'Cloud'],
-  ['fly', 'Fly.io', 'Cloud'], ['render', 'Render', 'Cloud'],
-  ['nginx', 'nginx', 'Cloud'], ['traefik', 'Traefik', 'Cloud'],
-  ['grafana', 'Grafana', 'Cloud'], ['prometheus', 'Prometheus', 'Cloud'],
+  ['netlify', 'Netlify', 'Cloud'],
+  ['vercel', 'Vercel', 'Cloud'],
+  ['heroku', 'Heroku', 'Cloud'],
+  ['railway', 'Railway', 'Cloud'],
+  ['fly', 'Fly.io', 'Cloud'],
+  ['render', 'Render', 'Cloud'],
+  ['nginx', 'nginx', 'Cloud'],
+  ['traefik', 'Traefik', 'Cloud'],
+  ['grafana', 'Grafana', 'Cloud'],
+  ['prometheus', 'Prometheus', 'Cloud'],
   ['elasticsearch', 'Elasticsearch', 'Cloud'],
-  ['terraform', 'Terraform', 'Cloud'], ['ansible', 'Ansible', 'Cloud'],
-  ['vagrant', 'Vagrant', 'Cloud'], ['pulumi', 'Pulumi', 'Cloud'],
-  ['helm', 'Helm', 'Cloud'], ['portainer', 'Portainer', 'Cloud'],
-  ['podman', 'Podman', 'Cloud'], ['cloudinary', 'Cloudinary', 'Cloud'],
-  ['apacheairflow', 'Airflow', 'Cloud'], ['apachespark', 'Spark', 'Cloud'],
+  ['terraform', 'Terraform', 'Cloud'],
+  ['ansible', 'Ansible', 'Cloud'],
+  ['vagrant', 'Vagrant', 'Cloud'],
+  ['pulumi', 'Pulumi', 'Cloud'],
+  ['helm', 'Helm', 'Cloud'],
+  ['portainer', 'Portainer', 'Cloud'],
+  ['podman', 'Podman', 'Cloud'],
+  ['cloudinary', 'Cloudinary', 'Cloud'],
+  ['apacheairflow', 'Airflow', 'Cloud'],
+  ['apachespark', 'Spark', 'Cloud'],
 
   // ── OS & Hardware ──────────────────────────────────────────────────────────
-  ['linux', 'Linux', 'OS'], ['ubuntu', 'Ubuntu', 'OS'],
-  ['debian', 'Debian', 'OS'], ['fedora', 'Fedora', 'OS'],
-  ['archlinux', 'Arch Linux', 'OS'], ['centos', 'CentOS', 'OS'],
-  ['redhat', 'Red Hat', 'OS'], ['freebsd', 'FreeBSD', 'OS'],
-  ['windows11', 'Windows', 'OS'], ['gnome', 'GNOME', 'OS'],
-  ['kde', 'KDE', 'OS'], ['raspberrypi', 'Raspberry Pi', 'OS'],
+  ['linux', 'Linux', 'OS'],
+  ['ubuntu', 'Ubuntu', 'OS'],
+  ['debian', 'Debian', 'OS'],
+  ['fedora', 'Fedora', 'OS'],
+  ['archlinux', 'Arch Linux', 'OS'],
+  ['centos', 'CentOS', 'OS'],
+  ['redhat', 'Red Hat', 'OS'],
+  ['freebsd', 'FreeBSD', 'OS'],
+  ['windows11', 'Windows', 'OS'],
+  ['gnome', 'GNOME', 'OS'],
+  ['kde', 'KDE', 'OS'],
+  ['raspberrypi', 'Raspberry Pi', 'OS'],
   ['arduino', 'Arduino', 'OS'],
-  ['nvidia', 'NVIDIA', 'OS'], ['amd', 'AMD', 'OS'], ['intel', 'Intel', 'OS'],
+  ['nvidia', 'NVIDIA', 'OS'],
+  ['amd', 'AMD', 'OS'],
+  ['intel', 'Intel', 'OS'],
 
   // ── Gaming ─────────────────────────────────────────────────────────────────
-  ['steam', 'Steam', 'Gaming'], ['epicgames', 'Epic Games', 'Gaming'],
-  ['riotgames', 'Riot Games', 'Gaming'], ['nintendo', 'Nintendo', 'Gaming'],
-  ['playstation', 'PlayStation', 'Gaming'], ['xbox', 'Xbox', 'Gaming'],
-  ['unity', 'Unity', 'Gaming'], ['unrealengine', 'Unreal Engine', 'Gaming'],
-  ['godotengine', 'Godot', 'Gaming'], ['itchdotio', 'itch.io', 'Gaming'],
-  ['gog', 'GOG', 'Gaming'], ['ea', 'EA', 'Gaming'],
-  ['ubisoft', 'Ubisoft', 'Gaming'], ['nexusmods', 'Nexus Mods', 'Gaming'],
-  ['blizzard', 'Blizzard', 'Gaming'], ['bethesda', 'Bethesda', 'Gaming'],
+  ['steam', 'Steam', 'Gaming'],
+  ['epicgames', 'Epic Games', 'Gaming'],
+  ['riotgames', 'Riot Games', 'Gaming'],
+  ['nintendo', 'Nintendo', 'Gaming'],
+  ['playstation', 'PlayStation', 'Gaming'],
+  ['xbox', 'Xbox', 'Gaming'],
+  ['unity', 'Unity', 'Gaming'],
+  ['unrealengine', 'Unreal Engine', 'Gaming'],
+  ['godotengine', 'Godot', 'Gaming'],
+  ['itchdotio', 'itch.io', 'Gaming'],
+  ['gog', 'GOG', 'Gaming'],
+  ['ea', 'EA', 'Gaming'],
+  ['ubisoft', 'Ubisoft', 'Gaming'],
+  ['nexusmods', 'Nexus Mods', 'Gaming'],
+  ['blizzard', 'Blizzard', 'Gaming'],
+  ['bethesda', 'Bethesda', 'Gaming'],
 
   // ── Media & Entertainment ──────────────────────────────────────────────────
-  ['jellyfin', 'Jellyfin', 'Media'], ['plex', 'Plex', 'Media'],
-  ['kodi', 'Kodi', 'Media'], ['vlc', 'VLC', 'Media'],
-  ['obsstudio', 'OBS Studio', 'Media'], ['streamlabs', 'Streamlabs', 'Media'],
-  ['themoviedatabase', 'TMDB', 'Media'], ['tvdb', 'TVDB', 'Media'],
-  ['sonarr', 'Sonarr', 'Media'], ['radarr', 'Radarr', 'Media'],
+  ['jellyfin', 'Jellyfin', 'Media'],
+  ['plex', 'Plex', 'Media'],
+  ['kodi', 'Kodi', 'Media'],
+  ['vlc', 'VLC', 'Media'],
+  ['obsstudio', 'OBS Studio', 'Media'],
+  ['streamlabs', 'Streamlabs', 'Media'],
+  ['themoviedatabase', 'TMDB', 'Media'],
+  ['tvdb', 'TVDB', 'Media'],
+  ['sonarr', 'Sonarr', 'Media'],
+  ['radarr', 'Radarr', 'Media'],
   ['lidarr', 'Lidarr', 'Media'],
-  ['youtube', 'YouTube', 'Media'], ['twitch', 'Twitch', 'Media'],
-  ['vimeo', 'Vimeo', 'Media'], ['dailymotion', 'Dailymotion', 'Media'],
-  ['netflix', 'Netflix', 'Media'], ['hulu', 'Hulu', 'Media'],
-  ['disneyplus', 'Disney+', 'Media'], ['crunchyroll', 'Crunchyroll', 'Media'],
+  ['youtube', 'YouTube', 'Media'],
+  ['twitch', 'Twitch', 'Media'],
+  ['vimeo', 'Vimeo', 'Media'],
+  ['dailymotion', 'Dailymotion', 'Media'],
+  ['netflix', 'Netflix', 'Media'],
+  ['hulu', 'Hulu', 'Media'],
+  ['disneyplus', 'Disney+', 'Media'],
+  ['crunchyroll', 'Crunchyroll', 'Media'],
   ['primevideo', 'Prime Video', 'Media'],
 
   // ── Music ──────────────────────────────────────────────────────────────────
-  ['spotify', 'Spotify', 'Music'], ['lastdotfm', 'Last.fm', 'Music'],
-  ['discogs', 'Discogs', 'Music'], ['soundcloud', 'SoundCloud', 'Music'],
-  ['applemusic', 'Apple Music', 'Music'], ['deezer', 'Deezer', 'Music'],
-  ['tidal', 'Tidal', 'Music'], ['bandcamp', 'Bandcamp', 'Music'],
-  ['musicbrainz', 'MusicBrainz', 'Music'], ['audiomack', 'Audiomack', 'Music'],
-  ['mixcloud', 'Mixcloud', 'Music'], ['pandora', 'Pandora', 'Music'],
-  ['youtubemusic', 'YouTube Music', 'Music'], ['amazonmusic', 'Amazon Music', 'Music'],
+  ['spotify', 'Spotify', 'Music'],
+  ['lastdotfm', 'Last.fm', 'Music'],
+  ['discogs', 'Discogs', 'Music'],
+  ['soundcloud', 'SoundCloud', 'Music'],
+  ['applemusic', 'Apple Music', 'Music'],
+  ['deezer', 'Deezer', 'Music'],
+  ['tidal', 'Tidal', 'Music'],
+  ['bandcamp', 'Bandcamp', 'Music'],
+  ['musicbrainz', 'MusicBrainz', 'Music'],
+  ['audiomack', 'Audiomack', 'Music'],
+  ['mixcloud', 'Mixcloud', 'Music'],
+  ['pandora', 'Pandora', 'Music'],
+  ['youtubemusic', 'YouTube Music', 'Music'],
+  ['amazonmusic', 'Amazon Music', 'Music'],
 
   // ── Social & Comms ─────────────────────────────────────────────────────────
-  ['discord', 'Discord', 'Social'], ['slack', 'Slack', 'Social'],
-  ['telegram', 'Telegram', 'Social'], ['signal', 'Signal', 'Social'],
-  ['whatsapp', 'WhatsApp', 'Social'], ['line', 'LINE', 'Social'],
-  ['twitter', 'X / Twitter', 'Social'], ['mastodon', 'Mastodon', 'Social'],
-  ['bluesky', 'Bluesky', 'Social'], ['threads', 'Threads', 'Social'],
-  ['reddit', 'Reddit', 'Social'], ['instagram', 'Instagram', 'Social'],
-  ['facebook', 'Facebook', 'Social'], ['linkedin', 'LinkedIn', 'Social'],
-  ['tiktok', 'TikTok', 'Social'], ['pinterest', 'Pinterest', 'Social'],
-  ['snapchat', 'Snapchat', 'Social'], ['tumblr', 'Tumblr', 'Social'],
-  ['medium', 'Medium', 'Social'], ['devdotto', 'DEV', 'Social'],
+  ['discord', 'Discord', 'Social'],
+  ['slack', 'Slack', 'Social'],
+  ['telegram', 'Telegram', 'Social'],
+  ['signal', 'Signal', 'Social'],
+  ['whatsapp', 'WhatsApp', 'Social'],
+  ['line', 'LINE', 'Social'],
+  ['twitter', 'X / Twitter', 'Social'],
+  ['mastodon', 'Mastodon', 'Social'],
+  ['bluesky', 'Bluesky', 'Social'],
+  ['threads', 'Threads', 'Social'],
+  ['reddit', 'Reddit', 'Social'],
+  ['instagram', 'Instagram', 'Social'],
+  ['facebook', 'Facebook', 'Social'],
+  ['linkedin', 'LinkedIn', 'Social'],
+  ['tiktok', 'TikTok', 'Social'],
+  ['pinterest', 'Pinterest', 'Social'],
+  ['snapchat', 'Snapchat', 'Social'],
+  ['tumblr', 'Tumblr', 'Social'],
+  ['medium', 'Medium', 'Social'],
+  ['devdotto', 'DEV', 'Social'],
   ['stackoverflow', 'Stack Overflow', 'Social'],
-  ['ycombinator', 'Hacker News', 'Social'], ['quora', 'Quora', 'Social'],
-  ['behance', 'Behance', 'Social'], ['dribbble', 'Dribbble', 'Social'],
-  ['artstation', 'ArtStation', 'Social'], ['producthunt', 'Product Hunt', 'Social'],
-  ['unsplash', 'Unsplash', 'Social'], ['flickr', 'Flickr', 'Social'],
+  ['ycombinator', 'Hacker News', 'Social'],
+  ['quora', 'Quora', 'Social'],
+  ['behance', 'Behance', 'Social'],
+  ['dribbble', 'Dribbble', 'Social'],
+  ['artstation', 'ArtStation', 'Social'],
+  ['producthunt', 'Product Hunt', 'Social'],
+  ['unsplash', 'Unsplash', 'Social'],
+  ['flickr', 'Flickr', 'Social'],
 
   // ── Productivity ───────────────────────────────────────────────────────────
-  ['notion', 'Notion', 'Productivity'], ['trello', 'Trello', 'Productivity'],
-  ['jira', 'Jira', 'Productivity'], ['confluence', 'Confluence', 'Productivity'],
-  ['airtable', 'Airtable', 'Productivity'], ['asana', 'Asana', 'Productivity'],
-  ['clickup', 'ClickUp', 'Productivity'], ['linear', 'Linear', 'Productivity'],
+  ['notion', 'Notion', 'Productivity'],
+  ['trello', 'Trello', 'Productivity'],
+  ['jira', 'Jira', 'Productivity'],
+  ['confluence', 'Confluence', 'Productivity'],
+  ['airtable', 'Airtable', 'Productivity'],
+  ['asana', 'Asana', 'Productivity'],
+  ['clickup', 'ClickUp', 'Productivity'],
+  ['linear', 'Linear', 'Productivity'],
   ['todoist', 'Todoist', 'Productivity'],
-  ['figma', 'Figma', 'Productivity'], ['miro', 'Miro', 'Productivity'],
+  ['figma', 'Figma', 'Productivity'],
+  ['miro', 'Miro', 'Productivity'],
   ['googledrive', 'Google Drive', 'Productivity'],
   ['googledocs', 'Google Docs', 'Productivity'],
   ['googlesheets', 'Google Sheets', 'Productivity'],
@@ -201,27 +332,40 @@ const SI_REGISTRY: [string, string, string][] = [
   ['intercom', 'Intercom', 'Productivity'],
   ['hubspot', 'HubSpot', 'Productivity'],
   ['salesforce', 'Salesforce', 'Productivity'],
-  ['webflow', 'Webflow', 'Productivity'], ['wordpress', 'WordPress', 'Productivity'],
-  ['ghost', 'Ghost', 'Productivity'], ['wix', 'Wix', 'Productivity'],
+  ['webflow', 'Webflow', 'Productivity'],
+  ['wordpress', 'WordPress', 'Productivity'],
+  ['ghost', 'Ghost', 'Productivity'],
+  ['wix', 'Wix', 'Productivity'],
   ['squarespace', 'Squarespace', 'Productivity'],
   ['contentful', 'Contentful', 'Productivity'],
-  ['strapi', 'Strapi', 'Productivity'], ['directus', 'Directus', 'Productivity'],
-  ['drupal', 'Drupal', 'Productivity'], ['joomla', 'Joomla', 'Productivity'],
-  ['magento', 'Magento', 'Productivity'], ['woocommerce', 'WooCommerce', 'Productivity'],
+  ['strapi', 'Strapi', 'Productivity'],
+  ['directus', 'Directus', 'Productivity'],
+  ['drupal', 'Drupal', 'Productivity'],
+  ['joomla', 'Joomla', 'Productivity'],
+  ['magento', 'Magento', 'Productivity'],
+  ['woocommerce', 'WooCommerce', 'Productivity'],
   ['mailchimp', 'Mailchimp', 'Productivity'],
-  ['twilio', 'Twilio', 'Productivity'], ['sendgrid', 'SendGrid', 'Productivity'],
+  ['twilio', 'Twilio', 'Productivity'],
+  ['sendgrid', 'SendGrid', 'Productivity'],
   ['mailgun', 'Mailgun', 'Productivity'],
-  ['segment', 'Segment', 'Productivity'], ['hotjar', 'Hotjar', 'Productivity'],
-  ['posthog', 'PostHog', 'Productivity'], ['googleanalytics', 'Google Analytics', 'Productivity'],
-  ['zapier', 'Zapier', 'Productivity'], ['ifttt', 'IFTTT', 'Productivity'],
+  ['segment', 'Segment', 'Productivity'],
+  ['hotjar', 'Hotjar', 'Productivity'],
+  ['posthog', 'PostHog', 'Productivity'],
+  ['googleanalytics', 'Google Analytics', 'Productivity'],
+  ['zapier', 'Zapier', 'Productivity'],
+  ['ifttt', 'IFTTT', 'Productivity'],
   ['pagerduty', 'PagerDuty', 'Productivity'],
-  ['mapbox', 'Mapbox', 'Productivity'], ['openstreetmap', 'OpenStreetMap', 'Productivity'],
-  ['algolia', 'Algolia', 'Productivity'], ['streamlit', 'Streamlit', 'Productivity'],
+  ['mapbox', 'Mapbox', 'Productivity'],
+  ['openstreetmap', 'OpenStreetMap', 'Productivity'],
+  ['algolia', 'Algolia', 'Productivity'],
+  ['streamlit', 'Streamlit', 'Productivity'],
   ['mixpanel', 'Mixpanel', 'Productivity'],
 
   // ── Auth & Security ────────────────────────────────────────────────────────
-  ['okta', 'Okta', 'Auth'], ['auth0', 'Auth0', 'Auth'],
-  ['keycloak', 'Keycloak', 'Auth'], ['openid', 'OpenID', 'Auth'],
+  ['okta', 'Okta', 'Auth'],
+  ['auth0', 'Auth0', 'Auth'],
+  ['keycloak', 'Keycloak', 'Auth'],
+  ['openid', 'OpenID', 'Auth'],
   ['letsencrypt', "Let's Encrypt", 'Auth'],
   ['bitwarden', 'Bitwarden', 'Auth'],
   ['1password', '1Password', 'Auth'],
@@ -232,109 +376,162 @@ const SI_REGISTRY: [string, string, string][] = [
   ['openvpn', 'OpenVPN', 'Auth'],
 
   // ── Finance & Payments ─────────────────────────────────────────────────────
-  ['stripe', 'Stripe', 'Finance'], ['paypal', 'PayPal', 'Finance'],
-  ['square', 'Square', 'Finance'], ['shopify', 'Shopify', 'Finance'],
+  ['stripe', 'Stripe', 'Finance'],
+  ['paypal', 'PayPal', 'Finance'],
+  ['square', 'Square', 'Finance'],
+  ['shopify', 'Shopify', 'Finance'],
   ['coinbase', 'Coinbase', 'Finance'],
-  ['ethereum', 'Ethereum', 'Finance'], ['bitcoin', 'Bitcoin', 'Finance'],
-  ['binance', 'Binance', 'Finance'], ['solana', 'Solana', 'Finance'],
-  ['wise', 'Wise', 'Finance'], ['payoneer', 'Payoneer', 'Finance'],
-  ['adyen', 'Adyen', 'Finance'], ['klarna', 'Klarna', 'Finance'],
-  ['applepay', 'Apple Pay', 'Finance'], ['googlepay', 'Google Pay', 'Finance'],
+  ['ethereum', 'Ethereum', 'Finance'],
+  ['bitcoin', 'Bitcoin', 'Finance'],
+  ['binance', 'Binance', 'Finance'],
+  ['solana', 'Solana', 'Finance'],
+  ['wise', 'Wise', 'Finance'],
+  ['payoneer', 'Payoneer', 'Finance'],
+  ['adyen', 'Adyen', 'Finance'],
+  ['klarna', 'Klarna', 'Finance'],
+  ['applepay', 'Apple Pay', 'Finance'],
+  ['googlepay', 'Google Pay', 'Finance'],
   ['revolut', 'Revolut', 'Finance'],
 
   // ── CI / Monitoring ────────────────────────────────────────────────────────
   ['githubactions', 'GitHub Actions', 'CI'],
-  ['circleci', 'CircleCI', 'CI'], ['travisci', 'Travis CI', 'CI'],
-  ['jenkins', 'Jenkins', 'CI'], ['sonarcloud', 'SonarCloud', 'CI'],
-  ['codecov', 'Codecov', 'CI'], ['sentry', 'Sentry', 'CI'],
-  ['datadog', 'Datadog', 'CI'], ['newrelic', 'New Relic', 'CI'],
-  ['teamcity', 'TeamCity', 'CI'], ['bamboo', 'Bamboo', 'CI'],
+  ['circleci', 'CircleCI', 'CI'],
+  ['travisci', 'Travis CI', 'CI'],
+  ['jenkins', 'Jenkins', 'CI'],
+  ['sonarcloud', 'SonarCloud', 'CI'],
+  ['codecov', 'Codecov', 'CI'],
+  ['sentry', 'Sentry', 'CI'],
+  ['datadog', 'Datadog', 'CI'],
+  ['newrelic', 'New Relic', 'CI'],
+  ['teamcity', 'TeamCity', 'CI'],
+  ['bamboo', 'Bamboo', 'CI'],
   ['octopusdeploy', 'Octopus Deploy', 'CI'],
 
   // ── AI / LLM ───────────────────────────────────────────────────────────────
-  ['openai', 'OpenAI', 'AI'], ['anthropic', 'Anthropic', 'AI'],
+  ['openai', 'OpenAI', 'AI'],
+  ['anthropic', 'Anthropic', 'AI'],
   ['huggingface', 'Hugging Face', 'AI'],
-  ['googlegemini', 'Gemini', 'AI'], ['mistral', 'Mistral', 'AI'],
-  ['ollama', 'Ollama', 'AI'], ['perplexity', 'Perplexity', 'AI'],
+  ['googlegemini', 'Gemini', 'AI'],
+  ['mistral', 'Mistral', 'AI'],
+  ['ollama', 'Ollama', 'AI'],
+  ['perplexity', 'Perplexity', 'AI'],
 
   // ── Misc ───────────────────────────────────────────────────────────────────
-  ['google', 'Google', 'Misc'], ['microsoft', 'Microsoft', 'Misc'],
-  ['apple', 'Apple', 'Misc'], ['proton', 'Proton', 'Misc'],
-  ['wakatime', 'WakaTime', 'Misc'], ['n8n', 'n8n', 'Misc'],
-  ['homeassistant', 'Home Assistant', 'Misc'], ['proxmox', 'Proxmox', 'Misc'],
-  ['nextcloud', 'Nextcloud', 'Misc'], ['synology', 'Synology', 'Misc'],
+  ['google', 'Google', 'Misc'],
+  ['microsoft', 'Microsoft', 'Misc'],
+  ['apple', 'Apple', 'Misc'],
+  ['proton', 'Proton', 'Misc'],
+  ['wakatime', 'WakaTime', 'Misc'],
+  ['n8n', 'n8n', 'Misc'],
+  ['homeassistant', 'Home Assistant', 'Misc'],
+  ['proxmox', 'Proxmox', 'Misc'],
+  ['nextcloud', 'Nextcloud', 'Misc'],
+  ['synology', 'Synology', 'Misc'],
   ['googlemaps', 'Google Maps', 'Misc'],
   ['pocketbase', 'PocketBase', 'Misc'],
 
   // ── Cloud (extended) ───────────────────────────────────────────────────────
-  ['hetzner', 'Hetzner', 'Cloud'], ['linode', 'Linode', 'Cloud'],
-  ['ovh', 'OVH', 'Cloud'], ['scaleway', 'Scaleway', 'Cloud'],
-  ['vultr', 'Vultr', 'Cloud'], ['exoscale', 'Exoscale', 'Cloud'],
-  ['render', 'Render', 'Cloud'], ['railway', 'Railway', 'Cloud'],
-  ['fly', 'Fly.io', 'Cloud'], ['netlify', 'Netlify', 'Cloud'],
+  ['hetzner', 'Hetzner', 'Cloud'],
+  ['linode', 'Linode', 'Cloud'],
+  ['ovh', 'OVH', 'Cloud'],
+  ['scaleway', 'Scaleway', 'Cloud'],
+  ['vultr', 'Vultr', 'Cloud'],
+  ['exoscale', 'Exoscale', 'Cloud'],
+  ['render', 'Render', 'Cloud'],
+  ['railway', 'Railway', 'Cloud'],
+  ['fly', 'Fly.io', 'Cloud'],
+  ['netlify', 'Netlify', 'Cloud'],
   ['surge', 'Surge', 'Cloud'],
 
   // ── Monitoring & Observability ─────────────────────────────────────────────
-  ['prometheus', 'Prometheus', 'Monitoring'], ['grafana', 'Grafana', 'Monitoring'],
-  ['loki', 'Loki', 'Monitoring'], ['jaeger', 'Jaeger', 'Monitoring'],
+  ['prometheus', 'Prometheus', 'Monitoring'],
+  ['grafana', 'Grafana', 'Monitoring'],
+  ['loki', 'Loki', 'Monitoring'],
+  ['jaeger', 'Jaeger', 'Monitoring'],
   ['opentelemetry', 'OpenTelemetry', 'Monitoring'],
-  ['elastic', 'Elastic', 'Monitoring'], ['kibana', 'Kibana', 'Monitoring'],
+  ['elastic', 'Elastic', 'Monitoring'],
+  ['kibana', 'Kibana', 'Monitoring'],
   ['logstash', 'Logstash', 'Monitoring'],
   ['uptimekuma', 'Uptime Kuma', 'Monitoring'],
-  ['pingdom', 'Pingdom', 'Monitoring'], ['statuspage', 'Statuspage', 'Monitoring'],
+  ['pingdom', 'Pingdom', 'Monitoring'],
+  ['statuspage', 'Statuspage', 'Monitoring'],
 
   // ── Databases (extended) ───────────────────────────────────────────────────
-  ['redis', 'Redis', 'Database'], ['mongodb', 'MongoDB', 'Database'],
+  ['redis', 'Redis', 'Database'],
+  ['mongodb', 'MongoDB', 'Database'],
   ['cassandra', 'Cassandra', 'Database'],
   ['elasticsearch', 'Elasticsearch', 'Database'],
-  ['influxdb', 'InfluxDB', 'Database'], ['neo4j', 'Neo4j', 'Database'],
-  ['mariadb', 'MariaDB', 'Database'], ['sqlite', 'SQLite', 'Database'],
+  ['influxdb', 'InfluxDB', 'Database'],
+  ['neo4j', 'Neo4j', 'Database'],
+  ['mariadb', 'MariaDB', 'Database'],
+  ['sqlite', 'SQLite', 'Database'],
   ['cockroachdb', 'CockroachDB', 'Database'],
-  ['clickhouse', 'ClickHouse', 'Database'], ['planetscale', 'PlanetScale', 'Database'],
-  ['neon', 'Neon', 'Database'], ['turso', 'Turso', 'Database'],
+  ['clickhouse', 'ClickHouse', 'Database'],
+  ['planetscale', 'PlanetScale', 'Database'],
+  ['neon', 'Neon', 'Database'],
+  ['turso', 'Turso', 'Database'],
 
   // ── Auth (extended) ────────────────────────────────────────────────────────
-  ['authentik', 'Authentik', 'Auth'], ['authelia', 'Authelia', 'Auth'],
-  ['zitadel', 'Zitadel', 'Auth'], ['logto', 'Logto', 'Auth'],
-  ['clerk', 'Clerk', 'Auth'], ['stytch', 'Stytch', 'Auth'],
+  ['authentik', 'Authentik', 'Auth'],
+  ['authelia', 'Authelia', 'Auth'],
+  ['zitadel', 'Zitadel', 'Auth'],
+  ['logto', 'Logto', 'Auth'],
+  ['clerk', 'Clerk', 'Auth'],
+  ['stytch', 'Stytch', 'Auth'],
 
   // ── Messaging & Queues ─────────────────────────────────────────────────────
   ['rabbitmq', 'RabbitMQ', 'Messaging'],
   ['apachekafka', 'Apache Kafka', 'Messaging'],
-  ['nats', 'NATS', 'Messaging'], ['mosquitto', 'Mosquitto', 'Messaging'],
+  ['nats', 'NATS', 'Messaging'],
+  ['mosquitto', 'Mosquitto', 'Messaging'],
   ['apachepulsar', 'Apache Pulsar', 'Messaging'],
   ['amazonsqs', 'Amazon SQS', 'Messaging'],
   ['pusher', 'Pusher', 'Messaging'],
 
   // ── Storage ────────────────────────────────────────────────────────────────
-  ['minio', 'MinIO', 'Storage'], ['backblaze', 'Backblaze', 'Storage'],
+  ['minio', 'MinIO', 'Storage'],
+  ['backblaze', 'Backblaze', 'Storage'],
   ['cloudflarer2', 'Cloudflare R2', 'Storage'],
   ['amazons3', 'Amazon S3', 'Storage'],
   ['googlecloudstorage', 'GCS', 'Storage'],
 
   // ── DevOps (extended) ─────────────────────────────────────────────────────
-  ['argocd', 'Argo CD', 'DevOps'], ['flux', 'Flux', 'DevOps'],
-  ['consul', 'Consul', 'DevOps'], ['vault', 'Vault', 'DevOps'],
-  ['packer', 'Packer', 'DevOps'], ['vagrant', 'Vagrant', 'DevOps'],
-  ['ansible', 'Ansible', 'DevOps'], ['chef', 'Chef', 'DevOps'],
+  ['argocd', 'Argo CD', 'DevOps'],
+  ['flux', 'Flux', 'DevOps'],
+  ['consul', 'Consul', 'DevOps'],
+  ['vault', 'Vault', 'DevOps'],
+  ['packer', 'Packer', 'DevOps'],
+  ['vagrant', 'Vagrant', 'DevOps'],
+  ['ansible', 'Ansible', 'DevOps'],
+  ['chef', 'Chef', 'DevOps'],
   ['puppet', 'Puppet', 'DevOps'],
 
   // ── CDN / Edge ─────────────────────────────────────────────────────────────
-  ['cloudflare', 'Cloudflare', 'CDN'], ['fastly', 'Fastly', 'CDN'],
-  ['bunny', 'Bunny.net', 'CDN'], ['akamai', 'Akamai', 'CDN'],
+  ['cloudflare', 'Cloudflare', 'CDN'],
+  ['fastly', 'Fastly', 'CDN'],
+  ['bunny', 'Bunny.net', 'CDN'],
+  ['akamai', 'Akamai', 'CDN'],
 
   // ── Homelab ────────────────────────────────────────────────────────────────
-  ['truenas', 'TrueNAS', 'Homelab'], ['unraid', 'Unraid', 'Homelab'],
-  ['opnsense', 'OPNsense', 'Homelab'], ['pfsense', 'pfSense', 'Homelab'],
-  ['portainer', 'Portainer', 'Homelab'], ['unifi', 'UniFi', 'Homelab'],
-  ['pihole', 'Pi-hole', 'Homelab'], ['adguard', 'AdGuard', 'Homelab'],
+  ['truenas', 'TrueNAS', 'Homelab'],
+  ['unraid', 'Unraid', 'Homelab'],
+  ['opnsense', 'OPNsense', 'Homelab'],
+  ['pfsense', 'pfSense', 'Homelab'],
+  ['portainer', 'Portainer', 'Homelab'],
+  ['unifi', 'UniFi', 'Homelab'],
+  ['pihole', 'Pi-hole', 'Homelab'],
+  ['adguard', 'AdGuard', 'Homelab'],
   ['paperlessngx', 'Paperless-ngx', 'Homelab'],
 
   // ── AI (extended) ─────────────────────────────────────────────────────────
-  ['stability', 'Stability AI', 'AI'], ['cohere', 'Cohere', 'AI'],
-  ['replicate', 'Replicate', 'AI'], ['groq', 'Groq', 'AI'],
-  ['together', 'Together AI', 'AI'], ['fireworks', 'Fireworks AI', 'AI'],
-  ['deepseek', 'DeepSeek', 'AI'], ['xai', 'xAI / Grok', 'AI'],
+  ['stability', 'Stability AI', 'AI'],
+  ['cohere', 'Cohere', 'AI'],
+  ['replicate', 'Replicate', 'AI'],
+  ['groq', 'Groq', 'AI'],
+  ['together', 'Together AI', 'AI'],
+  ['fireworks', 'Fireworks AI', 'AI'],
+  ['deepseek', 'DeepSeek', 'AI'],
+  ['xai', 'xAI / Grok', 'AI'],
 ];
 
 /**
@@ -352,94 +549,157 @@ SI_REGISTRY.forEach(([slug, name]) => {
 });
 Object.assign(SI_AUTO, {
   // Media
-  'lastfm': 'lastdotfm', 'last.fm': 'lastdotfm',
-  'tmdb': 'themoviedatabase', 'themoviedatabasemdb': 'themoviedatabase',
-  'sonarr': 'sonarr', 'radarr': 'radarr', 'lidarr': 'lidarr',
-  'jackett': 'sonarr', 'prowlarr': 'sonarr', 'jellyfin': 'jellyfin',
-  'obs': 'obsstudio', 'obs studio': 'obsstudio',
+  lastfm: 'lastdotfm',
+  'last.fm': 'lastdotfm',
+  tmdb: 'themoviedatabase',
+  themoviedatabasemdb: 'themoviedatabase',
+  sonarr: 'sonarr',
+  radarr: 'radarr',
+  lidarr: 'lidarr',
+  jackett: 'sonarr',
+  prowlarr: 'sonarr',
+  jellyfin: 'jellyfin',
+  obs: 'obsstudio',
+  'obs studio': 'obsstudio',
   // Cloud shortcuts
-  'aws': 'amazonaws', 'gcp': 'googlecloud', 'azure': 'microsoftazure',
-  'do': 'digitalocean',
+  aws: 'amazonaws',
+  gcp: 'googlecloud',
+  azure: 'microsoftazure',
+  do: 'digitalocean',
   // Social
-  'xtwitter': 'twitter', 'x': 'twitter',
-  'devto': 'devdotto', 'dev.to': 'devdotto',
-  'hackernews': 'ycombinator', 'hacker news': 'ycombinator', 'hn': 'ycombinator',
+  xtwitter: 'twitter',
+  x: 'twitter',
+  devto: 'devdotto',
+  'dev.to': 'devdotto',
+  hackernews: 'ycombinator',
+  'hacker news': 'ycombinator',
+  hn: 'ycombinator',
   // Gaming
-  'riot': 'riotgames', 'riot games': 'riotgames',
-  'epic games': 'epicgames', 'nexus mods': 'nexusmods',
-  'itchio': 'itchdotio', 'itch.io': 'itchdotio', 'itch': 'itchdotio',
+  riot: 'riotgames',
+  'riot games': 'riotgames',
+  'epic games': 'epicgames',
+  'nexus mods': 'nexusmods',
+  itchio: 'itchdotio',
+  'itch.io': 'itchdotio',
+  itch: 'itchdotio',
   'electronic arts': 'ea',
   // Dev languages
-  'golang': 'go', 'go lang': 'go',
-  'c++': 'cplusplus', 'c plus plus': 'cplusplus',
-  'c#': 'csharp', 'c sharp': 'csharp',
+  golang: 'go',
+  'go lang': 'go',
+  'c++': 'cplusplus',
+  'c plus plus': 'cplusplus',
+  'c#': 'csharp',
+  'c sharp': 'csharp',
   '.net': 'dotnet',
   // Frameworks / runtimes
-  'node': 'nodedotjs', 'nodejs': 'nodedotjs', 'node.js': 'nodedotjs',
-  'rails': 'rubyonrails', 'ror': 'rubyonrails', 'ruby on rails': 'rubyonrails',
-  'vue': 'vuedotjs', 'next': 'nextdotjs', 'nuxt': 'nuxtdotjs',
-  'alpine': 'alpinedotjs', 'alpine.js': 'alpinedotjs',
+  node: 'nodedotjs',
+  nodejs: 'nodedotjs',
+  'node.js': 'nodedotjs',
+  rails: 'rubyonrails',
+  ror: 'rubyonrails',
+  'ruby on rails': 'rubyonrails',
+  vue: 'vuedotjs',
+  next: 'nextdotjs',
+  nuxt: 'nuxtdotjs',
+  alpine: 'alpinedotjs',
+  'alpine.js': 'alpinedotjs',
   // Editors
-  'vscode': 'visualstudiocode', 'vs code': 'visualstudiocode',
-  'idea': 'intellijidea', 'intellij': 'intellijidea',
-  'eclipse': 'eclipseide',
+  vscode: 'visualstudiocode',
+  'vs code': 'visualstudiocode',
+  idea: 'intellijidea',
+  intellij: 'intellijidea',
+  eclipse: 'eclipseide',
   // Build tools / queues
-  'k8s': 'kubernetes',
-  'kafka': 'apachekafka', 'apache kafka': 'apachekafka',
-  'maven': 'apachemaven', 'apache maven': 'apachemaven',
-  'airflow': 'apacheairflow', 'spark': 'apachespark',
+  k8s: 'kubernetes',
+  kafka: 'apachekafka',
+  'apache kafka': 'apachekafka',
+  maven: 'apachemaven',
+  'apache maven': 'apachemaven',
+  airflow: 'apacheairflow',
+  spark: 'apachespark',
   // OS
-  'arch': 'archlinux', 'arch linux': 'archlinux',
-  'windows': 'windows11', 'win': 'windows11', 'win11': 'windows11',
-  'raspberry pi': 'raspberrypi', 'rpi': 'raspberrypi',
+  arch: 'archlinux',
+  'arch linux': 'archlinux',
+  windows: 'windows11',
+  win: 'windows11',
+  win11: 'windows11',
+  'raspberry pi': 'raspberrypi',
+  rpi: 'raspberrypi',
   // Finance / crypto
-  'eth': 'ethereum', 'btc': 'bitcoin', 'bnb': 'binance',
-  'sol': 'solana', 'transferwise': 'wise',
+  eth: 'ethereum',
+  btc: 'bitcoin',
+  bnb: 'binance',
+  sol: 'solana',
+  transferwise: 'wise',
   // Auth
-  'lets encrypt': 'letsencrypt', "let's encrypt": 'letsencrypt',
+  'lets encrypt': 'letsencrypt',
+  "let's encrypt": 'letsencrypt',
   '1pass': '1password',
   // Misc DB/data
-  'cockroach': 'cockroachdb', 'clickhouse': 'clickhouse',
+  cockroach: 'cockroachdb',
+  clickhouse: 'clickhouse',
   // Misc services
-  'google maps': 'googlemaps', 'gmaps': 'googlemaps',
-  'google analytics': 'googleanalytics', 'ga': 'googleanalytics',
-  'google meet': 'googlemeet', 'gmeet': 'googlemeet',
-  'google pay': 'googlepay', 'gpay': 'googlepay',
+  'google maps': 'googlemaps',
+  gmaps: 'googlemaps',
+  'google analytics': 'googleanalytics',
+  ga: 'googleanalytics',
+  'google meet': 'googlemeet',
+  gmeet: 'googlemeet',
+  'google pay': 'googlepay',
+  gpay: 'googlepay',
   'apple pay': 'applepay',
-  'openstreetmap': 'openstreetmap', 'osm': 'openstreetmap',
+  openstreetmap: 'openstreetmap',
+  osm: 'openstreetmap',
   // Legacy / redirects kept
-  'topposters': 'themoviedatabase', 'digitalcore': 'themoviedatabase',
+  topposters: 'themoviedatabase',
+  digitalcore: 'themoviedatabase',
   // AI
-  'gpt': 'openai', 'chatgpt': 'openai',
-  'claude': 'anthropic',
-  'gemini': 'googlegemini', 'google gemini': 'googlegemini',
-  'hf': 'huggingface',
+  gpt: 'openai',
+  chatgpt: 'openai',
+  claude: 'anthropic',
+  gemini: 'googlegemini',
+  'google gemini': 'googlegemini',
+  hf: 'huggingface',
   // Media
-  'prime video': 'primevideo', 'amazon prime': 'primevideo',
-  'disney plus': 'disneyplus', 'disney+': 'disneyplus',
+  'prime video': 'primevideo',
+  'amazon prime': 'primevideo',
+  'disney plus': 'disneyplus',
+  'disney+': 'disneyplus',
   // New cloud shortcuts
   'hetzner cloud': 'hetzner',
-  'fly.io': 'fly', 'flyio': 'fly',
+  'fly.io': 'fly',
+  flyio: 'fly',
   // New monitoring
   'uptime kuma': 'uptimekuma',
   // New databases
-  'postgres': 'postgresql', 'pg': 'postgresql',
-  'elastic search': 'elasticsearch', 'elk': 'elasticsearch',
+  postgres: 'postgresql',
+  pg: 'postgresql',
+  'elastic search': 'elasticsearch',
+  elk: 'elasticsearch',
   // New homelab
-  'pi hole': 'pihole', 'adguard home': 'adguard',
+  'pi hole': 'pihole',
+  'adguard home': 'adguard',
   'unifi network': 'unifi',
   // New AI
-  'deepseek ai': 'deepseek', 'grok': 'xai', 'x ai': 'xai',
-  'stable diffusion': 'stability', 'stablediffusion': 'stability',
+  'deepseek ai': 'deepseek',
+  grok: 'xai',
+  'x ai': 'xai',
+  'stable diffusion': 'stability',
+  stablediffusion: 'stability',
   // New auth
-  'authentik': 'authentik',
+  authentik: 'authentik',
   // DevOps
-  'argo cd': 'argocd', 'argocd': 'argocd',
-  'hashicorp vault': 'vault', 'hcl': 'hashicorp',
+  'argo cd': 'argocd',
+  argocd: 'argocd',
+  'hashicorp vault': 'vault',
+  hcl: 'hashicorp',
   // Storage
-  'minio': 'minio', 's3': 'amazons3', 'r2': 'cloudflarer2',
+  minio: 'minio',
+  s3: 'amazons3',
+  r2: 'cloudflarer2',
   // Messaging
-  'rabbit mq': 'rabbitmq', 'rabbit': 'rabbitmq',
+  'rabbit mq': 'rabbitmq',
+  rabbit: 'rabbitmq',
   'nats.io': 'nats',
 });
 
@@ -591,14 +851,18 @@ function renderIconGrid(query: string) {
   // our CSP (script-src 'self'), so it silently never ran. The `si-icon` class
   // routes failures to the global capture-phase error listener in
   // initIconPicker(), which swaps in a letter fallback for real.
-  grid.innerHTML = items.map(([slug, name]) => `
+  grid.innerHTML = items
+    .map(
+      ([slug, name]) => `
     <div class="icon-item${iconPicker.selected === slug ? ' selected' : ''}"
          data-action="select" data-slug="${escAttr(slug)}" title="${escAttr(name)}">
       <img class="si-icon" src="${escAttr(iconImgURL(slug))}" alt="${escAttr(name)}"
            width="24" height="24" loading="lazy">
       <div class="icon-item-name">${esc(name)}</div>
     </div>
-  `).join('');
+  `,
+    )
+    .join('');
 }
 
 /**
@@ -635,7 +899,7 @@ function applyIconToTarget(slug: string | null) {
 export function openIconPicker(
   fieldEl?: HTMLInputElement,
   previewEl?: HTMLElement,
-  onClose?: (slug: string | null) => void
+  onClose?: (slug: string | null) => void,
 ) {
   iconPicker.target = { field: fieldEl, preview: previewEl, onClose };
   iconPicker.selected = fieldEl?.value ?? null;
@@ -713,7 +977,10 @@ export function readIconField(field: HTMLInputElement | null): string | undefine
  * widget for any `<input type="file">` present in the DOM regardless of
  * `display:none`, so a static one leaves a ghost control on the page.
  */
-export function pickIconFile(onPicked: (dataUri: string) => void, onError: (msg: string) => void): void {
+export function pickIconFile(
+  onPicked: (dataUri: string) => void,
+  onError: (msg: string) => void,
+): void {
   const input = document.createElement('input');
   input.type = 'file';
   input.accept = '.ico,.png,.jpg,.jpeg,.gif,.webp,.bmp,image/*';
@@ -726,7 +993,10 @@ export function pickIconFile(onPicked: (dataUri: string) => void, onError: (msg:
   };
   input.addEventListener('change', () => {
     const file = input.files?.[0];
-    if (!file) { cleanup(); return; }
+    if (!file) {
+      cleanup();
+      return;
+    }
     const reader = new FileReader();
     reader.onload = () => {
       const uri = String(reader.result || '');
@@ -735,7 +1005,10 @@ export function pickIconFile(onPicked: (dataUri: string) => void, onError: (msg:
       else onPicked(uri);
       cleanup();
     };
-    reader.onerror = () => { onError('Could not read that file'); cleanup(); };
+    reader.onerror = () => {
+      onError('Could not read that file');
+      cleanup();
+    };
     reader.readAsDataURL(file);
   });
   input.addEventListener('cancel', cleanup);
@@ -746,19 +1019,21 @@ export function pickIconFile(onPicked: (dataUri: string) => void, onError: (msg:
 
 export function initIconPicker() {
   // Delegated listener on the icon grid
-  document.getElementById('icon-grid')!.addEventListener('click', e => {
+  document.getElementById('icon-grid')!.addEventListener('click', (e) => {
     const el = (e.target as HTMLElement).closest<HTMLElement>('[data-action="select"]');
     if (el) selectIcon(el.dataset.slug!);
   });
 
-  document.getElementById('icon-search')!.addEventListener('input', e => renderIconGrid((e.target as HTMLInputElement).value));
+  document
+    .getElementById('icon-search')!
+    .addEventListener('input', (e) => renderIconGrid((e.target as HTMLInputElement).value));
   document.getElementById('icon-picker-close')!.addEventListener('click', closeIconPicker);
-  document.getElementById('icon-picker-overlay')!.addEventListener('click', e => {
+  document.getElementById('icon-picker-overlay')!.addEventListener('click', (e) => {
     if (e.target === e.currentTarget) closeIconPicker();
   });
   // Every other overlay in the app closes on Escape; this one did not, and the
   // global handler in vault.ts does not know about it.
-  document.addEventListener('keydown', e => {
+  document.addEventListener('keydown', (e) => {
     if (e.key !== 'Escape') return;
     if (!document.getElementById('icon-picker-overlay')?.classList.contains('open')) return;
     e.stopPropagation();
@@ -766,26 +1041,36 @@ export function initIconPicker() {
   });
   document.getElementById('icon-manual-apply')!.addEventListener('click', () => {
     const v = (document.getElementById('icon-manual') as HTMLInputElement).value.trim();
-    if (v) { selectIcon(v); closeIconPicker(); }
+    if (v) {
+      selectIcon(v);
+      closeIconPicker();
+    }
   });
   // An uploaded file becomes the selection like any slug would, so it flows
   // through the same onClose callback the picker already has — the card path and
   // the add/edit form both store it without either knowing about files.
   document.getElementById('icon-upload')?.addEventListener('click', () => {
     pickIconFile(
-      (uri) => { selectIcon(uri); closeIconPicker(); },
+      (uri) => {
+        selectIcon(uri);
+        closeIconPicker();
+      },
       (msg) => showToast(msg, 'err', 4000),
     );
   });
-  document.addEventListener('error', (e) => {
-    const img = e.target as HTMLImageElement;
-    if (!img || !img.classList.contains('si-icon')) return;
-    const letter = img.alt?.[0]?.toUpperCase() || '?';
-    const span = document.createElement('span');
-    span.className = 'si-fallback';
-    span.textContent = letter;
-    img.replaceWith(span);
-  }, true);
+  document.addEventListener(
+    'error',
+    (e) => {
+      const img = e.target as HTMLImageElement;
+      if (!img?.classList.contains('si-icon')) return;
+      const letter = img.alt?.[0]?.toUpperCase() || '?';
+      const span = document.createElement('span');
+      span.className = 'si-fallback';
+      span.textContent = letter;
+      img.replaceWith(span);
+    },
+    true,
+  );
   document.getElementById('icon-clear')!.addEventListener('click', () => {
     iconPicker.selected = null;
     selectIcon('');

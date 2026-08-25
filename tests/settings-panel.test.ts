@@ -5,7 +5,13 @@
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { Settings } from '../src/ts/state';
-import { openSettings, saveSettings, cancelSettings, closeSettings, applyPanelOrder } from '../src/ts/settings-panel';
+import {
+  openSettings,
+  saveSettings,
+  cancelSettings,
+  closeSettings,
+  applyPanelOrder,
+} from '../src/ts/settings-panel';
 import { loadRealIndexHtml } from './helpers';
 
 vi.mock('../src/ts/utils', async (importOriginal) => {
@@ -18,10 +24,18 @@ const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getEleme
 beforeEach(() => {
   loadRealIndexHtml();
   Settings.setAll({
-    theme: 'dark', accentColor: '#7364c9', autoLockMinutes: 15, lockOnHide: false,
-    maskKeysByDefault: true, showExpiryWarning: true, expiryWarningDays: 30,
-    defaultAccount: '', defaultExportFormat: 'dotenv', envCopyField: 'api_key',
-    customCss: '', groupByType: false,
+    theme: 'dark',
+    accentColor: '#7364c9',
+    autoLockMinutes: 15,
+    lockOnHide: false,
+    maskKeysByDefault: true,
+    showExpiryWarning: true,
+    expiryWarningDays: 30,
+    defaultAccount: '',
+    defaultExportFormat: 'dotenv',
+    envCopyField: 'api_key',
+    customCss: '',
+    groupByType: false,
   } as any);
 });
 
@@ -45,7 +59,7 @@ describe('auto-lock interval', () => {
     // back "". `parseInt(...) || 0` turned that into 0, and 0 means off, so a
     // typo quietly switched off the vault's inactivity lock. Off is spelled 0.
     openSettings();
-    ($('s-autolock') as HTMLInputElement).value = 'abc';   // discarded -> ''
+    ($('s-autolock') as HTMLInputElement).value = 'abc'; // discarded -> ''
     expect(($('s-autolock') as HTMLInputElement).value).toBe('');
     saveSettings();
     expect(Settings.get('autoLockMinutes')).toBe(15);
@@ -115,7 +129,10 @@ describe('buttons inside the settings pane', () => {
   // opened and closed repeatedly and { once: true } only detaches on click.
   it('does not accumulate a handler on every open', () => {
     Settings.set('recentSearches', ['alpha', 'beta'] as any);
-    for (let i = 0; i < 5; i++) { openSettings(); closeSettings(); }
+    for (let i = 0; i < 5; i++) {
+      openSettings();
+      closeSettings();
+    }
 
     openSettings();
     const btn = $('s-clear-recent');

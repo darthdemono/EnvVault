@@ -19,7 +19,7 @@ let cachedBody: string | null = null;
 export function loadRealIndexHtml(): void {
   if (cachedBody === null) {
     const html = readFileSync(INDEX_HTML, 'utf8');
-    const m = html.match(/<body[^>]*>([\s\S]*)<\/body>/i);
+    const m = /<body[^>]*>([\s\S]*)<\/body>/i.exec(html);
     if (!m) throw new Error('index.html has no <body> — fixture cannot load');
     // Strip <script> tags: the modules are imported directly by the tests, and
     // letting jsdom fetch/execute them would double-register event listeners.
@@ -43,14 +43,21 @@ export function makeEntry(over: Partial<VaultEntry> = {}): VaultEntry {
 }
 
 export function makeProject(over: Partial<Project> = {}): Project {
-  return { id: over.id ?? `p-${Math.random().toString(36).slice(2)}`, name: 'Proj', description: '', ...over } as Project;
+  return {
+    id: over.id ?? `p-${Math.random().toString(36).slice(2)}`,
+    name: 'Proj',
+    description: '',
+    ...over,
+  } as Project;
 }
 
 export function makeVault(over: Partial<VaultData> = {}): VaultData {
   return {
     api_keys: [],
     user_categories: [],
-    projects: [{ id: 'Universal', name: 'Universal', description: 'All keys belong here by default' }],
+    projects: [
+      { id: 'Universal', name: 'Universal', description: 'All keys belong here by default' },
+    ],
     ...over,
   } as VaultData;
 }

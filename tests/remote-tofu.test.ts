@@ -20,14 +20,19 @@ vi.mock('../src/ts/utils', async (importOriginal) => {
   const real = await importOriginal<typeof import('../src/ts/utils')>();
   return {
     ...real,
-    showToast: (m: string) => { toasts.push(m); },
-    showConfirm: async (m: string) => { confirmMessages.push(m); return confirmAnswer; },
+    showToast: (m: string) => {
+      toasts.push(m);
+    },
+    showConfirm: async (m: string) => {
+      confirmMessages.push(m);
+      return confirmAnswer;
+    },
     showPasswordPrompt: async () => 'pw',
   };
 });
 
 /** Array.prototype.at is ES2022; this project's tsconfig targets ES2020. */
-const last = <T,>(arr: T[]): T => arr[arr.length - 1];
+const last = <T>(arr: T[]): T => arr[arr.length - 1];
 
 const FP = 'a'.repeat(64);
 let probeCalls: string[] = [];
@@ -97,7 +102,11 @@ describe('acquireFingerprint', () => {
 
 describe('pin storage', () => {
   it('keeps the accepted fingerprint against the saved server', () => {
-    const cfg = upsertSavedRemote({ url: 'https://vault.example.com', username: '', certFingerprint: FP });
+    const cfg = upsertSavedRemote({
+      url: 'https://vault.example.com',
+      username: '',
+      certFingerprint: FP,
+    });
     expect(findSavedRemote('https://vault.example.com')!.certFingerprint).toBe(FP);
     expect(cfg.certFingerprint).toBe(FP);
   });
@@ -108,6 +117,6 @@ describe('pin storage', () => {
     upsertSavedRemote({ url: 'https://vault.example.com', username: '', certFingerprint: FP });
     const other = 'b'.repeat(64);
     upsertSavedRemote({ url: 'https://vault.example.com', username: '', certFingerprint: other });
-    expect(toasts.some(t => /fingerprint changed/i.test(t))).toBe(true);
+    expect(toasts.some((t) => /fingerprint changed/i.test(t))).toBe(true);
   });
 });

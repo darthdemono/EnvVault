@@ -83,8 +83,7 @@
    so a clamp never slices a badge in half. */
 #card-grid {
   --cs-clamp-rows: calc(
-    var(--cs-badge-rows) * var(--cs-row-h) +
-    (var(--cs-badge-rows) - 1) * var(--cs-row-gap)
+    var(--cs-badge-rows) * var(--cs-row-h) + (var(--cs-badge-rows) - 1) * var(--cs-row-gap)
   );
 }
 
@@ -96,8 +95,10 @@
   overflow: hidden;
   display: flex;
   flex-direction: column;
-  transition: border-color .12s, box-shadow .12s;
-  animation: cardIn .2s ease both
+  transition:
+    border-color 0.12s,
+    box-shadow 0.12s;
+  animation: cardIn 0.2s ease both;
 }
 
 /* --cs-card-h is a *floor*, not a fixed height.
@@ -116,31 +117,31 @@
    grow — and a content-heavy one grows instead of losing content. `align-items:
    start` on the grid means a taller card does not stretch its neighbours. */
 .card:not(.expanded) {
-  min-height: var(--cs-card-h, 236px)
+  min-height: var(--cs-card-h, 236px);
 }
 
 .card.expanded {
-  height: auto
+  height: auto;
 }
 
 .card:hover {
-  border-color: var(--border3)
+  border-color: var(--border3);
 }
 
 .card.expanded {
   border-color: var(--accent);
-  box-shadow: 0 0 0 1px var(--accent-dim) inset
+  box-shadow: 0 0 0 1px var(--accent-dim) inset;
 }
 
 @keyframes cardIn {
   from {
     opacity: 0;
-    transform: translateY(5px)
+    transform: translateY(5px);
   }
 
   to {
     opacity: 1;
-    transform: none
+    transform: none;
   }
 }
 
@@ -153,7 +154,7 @@
   user-select: none;
   flex: 0 0 auto;
   min-width: 0;
-  overflow: hidden
+  overflow: hidden;
 }
 
 /* Collapsed only: the head sits at its natural height at the top of the card and
@@ -167,7 +168,7 @@
    that on its own, and now does it against a min-height rather than a hard one. */
 .card:not(.expanded) .card-head {
   flex: 0 0 auto;
-  min-height: 0
+  min-height: 0;
 }
 
 .provider-icon-wrap {
@@ -181,35 +182,35 @@
   flex-shrink: 0;
   overflow: hidden;
   cursor: pointer;
-  transition: border-color .12s
+  transition: border-color 0.12s;
 }
 
 .provider-icon-wrap:hover {
-  border-color: var(--accent)
+  border-color: var(--accent);
 }
 
 .si-icon {
-  width: calc(var(--cs-icon) * .55);
-  height: calc(var(--cs-icon) * .55);
-  object-fit: contain
+  width: calc(var(--cs-icon) * 0.55);
+  height: calc(var(--cs-icon) * 0.55);
+  object-fit: contain;
 }
 
 .si-fallback {
-  font-family: 'JetBrains Mono', monospace;
-  font-size: calc(var(--cs-icon) * .38);
+  font-family: "JetBrains Mono", monospace;
+  font-size: calc(var(--cs-icon) * 0.38);
   font-weight: 700;
   color: var(--accent);
   display: flex;
   align-items: center;
   justify-content: center;
   width: 100%;
-  height: 100%
+  height: 100%;
 }
 
 .card-meta {
   flex: 1 1 auto;
   min-width: 0;
-  overflow: hidden
+  overflow: hidden;
 }
 
 .card-provider {
@@ -225,12 +226,12 @@
   /* Clamped to whole rows — an entry with a dozen badges stops at the clamp
      instead of growing the head until the footer is pushed out of the card. */
   max-height: var(--cs-clamp-rows);
-  overflow: hidden
+  overflow: hidden;
 }
 
 .card.expanded .card-provider {
   max-height: none;
-  overflow: visible
+  overflow: visible;
 }
 
 /* The provider name is the one free-text item in the badge row, so it is the
@@ -242,21 +243,21 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  line-height: var(--cs-row-h)
+  line-height: var(--cs-row-h);
 }
 
 .card-account {
-  font-family: 'JetBrains Mono', monospace;
+  font-family: "JetBrains Mono", monospace;
   font-size: var(--cs-acct);
   color: var(--text2);
   line-height: 1.4;
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap
+  white-space: nowrap;
 }
 
 .card-account:empty {
-  display: none
+  display: none;
 }
 
 .card-projects {
@@ -265,15 +266,15 @@
   gap: 4px;
   flex-wrap: wrap;
   max-height: var(--cs-row-h);
-  overflow: hidden
+  overflow: hidden;
 }
 
 .card-projects:empty {
-  display: none
+  display: none;
 }
 
 .card.expanded .card-projects {
-  max-height: none
+  max-height: none;
 }
 
 .card-chevron {
@@ -288,28 +289,28 @@
   place-items: center;
   flex-shrink: 0;
   margin-top: 1px;
-  transition: all .12s
+  transition: all 0.12s;
 }
 
 .card-chevron:hover {
   background: var(--surface2);
-  color: var(--text)
+  color: var(--text);
 }
 
 .card-chevron svg {
-  transition: transform .18s
+  transition: transform 0.18s;
 }
 
 .card.expanded .card-chevron svg {
-  transform: rotate(180deg)
+  transform: rotate(180deg);
 }
 
 /* Badges */
 .badge {
-  font-family: 'JetBrains Mono', monospace;
+  font-family: "JetBrains Mono", monospace;
   font-size: 9px;
   line-height: 1.4;
-  letter-spacing: .03em;
+  letter-spacing: 0.03em;
   text-transform: uppercase;
   border-radius: 4px;
   padding: 2px 5px;
@@ -319,37 +320,37 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  border: 1px solid transparent
+  border: 1px solid transparent;
 }
 
 .badge-price[data-price="free"] {
-  background: rgba(79, 201, 126, .12);
+  background: rgba(79, 201, 126, 0.12);
   color: var(--price-free);
-  border-color: rgba(79, 201, 126, .25)
+  border-color: rgba(79, 201, 126, 0.25);
 }
 
 .badge-price[data-price="local"] {
   background: var(--accent-dim);
   color: var(--price-local);
-  border-color: var(--accent-mid)
+  border-color: var(--accent-mid);
 }
 
 .badge-price[data-price="paid"] {
-  background: rgba(201, 100, 100, .12);
+  background: rgba(201, 100, 100, 0.12);
   color: var(--price-paid);
-  border-color: rgba(201, 100, 100, .25)
+  border-color: rgba(201, 100, 100, 0.25);
 }
 
 .badge-price[data-price="conditional"] {
-  background: rgba(201, 166, 74, .12);
+  background: rgba(201, 166, 74, 0.12);
   color: var(--price-cond);
-  border-color: rgba(201, 166, 74, .25)
+  border-color: rgba(201, 166, 74, 0.25);
 }
 
 .badge-keyid {
   background: var(--surface3);
   color: var(--text2);
-  border-color: var(--border2)
+  border-color: var(--border2);
 }
 
 .badge-ptype {
@@ -357,43 +358,43 @@
   color: var(--accent);
   border-color: var(--accent-dim);
   font-size: 9px;
-  vertical-align: middle
+  vertical-align: middle;
 }
 
 .badge-env {
-  border: 1px solid transparent
+  border: 1px solid transparent;
 }
 
 .badge-env[data-env="production"] {
   background: var(--env-prod);
-  color: var(--env-prod-t)
+  color: var(--env-prod-t);
 }
 
 .badge-env[data-env="staging"] {
   background: var(--env-stage);
-  color: var(--env-stage-t)
+  color: var(--env-stage-t);
 }
 
 .badge-env[data-env="development"] {
   background: var(--env-dev);
-  color: var(--env-dev-t)
+  color: var(--env-dev-t);
 }
 
 .badge-env[data-env="testing"] {
   background: var(--env-test);
-  color: var(--env-test-t)
+  color: var(--env-test-t);
 }
 
 .badge-expiry-warn {
-  background: rgba(201, 166, 74, .15);
+  background: rgba(201, 166, 74, 0.15);
   color: var(--price-cond);
-  border-color: rgba(201, 166, 74, .3)
+  border-color: rgba(201, 166, 74, 0.3);
 }
 
 .badge-expiry-expired {
-  background: rgba(201, 100, 100, .15);
+  background: rgba(201, 100, 100, 0.15);
   color: var(--price-paid);
-  border-color: rgba(201, 100, 100, .3)
+  border-color: rgba(201, 100, 100, 0.3);
 }
 
 /* ── DESCRIPTION SECTION ───────────────────────────────
@@ -413,9 +414,16 @@
   font-size: var(--cs-desc);
   color: var(--text2);
   line-height: var(--cs-desc-lh);
-  /* Left inset lines the text up under the header text, past the icon. */
-  padding: 0 var(--cs-pad-x) calc(var(--cs-head-pb) + 1px)
-           calc(var(--cs-pad-x) + var(--cs-icon) + var(--cs-gap));
+  /* Left inset lines the text up under the header text, past the icon.
+
+     padding-bottom is 0 and the gap below is a margin, for the same reason the
+     tag band has none: `overflow:hidden` clips at the *padding* box. With an 11px
+     bottom padding the clip fell 11px below the three-line ceiling, so a fourth
+     line rendered into that strip and was sliced through — the ellipsis appeared
+     on line three and a half-height line four sat underneath it. A margin is
+     outside the clip box and cannot leak a line. */
+  padding: 0 var(--cs-pad-x) 0 calc(var(--cs-pad-x) + var(--cs-icon) + var(--cs-gap));
+  margin-bottom: calc(var(--cs-head-pb) + 1px);
   box-sizing: content-box;
   max-height: calc(var(--cs-desc-line) * var(--cs-desc-lines));
   display: -webkit-box;
@@ -453,11 +461,11 @@
   align-items: center;
   gap: 6px;
   min-width: 0;
-  overflow: hidden
+  overflow: hidden;
 }
 
 .card-foot > .icon-btn {
-  flex: 0 0 auto
+  flex: 0 0 auto;
 }
 
 .env-copy-btn {
@@ -475,14 +483,17 @@
   gap: 6px;
   cursor: pointer;
   color: var(--accent);
-  font-family: 'JetBrains Mono', monospace;
+  font-family: "JetBrains Mono", monospace;
   font-size: 10px;
   font-weight: 600;
   line-height: 1;
   white-space: nowrap;
   overflow: hidden;
-  transition: background .12s, border-color .12s, color .12s;
-  text-align: left
+  transition:
+    background 0.12s,
+    border-color 0.12s,
+    color 0.12s;
+  text-align: left;
 }
 
 /* The dotenv key — the only variable-width part of the button. */
@@ -491,42 +502,42 @@
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap
+  white-space: nowrap;
 }
 
 .env-copy-btn:hover {
   background: var(--accent-mid);
-  border-color: var(--accent)
+  border-color: var(--accent);
 }
 
 .env-copy-btn svg {
-  flex-shrink: 0
+  flex-shrink: 0;
 }
 
 .env-copied {
-  color: var(--price-free) !important
+  color: var(--price-free) !important;
 }
 
 .env-format-badge {
   flex: 0 0 auto;
-  font-family: 'JetBrains Mono', monospace;
+  font-family: "JetBrains Mono", monospace;
   font-size: 9px;
   color: var(--text3);
   background: var(--surface2);
   border: 1px solid var(--border);
   border-radius: 4px;
   padding: 1px 5px;
-  white-space: nowrap
+  white-space: nowrap;
 }
 
 /* ── EXPANDED BODY ─────────────────────────────────── */
 .card-body {
   display: none;
-  flex-direction: column
+  flex-direction: column;
 }
 
 .card.expanded .card-body {
-  display: flex
+  display: flex;
 }
 
 .key-section {
@@ -534,27 +545,27 @@
   border-top: 1px solid var(--border);
   display: flex;
   flex-direction: column;
-  gap: 8px
+  gap: 8px;
 }
 
 .key-row {
   display: flex;
   align-items: center;
-  gap: 8px
+  gap: 8px;
 }
 
 .key-label {
-  font-family: 'JetBrains Mono', monospace;
+  font-family: "JetBrains Mono", monospace;
   font-size: 9px;
   color: var(--text3);
   text-transform: uppercase;
-  letter-spacing: .08em;
+  letter-spacing: 0.08em;
   width: 72px;
-  flex-shrink: 0
+  flex-shrink: 0;
 }
 
 .key-value {
-  font-family: 'JetBrains Mono', monospace;
+  font-family: "JetBrains Mono", monospace;
   font-size: 10.5px;
   color: var(--text2);
   flex: 1;
@@ -567,25 +578,25 @@
   white-space: nowrap;
   min-width: 0;
   cursor: pointer;
-  transition: border-color .12s
+  transition: border-color 0.12s;
 }
 
 .key-value:hover {
-  border-color: var(--border3)
+  border-color: var(--border3);
 }
 
 .key-value.revealed {
-  color: var(--text)
+  color: var(--text);
 }
 
 .key-actions {
   display: flex;
   gap: 3px;
-  flex-shrink: 0
+  flex-shrink: 0;
 }
 
 .desc-section {
-  border-top: 1px solid var(--border)
+  border-top: 1px solid var(--border);
 }
 
 .desc-toggle {
@@ -597,25 +608,25 @@
   align-items: center;
   gap: 7px;
   cursor: pointer;
-  font-family: 'Syne', sans-serif;
+  font-family: "Syne", sans-serif;
   font-size: 11px;
   color: var(--text2);
   font-weight: 600;
   text-align: left;
-  transition: color .12s
+  transition: color 0.12s;
 }
 
 .desc-toggle:hover {
-  color: var(--text)
+  color: var(--text);
 }
 
 .desc-toggle svg {
-  transition: transform .18s;
-  flex-shrink: 0
+  transition: transform 0.18s;
+  flex-shrink: 0;
 }
 
 .desc-toggle.open svg {
-  transform: rotate(90deg)
+  transform: rotate(90deg);
 }
 
 .desc-content {
@@ -623,11 +634,11 @@
   padding: 0 15px 10px;
   font-size: 11.5px;
   color: var(--text2);
-  line-height: 1.6
+  line-height: 1.6;
 }
 
 .desc-content.open {
-  display: block
+  display: block;
 }
 
 .meta-section {
@@ -635,76 +646,76 @@
   padding: 10px 15px;
   display: flex;
   flex-direction: column;
-  gap: 6px
+  gap: 6px;
 }
 
 .meta-row {
   display: flex;
   gap: 8px;
-  align-items: flex-start
+  align-items: flex-start;
 }
 
 .meta-key {
-  font-family: 'JetBrains Mono', monospace;
+  font-family: "JetBrains Mono", monospace;
   font-size: 9px;
   color: var(--text3);
   text-transform: uppercase;
-  letter-spacing: .06em;
+  letter-spacing: 0.06em;
   width: 72px;
   flex-shrink: 0;
-  padding-top: 1px
+  padding-top: 1px;
 }
 
 .meta-val {
   color: var(--text2);
   flex: 1;
-  font-family: 'JetBrains Mono', monospace;
+  font-family: "JetBrains Mono", monospace;
   font-size: 10.5px;
   line-height: 1.5;
-  word-break: break-all
+  word-break: break-all;
 }
 
 .meta-val a {
   color: var(--accent);
-  text-decoration: none
+  text-decoration: none;
 }
 
 .meta-val a:hover {
-  text-decoration: underline
+  text-decoration: underline;
 }
 
 .scopes-row {
   display: flex;
   flex-wrap: wrap;
   gap: 4px;
-  padding: 0 15px 10px
+  padding: 0 15px 10px;
 }
 
 .scope-pill {
-  font-family: 'JetBrains Mono', monospace;
+  font-family: "JetBrains Mono", monospace;
   font-size: 9px;
   color: var(--text2);
   background: var(--surface2);
   border: 1px solid var(--border2);
   border-radius: 4px;
-  padding: 2px 6px
+  padding: 2px 6px;
 }
 
 .cat-pills {
   display: flex;
   flex-wrap: wrap;
   gap: 4px;
-  padding: 0 15px 10px
+  padding: 0 15px 10px;
 }
 
 .cat-pill {
-  font-family: 'JetBrains Mono', monospace;
+  font-family: "JetBrains Mono", monospace;
   font-size: 9px;
   color: var(--accent);
   background: var(--accent-dim);
   border: 1px solid var(--accent-mid);
   border-radius: 4px;
-  padding: 2px 6px
+  padding: 2px 6px;
 }
 
 /* ── EMPTY STATE ───────────────────────────────────── */
@@ -712,84 +723,91 @@
   text-align: center;
   padding: 60px 20px;
   color: var(--text3);
-  grid-column: 1/-1
+  grid-column: 1/-1;
 }
 
 .empty-state svg {
-  opacity: .2;
+  opacity: 0.2;
   display: block;
-  margin: 0 auto 12px
+  margin: 0 auto 12px;
 }
 
 .empty-state p {
   font-size: 13px;
-  margin-bottom: 4px
+  margin-bottom: 4px;
 }
 
 .empty-state small {
-  font-family: 'JetBrains Mono', monospace;
-  font-size: 11px
+  font-family: "JetBrains Mono", monospace;
+  font-size: 11px;
 }
 
 .badge-prefix {
-  background: rgba(88, 180, 220, .12);
+  background: rgba(88, 180, 220, 0.12);
   color: #58b4dc;
-  border-color: rgba(88, 180, 220, .25);
-  font-family: 'JetBrains Mono', monospace
+  border-color: rgba(88, 180, 220, 0.25);
+  font-family: "JetBrains Mono", monospace;
 }
 
 .badge-compromised {
-  background: rgba(201, 60, 60, .18);
+  background: rgba(201, 60, 60, 0.18);
   color: #ff6b6b;
-  border-color: rgba(201, 60, 60, .45);
-  font-weight: 700
+  border-color: rgba(201, 60, 60, 0.45);
+  font-weight: 700;
 }
 
 .badge-rotation-due {
-  background: rgba(230, 150, 50, .15);
+  background: rgba(230, 150, 50, 0.15);
   color: #e69632;
-  border-color: rgba(230, 150, 50, .35)
+  border-color: rgba(230, 150, 50, 0.35);
 }
 
 .chunk-ref-jump:hover {
   text-decoration: underline;
-  filter: brightness(1.25)
+  filter: brightness(1.25);
 }
 
 .usedby-row {
   display: flex;
   flex-wrap: wrap;
-  gap: 4px
+  gap: 4px;
 }
 
 .usedby-badge {
-  font-family: 'JetBrains Mono', monospace;
+  font-family: "JetBrains Mono", monospace;
   font-size: 9px;
   color: #58b4dc;
-  background: rgba(88, 180, 220, .1);
-  border: 1px solid rgba(88, 180, 220, .25);
+  background: rgba(88, 180, 220, 0.1);
+  border: 1px solid rgba(88, 180, 220, 0.25);
   border-radius: 4px;
-  padding: 1px 5px
+  padding: 1px 5px;
 }
 
 .chunk-ref-chunk {
   color: #b48ad0;
-  background: rgba(180, 138, 208, .12);
-  border-color: rgba(180, 138, 208, .3)
+  background: rgba(180, 138, 208, 0.12);
+  border-color: rgba(180, 138, 208, 0.3);
 }
 
 @keyframes flashHighlight {
-  0%, 100% { box-shadow: 0 0 0 0 transparent }
-  30% { box-shadow: 0 0 0 2px var(--accent), 0 0 18px 2px var(--accent-dim) }
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 transparent;
+  }
+  30% {
+    box-shadow:
+      0 0 0 2px var(--accent),
+      0 0 18px 2px var(--accent-dim);
+  }
 }
 
 .card.flash-highlight {
-  animation: flashHighlight 1.4s ease
+  animation: flashHighlight 1.4s ease;
 }
 
 /* Chunk type card — env-style field rows */
 .chunk-field-row .chunk-field-key {
-  font-family: 'JetBrains Mono', monospace;
+  font-family: "JetBrains Mono", monospace;
   font-size: 10px;
   color: var(--text2);
   text-transform: none;
@@ -798,6 +816,5 @@
   max-width: 180px;
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap
+  white-space: nowrap;
 }
-

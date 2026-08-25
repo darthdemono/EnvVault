@@ -12,7 +12,9 @@ use serde_json::Value;
 /// Map an env-var field suffix to the canonical vault-entry JSON field name.
 pub fn canonical_field(field: &str) -> &str {
     match field.to_uppercase().as_str() {
-        "APIKEY" | "API_KEY" | "KEY" | "TOKEN" | "ACCESS_TOKEN" | "BEARER" | "SECRET_KEY" => "api_key",
+        "APIKEY" | "API_KEY" | "KEY" | "TOKEN" | "ACCESS_TOKEN" | "BEARER" | "SECRET_KEY" => {
+            "api_key"
+        }
         "SECRET" | "API_SECRET" | "CLIENT_SECRET" | "SHARED_SECRET" => "api_secret",
         "USERNAME" | "USER" | "LOGIN" | "USER_NAME" => "username",
         "URL" | "URI" | "ENDPOINT" | "API_URL" | "BASE_URL" => "api_url",
@@ -71,7 +73,11 @@ pub fn env_copy_field() -> String {
         .filter(|p| p.exists())
         .and_then(|p| std::fs::read_to_string(p).ok())
         .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
-        .and_then(|v| v.get("envCopyField").and_then(|f| f.as_str()).map(String::from));
+        .and_then(|v| {
+            v.get("envCopyField")
+                .and_then(|f| f.as_str())
+                .map(String::from)
+        });
     match field.as_deref() {
         Some("api_secret") => "api_secret".into(),
         Some("key_id") => "key_id".into(),
@@ -89,21 +95,40 @@ pub struct Resolved {
 
 /// Resolve a whole field value. A value that is not a `${…}` reference comes back
 /// verbatim.
-pub fn resolve_value(entries: &[Value], projects: &[Value], raw: &str, env_field: &str) -> Resolved {
+pub fn resolve_value(
+    entries: &[Value],
+    projects: &[Value],
+    raw: &str,
+    env_field: &str,
+) -> Resolved {
     let trimmed = raw.trim();
     if !(trimmed.starts_with("${") && trimmed.ends_with('}') && trimmed.len() > 3) {
-        return Resolved { value: Some(raw.to_string()), unresolved: false };
+        return Resolved {
+            value: Some(raw.to_string()),
+            unresolved: false,
+        };
     }
     let inner = &trimmed[2..trimmed.len() - 1];
     match resolve_ref(entries, projects, inner, env_field, 0) {
-        Some(v) => Resolved { value: Some(v), unresolved: false },
-        None => Resolved { value: None, unresolved: true },
+        Some(v) => Resolved {
+            value: Some(v),
+            unresolved: false,
+        },
+        None => Resolved {
+            value: None,
+            unresolved: true,
+        },
     }
 }
 
 /// Resolve, falling back to the literal text when the reference is stale — what
 /// every exporter wants, since a literal `${…}` at least shows what broke.
-pub fn resolve_or_literal(entries: &[Value], projects: &[Value], raw: &str, env_field: &str) -> String {
+pub fn resolve_or_literal(
+    entries: &[Value],
+    projects: &[Value],
+    raw: &str,
+    env_field: &str,
+) -> String {
     resolve_value(entries, projects, raw, env_field)
         .value
         .unwrap_or_else(|| raw.to_string())
@@ -157,21 +182,39 @@ pub fn resolve_ref(
         // Honour envCopyField, falling back to api_key when the chosen field is
         // empty — the UI does the same, and an empty value in a .env is worse
         // than the "wrong" field.
-        let chosen = entry.get(env_field).and_then(|v| v.as_str()).filter(|s| !s.is_empty());
+        let chosen = entry
+            .get(env_field)
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty());
         return chosen
             .map(String::from)
-            .or_else(|| entry.get("api_key").and_then(|v| v.as_str()).map(String::from))
+            .or_else(|| {
+                entry
+                    .get("api_key")
+                    .and_then(|v| v.as_str())
+                    .map(String::from)
+            })
             .filter(|s| !s.is_empty());
     }
 
     // env_file chunks are the last fallback: a bare ${NAME} may name a key in a
     // project's .env chunk rather than a vault entry.
     for p in projects {
-        for c in p.get("chunks").and_then(|v| v.as_array()).into_iter().flatten() {
+        for c in p
+            .get("chunks")
+            .and_then(|v| v.as_array())
+            .into_iter()
+            .flatten()
+        {
             if c.get("chunk_type").and_then(|v| v.as_str()) != Some("env_file") {
                 continue;
             }
-            for f in c.get("fields").and_then(|v| v.as_array()).into_iter().flatten() {
+            for f in c
+                .get("fields")
+                .and_then(|v| v.as_array())
+                .into_iter()
+                .flatten()
+            {
                 if f.get("key").and_then(|v| v.as_str()) == Some(inner) {
                     return f.get("value").and_then(|v| v.as_str()).map(String::from);
                 }
@@ -212,16 +255,34 @@ impl Resolver {
 
     fn new(vault: &Value, redact: bool) -> Self {
         Self {
-            entries: vault.get("api_keys").and_then(|v| v.as_array()).cloned().unwrap_or_default(),
-            projects: vault.get("projects").and_then(|v| v.as_array()).cloned().unwrap_or_default(),
+            entries: vault
+                .get("api_keys")
+                .and_then(|v| v.as_array())
+                .cloned()
+                .unwrap_or_default(),
+            projects: vault
+                .get("projects")
+                .and_then(|v| v.as_array())
+                .cloned()
+                .unwrap_or_default(),
             env_field: env_copy_field(),
             redact,
         }
     }
 
     /// Explicit construction, for tests and for callers holding the pieces already.
-    pub fn from_parts(entries: Vec<Value>, projects: Vec<Value>, env_field: &str, redact: bool) -> Self {
-        Self { entries, projects, env_field: env_field.to_string(), redact }
+    pub fn from_parts(
+        entries: Vec<Value>,
+        projects: Vec<Value>,
+        env_field: &str,
+        redact: bool,
+    ) -> Self {
+        Self {
+            entries,
+            projects,
+            env_field: env_field.to_string(),
+            redact,
+        }
     }
 
     pub fn resolve(&self, raw: &str) -> Resolved {

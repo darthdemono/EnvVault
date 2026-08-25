@@ -10,12 +10,14 @@ import { st, resetViewState } from '../src/ts/state';
 import { exportEncryptedBackup, importEncryptedBackup } from '../src/ts/import-export';
 import { loadRealIndexHtml, makeEntry, makeProject, makeVault, resetState } from './helpers';
 
-const toasts: Array<{ msg: string; type: string }> = [];
+const toasts: { msg: string; type: string }[] = [];
 vi.mock('../src/ts/utils', async (importOriginal) => {
   const real = await importOriginal<typeof import('../src/ts/utils')>();
   return {
     ...real,
-    showToast: (msg: string, type = '') => { toasts.push({ msg, type }); },
+    showToast: (msg: string, type = '') => {
+      toasts.push({ msg, type });
+    },
     showConfirm: async () => true,
   };
 });
@@ -25,7 +27,7 @@ let downloaded: string | null = null;
 let downloadedBlob: Blob | null = null;
 
 /** Array.prototype.at is ES2022; this project's tsconfig targets ES2020. */
-const last = <T,>(arr: T[]): T => arr[arr.length - 1];
+const last = <T>(arr: T[]): T => arr[arr.length - 1];
 
 beforeEach(() => {
   loadRealIndexHtml();
@@ -69,7 +71,10 @@ describe('password floor', () => {
 describe('round trip', () => {
   beforeEach(() => {
     st.vault = makeVault({
-      projects: [makeProject({ id: 'Universal', name: 'Universal' }), makeProject({ id: 'p1', name: 'Acme' })],
+      projects: [
+        makeProject({ id: 'Universal', name: 'Universal' }),
+        makeProject({ id: 'p1', name: 'Acme' }),
+      ],
       user_categories: ['infra'],
       api_keys: [
         makeEntry({ id: 'a', provider: 'Alpha', api_key: 'sk-alpha' }),
@@ -82,7 +87,7 @@ describe('round trip', () => {
     const env = (await exportAndCapture(GOOD_PW))!;
     st.vault = makeVault();
     await importEncryptedBackup(env, GOOD_PW);
-    expect(st.vault.api_keys.map(e => e.provider)).toEqual(['Alpha', 'Bravo']);
+    expect(st.vault.api_keys.map((e) => e.provider)).toEqual(['Alpha', 'Bravo']);
     expect(st.vault.api_keys[0].api_key).toBe('sk-alpha');
   });
 
@@ -90,7 +95,7 @@ describe('round trip', () => {
     const env = (await exportAndCapture(GOOD_PW))!;
     st.vault = makeVault();
     await importEncryptedBackup(env, GOOD_PW);
-    expect(st.vault.projects.map(p => p.name)).toContain('Acme');
+    expect(st.vault.projects.map((p) => p.name)).toContain('Acme');
     expect(st.vault.user_categories).toEqual(['infra']);
   });
 
@@ -125,13 +130,15 @@ describe('round trip', () => {
 });
 
 describe('rejecting bad input', () => {
-  beforeEach(() => { st.vault = makeVault({ api_keys: [makeEntry({ provider: 'Alpha' })] }); });
+  beforeEach(() => {
+    st.vault = makeVault({ api_keys: [makeEntry({ provider: 'Alpha' })] });
+  });
 
   it('rejects the wrong password without touching the vault', async () => {
     const env = (await exportAndCapture(GOOD_PW))!;
     st.vault = makeVault({ api_keys: [makeEntry({ provider: 'Existing' })] });
     await importEncryptedBackup(env, 'wrong password here');
-    expect(st.vault.api_keys.map(e => e.provider)).toEqual(['Existing']);
+    expect(st.vault.api_keys.map((e) => e.provider)).toEqual(['Existing']);
     expect(last(toasts).msg).toMatch(/decryption failed/i);
   });
 
@@ -160,7 +167,7 @@ describe('rejecting bad input', () => {
     // count decrypted as "wrong password".
     const env = JSON.parse((await exportAndCapture(GOOD_PW))!);
     expect(env.kdf.iters).toBeGreaterThan(0);
-    env.kdf.iters = 1;                       // claim a count that does not match
+    env.kdf.iters = 1; // claim a count that does not match
     st.vault = makeVault();
     await importEncryptedBackup(JSON.stringify(env), GOOD_PW);
     // Deriving with the declared count now genuinely fails to decrypt, rather

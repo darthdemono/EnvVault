@@ -5,7 +5,6 @@
   "type": "object",
   "required": ["api_keys", "user_categories", "projects"],
   "properties": {
-
     "api_keys": {
       "type": "array",
       "description": "All stored secret entries.",
@@ -13,7 +12,6 @@
         "type": "object",
         "required": ["provider", "api_key", "secretType"],
         "properties": {
-
           "provider": {
             "type": "string",
             "description": "Name of the service, platform, or system (e.g. GitHub, Stripe, DATABASE_URL)."
@@ -56,7 +54,15 @@
           "secretType": {
             "type": "string",
             "description": "Kind of secret. Controls which form fields are shown and how the card renders. api_key: standard API key / token. password: username + password login. certificate: TLS/SSL cert (PEM). env_var: environment variable. connection_string: DB/service URL. ssh_key: SSH keypair. file_blob: arbitrary file reference.",
-            "enum": ["api_key", "password", "certificate", "env_var", "connection_string", "ssh_key", "file_blob"],
+            "enum": [
+              "api_key",
+              "password",
+              "certificate",
+              "env_var",
+              "connection_string",
+              "ssh_key",
+              "file_blob"
+            ],
             "default": "api_key"
           },
           "price_type": {
@@ -158,7 +164,20 @@
           "env_var_subtype": {
             "type": ["string", "null"],
             "description": "Display hint for env_var entries that controls validation and rendering.",
-            "enum": ["string", "multiline", "secret", "boolean", "number", "ip", "cidr", "port", "url", "date", "json", null],
+            "enum": [
+              "string",
+              "multiline",
+              "secret",
+              "boolean",
+              "number",
+              "ip",
+              "cidr",
+              "port",
+              "url",
+              "date",
+              "json",
+              null
+            ],
             "default": null
           },
 
@@ -170,7 +189,10 @@
               "required": ["value", "saved_at"],
               "properties": {
                 "value": { "type": "string", "description": "Previous secret value." },
-                "saved_at": { "type": "string", "description": "ISO 8601 UTC timestamp when this value was superseded." }
+                "saved_at": {
+                  "type": "string",
+                  "description": "ISO 8601 UTC timestamp when this value was superseded."
+                }
               }
             },
             "default": []
@@ -209,7 +231,15 @@
           "project_type": {
             "type": "string",
             "description": "High-level type of the project. Drives the structured config view (WireGuard peers, Docker Compose, Nginx blocks, K8s manifests, etc.).",
-            "enum": ["generic", "wireguard", "docker", "nginx", "kubernetes", "ssh_config", "traefik"],
+            "enum": [
+              "generic",
+              "wireguard",
+              "docker",
+              "nginx",
+              "kubernetes",
+              "ssh_config",
+              "traefik"
+            ],
             "default": "generic"
           },
           "chunks": {
@@ -220,18 +250,32 @@
               "required": ["id", "name", "chunk_type", "fields"],
               "properties": {
                 "id": { "type": "string", "description": "Stable UUID for this chunk." },
-                "name": { "type": "string", "description": "Display name (e.g. 'Interface', 'Peer — office', 'navidrome service')." },
+                "name": {
+                  "type": "string",
+                  "description": "Display name (e.g. 'Interface', 'Peer — office', 'navidrome service')."
+                },
                 "chunk_type": {
                   "type": "string",
                   "description": "Determines field schema and export format.",
                   "enum": [
-                    "wg_interface", "wg_peer",
-                    "docker_service", "docker_network", "docker_volume",
+                    "wg_interface",
+                    "wg_peer",
+                    "docker_service",
+                    "docker_network",
+                    "docker_volume",
                     "env_file",
-                    "nginx_server", "nginx_upstream", "nginx_location",
-                    "k8s_deployment", "k8s_service", "k8s_configmap", "k8s_secret", "k8s_ingress",
+                    "nginx_server",
+                    "nginx_upstream",
+                    "nginx_location",
+                    "k8s_deployment",
+                    "k8s_service",
+                    "k8s_configmap",
+                    "k8s_secret",
+                    "k8s_ingress",
                     "ssh_host",
-                    "traefik_router", "traefik_service", "traefik_middleware",
+                    "traefik_router",
+                    "traefik_service",
+                    "traefik_middleware",
                     "generic"
                   ]
                 },
@@ -242,16 +286,44 @@
                     "type": "object",
                     "required": ["key", "value", "field_type"],
                     "properties": {
-                      "key":        { "type": "string", "description": "Field key name (e.g. 'PrivateKey', 'POSTGRES_PASSWORD')." },
-                      "value":      { "type": "string", "description": "Raw value or '${REF_NAME}' to reference a vault env_var entry." },
+                      "key": {
+                        "type": "string",
+                        "description": "Field key name (e.g. 'PrivateKey', 'POSTGRES_PASSWORD')."
+                      },
+                      "value": {
+                        "type": "string",
+                        "description": "Raw value or '${REF_NAME}' to reference a vault env_var entry."
+                      },
                       "field_type": {
                         "type": "string",
                         "description": "How this field is categorised and exported.",
-                        "enum": ["var", "env_var", "secret", "list", "multiline", "port", "user_id", "subnet", "ip", "endpoint", "volume_mount"]
+                        "enum": [
+                          "var",
+                          "env_var",
+                          "secret",
+                          "list",
+                          "multiline",
+                          "port",
+                          "user_id",
+                          "subnet",
+                          "ip",
+                          "endpoint",
+                          "volume_mount"
+                        ]
                       },
-                      "ref_name":    { "type": ["string", "null"], "description": "If set, value is resolved from the vault entry where provider === ref_name and secretType === 'env_var'." },
-                      "secret":      { "type": "boolean", "description": "When true the value is masked in the UI.", "default": false },
-                      "description": { "type": ["string", "null"], "description": "Optional comment for this field." }
+                      "ref_name": {
+                        "type": ["string", "null"],
+                        "description": "If set, value is resolved from the vault entry where provider === ref_name and secretType === 'env_var'."
+                      },
+                      "secret": {
+                        "type": "boolean",
+                        "description": "When true the value is masked in the UI.",
+                        "default": false
+                      },
+                      "description": {
+                        "type": ["string", "null"],
+                        "description": "Optional comment for this field."
+                      }
                     }
                   },
                   "default": []
@@ -262,7 +334,13 @@
           }
         }
       },
-      "default": [{ "id": "Universal", "name": "Universal", "description": "All secrets belong here by default." }]
+      "default": [
+        {
+          "id": "Universal",
+          "name": "Universal",
+          "description": "All secrets belong here by default."
+        }
+      ]
     }
   }
 }

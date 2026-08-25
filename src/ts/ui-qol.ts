@@ -1,6 +1,7 @@
 /**
- * @file Small cross-cutting UX affordances: password reveal toggles, Caps Lock
- *       warnings, a password strength meter, and the recent-search dropdown.
+ * @file
+ * Small cross-cutting UX affordances: password reveal toggles, Caps Lock
+ * warnings, a password strength meter, and the recent-search dropdown.
  *
  * These are deliberately independent of `vault.ts`'s init: each `wire*` helper
  * is idempotent and binds to elements by id, so a screen that is rebuilt (the
@@ -14,7 +15,7 @@ import { esc } from './utils';
 // ── Password reveal ───────────────────────────────────────────────────────────
 
 const EYE_OPEN = `<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>`;
-const EYE_OFF  = `<path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/>`;
+const EYE_OFF = `<path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/>`;
 
 /**
  * Wires every `[data-reveal="<input id>"]` button to toggle its input's type.
@@ -25,7 +26,7 @@ const EYE_OFF  = `<path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a1
  * `showUnlockModal` already guards against on the server-URL field.
  */
 export function wireRevealButtons(root: ParentNode = document): void {
-  root.querySelectorAll<HTMLButtonElement>('[data-reveal]').forEach(btn => {
+  root.querySelectorAll<HTMLButtonElement>('[data-reveal]').forEach((btn) => {
     const input = document.getElementById(btn.dataset.reveal!) as HTMLInputElement | null;
     if (!input) return;
     btn.onclick = () => {
@@ -72,7 +73,7 @@ export function resetReveal(inputId: string): void {
  */
 export function wireCapsLockHint(inputId: string, hintId: string): void {
   const input = document.getElementById(inputId) as HTMLInputElement | null;
-  const hint  = document.getElementById(hintId);
+  const hint = document.getElementById(hintId);
   if (!input || !hint) return;
 
   const update = (e: KeyboardEvent) => {
@@ -83,12 +84,18 @@ export function wireCapsLockHint(inputId: string, hintId: string): void {
   };
   input.onkeyup = update;
   input.onkeydown = update;
-  input.onblur = () => { hint.style.display = 'none'; };
+  input.onblur = () => {
+    hint.style.display = 'none';
+  };
 }
 
 // ── Password strength ─────────────────────────────────────────────────────────
 
-export interface PasswordStrength { score: 0 | 1 | 2 | 3 | 4; label: string; color: string; }
+export interface PasswordStrength {
+  score: 0 | 1 | 2 | 3 | 4;
+  label: string;
+  color: string;
+}
 
 /**
  * A deliberately coarse strength estimate for the create-vault screen.
@@ -104,17 +111,17 @@ export function passwordStrength(pw: string): PasswordStrength {
   if (pw.length >= 12) bits++;
   if (pw.length >= 16) bits++;
   if (pw.length >= 24) bits++;
-  const classes = [/[a-z]/, /[A-Z]/, /[0-9]/, /[^A-Za-z0-9]/].filter(re => re.test(pw)).length;
+  const classes = [/[a-z]/, /[A-Z]/, /[0-9]/, /[^A-Za-z0-9]/].filter((re) => re.test(pw)).length;
   if (classes >= 3) bits++;
-  if (new Set(pw).size < Math.min(6, pw.length)) bits--;   // "aaaaaaaaaaaa" is not strong
+  if (new Set(pw).size < Math.min(6, pw.length)) bits--; // "aaaaaaaaaaaa" is not strong
 
   const score = Math.max(0, Math.min(4, bits)) as 0 | 1 | 2 | 3 | 4;
   const table: Record<number, [string, string]> = {
-    0: ['Weak',       'var(--danger, #e05)'],
-    1: ['Weak',       'var(--danger, #e05)'],
-    2: ['Fair',       'var(--warn, #e8a33d)'],
-    3: ['Good',       'var(--accent)'],
-    4: ['Strong',     'var(--ok, #3ec98a)'],
+    0: ['Weak', 'var(--danger, #e05)'],
+    1: ['Weak', 'var(--danger, #e05)'],
+    2: ['Fair', 'var(--warn, #e8a33d)'],
+    3: ['Good', 'var(--accent)'],
+    4: ['Strong', 'var(--ok, #3ec98a)'],
   };
   const [label, color] = table[score];
   return { score, label, color };
@@ -123,8 +130,8 @@ export function passwordStrength(pw: string): PasswordStrength {
 /** Live-updates the strength meter beside a new-password field. */
 export function wirePasswordStrength(inputId: string, wrapId: string): void {
   const input = document.getElementById(inputId) as HTMLInputElement | null;
-  const wrap  = document.getElementById(wrapId);
-  const fill  = document.getElementById(`${wrapId}-fill`);
+  const wrap = document.getElementById(wrapId);
+  const fill = document.getElementById(`${wrapId}-fill`);
   const label = document.getElementById(`${wrapId}-label`);
   if (!input || !wrap || !fill || !label) return;
 
@@ -159,7 +166,10 @@ export function openSearchHistory(onPick: (q: string) => void): boolean {
   if (!panel) return false;
 
   const items = (Settings.get('recentSearches') || []).slice(0, RECENT_SEARCH_MAX);
-  if (!items.length) { panel.style.display = 'none'; return false; }
+  if (!items.length) {
+    panel.style.display = 'none';
+    return false;
+  }
 
   // Search strings are user input that has been round-tripped through
   // localStorage — a vault imported from elsewhere never touches this, but the
@@ -168,10 +178,13 @@ export function openSearchHistory(onPick: (q: string) => void): boolean {
   panel.innerHTML =
     `<div class="search-history-head">Recent searches` +
     `<button type="button" class="search-history-clear" data-clear-history>Clear</button></div>` +
-    items.map(q =>
-      `<button type="button" class="search-history-item" data-recent="${esc(q)}">` +
-      `${CLOCK_SVG}<span>${esc(q)}</span></button>`,
-    ).join('');
+    items
+      .map(
+        (q) =>
+          `<button type="button" class="search-history-item" data-recent="${esc(q)}">` +
+          `${CLOCK_SVG}<span>${esc(q)}</span></button>`,
+      )
+      .join('');
   panel.style.display = 'block';
 
   panel.onclick = (e) => {
@@ -200,10 +213,17 @@ export function wireSearchHistory(onPick: (q: string) => void): void {
   const input = document.getElementById('search') as HTMLInputElement | null;
   if (!input) return;
 
-  input.addEventListener('focus', () => { if (!input.value.trim()) openSearchHistory(onPick); });
-  input.addEventListener('input', () => { if (input.value) closeSearchHistory(); });
+  input.addEventListener('focus', () => {
+    if (!input.value.trim()) openSearchHistory(onPick);
+  });
+  input.addEventListener('input', () => {
+    if (input.value) closeSearchHistory();
+  });
   input.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter')  { pushRecentSearch(input.value); closeSearchHistory(); }
+    if (e.key === 'Enter') {
+      pushRecentSearch(input.value);
+      closeSearchHistory();
+    }
     if (e.key === 'Escape') closeSearchHistory();
   });
   input.addEventListener('blur', () => {
@@ -230,16 +250,16 @@ export function relativeTime(iso: string | undefined | null): string {
   // clock runs ahead of ours, which is normal across machines, and it must read
   // as "just now" rather than "in -3 minutes".
   const secs = Math.round((Date.now() - then) / 1000);
-  if (secs < 60)    return 'just now';
+  if (secs < 60) return 'just now';
   const mins = Math.round(secs / 60);
-  if (mins < 60)    return `${mins} minute${mins === 1 ? '' : 's'} ago`;
+  if (mins < 60) return `${mins} minute${mins === 1 ? '' : 's'} ago`;
   const hours = Math.round(mins / 60);
-  if (hours < 24)   return `${hours} hour${hours === 1 ? '' : 's'} ago`;
+  if (hours < 24) return `${hours} hour${hours === 1 ? '' : 's'} ago`;
   const days = Math.round(hours / 24);
-  if (days === 1)   return 'yesterday';
-  if (days < 30)    return `${days} days ago`;
+  if (days === 1) return 'yesterday';
+  if (days < 30) return `${days} days ago`;
   const months = Math.round(days / 30);
-  if (months < 12)  return `${months} month${months === 1 ? '' : 's'} ago`;
+  if (months < 12) return `${months} month${months === 1 ? '' : 's'} ago`;
   return `${Math.round(months / 12)} year${Math.round(months / 12) === 1 ? '' : 's'} ago`;
 }
 

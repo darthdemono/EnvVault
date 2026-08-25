@@ -12,9 +12,18 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { st } from '../src/ts/state';
 import {
-  exportWireGuard, exportDockerCompose, exportK8s, exportSshConfig, exportNginx,
+  exportWireGuard,
+  exportDockerCompose,
+  exportK8s,
+  exportSshConfig,
+  exportNginx,
 } from '../src/ts/chunk-ops';
-import { parseWgConf, parseSshConfig, parseNginxConf, parseDockerCompose } from '../src/ts/chunks/parsers';
+import {
+  parseWgConf,
+  parseSshConfig,
+  parseNginxConf,
+  parseDockerCompose,
+} from '../src/ts/chunks/parsers';
 import { loadRealIndexHtml, makeEntry, makeProject, makeVault, resetState } from './helpers';
 
 const chunk = (over: any) => ({ id: crypto.randomUUID(), fields: [], ...over });
@@ -28,14 +37,19 @@ beforeEach(() => {
 describe('exportWireGuard', () => {
   function projectWith(value: string) {
     return makeProject({
-      id: 'p1', name: 'VPN', project_type: 'wireguard',
-      chunks: [chunk({
-        name: 'Interface', chunk_type: 'wg_interface',
-        fields: [
-          { key: 'PrivateKey', value, field_type: 'secret', secret: true },
-          { key: 'Address', value: '10.0.0.1/24', field_type: 'subnet' },
-        ],
-      })],
+      id: 'p1',
+      name: 'VPN',
+      project_type: 'wireguard',
+      chunks: [
+        chunk({
+          name: 'Interface',
+          chunk_type: 'wg_interface',
+          fields: [
+            { key: 'PrivateKey', value, field_type: 'secret', secret: true },
+            { key: 'Address', value: '10.0.0.1/24', field_type: 'subnet' },
+          ],
+        }),
+      ],
     } as any);
   }
 
@@ -90,15 +104,20 @@ describe('exportWireGuard', () => {
 describe('exportDockerCompose', () => {
   function projectWith(envValue: string) {
     return makeProject({
-      id: 'p1', name: 'Stack', project_type: 'docker',
-      chunks: [chunk({
-        name: 'web', chunk_type: 'docker_service',
-        fields: [
-          { key: 'image', value: 'nginx:alpine', field_type: 'var' },
-          { key: 'ports', value: '80:80', field_type: 'port' },
-          { key: 'DB_PASSWORD', value: envValue, field_type: 'env_var', description: 'env' },
-        ],
-      })],
+      id: 'p1',
+      name: 'Stack',
+      project_type: 'docker',
+      chunks: [
+        chunk({
+          name: 'web',
+          chunk_type: 'docker_service',
+          fields: [
+            { key: 'image', value: 'nginx:alpine', field_type: 'var' },
+            { key: 'ports', value: '80:80', field_type: 'port' },
+            { key: 'DB_PASSWORD', value: envValue, field_type: 'env_var', description: 'env' },
+          ],
+        }),
+      ],
     } as any);
   }
 
@@ -147,7 +166,7 @@ describe('exportDockerCompose', () => {
   it('round-trips the service through the compose parser', () => {
     const { yaml } = exportDockerCompose(projectWith('literal-value'));
     const reparsed = parseDockerCompose(yaml);
-    const web = reparsed.find(c => c.chunk_type === 'docker_service')!;
+    const web = reparsed.find((c) => c.chunk_type === 'docker_service')!;
     expect(web.name).toBe('web');
     expect(field(web, 'image').value).toBe('nginx:alpine');
   });
@@ -156,19 +175,27 @@ describe('exportDockerCompose', () => {
 describe('exportK8s', () => {
   function secretProject(value: string) {
     return makeProject({
-      id: 'p1', name: 'K8s', project_type: 'kubernetes',
-      chunks: [chunk({
-        name: 'app-secret', chunk_type: 'k8s_secret',
-        fields: [
-          { key: 'name', value: 'app-secret', field_type: 'var' },
-          { key: 'DB_PASSWORD', value, field_type: 'secret', secret: true },
-        ],
-      })],
+      id: 'p1',
+      name: 'K8s',
+      project_type: 'kubernetes',
+      chunks: [
+        chunk({
+          name: 'app-secret',
+          chunk_type: 'k8s_secret',
+          fields: [
+            { key: 'name', value: 'app-secret', field_type: 'var' },
+            { key: 'DB_PASSWORD', value, field_type: 'secret', secret: true },
+          ],
+        }),
+      ],
     } as any);
   }
 
   const dataValue = (manifest: string) =>
-    manifest.split('\n').find(l => l.trim().startsWith('DB_PASSWORD:'))!.split(': ')[1];
+    manifest
+      .split('\n')
+      .find((l) => l.trim().startsWith('DB_PASSWORD:'))!
+      .split(': ')[1];
 
   it('base64-encodes an ASCII secret', () => {
     const out = exportK8s(secretProject('hunter2'));
@@ -188,28 +215,35 @@ describe('exportK8s', () => {
     // than the one stored — wrong, and silently so.
     const out = exportK8s(secretProject('café'));
     expect(dataValue(out)).toBe(Buffer.from('café', 'utf8').toString('base64'));
-    expect(dataValue(out)).not.toBe('Y2Fm6Q==');   // the old Latin-1 output
+    expect(dataValue(out)).not.toBe('Y2Fm6Q=='); // the old Latin-1 output
   });
 
   it('resolves a reference before encoding it', () => {
     // A field holding ${DB_PASSWORD} was base64'd literally, shipping the
     // placeholder text to the cluster as if it were the secret.
-    st.vault = makeVault({ api_keys: [makeEntry({ provider: 'DbPass', api_key: 'resolved-secret' })] });
+    st.vault = makeVault({
+      api_keys: [makeEntry({ provider: 'DbPass', api_key: 'resolved-secret' })],
+    });
     const out = exportK8s(secretProject('${DbPass/key}'));
     expect(dataValue(out)).toBe(Buffer.from('resolved-secret', 'utf8').toString('base64'));
   });
 
   it('emits a deployment manifest', () => {
     const proj = makeProject({
-      id: 'p1', name: 'K8s', project_type: 'kubernetes',
-      chunks: [chunk({
-        name: 'api', chunk_type: 'k8s_deployment',
-        fields: [
-          { key: 'name', value: 'api', field_type: 'var' },
-          { key: 'image', value: 'api:1.2.3', field_type: 'var' },
-          { key: 'replicas', value: '3', field_type: 'var' },
-        ],
-      })],
+      id: 'p1',
+      name: 'K8s',
+      project_type: 'kubernetes',
+      chunks: [
+        chunk({
+          name: 'api',
+          chunk_type: 'k8s_deployment',
+          fields: [
+            { key: 'name', value: 'api', field_type: 'var' },
+            { key: 'image', value: 'api:1.2.3', field_type: 'var' },
+            { key: 'replicas', value: '3', field_type: 'var' },
+          ],
+        }),
+      ],
     } as any);
     const out = exportK8s(proj);
     expect(out).toContain('kind: Deployment');
@@ -219,10 +253,20 @@ describe('exportK8s', () => {
 
   it('separates multiple manifests with a document marker', () => {
     const proj = makeProject({
-      id: 'p1', name: 'K8s', project_type: 'kubernetes',
+      id: 'p1',
+      name: 'K8s',
+      project_type: 'kubernetes',
       chunks: [
-        chunk({ name: 'a', chunk_type: 'k8s_service', fields: [{ key: 'name', value: 'a', field_type: 'var' }] }),
-        chunk({ name: 'b', chunk_type: 'k8s_service', fields: [{ key: 'name', value: 'b', field_type: 'var' }] }),
+        chunk({
+          name: 'a',
+          chunk_type: 'k8s_service',
+          fields: [{ key: 'name', value: 'a', field_type: 'var' }],
+        }),
+        chunk({
+          name: 'b',
+          chunk_type: 'k8s_service',
+          fields: [{ key: 'name', value: 'b', field_type: 'var' }],
+        }),
       ],
     } as any);
     expect(exportK8s(proj).split('\n---\n')).toHaveLength(2);
@@ -232,14 +276,19 @@ describe('exportK8s', () => {
 describe('exportSshConfig', () => {
   it('round-trips through the ssh_config parser', () => {
     const proj = makeProject({
-      id: 'p1', name: 'Hosts', project_type: 'ssh_config',
-      chunks: [chunk({
-        name: 'prod', chunk_type: 'ssh_host',
-        fields: [
-          { key: 'HostName', value: '10.0.0.1', field_type: 'var' },
-          { key: 'User', value: 'deploy', field_type: 'var' },
-        ],
-      })],
+      id: 'p1',
+      name: 'Hosts',
+      project_type: 'ssh_config',
+      chunks: [
+        chunk({
+          name: 'prod',
+          chunk_type: 'ssh_host',
+          fields: [
+            { key: 'HostName', value: '10.0.0.1', field_type: 'var' },
+            { key: 'User', value: 'deploy', field_type: 'var' },
+          ],
+        }),
+      ],
     } as any);
     const reparsed = parseSshConfig(exportSshConfig(proj));
     expect(reparsed).toHaveLength(1);
@@ -251,18 +300,23 @@ describe('exportSshConfig', () => {
 describe('exportNginx', () => {
   it('round-trips a server block through the nginx parser', () => {
     const proj = makeProject({
-      id: 'p1', name: 'Web', project_type: 'nginx',
-      chunks: [chunk({
-        name: 'example.com:443', chunk_type: 'nginx_server',
-        fields: [
-          { key: 'listen', value: '443 ssl', field_type: 'port' },
-          { key: 'server_name', value: 'example.com', field_type: 'var' },
-          { key: 'root', value: '/var/www/html', field_type: 'var' },
-        ],
-      })],
+      id: 'p1',
+      name: 'Web',
+      project_type: 'nginx',
+      chunks: [
+        chunk({
+          name: 'example.com:443',
+          chunk_type: 'nginx_server',
+          fields: [
+            { key: 'listen', value: '443 ssl', field_type: 'port' },
+            { key: 'server_name', value: 'example.com', field_type: 'var' },
+            { key: 'root', value: '/var/www/html', field_type: 'var' },
+          ],
+        }),
+      ],
     } as any);
     const reparsed = parseNginxConf(exportNginx(proj));
-    const server = reparsed.find(c => c.chunk_type === 'nginx_server')!;
+    const server = reparsed.find((c) => c.chunk_type === 'nginx_server')!;
     expect(server).toBeDefined();
     expect(field(server, 'server_name').value).toBe('example.com');
     expect(field(server, 'root').value).toBe('/var/www/html');
@@ -278,12 +332,17 @@ describe('disabled chunks are excluded from exports', () => {
   // Compose service still came up.
   const withDisabled = (type: any, chunkType: string, fields: any[]) =>
     makeProject({
-      id: 'p1', name: 'P', project_type: type,
+      id: 'p1',
+      name: 'P',
+      project_type: type,
       chunks: [
         chunk({ name: 'live', chunk_type: chunkType, fields }),
-        chunk({ name: 'off', chunk_type: chunkType, disabled: true, fields: [
-          { key: fields[0].key, value: 'NEVER_EXPORTED', field_type: 'var' },
-        ] }),
+        chunk({
+          name: 'off',
+          chunk_type: chunkType,
+          disabled: true,
+          fields: [{ key: fields[0].key, value: 'NEVER_EXPORTED', field_type: 'var' }],
+        }),
       ],
     } as any);
 
@@ -326,14 +385,19 @@ describe('exportNginx resolves references', () => {
       api_keys: [makeEntry({ provider: 'TLS', api_key: '/etc/ssl/fullchain.pem' })],
     });
     const proj = makeProject({
-      id: 'p1', name: 'Web', project_type: 'nginx',
-      chunks: [chunk({
-        name: 'HTTPS', chunk_type: 'nginx_server',
-        fields: [
-          { key: 'listen', value: '443 ssl', field_type: 'port' },
-          { key: 'ssl_certificate', value: '${TLS}', field_type: 'cert' },
-        ],
-      })],
+      id: 'p1',
+      name: 'Web',
+      project_type: 'nginx',
+      chunks: [
+        chunk({
+          name: 'HTTPS',
+          chunk_type: 'nginx_server',
+          fields: [
+            { key: 'listen', value: '443 ssl', field_type: 'port' },
+            { key: 'ssl_certificate', value: '${TLS}', field_type: 'cert' },
+          ],
+        }),
+      ],
     } as any);
     const out = exportNginx(proj);
     expect(out).toContain('ssl_certificate /etc/ssl/fullchain.pem;');

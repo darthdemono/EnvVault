@@ -54,11 +54,22 @@ struct Cli {
     /// id with any subcommand argument of the same name, so a plain `user` id
     /// made `envv user token ls deploy` set this flag to "deploy" and refuse to
     /// run without --server.
-    #[arg(long = "user", value_name = "USERNAME", env = "ENVV_USER", global = true)]
+    #[arg(
+        long = "user",
+        value_name = "USERNAME",
+        env = "ENVV_USER",
+        global = true
+    )]
     as_user: Option<String>,
 
     /// Authenticate with an API token instead of a password (requires --server).
-    #[arg(long = "token", value_name = "TOKEN", env = "ENVV_TOKEN", global = true, hide_env_values = true)]
+    #[arg(
+        long = "token",
+        value_name = "TOKEN",
+        env = "ENVV_TOKEN",
+        global = true,
+        hide_env_values = true
+    )]
     api_token: Option<String>,
 
     /// Skip confirmation prompts on destructive commands.
@@ -116,6 +127,13 @@ struct Cli {
     command: Commands,
 }
 
+// clippy::large_enum_variant — the `Entry` variant carries the whole `EntryCmd`
+// subcommand tree and is ~800 bytes against a ~145-byte median. Boxing it is
+// clippy's suggested fix and the wrong one here: `#[command(subcommand)]` on a
+// `Box<EntryCmd>` is not part of clap's derive contract, and this enum is
+// constructed exactly once per process, from argv, and immediately matched. The
+// size costs one stack frame at startup.
+#[allow(clippy::large_enum_variant)]
 #[derive(Subcommand)]
 enum Commands {
     /// List vault entries (table view).
@@ -396,14 +414,9 @@ enum EntryCmd {
         create: bool,
     },
     /// Rename an entry, rewriting every ${ref} that points at it.
-    Rename {
-        provider: String,
-        new_name: String,
-    },
+    Rename { provider: String, new_name: String },
     /// Delete an entry.
-    Rm {
-        provider: String,
-    },
+    Rm { provider: String },
     /// Add or remove tags.
     Tag {
         provider: String,
@@ -443,14 +456,9 @@ enum EntryCmd {
         generate: bool,
     },
     /// Show previous values of an entry's secret.
-    History {
-        provider: String,
-    },
+    History { provider: String },
     /// Restore a previous value by its position in `entry history`.
-    Restore {
-        provider: String,
-        version: usize,
-    },
+    Restore { provider: String, version: usize },
 }
 
 #[derive(Subcommand)]
@@ -461,9 +469,7 @@ enum ProjectCmd {
         json: bool,
     },
     /// Print a project as JSON, chunks included.
-    Show {
-        project: String,
-    },
+    Show { project: String },
     /// Create a project, with starter chunks for its type.
     Add {
         /// Name. Slash segments nest: "Acme/Web" creates "Acme" if absent.
@@ -499,9 +505,7 @@ enum ProjectCmd {
         slug: Option<String>,
     },
     /// Delete a project; sub-projects are promoted to top level.
-    Rm {
-        project: String,
-    },
+    Rm { project: String },
     /// Export a project's config in its native format.
     Export {
         project: String,
@@ -577,10 +581,17 @@ enum ChunkCmd {
 #[derive(Subcommand)]
 enum CategoryCmd {
     Ls,
-    Add { name: String },
-    Rename { name: String, new_name: String },
+    Add {
+        name: String,
+    },
+    Rename {
+        name: String,
+        new_name: String,
+    },
     /// Delete a category and its slash-nested children.
-    Rm { name: String },
+    Rm {
+        name: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -773,16 +784,18 @@ enum PermCmd {
         write: Option<String>,
     },
     /// Parse an expression without storing it.
-    Check {
-        expression: String,
-    },
+    Check { expression: String },
 }
 
 // ── Entry point ───────────────────────────────────────────────────────────────
 
 fn main() {
     let cli = Cli::parse();
-    out::init(out::Mode { json: cli.json, reveal: cli.reveal, dry_run: cli.dry_run });
+    out::init(out::Mode {
+        json: cli.json,
+        reveal: cli.reveal,
+        dry_run: cli.dry_run,
+    });
 
     // `completions` and `describe` write a document and must never ask for a
     // password — they are the two commands a caller runs *before* it has one.
@@ -819,7 +832,10 @@ fn run(cli: &Cli) -> CliResult {
         None => Vec::new(),
     };
     let dotenv_get = |key: &str| {
-        dotenv.iter().find(|(k, _)| k == key).map(|(_, v)| v.clone())
+        dotenv
+            .iter()
+            .find(|(k, _)| k == key)
+            .map(|(_, v)| v.clone())
     };
 
     let password = session::resolve_password(
@@ -870,17 +886,17 @@ fn run(cli: &Cli) -> CliResult {
     // A cached session that the server no longer knows is not a permissions
     // problem the caller can fix by retrying — drop it and say so, or every
     // later command fails the same way with the same unhelpful 401.
-    if let (Err(e), Some(server), true) =
-        (&result, server.as_deref(), cached.is_some())
-    {
+    if let (Err(e), Some(server), true) = (&result, server.as_deref(), cached.is_some()) {
         if e.code == envv_cli::error::Code::Denied {
             // Clear only the identity that was actually used. Dropping every
             // session for the server because one expired would log the other
             // cached users out too, which they would discover one at a time.
-            let subject = cli
-                .as_user
-                .clone()
-                .or_else(|| session::describe(server)?.get("default")?.as_str().map(String::from));
+            let subject = cli.as_user.clone().or_else(|| {
+                session::describe(server)?
+                    .get("default")?
+                    .as_str()
+                    .map(String::from)
+            });
             let _ = session::clear(server, subject.as_deref());
             let as_who = subject
                 .as_deref()
@@ -901,7 +917,10 @@ fn finish(result: CliResult) {
         Ok(()) => {}
         Err(e) => {
             if out::is_json() {
-                println!("{}", serde_json::to_string_pretty(&e.to_json()).unwrap_or_default());
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&e.to_json()).unwrap_or_default()
+                );
             } else {
                 eprintln!("Error: {}", e.message);
             }
@@ -939,7 +958,11 @@ fn cmd_login(cli: &Cli, password: Option<&str>) -> CliResult {
     // occupy the owner's slot.
     let subject = cli.as_user.as_deref().unwrap_or(session::OWNER_SUBJECT);
     session::save(server, &remote.token, subject)?;
-    let label = if subject == session::OWNER_SUBJECT { "the vault owner" } else { subject };
+    let label = if subject == session::OWNER_SUBJECT {
+        "the vault owner"
+    } else {
+        subject
+    };
     out::ok(
         "login",
         serde_json::json!({
@@ -964,10 +987,14 @@ fn cmd_login(cli: &Cli, password: Option<&str>) -> CliResult {
 /// person.
 fn cmd_whoami(cli: &Cli) -> CliResult {
     let Some(server) = cli.server.as_deref() else {
-        out::ok("whoami", serde_json::json!({ "mode": "local", "subject": "owner" }), || {
-            println!("Local vault at {}", access::default_db_path().display());
-            println!("Authenticated as the vault owner (by deriving the key).");
-        });
+        out::ok(
+            "whoami",
+            serde_json::json!({ "mode": "local", "subject": "owner" }),
+            || {
+                println!("Local vault at {}", access::default_db_path().display());
+                println!("Authenticated as the vault owner (by deriving the key).");
+            },
+        );
         return Ok(());
     };
 
@@ -996,12 +1023,21 @@ fn cmd_whoami(cli: &Cli) -> CliResult {
 
     let created = entry
         .as_ref()
-        .and_then(|e| e.get("subjects")?.get(&subject)?.get("created_at")?.as_str())
+        .and_then(|e| {
+            e.get("subjects")?
+                .get(&subject)?
+                .get("created_at")?
+                .as_str()
+        })
         .unwrap_or("unknown")
         .to_string();
     let others: Vec<String> = entry
         .as_ref()
-        .and_then(|e| e.get("subjects")?.as_object().map(|m| m.keys().cloned().collect()))
+        .and_then(|e| {
+            e.get("subjects")?
+                .as_object()
+                .map(|m| m.keys().cloned().collect())
+        })
         .unwrap_or_default();
 
     out::ok(
@@ -1015,9 +1051,20 @@ fn cmd_whoami(cli: &Cli) -> CliResult {
             "cached_subjects": others,
         }),
         || {
-            let label = if subject == session::OWNER_SUBJECT { "the vault owner" } else { &subject };
+            let label = if subject == session::OWNER_SUBJECT {
+                "the vault owner"
+            } else {
+                &subject
+            };
             println!("{label} @ {server}");
-            println!("Session cached {created}, {}", if live { "valid" } else { "REJECTED — log in again" });
+            println!(
+                "Session cached {created}, {}",
+                if live {
+                    "valid"
+                } else {
+                    "REJECTED — log in again"
+                }
+            );
             if others.len() > 1 {
                 println!("Other cached identities here: {}", others.join(", "));
             }
@@ -1035,7 +1082,9 @@ fn cmd_logout(cli: &Cli, all: bool) -> CliResult {
         return Ok(());
     }
     let Some(server) = cli.server.as_deref() else {
-        return Err(CliError::invalid("Pass --server URL, or --all to clear every session"));
+        return Err(CliError::invalid(
+            "Pass --server URL, or --all to clear every session",
+        ));
     };
     // `--user alice` forgets only alice; without it the server's every identity
     // goes. Logging one person out of a shared workstation must not silently log
@@ -1085,7 +1134,11 @@ fn cmd_sessions() -> CliResult {
                 return;
             }
             for r in &rows {
-                let mark = if r["default"].as_bool() == Some(true) { "*" } else { " " };
+                let mark = if r["default"].as_bool() == Some(true) {
+                    "*"
+                } else {
+                    " "
+                };
                 println!(
                     "{mark} {:<24} {:<40} {}",
                     r["subject"].as_str().unwrap_or(""),
@@ -1206,7 +1259,15 @@ fn dispatch(cli: &Cli, a: &Access) -> CliResult {
         | Commands::Sessions
         | Commands::Logout { .. } => Ok(()),
 
-        Commands::List { project, r#type, tag, env, category, search, json } => entries::cmd_list(
+        Commands::List {
+            project,
+            r#type,
+            tag,
+            env,
+            category,
+            search,
+            json,
+        } => entries::cmd_list(
             a,
             project.as_deref(),
             r#type.as_deref(),
@@ -1217,9 +1278,12 @@ fn dispatch(cli: &Cli, a: &Access) -> CliResult {
             *json,
         ),
         Commands::Get { provider, field } => entries::cmd_get(a, provider, field.as_deref()),
-        Commands::Export { format, project, name, out } => {
-            envfile::export_vault(a, format, project.as_deref(), name, out.as_deref())
-        }
+        Commands::Export {
+            format,
+            project,
+            name,
+            out,
+        } => envfile::export_vault(a, format, project.as_deref(), name, out.as_deref()),
         Commands::RotateCheck { days } => {
             let list = a.expiring(*days)?;
             let safe = out::redact_entries(&list);
@@ -1237,7 +1301,15 @@ fn dispatch(cli: &Cli, a: &Access) -> CliResult {
             );
             Ok(())
         }
-        Commands::Import { file, project, category, env, price, allow_duplicates, json } => {
+        Commands::Import {
+            file,
+            project,
+            category,
+            env,
+            price,
+            allow_duplicates,
+            json,
+        } => {
             if *json {
                 envfile::import_json(a, file, yes)
             } else {
@@ -1261,7 +1333,11 @@ fn dispatch(cli: &Cli, a: &Access) -> CliResult {
                 cmd_audit(a, *limit)
             }
         }
-        Commands::Watch { file, project, category } => envfile::watch(
+        Commands::Watch {
+            file,
+            project,
+            category,
+        } => envfile::watch(
             a,
             file,
             &envfile::ImportOpts {
@@ -1274,7 +1350,13 @@ fn dispatch(cli: &Cli, a: &Access) -> CliResult {
         ),
         Commands::Env { project, out } => chunks::export(a, project, Some("env"), out.as_deref()),
 
-        Commands::Exec { project, entries: entry_specs, prefix, clean, argv } => {
+        Commands::Exec {
+            project,
+            entries: entry_specs,
+            prefix,
+            clean,
+            argv,
+        } => {
             let opts = exec::ExecOpts {
                 project: project.as_deref(),
                 entries: entry_specs,
@@ -1287,12 +1369,22 @@ fn dispatch(cli: &Cli, a: &Access) -> CliResult {
             }
             Ok(())
         }
-        Commands::Render { template, out, strict } => {
-            render::cmd_render(a, template.as_deref(), out.as_deref(), *strict)
-        }
+        Commands::Render {
+            template,
+            out,
+            strict,
+        } => render::cmd_render(a, template.as_deref(), out.as_deref(), *strict),
 
         Commands::Entry { cmd } => match cmd {
-            EntryCmd::Ls { project, r#type, tag, env, category, search, json } => entries::cmd_list(
+            EntryCmd::Ls {
+                project,
+                r#type,
+                tag,
+                env,
+                category,
+                search,
+                json,
+            } => entries::cmd_list(
                 a,
                 project.as_deref(),
                 r#type.as_deref(),
@@ -1303,22 +1395,33 @@ fn dispatch(cli: &Cli, a: &Access) -> CliResult {
                 *json,
             ),
             EntryCmd::Get { provider, field } => entries::cmd_get(a, provider, field.as_deref()),
-            EntryCmd::Add { provider, fields, if_missing } => {
-                entries::cmd_add(a, provider, fields, *if_missing)
-            }
-            EntryCmd::Set { provider, fields, create } => {
-                entries::cmd_set(a, provider, fields, *create)
-            }
+            EntryCmd::Add {
+                provider,
+                fields,
+                if_missing,
+            } => entries::cmd_add(a, provider, fields, *if_missing),
+            EntryCmd::Set {
+                provider,
+                fields,
+                create,
+            } => entries::cmd_set(a, provider, fields, *create),
             EntryCmd::Rename { provider, new_name } => entries::cmd_rename(a, provider, new_name),
             EntryCmd::Rm { provider } => entries::cmd_rm(a, provider, yes),
-            EntryCmd::Tag { provider, add, remove } => entries::cmd_tag(a, provider, add, remove),
+            EntryCmd::Tag {
+                provider,
+                add,
+                remove,
+            } => entries::cmd_tag(a, provider, add, remove),
             EntryCmd::Pin { provider, off } => entries::cmd_flag(a, provider, "pinned", !*off),
             EntryCmd::Compromise { provider, off } => {
                 entries::cmd_flag(a, provider, "compromised", !*off)
             }
-            EntryCmd::Rotate { provider, key, stdin, generate } => {
-                entries::cmd_rotate(a, provider, key.as_deref(), *stdin, *generate)
-            }
+            EntryCmd::Rotate {
+                provider,
+                key,
+                stdin,
+                generate,
+            } => entries::cmd_rotate(a, provider, key.as_deref(), *stdin, *generate),
             EntryCmd::History { provider } => entries::cmd_history(a, provider),
             EntryCmd::Restore { provider, version } => {
                 entries::cmd_restore(a, provider, *version, yes)
@@ -1328,7 +1431,14 @@ fn dispatch(cli: &Cli, a: &Access) -> CliResult {
         Commands::Project { cmd } => match cmd {
             ProjectCmd::Ls { json } => projects::cmd_ls(a, *json),
             ProjectCmd::Show { project } => projects::cmd_show(a, project),
-            ProjectCmd::Add { name, ptype, desc, slug, experimental, if_missing } => projects::cmd_add(
+            ProjectCmd::Add {
+                name,
+                ptype,
+                desc,
+                slug,
+                experimental,
+                if_missing,
+            } => projects::cmd_add(
                 a,
                 name,
                 ptype,
@@ -1337,7 +1447,11 @@ fn dispatch(cli: &Cli, a: &Access) -> CliResult {
                 *experimental,
                 *if_missing,
             ),
-            ProjectCmd::Rename { project, new_name, slug } => {
+            ProjectCmd::Rename {
+                project,
+                new_name,
+                slug,
+            } => {
                 if new_name.is_none() && slug.is_none() {
                     return Err(CliError::invalid(
                         "Nothing to change — give a new name, --slug, or both",
@@ -1346,21 +1460,42 @@ fn dispatch(cli: &Cli, a: &Access) -> CliResult {
                 projects::cmd_rename(a, project, new_name.as_deref(), slug.as_deref())
             }
             ProjectCmd::Rm { project } => projects::cmd_rm(a, project, yes),
-            ProjectCmd::Export { project, format, out } => {
-                chunks::export(a, project, format.as_deref(), out.as_deref())
-            }
+            ProjectCmd::Export {
+                project,
+                format,
+                out,
+            } => chunks::export(a, project, format.as_deref(), out.as_deref()),
             ProjectCmd::Chunk { cmd } => match cmd {
                 ChunkCmd::Ls { project } => chunks::ls(a, project),
-                ChunkCmd::Show { project, chunk, raw } => chunks::show(a, project, chunk, *raw),
-                ChunkCmd::Add { project, name, ctype } => chunks::add(a, project, name, ctype),
+                ChunkCmd::Show {
+                    project,
+                    chunk,
+                    raw,
+                } => chunks::show(a, project, chunk, *raw),
+                ChunkCmd::Add {
+                    project,
+                    name,
+                    ctype,
+                } => chunks::add(a, project, name, ctype),
                 ChunkCmd::Rm { project, chunk } => chunks::rm(a, project, chunk, yes),
-                ChunkCmd::Rename { project, chunk, new_name } => {
-                    chunks::rename(a, project, chunk, new_name)
-                }
-                ChunkCmd::Set { project, chunk, pairs, field_type, secret, append } => {
-                    chunks::set(a, project, chunk, pairs, field_type, *secret, *append)
-                }
-                ChunkCmd::Unset { project, chunk, keys } => chunks::unset(a, project, chunk, keys),
+                ChunkCmd::Rename {
+                    project,
+                    chunk,
+                    new_name,
+                } => chunks::rename(a, project, chunk, new_name),
+                ChunkCmd::Set {
+                    project,
+                    chunk,
+                    pairs,
+                    field_type,
+                    secret,
+                    append,
+                } => chunks::set(a, project, chunk, pairs, field_type, *secret, *append),
+                ChunkCmd::Unset {
+                    project,
+                    chunk,
+                    keys,
+                } => chunks::unset(a, project, chunk, keys),
                 ChunkCmd::Disable { project, chunk } => chunks::toggle(a, project, chunk, true),
                 ChunkCmd::Enable { project, chunk } => chunks::toggle(a, project, chunk, false),
             },
@@ -1376,7 +1511,11 @@ fn dispatch(cli: &Cli, a: &Access) -> CliResult {
         Commands::Tags => entries::cmd_tags(a),
 
         Commands::Gen { cmd } => match cmd {
-            GenCmd::Cert { common_name, days, save_as } => {
+            GenCmd::Cert {
+                common_name,
+                days,
+                save_as,
+            } => {
                 let v = gen::certificate(common_name, *days)?;
                 let provider = save_as.as_deref().unwrap_or(common_name);
                 let fields = EntryFields {
@@ -1384,7 +1523,12 @@ fn dispatch(cli: &Cli, a: &Access) -> CliResult {
                     cert: v.get("cert_pem").and_then(|c| c.as_str()).map(String::from),
                     cert_key: v.get("key_pem").and_then(|c| c.as_str()).map(String::from),
                     cert_issuer: Some("EnvV".into()),
-                    key: Some(v.get("cert_pem").and_then(|c| c.as_str()).unwrap_or("").to_string()),
+                    key: Some(
+                        v.get("cert_pem")
+                            .and_then(|c| c.as_str())
+                            .unwrap_or("")
+                            .to_string(),
+                    ),
                     generate_bytes: 32,
                     generate_format: "base64url".into(),
                     ..Default::default()
@@ -1396,8 +1540,14 @@ fn dispatch(cli: &Cli, a: &Access) -> CliResult {
                 let provider = save_as.as_deref().unwrap_or("ssh-key");
                 let fields = EntryFields {
                     secret_type: Some("ssh_key".into()),
-                    key: v.get("private_key_openssh").and_then(|c| c.as_str()).map(String::from),
-                    notes: v.get("public_key").and_then(|c| c.as_str()).map(String::from),
+                    key: v
+                        .get("private_key_openssh")
+                        .and_then(|c| c.as_str())
+                        .map(String::from),
+                    notes: v
+                        .get("public_key")
+                        .and_then(|c| c.as_str())
+                        .map(String::from),
                     generate_bytes: 32,
                     generate_format: "base64url".into(),
                     ..Default::default()
@@ -1409,15 +1559,23 @@ fn dispatch(cli: &Cli, a: &Access) -> CliResult {
         },
 
         Commands::Backup { cmd } => match cmd {
-            BackupCmd::Export { file, backup_password } => {
-                backup::export(a, file, backup_password.as_deref())
-            }
-            BackupCmd::Import { file, backup_password } => {
-                backup::import(a, file, backup_password.as_deref(), yes)
-            }
+            BackupCmd::Export {
+                file,
+                backup_password,
+            } => backup::export(a, file, backup_password.as_deref()),
+            BackupCmd::Import {
+                file,
+                backup_password,
+            } => backup::import(a, file, backup_password.as_deref(), yes),
         },
 
-        Commands::Enrich { apply, force, only, online, timeout } => enrich::cmd_enrich(
+        Commands::Enrich {
+            apply,
+            force,
+            only,
+            online,
+            timeout,
+        } => enrich::cmd_enrich(
             a,
             &enrich::EnrichOpts {
                 apply: *apply,
@@ -1432,24 +1590,37 @@ fn dispatch(cli: &Cli, a: &Access) -> CliResult {
 
         Commands::User { cmd } => match cmd {
             UserCmd::Ls { json } => users_cmd::user_ls(a, *json),
-            UserCmd::Add { username, user_password, no_password } => {
-                users_cmd::user_add(a, username, user_password.as_deref(), *no_password)
-            }
+            UserCmd::Add {
+                username,
+                user_password,
+                no_password,
+            } => users_cmd::user_add(a, username, user_password.as_deref(), *no_password),
             UserCmd::Rm { user } => users_cmd::user_rm(a, user, yes),
             UserCmd::Rename { user, new_name } => users_cmd::user_rename(a, user, new_name),
             UserCmd::Passwd { user, clear } => users_cmd::user_passwd(a, user, *clear),
             UserCmd::Class { user, class, none } => {
                 let target = if *none { None } else { class.as_deref() };
                 if target.is_none() && !*none {
-                    return Err(CliError::invalid("Name a class, or pass --none to unassign"));
+                    return Err(CliError::invalid(
+                        "Name a class, or pass --none to unassign",
+                    ));
                 }
                 users_cmd::user_class(a, user, target)
             }
             UserCmd::Token { cmd } => match cmd {
                 TokenCmd::Ls { user } => users_cmd::token_ls(a, user),
-                TokenCmd::New { user, desc, expires, out } => {
-                    users_cmd::token_new(a, user, desc.as_deref(), expires.as_deref(), out.as_deref())
-                }
+                TokenCmd::New {
+                    user,
+                    desc,
+                    expires,
+                    out,
+                } => users_cmd::token_new(
+                    a,
+                    user,
+                    desc.as_deref(),
+                    expires.as_deref(),
+                    out.as_deref(),
+                ),
                 TokenCmd::Revoke { user, token_id } => {
                     users_cmd::token_revoke(a, user, token_id, yes)
                 }
@@ -1458,39 +1629,51 @@ fn dispatch(cli: &Cli, a: &Access) -> CliResult {
 
         Commands::Class { cmd } => match cmd {
             ClassCmd::Ls { json } => users_cmd::class_ls(a, *json),
-            ClassCmd::Add { name, desc, manage_users, manage_classes, delete_projects } => {
-                users_cmd::class_add(
-                    a,
-                    name,
-                    desc,
-                    &users_cmd::ClassCaps {
-                        manage_users: *manage_users,
-                        manage_classes: *manage_classes,
-                        delete_projects: *delete_projects,
-                    },
-                )
-            }
-            ClassCmd::Set { class, name, desc, manage_users, manage_classes, delete_projects } => {
-                users_cmd::class_set(
-                    a,
-                    class,
-                    name.as_deref(),
-                    desc.as_deref(),
-                    &users_cmd::ClassCaps {
-                        manage_users: *manage_users,
-                        manage_classes: *manage_classes,
-                        delete_projects: *delete_projects,
-                    },
-                )
-            }
+            ClassCmd::Add {
+                name,
+                desc,
+                manage_users,
+                manage_classes,
+                delete_projects,
+            } => users_cmd::class_add(
+                a,
+                name,
+                desc,
+                &users_cmd::ClassCaps {
+                    manage_users: *manage_users,
+                    manage_classes: *manage_classes,
+                    delete_projects: *delete_projects,
+                },
+            ),
+            ClassCmd::Set {
+                class,
+                name,
+                desc,
+                manage_users,
+                manage_classes,
+                delete_projects,
+            } => users_cmd::class_set(
+                a,
+                class,
+                name.as_deref(),
+                desc.as_deref(),
+                &users_cmd::ClassCaps {
+                    manage_users: *manage_users,
+                    manage_classes: *manage_classes,
+                    delete_projects: *delete_projects,
+                },
+            ),
             ClassCmd::Rm { class } => users_cmd::class_rm(a, class, yes),
         },
 
         Commands::Perm { cmd } => match cmd {
             PermCmd::Show { kind, subject } => users_cmd::perm_show(a, kind, subject),
-            PermCmd::Set { kind, subject, read, write } => {
-                users_cmd::perm_set(a, kind, subject, read.as_deref(), write.as_deref())
-            }
+            PermCmd::Set {
+                kind,
+                subject,
+                read,
+                write,
+            } => users_cmd::perm_set(a, kind, subject, read.as_deref(), write.as_deref()),
             PermCmd::Check { expression } => users_cmd::perm_check(expression),
         },
     }
@@ -1516,27 +1699,33 @@ fn cmd_audit(access: &Access, limit: usize) -> CliResult {
         Access::Remote(c) => c.get_audit()?.into_iter().take(limit).collect(),
     };
 
-    out::ok("audit", serde_json::json!({ "count": rows.len(), "rows": rows }), || {
-        println!(
-            "{:<6} {:<10} {:<25} {:<22} {}",
-            "ID", "Action", "Provider", "Timestamp", "Hash prefix"
-        );
-        println!("{}", "-".repeat(80));
-        for r in &rows {
-            let hash_prefix = r
-                .get("entry_hash")
-                .and_then(|h| h.as_str())
-                .map(|h| h.chars().take(12).collect::<String>())
-                .unwrap_or_else(|| "—".into());
+    out::ok(
+        "audit",
+        serde_json::json!({ "count": rows.len(), "rows": rows }),
+        || {
             println!(
-                "{:<6} {:<10} {:<25} {:<22} {}",
-                r.get("id").and_then(|v| v.as_i64()).unwrap_or(0),
-                r.get("action").and_then(|v| v.as_str()).unwrap_or(""),
-                r.get("entry_provider").and_then(|v| v.as_str()).unwrap_or("—"),
-                r.get("timestamp").and_then(|v| v.as_str()).unwrap_or(""),
-                hash_prefix,
+                "{:<6} {:<10} {:<25} {:<22} Hash prefix",
+                "ID", "Action", "Provider", "Timestamp"
             );
-        }
-    });
+            println!("{}", "-".repeat(80));
+            for r in &rows {
+                let hash_prefix = r
+                    .get("entry_hash")
+                    .and_then(|h| h.as_str())
+                    .map(|h| h.chars().take(12).collect::<String>())
+                    .unwrap_or_else(|| "—".into());
+                println!(
+                    "{:<6} {:<10} {:<25} {:<22} {}",
+                    r.get("id").and_then(|v| v.as_i64()).unwrap_or(0),
+                    r.get("action").and_then(|v| v.as_str()).unwrap_or(""),
+                    r.get("entry_provider")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("—"),
+                    r.get("timestamp").and_then(|v| v.as_str()).unwrap_or(""),
+                    hash_prefix,
+                );
+            }
+        },
+    );
     Ok(())
 }

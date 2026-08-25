@@ -33,7 +33,11 @@ pub fn init(mode: Mode) {
 }
 
 pub fn mode() -> Mode {
-    *MODE.get().unwrap_or(&Mode { json: false, reveal: false, dry_run: false })
+    *MODE.get().unwrap_or(&Mode {
+        json: false,
+        reveal: false,
+        dry_run: false,
+    })
 }
 
 pub fn is_json() -> bool {
@@ -90,8 +94,7 @@ pub fn masked_json(value: &str) -> Value {
 /// `blob_ref` and `api_url` are deliberately absent: a path and a URL are
 /// locating information, and blanking them would make the redacted view useless
 /// for deciding *which* entry you are looking at.
-const SECRET_FIELDS: [&str; 4] =
-    ["api_key", "api_secret", "certificate_data", "cert_key_data"];
+const SECRET_FIELDS: [&str; 4] = ["api_key", "api_secret", "certificate_data", "cert_key_data"];
 
 /// Redact a single vault entry for JSON output. Returns it unchanged when
 /// `--reveal` is in force.
@@ -156,7 +159,10 @@ pub fn redact_entries(entries: &[Value]) -> Vec<Value> {
 
 /// True when a chunk field holds secret material.
 pub fn chunk_field_is_secret(field: &Value) -> bool {
-    field.get("secret").and_then(|s| s.as_bool()).unwrap_or(false)
+    field
+        .get("secret")
+        .and_then(|s| s.as_bool())
+        .unwrap_or(false)
         || field.get("field_type").and_then(|t| t.as_str()) == Some("secret")
 }
 
@@ -169,7 +175,9 @@ pub fn redact_project(project: &Value) -> Value {
     if let Some(chunks) = p.get_mut("chunks").and_then(|c| c.as_array_mut()) {
         for c in chunks.iter_mut() {
             let is_env_file = c.get("chunk_type").and_then(|t| t.as_str()) == Some("env_file");
-            let Some(fields) = c.get_mut("fields").and_then(|f| f.as_array_mut()) else { continue };
+            let Some(fields) = c.get_mut("fields").and_then(|f| f.as_array_mut()) else {
+                continue;
+            };
             for f in fields.iter_mut() {
                 // Every value in an env_file is destined for a `.env`, so treat
                 // the whole chunk as secret rather than trusting per-field flags
@@ -177,7 +185,11 @@ pub fn redact_project(project: &Value) -> Value {
                 if !(is_env_file || chunk_field_is_secret(f)) {
                     continue;
                 }
-                let raw = f.get("value").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                let raw = f
+                    .get("value")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
                 // A `${ref}` is a pointer, not a secret. Leaving it visible is
                 // what lets an agent wire configs together without ever holding
                 // the value the pointer resolves to.

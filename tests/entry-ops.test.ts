@@ -7,7 +7,14 @@
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { st, entryId } from '../src/ts/state';
-import { deleteKey, duplicateKey, saveModal, fillForm, populateProjectSelect, buildCatChips } from '../src/ts/modals';
+import {
+  deleteKey,
+  duplicateKey,
+  saveModal,
+  fillForm,
+  populateProjectSelect,
+  buildCatChips,
+} from '../src/ts/modals';
 import { renameProviderRefs } from '../src/ts/chunk-ops';
 import { loadRealIndexHtml, makeEntry, makeProject, makeVault, resetState } from './helpers';
 
@@ -35,33 +42,33 @@ describe('deleteKey undo', () => {
 
   it('restores the entry to its original slot', () => {
     deleteKey(evt(), 1);
-    expect(st.vault.api_keys.map(e => e.id)).toEqual(['a', 'c', 'd']);
+    expect(st.vault.api_keys.map((e) => e.id)).toEqual(['a', 'c', 'd']);
     st.undoStack[0].fn();
-    expect(st.vault.api_keys.map(e => e.id)).toEqual(['a', 'b', 'c', 'd']);
+    expect(st.vault.api_keys.map((e) => e.id)).toEqual(['a', 'b', 'c', 'd']);
   });
 
   it('still restores to the right slot after a second delete shifted the array', () => {
     // The bug: undo replayed a captured index, so a delete in between put the
     // restored entry back in the wrong place.
-    deleteKey(evt(), 2);              // remove Charlie -> a, b, d
+    deleteKey(evt(), 2); // remove Charlie -> a, b, d
     const undoCharlie = st.undoStack[0].fn;
-    deleteKey(evt(), 0);              // remove Alpha   -> b, d
+    deleteKey(evt(), 0); // remove Alpha   -> b, d
     undoCharlie();
-    expect(st.vault.api_keys.map(e => e.id)).toEqual(['b', 'c', 'd']);
+    expect(st.vault.api_keys.map((e) => e.id)).toEqual(['b', 'c', 'd']);
   });
 
   it('appends when the entry that followed is itself gone', () => {
-    deleteKey(evt(), 2);              // remove Charlie, anchored on Delta
+    deleteKey(evt(), 2); // remove Charlie, anchored on Delta
     const undoCharlie = st.undoStack[0].fn;
-    deleteKey(evt(), 2);              // remove Delta
+    deleteKey(evt(), 2); // remove Delta
     undoCharlie();
-    expect(st.vault.api_keys.map(e => e.id)).toEqual(['a', 'b', 'c']);
+    expect(st.vault.api_keys.map((e) => e.id)).toEqual(['a', 'b', 'c']);
   });
 
   it('restores a deleted last entry to the end', () => {
     deleteKey(evt(), 3);
     st.undoStack[0].fn();
-    expect(st.vault.api_keys.map(e => e.id)).toEqual(['a', 'b', 'c', 'd']);
+    expect(st.vault.api_keys.map((e) => e.id)).toEqual(['a', 'b', 'c', 'd']);
   });
 
   it('clears the reveal state of the deleted entry', () => {
@@ -83,15 +90,17 @@ describe('duplicateKey', () => {
     expect(st.vault.api_keys[1].id).toBeTruthy();
   });
 
-  it('does not inherit the source entry\'s rotation history', () => {
+  it("does not inherit the source entry's rotation history", () => {
     // version_history holds *previous secret values*. Copying it handed the new
     // entry a log of another entry's secrets, visible in its history panel.
-    st.vault.api_keys = [makeEntry({
-      id: 'a',
-      provider: 'Alpha',
-      version_history: [{ value: 'old-secret-value', saved_at: '2020-01-01T00:00:00Z' }],
-      last_rotated_at: '2020-01-01',
-    })];
+    st.vault.api_keys = [
+      makeEntry({
+        id: 'a',
+        provider: 'Alpha',
+        version_history: [{ value: 'old-secret-value', saved_at: '2020-01-01T00:00:00Z' }],
+        last_rotated_at: '2020-01-01',
+      }),
+    ];
     duplicateKey(evt(), 0);
     const copy = st.vault.api_keys[1];
     expect(copy.version_history).toBeUndefined();
@@ -109,7 +118,7 @@ describe('duplicateKey', () => {
   it('inserts the copy directly after the source', () => {
     st.vault.api_keys = [makeEntry({ id: 'a' }), makeEntry({ id: 'b' })];
     duplicateKey(evt(), 0);
-    expect(st.vault.api_keys.map(e => e.id)[1]).not.toBe('b');
+    expect(st.vault.api_keys.map((e) => e.id)[1]).not.toBe('b');
     expect(st.vault.api_keys).toHaveLength(3);
   });
 });
@@ -121,25 +130,31 @@ describe('renameProviderRefs', () => {
         makeProject({
           id: 'p1',
           name: 'Infra',
-          chunks: [{
-            id: 'c1', name: 'web', chunk_type: 'generic',
-            fields: [
-              { key: 'bare',      value: '${Stripe}',            field_type: 'text' },
-              { key: 'withField', value: '${Stripe/api_url}',    field_type: 'text' },
-              { key: 'other',     value: '${Twilio/api_key}',    field_type: 'text' },
-              { key: 'chunkRef',  value: '${chunk:web/bare}',    field_type: 'text' },
-              { key: 'literal',   value: 'not-a-ref',            field_type: 'text' },
-            ],
-          }],
+          chunks: [
+            {
+              id: 'c1',
+              name: 'web',
+              chunk_type: 'generic',
+              fields: [
+                { key: 'bare', value: '${Stripe}', field_type: 'text' },
+                { key: 'withField', value: '${Stripe/api_url}', field_type: 'text' },
+                { key: 'other', value: '${Twilio/api_key}', field_type: 'text' },
+                { key: 'chunkRef', value: '${chunk:web/bare}', field_type: 'text' },
+                { key: 'literal', value: 'not-a-ref', field_type: 'text' },
+              ],
+            },
+          ],
         } as any),
       ],
     });
   }
 
-  beforeEach(() => { st.vault = vaultWithRefs(); });
+  beforeEach(() => {
+    st.vault = vaultWithRefs();
+  });
 
-  const fields = () => (st.vault.projects[0].chunks![0].fields as any[]);
-  const byKey = (k: string) => fields().find(f => f.key === k).value;
+  const fields = () => st.vault.projects[0].chunks![0].fields as any[];
+  const byKey = (k: string) => fields().find((f) => f.key === k).value;
 
   it('rewrites both the bare and the field-suffixed reference', () => {
     const n = renameProviderRefs('Stripe', null, 'StripeLive', null);
@@ -192,11 +207,16 @@ describe('saveModal provider rename', () => {
       projects: [
         makeProject({ id: 'Universal', name: 'Universal' }),
         makeProject({
-          id: 'p1', name: 'Infra',
-          chunks: [{
-            id: 'c1', name: 'web', chunk_type: 'generic',
-            fields: [{ key: 'k', value: '${Stripe/api_key}', field_type: 'text' }],
-          }],
+          id: 'p1',
+          name: 'Infra',
+          chunks: [
+            {
+              id: 'c1',
+              name: 'web',
+              chunk_type: 'generic',
+              fields: [{ key: 'k', value: '${Stripe/api_key}', field_type: 'text' }],
+            },
+          ],
         } as any),
       ],
       api_keys: [makeEntry({ id: 'a', provider: 'Stripe', api_key: 'sk-1' })],

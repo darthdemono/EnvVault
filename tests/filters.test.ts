@@ -1,5 +1,11 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { getDescendantProjectIds, buildProjectTree, parseSearch, getFiltered, sorted } from '../src/ts/filters';
+import {
+  getDescendantProjectIds,
+  buildProjectTree,
+  parseSearch,
+  getFiltered,
+  sorted,
+} from '../src/ts/filters';
 import { st } from '../src/ts/state';
 import { makeEntry, makeProject, makeVault, resetState } from './helpers';
 
@@ -115,7 +121,7 @@ describe('buildProjectTree', () => {
       makeProject({ id: '3', name: 'Alpha/z' }),
       makeProject({ id: '4', name: 'Alpha/a' }),
     ]);
-    expect(tree.map(n => n.name)).toEqual(['Alpha', 'Zeta']);
+    expect(tree.map((n) => n.name)).toEqual(['Alpha', 'Zeta']);
     expect(tree[0].children.map((c: any) => c.name)).toEqual(['Alpha/a', 'Alpha/z']);
   });
 });
@@ -148,7 +154,11 @@ describe('getFiltered', () => {
       makeEntry({ provider: 'other', projectIds: ['Universal', 'z'] }),
     ];
     st.currentSelectedProjectIds = ['a'];
-    expect(getFiltered().map(e => e.provider).sort()).toEqual(['child', 'root']);
+    expect(
+      getFiltered()
+        .map((e) => e.provider)
+        .sort(),
+    ).toEqual(['child', 'root']);
   });
 
   it('filters by tag via the sidebar tag filter', () => {
@@ -157,7 +167,7 @@ describe('getFiltered', () => {
       makeEntry({ provider: 'untagged' }),
     ];
     st.activeTagFilter = 'db';
-    expect(getFiltered().map(e => e.provider)).toEqual(['tagged']);
+    expect(getFiltered().map((e) => e.provider)).toEqual(['tagged']);
   });
 
   it('filters by env prefix', () => {
@@ -166,7 +176,7 @@ describe('getFiltered', () => {
       makeEntry({ provider: 'none' }),
     ];
     st.activePrefixFilter = 'VITE_';
-    expect(getFiltered().map(e => e.provider)).toEqual(['pfx']);
+    expect(getFiltered().map((e) => e.provider)).toEqual(['pfx']);
   });
 
   it('stacks the env filter with the tag filter', () => {
@@ -177,7 +187,7 @@ describe('getFiltered', () => {
     ];
     st.currentEnvFilter = 'production';
     st.activeTagFilter = 'db';
-    expect(getFiltered().map(e => e.provider)).toEqual(['both']);
+    expect(getFiltered().map((e) => e.provider)).toEqual(['both']);
   });
 
   it('matches free text case-insensitively across provider and description', () => {
@@ -187,7 +197,11 @@ describe('getFiltered', () => {
       makeEntry({ provider: 'Vercel' }),
     ];
     st.searchQ = 'github';
-    expect(getFiltered().map(e => e.provider).sort()).toEqual(['GitHub', 'Stripe']);
+    expect(
+      getFiltered()
+        .map((e) => e.provider)
+        .sort(),
+    ).toEqual(['GitHub', 'Stripe']);
   });
 
   it('supports /regex/ search syntax', () => {
@@ -197,7 +211,11 @@ describe('getFiltered', () => {
       makeEntry({ provider: 'cache-prod' }),
     ];
     st.searchQ = '/^db-/';
-    expect(getFiltered().map(e => e.provider).sort()).toEqual(['db-prod', 'db-staging']);
+    expect(
+      getFiltered()
+        .map((e) => e.provider)
+        .sort(),
+    ).toEqual(['db-prod', 'db-staging']);
   });
 
   it('falls back to substring match when the regex is malformed', () => {
@@ -216,7 +234,7 @@ describe('getFiltered', () => {
       makeEntry({ provider: 'Third' }),
     ];
     st.searchQ = 'postgres://user@host';
-    expect(getFiltered().map(e => e.provider)).toEqual(['DB']);
+    expect(getFiltered().map((e) => e.provider)).toEqual(['DB']);
   });
 
   it('returns nothing when a URL search matches nothing', () => {
@@ -232,7 +250,11 @@ describe('getFiltered', () => {
       makeEntry({ provider: 'sibling', categories: ['infrastructure'] }),
     ];
     st.filter = { type: 'category', value: 'infra' };
-    expect(getFiltered().map(e => e.provider).sort()).toEqual(['child', 'exact']);
+    expect(
+      getFiltered()
+        .map((e) => e.provider)
+        .sort(),
+    ).toEqual(['child', 'exact']);
   });
 
   it('defaults a missing secretType to api_key when filtering by type', () => {
@@ -248,7 +270,7 @@ describe('sorted', () => {
       makeEntry({ provider: 'Aaa' }),
       makeEntry({ provider: 'Zzz', pinned: true }),
     ]);
-    expect(out.map(e => e.provider)).toEqual(['Zzz', 'Aaa']);
+    expect(out.map((e) => e.provider)).toEqual(['Zzz', 'Aaa']);
   });
 
   it('orders by price tier then name', () => {
@@ -259,7 +281,7 @@ describe('sorted', () => {
       makeEntry({ provider: 'f1', price_type: 'free' }),
       makeEntry({ provider: 'l', price_type: 'local' }),
     ]);
-    expect(out.map(e => e.provider)).toEqual(['f1', 'f2', 'l', 'p']);
+    expect(out.map((e) => e.provider)).toEqual(['f1', 'f2', 'l', 'p']);
   });
 
   it('sorts entries with no expiry last', () => {
@@ -269,7 +291,7 @@ describe('sorted', () => {
       makeEntry({ provider: 'soon', expires_at: '2020-01-01T00:00:00Z' }),
       makeEntry({ provider: 'later', expires_at: '2030-01-01T00:00:00Z' }),
     ]);
-    expect(out.map(e => e.provider)).toEqual(['soon', 'later', 'never']);
+    expect(out.map((e) => e.provider)).toEqual(['soon', 'later', 'never']);
   });
 
   it('does not mutate the array it is given', () => {
