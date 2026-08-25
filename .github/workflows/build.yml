@@ -568,14 +568,43 @@ jobs:
     permissions:
       contents: write # create the release
       id-token: write # cosign keyless (Sigstore OIDC)
+      actions: read # gh run download reads this run's artifacts
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - uses: actions/download-artifact@v4
-        with:
-          path: artifacts/
+      # Not `actions/download-artifact`. Its streaming unzip truncates on the
+      # larger artifacts here (desktop staging is AppImage + deb + rpm + NSIS)
+      # and reports `Not a valid zip file` after its own five retries, naming
+      # neither the artifact nor the cause. `gh run download` fetches and
+      # extracts through a different path, one artifact at a time, so a failure
+      # says which one — and it lands the same layout the assemble step below
+      # depends on: one directory per artifact, NOT flattened.
+      - name: Download build artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          for a in desktop-linux-x86_64 desktop-windows-x86_64 \
+                   headless-linux-x86_64 headless-windows-x86_64; do
+            for i in 1 2 3; do
+              if gh run download "$GITHUB_RUN_ID" -n "$a" -D "artifacts/$a"; then
+                continue 2
+              fi
+              rm -rf "artifacts/$a"
+              echo "$a: attempt $i failed; sleeping $((i * 20))s"
+              sleep $((i * 20))
+            done
+            echo "::error::could not download artifact $a after 3 attempts"
+            exit 1
+          done
+          # Empty is as fatal as absent, and fails more confusingly later.
+          for d in artifacts/*/; do
+            [ -n "$(ls -A "$d")" ] || { echo "::error::empty artifact $d"; exit 1; }
+            echo "$(basename "$d"): $(find "$d" -type f | wc -l) file(s)"
+          done
 
       - name: Assemble release assets
         id: assets
