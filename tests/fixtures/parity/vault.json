@@ -7,7 +7,9 @@
       "price_type": "free",
       "secretType": "env_var",
       "categories": [],
-      "projectIds": ["Universal"],
+      "projectIds": [
+        "Universal"
+      ],
       "scopes": []
     },
     {
@@ -21,9 +23,17 @@
       "price_type": "paid",
       "secretType": "connection_string",
       "categories": [],
-      "projectIds": ["Universal"],
+      "projectIds": [
+        "Universal"
+      ],
       "scopes": [],
-      "extra_vars": [{ "key": "DB_NAME", "value": "app_production", "secret": false }]
+      "extra_vars": [
+        {
+          "key": "DB_NAME",
+          "value": "app_production",
+          "secret": false
+        }
+      ]
     },
     {
       "id": "33333333-3333-4333-8333-333333333333",
@@ -32,13 +42,56 @@
       "price_type": "free",
       "secretType": "certificate",
       "categories": [],
-      "projectIds": ["Universal"],
+      "projectIds": [
+        "Universal"
+      ],
+      "scopes": []
+    },
+    {
+      "id": "e-pg",
+      "provider": "PgProd",
+      "api_key": "pg-secret-value",
+      "secretType": "password",
+      "username": "appuser",
+      "price_type": "free",
+      "categories": [],
+      "projectIds": [
+        "Universal"
+      ],
+      "scopes": []
+    },
+    {
+      "id": "e-ssh",
+      "provider": "BastionKey",
+      "api_key": "/home/deploy/.ssh/id_ed25519",
+      "secretType": "ssh_key",
+      "price_type": "free",
+      "categories": [],
+      "projectIds": [
+        "Universal"
+      ],
+      "scopes": []
+    },
+    {
+      "id": "e-basic",
+      "provider": "HtpasswdLine",
+      "api_key": "admin:$apr1$abc$def",
+      "secretType": "password",
+      "price_type": "free",
+      "categories": [],
+      "projectIds": [
+        "Universal"
+      ],
       "scopes": []
     }
   ],
   "user_categories": [],
   "projects": [
-    { "id": "Universal", "name": "Universal", "description": "All keys belong here by default" },
+    {
+      "id": "Universal",
+      "name": "Universal",
+      "description": "All keys belong here by default"
+    },
     {
       "id": "vpn",
       "name": "VPN",
@@ -49,10 +102,27 @@
           "name": "Interface",
           "chunk_type": "wg_interface",
           "fields": [
-            { "key": "PrivateKey", "value": "${WgKey}", "field_type": "secret", "secret": true },
-            { "key": "Address", "value": "10.8.0.1/24", "field_type": "subnet" },
-            { "key": "ListenPort", "value": "51820", "field_type": "var" },
-            { "key": "Empty", "value": "", "field_type": "var" }
+            {
+              "key": "PrivateKey",
+              "value": "${WgKey}",
+              "field_type": "secret",
+              "secret": true
+            },
+            {
+              "key": "Address",
+              "value": "10.8.0.1/24",
+              "field_type": "subnet"
+            },
+            {
+              "key": "ListenPort",
+              "value": "51820",
+              "field_type": "var"
+            },
+            {
+              "key": "Empty",
+              "value": "",
+              "field_type": "var"
+            }
           ]
         },
         {
@@ -60,9 +130,22 @@
           "name": "Peer office",
           "chunk_type": "wg_peer",
           "fields": [
-            { "key": "PublicKey", "value": "PEER_PUBLIC_KEY", "field_type": "var" },
-            { "key": "AllowedIPs", "value": "10.8.0.2/32", "field_type": "var" },
-            { "key": "PresharedKey", "value": "${Postgres_primary/secret}", "field_type": "secret", "secret": true }
+            {
+              "key": "PublicKey",
+              "value": "PEER_PUBLIC_KEY",
+              "field_type": "var"
+            },
+            {
+              "key": "AllowedIPs",
+              "value": "10.8.0.2/32",
+              "field_type": "var"
+            },
+            {
+              "key": "PresharedKey",
+              "value": "${Postgres_primary/secret}",
+              "field_type": "secret",
+              "secret": true
+            }
           ]
         },
         {
@@ -70,7 +153,13 @@
           "name": "Disabled peer",
           "chunk_type": "wg_peer",
           "disabled": true,
-          "fields": [{ "key": "PublicKey", "value": "NEVER_EXPORTED", "field_type": "var" }]
+          "fields": [
+            {
+              "key": "PublicKey",
+              "value": "NEVER_EXPORTED",
+              "field_type": "var"
+            }
+          ]
         }
       ]
     },
@@ -84,14 +173,46 @@
           "name": "Web App",
           "chunk_type": "docker_service",
           "fields": [
-            { "key": "image", "value": "nginx:alpine", "field_type": "var" },
-            { "key": "container_name", "value": "web", "field_type": "var" },
-            { "key": "ports", "value": "8080:80,8443:443", "field_type": "port" },
-            { "key": "volumes", "value": "./site:/usr/share/nginx/html\n./conf:/etc/nginx/conf.d", "field_type": "volume_mount" },
-            { "key": "networks", "value": "frontend,backend", "field_type": "list" },
-            { "key": "DATABASE_URL", "value": "${Postgres/url}", "field_type": "env_var" },
-            { "key": "STATIC_VALUE", "value": "plain", "field_type": "env_var" },
-            { "key": "restart", "value": "always", "field_type": "var" }
+            {
+              "key": "image",
+              "value": "nginx:alpine",
+              "field_type": "var"
+            },
+            {
+              "key": "container_name",
+              "value": "web",
+              "field_type": "var"
+            },
+            {
+              "key": "ports",
+              "value": "8080:80,8443:443",
+              "field_type": "port"
+            },
+            {
+              "key": "volumes",
+              "value": "./site:/usr/share/nginx/html\n./conf:/etc/nginx/conf.d",
+              "field_type": "volume_mount"
+            },
+            {
+              "key": "networks",
+              "value": "frontend,backend",
+              "field_type": "list"
+            },
+            {
+              "key": "DATABASE_URL",
+              "value": "${Postgres/url}",
+              "field_type": "env_var"
+            },
+            {
+              "key": "STATIC_VALUE",
+              "value": "plain",
+              "field_type": "env_var"
+            },
+            {
+              "key": "restart",
+              "value": "always",
+              "field_type": "var"
+            }
           ]
         },
         {
@@ -99,25 +220,56 @@
           "name": "networks",
           "chunk_type": "docker_network",
           "fields": [
-            { "key": "frontend", "value": "bridge", "field_type": "var" },
-            { "key": "backend", "value": "", "field_type": "var" }
+            {
+              "key": "frontend",
+              "value": "bridge",
+              "field_type": "var"
+            },
+            {
+              "key": "backend",
+              "value": "",
+              "field_type": "var"
+            }
           ]
         },
         {
           "id": "c-vol-1",
           "name": "volumes",
           "chunk_type": "docker_volume",
-          "fields": [{ "key": "pgdata", "value": "", "field_type": "var" }]
+          "fields": [
+            {
+              "key": "pgdata",
+              "value": "",
+              "field_type": "var"
+            }
+          ]
         },
         {
           "id": "c-env-1",
           "name": "app.env",
           "chunk_type": "env_file",
           "fields": [
-            { "key": "DB_PASSWORD", "value": "${Postgres}", "field_type": "secret", "secret": true },
-            { "key": "DB_NAME", "value": "${Postgres/DB_NAME}", "field_type": "var" },
-            { "key": "PORT", "value": "3000", "field_type": "var" },
-            { "key": "MISSING", "value": "${NoSuchEntry}", "field_type": "var" }
+            {
+              "key": "DB_PASSWORD",
+              "value": "${Postgres}",
+              "field_type": "secret",
+              "secret": true
+            },
+            {
+              "key": "DB_NAME",
+              "value": "${Postgres/DB_NAME}",
+              "field_type": "var"
+            },
+            {
+              "key": "PORT",
+              "value": "3000",
+              "field_type": "var"
+            },
+            {
+              "key": "MISSING",
+              "value": "${NoSuchEntry}",
+              "field_type": "var"
+            }
           ]
         }
       ]
@@ -132,8 +284,16 @@
           "name": "app_upstream",
           "chunk_type": "nginx_upstream",
           "fields": [
-            { "key": "server", "value": "10.0.0.5:8080,10.0.0.6:8080", "field_type": "endpoint" },
-            { "key": "keepalive", "value": "32", "field_type": "var" }
+            {
+              "key": "server",
+              "value": "10.0.0.5:8080,10.0.0.6:8080",
+              "field_type": "endpoint"
+            },
+            {
+              "key": "keepalive",
+              "value": "32",
+              "field_type": "var"
+            }
           ]
         },
         {
@@ -141,10 +301,26 @@
           "name": "HTTPS",
           "chunk_type": "nginx_server",
           "fields": [
-            { "key": "listen", "value": "443 ssl http2", "field_type": "port" },
-            { "key": "server_name", "value": "example.com", "field_type": "var" },
-            { "key": "ssl_certificate", "value": "${TLS}", "field_type": "cert" },
-            { "key": "blank", "value": "", "field_type": "var" }
+            {
+              "key": "listen",
+              "value": "443 ssl http2",
+              "field_type": "port"
+            },
+            {
+              "key": "server_name",
+              "value": "example.com",
+              "field_type": "var"
+            },
+            {
+              "key": "ssl_certificate",
+              "value": "${TLS}",
+              "field_type": "cert"
+            },
+            {
+              "key": "blank",
+              "value": "",
+              "field_type": "var"
+            }
           ]
         },
         {
@@ -152,8 +328,409 @@
           "name": "location /",
           "chunk_type": "nginx_location",
           "fields": [
-            { "key": "path", "value": "/", "field_type": "var" },
-            { "key": "proxy_pass", "value": "http://app_upstream", "field_type": "endpoint" }
+            {
+              "key": "path",
+              "value": "/",
+              "field_type": "var"
+            },
+            {
+              "key": "proxy_pass",
+              "value": "http://app_upstream",
+              "field_type": "endpoint"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "k8s",
+      "name": "K8s",
+      "project_type": "kubernetes",
+      "chunks": [
+        {
+          "id": "k1",
+          "chunk_type": "k8s_secret",
+          "name": "app-secrets",
+          "fields": [
+            {
+              "key": "DB_PASSWORD",
+              "value": "${PgProd/password}",
+              "field_type": "secret",
+              "secret": true
+            },
+            {
+              "key": "PLAIN",
+              "value": "visible",
+              "field_type": "var",
+              "secret": false
+            }
+          ]
+        },
+        {
+          "id": "k2",
+          "chunk_type": "k8s_configmap",
+          "name": "app-config",
+          "fields": [
+            {
+              "key": "LOG_LEVEL",
+              "value": "info",
+              "field_type": "var",
+              "secret": false
+            }
+          ]
+        },
+        {
+          "id": "kdis",
+          "chunk_type": "k8s_secret",
+          "name": "disabled-one",
+          "disabled": true,
+          "fields": [
+            {
+              "key": "NOPE",
+              "value": "must-not-appear",
+              "field_type": "secret",
+              "secret": true
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "ssh",
+      "name": "Ssh",
+      "project_type": "ssh_config",
+      "chunks": [
+        {
+          "id": "s1",
+          "chunk_type": "ssh_host",
+          "name": "bastion",
+          "fields": [
+            {
+              "key": "HostName",
+              "value": "bastion.example.com",
+              "field_type": "endpoint",
+              "secret": false
+            },
+            {
+              "key": "User",
+              "value": "deploy",
+              "field_type": "user_id",
+              "secret": false
+            },
+            {
+              "key": "IdentityFile",
+              "value": "${BastionKey/key}",
+              "field_type": "var",
+              "secret": false
+            },
+            {
+              "key": "Port",
+              "value": "2222",
+              "field_type": "port",
+              "secret": false
+            }
+          ]
+        },
+        {
+          "id": "sdis",
+          "chunk_type": "ssh_host",
+          "name": "retired",
+          "disabled": true,
+          "fields": [
+            {
+              "key": "HostName",
+              "value": "gone.example.com",
+              "field_type": "endpoint",
+              "secret": false
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "traefik",
+      "name": "Traefik",
+      "project_type": "traefik",
+      "chunks": [
+        {
+          "id": "t1",
+          "chunk_type": "traefik_router",
+          "name": "web",
+          "fields": [
+            {
+              "key": "rule",
+              "value": "Host(`app.example.com`)",
+              "field_type": "var",
+              "secret": false
+            },
+            {
+              "key": "service",
+              "value": "app-svc",
+              "field_type": "var",
+              "secret": false
+            },
+            {
+              "key": "entryPoints",
+              "value": "web,websecure",
+              "field_type": "list",
+              "secret": false
+            }
+          ]
+        },
+        {
+          "id": "t2",
+          "chunk_type": "traefik_service",
+          "name": "app-svc",
+          "fields": [
+            {
+              "key": "url",
+              "value": "http://127.0.0.1:8080",
+              "field_type": "endpoint",
+              "secret": false
+            },
+            {
+              "key": "passHostHeader",
+              "value": "true",
+              "field_type": "var",
+              "secret": false
+            }
+          ]
+        },
+        {
+          "id": "t3",
+          "chunk_type": "traefik_middleware",
+          "name": "auth",
+          "fields": [
+            {
+              "key": "type",
+              "value": "basicAuth",
+              "field_type": "var",
+              "secret": false
+            },
+            {
+              "key": "users",
+              "value": "${HtpasswdLine/password}",
+              "field_type": "secret",
+              "secret": true
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "apache",
+      "name": "Apache",
+      "project_type": "apache",
+      "chunks": [
+        {
+          "id": "a1",
+          "chunk_type": "apache_vhost",
+          "name": "site",
+          "fields": [
+            {
+              "key": "ServerName",
+              "value": "app.example.com",
+              "field_type": "var",
+              "secret": false
+            },
+            {
+              "key": "DocumentRoot",
+              "value": "/srv/www",
+              "field_type": "var",
+              "secret": false
+            },
+            {
+              "key": "SSLEngine",
+              "value": "on",
+              "field_type": "var",
+              "secret": false
+            },
+            {
+              "key": "SSLCertificateFile",
+              "value": "${TLS/key}",
+              "field_type": "cert",
+              "secret": false
+            }
+          ]
+        },
+        {
+          "id": "a2",
+          "chunk_type": "apache_directory",
+          "name": "srv",
+          "fields": [
+            {
+              "key": "path",
+              "value": "/srv/www",
+              "field_type": "var",
+              "secret": false
+            },
+            {
+              "key": "Require",
+              "value": "all granted",
+              "field_type": "var",
+              "secret": false
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "haproxy",
+      "name": "Haproxy",
+      "project_type": "haproxy",
+      "chunks": [
+        {
+          "id": "h1",
+          "chunk_type": "haproxy_global",
+          "name": "global",
+          "fields": [
+            {
+              "key": "maxconn",
+              "value": "4096",
+              "field_type": "var",
+              "secret": false
+            }
+          ]
+        },
+        {
+          "id": "h2",
+          "chunk_type": "haproxy_frontend",
+          "name": "http-in",
+          "fields": [
+            {
+              "key": "bind",
+              "value": "*:80",
+              "field_type": "var",
+              "secret": false
+            },
+            {
+              "key": "default_backend",
+              "value": "servers",
+              "field_type": "var",
+              "secret": false
+            }
+          ]
+        },
+        {
+          "id": "h3",
+          "chunk_type": "haproxy_backend",
+          "name": "servers",
+          "fields": [
+            {
+              "key": "server",
+              "value": "web1 127.0.0.1:8080 check",
+              "field_type": "var",
+              "secret": false
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "ansible",
+      "name": "Ansible",
+      "project_type": "ansible",
+      "chunks": [
+        {
+          "id": "an1",
+          "chunk_type": "ansible_vars",
+          "name": "db",
+          "fields": [
+            {
+              "key": "db_user",
+              "value": "appuser",
+              "field_type": "var",
+              "secret": false
+            },
+            {
+              "key": "db_password",
+              "value": "${PgProd/password}",
+              "field_type": "secret",
+              "secret": true
+            }
+          ]
+        },
+        {
+          "id": "an2",
+          "chunk_type": "ansible_task",
+          "name": "restart",
+          "fields": [
+            {
+              "key": "name",
+              "value": "Restart app",
+              "field_type": "var",
+              "secret": false
+            },
+            {
+              "key": "module",
+              "value": "ansible.builtin.service",
+              "field_type": "var",
+              "secret": false
+            },
+            {
+              "key": "state",
+              "value": "restarted",
+              "field_type": "var",
+              "secret": false
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "pg",
+      "name": "Pg",
+      "project_type": "postgres",
+      "chunks": [
+        {
+          "id": "pg1",
+          "chunk_type": "pg_connection",
+          "name": "prod",
+          "fields": [
+            {
+              "key": "host",
+              "value": "db.internal",
+              "field_type": "endpoint",
+              "secret": false
+            },
+            {
+              "key": "port",
+              "value": "5432",
+              "field_type": "port",
+              "secret": false
+            },
+            {
+              "key": "dbname",
+              "value": "appdb",
+              "field_type": "var",
+              "secret": false
+            },
+            {
+              "key": "user",
+              "value": "appuser",
+              "field_type": "user_id",
+              "secret": false
+            },
+            {
+              "key": "password",
+              "value": "${PgProd/password}",
+              "field_type": "secret",
+              "secret": true
+            }
+          ]
+        },
+        {
+          "id": "pgdis",
+          "chunk_type": "pg_connection",
+          "name": "old",
+          "disabled": true,
+          "fields": [
+            {
+              "key": "host",
+              "value": "old.internal",
+              "field_type": "endpoint",
+              "secret": false
+            }
           ]
         }
       ]

@@ -20,6 +20,7 @@ pub mod exec;
 pub mod exporters;
 pub mod fmt;
 pub mod gen;
+pub mod import_vaults;
 pub mod out;
 pub mod pool;
 pub mod projects;

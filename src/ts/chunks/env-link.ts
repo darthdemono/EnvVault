@@ -64,10 +64,18 @@ function _findBestVaultMatch(
       }
     }
 
-    // Tier 1 (100/95): exact name match.
+    // Tier 1 (100/95/94): exact name match.
+    //
+    // An entry that carries a key_id is named `PROVIDER_KEYID`, so a bare
+    // `PROVIDER` is a *less* exact match for it than for an entry with no
+    // key_id. Scoring both at 100 made two entries tie, and `score > best`
+    // resolved the tie by array position — so `AWS=` linked to whichever of
+    // `AWS` and `AWS_PROD` happened to come first in `api_keys`. That is
+    // invariant 1 (never identify an entry by array index) wearing a different
+    // hat, and it silently rewrites a working .env to point at the wrong secret.
     if (score < 95) {
       if (key === e.provider) {
-        score = 100;
+        score = e.key_id ? 94 : 100;
         field = 'key';
       } else if (e.key_id && key === `${e.provider}_${e.key_id}`) {
         score = 95;

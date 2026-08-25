@@ -314,10 +314,52 @@ impl RemoteClient {
         Ok(v.as_array().cloned().unwrap_or_default())
     }
 
+    /// Selective read — the entries matching a filter, not the whole vault.
+    ///
+    /// Falls back to a whole-vault read against a server too old to have the
+    /// route, so a new CLI keeps working against an old server instead of
+    /// failing with a 404 that names nothing the user can act on.
+    pub fn get_entries(&self, query: &[(&str, &str)]) -> CliResult<Option<Vec<serde_json::Value>>> {
+        let qs: Vec<String> = query
+            .iter()
+            .filter(|(_, v)| !v.is_empty())
+            .map(|(k, v)| format!("{k}={}", urlencode(v)))
+            .collect();
+        if qs.is_empty() {
+            return Ok(None);
+        }
+        let path = format!("/api/vault/entries?{}", qs.join("&"));
+        match self.get_json(&path) {
+            Ok(v) => Ok(Some(
+                v.get("entries")
+                    .and_then(|e| e.as_array())
+                    .cloned()
+                    .unwrap_or_default(),
+            )),
+            // 404 here means "no such route", not "no such entry" — the handler
+            // returns an empty list for that.
+            Err(e) if e.code == crate::error::Code::NotFound => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+
     pub fn save_vault(&self, data: &serde_json::Value) -> CliResult {
         self.send_json(reqwest::Method::PUT, "/api/vault", Some(data))
             .map(|_| ())
     }
+}
+
+/// Minimal percent-encoding for query values. Project names contain spaces and
+/// slashes; sending them raw produces a request line the server rejects.
+fn urlencode(v: &str) -> String {
+    v.bytes()
+        .map(|b| match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                (b as char).to_string()
+            }
+            _ => format!("%{b:02X}"),
+        })
+        .collect()
 }
 
 // ── Data access abstraction ───────────────────────────────────────────────────

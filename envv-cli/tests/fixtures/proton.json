@@ -1,0 +1,47 @@
+{
+  "version": "1.31.3",
+  "userId": "u1",
+  "encrypted": false,
+  "vaults": {
+    "v1": {
+      "name": "Personal",
+      "description": "",
+      "items": [
+        {
+          "itemId": "p1", "state": 1,
+          "data": {
+            "type": "login",
+            "metadata": { "name": "DigitalOcean", "note": "droplet fleet", "itemUuid": "p1" },
+            "content": {
+              "itemEmail": "ops@example.com",
+              "itemUsername": "",
+              "password": "dop_v1_abcdefabcdefabcdefabcdefabcdef",
+              "urls": ["https://cloud.digitalocean.com"],
+              "totpUri": "otpauth://totp/DO?secret=BBBB"
+            }
+          }
+        },
+        {
+          "itemId": "p2", "state": 2,
+          "data": {
+            "type": "login",
+            "metadata": { "name": "Deleted thing", "note": "" },
+            "content": { "password": "should-not-import", "urls": [] }
+          }
+        },
+        {
+          "itemId": "p3", "state": 1,
+          "data": {
+            "type": "note",
+            "metadata": { "name": "Root CA", "note": "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----" },
+            "content": {}
+          }
+        },
+        {
+          "itemId": "p4", "state": 1,
+          "data": { "type": "creditCard", "metadata": { "name": "Amex" }, "content": {} }
+        }
+      ]
+    }
+  }
+}

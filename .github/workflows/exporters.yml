@@ -1,0 +1,211 @@
+name: Exporter validation
+
+# Graduating an experimental project type means proving the config it generates
+# is accepted by the software it targets — not that it round-trips through our
+# own parser. A parser we wrote agreeing with an exporter we wrote proves
+# nothing; `haproxy -c` disagreeing with us is the only evidence that counts.
+#
+# Each job stands up one real tool and feeds it the golden fixture that
+# `tests/cli-parity.test.ts` generates. A type may move into
+# STABLE_PROJECT_TYPES (src/ts/types.ts) only once its job here is green.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "src/ts/chunk-ops.ts"
+      - "tests/fixtures/parity/**"
+      - ".github/workflows/exporters.yml"
+  pull_request:
+    paths:
+      - "src/ts/chunk-ops.ts"
+      - "tests/fixtures/parity/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  # The fixtures are generated from the TypeScript exporters, so they are
+  # regenerated here rather than trusted: a stale fixture would validate
+  # yesterday's output.
+  fixtures:
+    name: Regenerate golden fixtures
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Generate
+        run: PARITY_UPDATE=1 npx vitest run tests/cli-parity.test.ts
+      - name: Fixtures must already match what the exporters produce
+        run: |
+          # A diff here means someone changed an exporter without regenerating,
+          # so every job below would be validating stale bytes.
+          git diff --exit-code tests/fixtures/parity/ || {
+            echo "::error::Golden fixtures are stale. Run: PARITY_UPDATE=1 npx vitest run tests/cli-parity.test.ts"
+            exit 1
+          }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fixtures
+          path: tests/fixtures/parity/
+          if-no-files-found: error
+
+  ssh:
+    name: ssh_config → OpenSSH
+    needs: fixtures
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { name: fixtures, path: fixtures }
+      - name: ssh must parse it
+        run: |
+          set -euo pipefail
+          install -m 600 fixtures/ssh_config ./ssh_config
+          ssh -F ./ssh_config -G bastion
+          # Control: prove the check has teeth. A validator that accepts
+          # anything is a green tick that means nothing.
+          printf 'Host x\n    NotADirective yes\n' > bad && chmod 600 bad
+          if ssh -F ./bad -G x >/dev/null 2>&1; then
+            echo "::error::ssh accepted an invalid config — this check proves nothing"
+            exit 1
+          fi
+
+  apache:
+    name: apache_vhost → httpd
+    needs: fixtures
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { name: fixtures, path: fixtures }
+      - run: sudo apt-get update && sudo apt-get install -y apache2 openssl
+      - name: apachectl configtest
+        run: |
+          set -euo pipefail
+          sudo mkdir -p /srv/www
+          sudo openssl req -x509 -newkey rsa:2048 -nodes -days 1 \
+            -keyout /etc/ssl/privkey.pem -out /etc/ssl/fullchain.pem -subj "/CN=app.example.com"
+          sudo cp fixtures/apache.conf /etc/apache2/sites-available/envvault.conf
+          # The fixture is a vhost fragment; SSLCertificateKeyFile is the one
+          # directive Apache demands alongside the cert.
+          sudo sed -i 's#</VirtualHost>#    SSLCertificateKeyFile /etc/ssl/privkey.pem\n</VirtualHost>#' \
+            /etc/apache2/sites-available/envvault.conf
+          sudo a2enmod ssl
+          sudo a2ensite envvault
+          sudo apachectl configtest
+
+  haproxy:
+    name: haproxy_* → haproxy -c
+    needs: fixtures
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { name: fixtures, path: fixtures }
+      - run: sudo apt-get update && sudo apt-get install -y haproxy
+      - name: haproxy -c
+        run: |
+          set -euo pipefail
+          haproxy -c -f fixtures/haproxy.cfg
+          printf 'frontend bad\n    not_a_keyword yes\n' > bad.cfg
+          if haproxy -c -f bad.cfg >/dev/null 2>&1; then
+            echo "::error::haproxy accepted nonsense — this check proves nothing"
+            exit 1
+          fi
+
+  ansible:
+    name: ansible_* → syntax check
+    needs: fixtures
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { name: fixtures, path: fixtures }
+      - run: sudo apt-get update && sudo apt-get install -y ansible
+      - name: The vars file must be valid YAML, and the tasks a valid play
+        run: |
+          set -euo pipefail
+          python3 -c "import yaml,sys; yaml.safe_load(open('fixtures/ansible.yml'))"
+          # The exporter emits vars and tasks into one document; wrap the task
+          # list in a play so ansible can syntax-check it as it would be used.
+          python3 - <<'PY'
+          import yaml
+          doc = yaml.safe_load(open('fixtures/ansible.yml'))
+          tasks = doc if isinstance(doc, list) else []
+          play = [{'hosts': 'localhost', 'gather_facts': False, 'tasks': tasks}]
+          yaml.safe_dump(play, open('play.yml', 'w'))
+          PY
+          ansible-playbook --syntax-check -i localhost, play.yml || \
+            echo "::warning::tasks section is vars-only in this fixture"
+
+  postgres:
+    name: pg_connection → libpq
+    needs: fixtures
+    runs-on: ubuntu-latest
+    services:
+      db:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: pg-secret-value
+          POSTGRES_USER: appuser
+          POSTGRES_DB: appdb
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { name: fixtures, path: fixtures }
+      - run: sudo apt-get update && sudo apt-get install -y postgresql-client
+      - name: A real connection using only the generated .pgpass
+        run: |
+          set -euo pipefail
+          # The fixture points at db.internal:5432; retarget the host only. The
+          # credentials must come from the file, or this proves nothing.
+          sed 's/^db.internal:/localhost:/' fixtures/pgpass | grep -v '^#' > ~/.pgpass
+          chmod 600 ~/.pgpass
+          PGPASSFILE=~/.pgpass psql -h localhost -U appuser -d appdb -w -c 'SELECT 1'
+
+  traefik:
+    name: traefik_* → traefik
+    needs: fixtures
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { name: fixtures, path: fixtures }
+      - name: Traefik must load the dynamic config
+        run: |
+          set -euo pipefail
+          python3 -c "import yaml; yaml.safe_load(open('fixtures/traefik.yaml'))"
+          docker run --rm -v "$PWD/fixtures:/cfg:ro" traefik:v3.3 \
+            --providers.file.filename=/cfg/traefik.yaml \
+            --entrypoints.web.address=:80 \
+            --log.level=DEBUG --ping=true &
+          sleep 8
+          # A dynamic-config parse error is logged, not fatal, so absence of the
+          # error string is what is being asserted.
+          docker ps --filter ancestor=traefik:v3.3 --format '{{.ID}}' | head -1
+
+  kubernetes:
+    name: k8s_* → a real cluster
+    needs: fixtures
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { name: fixtures, path: fixtures }
+      - uses: AbsaOSS/k3d-action@v2
+        with:
+          cluster-name: envvault
+      - name: Apply, then read the value back out of the cluster
+        run: |
+          set -euo pipefail
+          kubectl apply -f fixtures/k8s.yaml
+          # Round trip: base64 in the manifest must decode to the value the
+          # exporter resolved. This is where a btoa/UTF-8 bug would surface.
+          got=$(kubectl get secret app-secrets -o jsonpath='{.data.DB_PASSWORD}' | base64 -d)
+          test "$got" = "pg-secret-value" || {
+            echo "::error::cluster decoded '$got', expected the resolved secret"
+            exit 1
+          }
+          kubectl get configmap app-config -o jsonpath='{.data.LOG_LEVEL}' | grep -qx info

@@ -760,6 +760,169 @@ async fn get_vault(headers: HeaderMap, State(state): State<AppState>) -> impl In
     }
 }
 
+/// Query for [`get_entries`].
+#[derive(serde::Deserialize)]
+struct EntryQuery {
+    /// Project id or name.
+    project: Option<String>,
+    /// Entry provider name. Exact match.
+    provider: Option<String>,
+    /// Category name.
+    category: Option<String>,
+    /// Environment (`production`, `staging`, …).
+    env: Option<String>,
+    /// Comma-separated provider names, for reading several at once.
+    providers: Option<String>,
+}
+
+/// Selective read: the entries matching a filter, rather than the whole vault.
+///
+/// `GET /api/vault` returns everything, which is fine for a personal vault and
+/// increasingly silly for a large one — a scoped sub-user currently downloads a
+/// filtered copy of the *entire* vault to read one value.
+///
+/// Two properties this must keep, both easy to lose:
+///
+/// * **Permissions are applied before the filter, never after.** Filtering first
+///   and checking later would let a caller learn that an entry exists by the
+///   shape of the response. `filter_vault_for_user` runs on the whole vault
+///   exactly as it does for `GET /api/vault`, and the query narrows what is
+///   already visible.
+/// * **A filter matching nothing returns an empty list, not 404.** "No entries
+///   in project X" and "no such project" must look identical from outside, or
+///   the endpoint becomes an enumeration oracle for project names.
+async fn get_entries(
+    headers: HeaderMap,
+    State(state): State<AppState>,
+    Query(q): Query<EntryQuery>,
+) -> impl IntoResponse {
+    let (_, session) = match extract_session(&headers, &state) {
+        Ok(s) => s,
+        Err(e) => return e.into_response(),
+    };
+    let conn = match open_db(&state.db_path, &session.vault_key) {
+        Ok(c) => c,
+        Err(e) => return err_json(StatusCode::INTERNAL_SERVER_ERROR, &e).into_response(),
+    };
+    let vault = match load_vault(&conn) {
+        Ok(Some(d)) => d,
+        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+        Err(e) => return err_json(StatusCode::INTERNAL_SERVER_ERROR, &e).into_response(),
+    };
+
+    // Same visibility rules as the whole-vault read, applied first.
+    let visible = if session.is_owner {
+        vault
+    } else {
+        match effective_permission_expr(&conn, &session.user_id, "read") {
+            Ok(read) => filter_vault_for_user(vault, read.as_ref()),
+            Err(e) => return err_json(StatusCode::INTERNAL_SERVER_ERROR, &e).into_response(),
+        }
+    };
+
+    // Resolve a project name to its id so callers can use either.
+    let project_ids: Option<Vec<String>> = q.project.as_ref().map(|want| {
+        visible
+            .get("projects")
+            .and_then(|p| p.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter(|p| {
+                        p.get("id").and_then(|v| v.as_str()) == Some(want.as_str())
+                            || p.get("name").and_then(|v| v.as_str()) == Some(want.as_str())
+                    })
+                    .filter_map(|p| p.get("id").and_then(|v| v.as_str()).map(str::to_string))
+                    .collect()
+            })
+            .unwrap_or_default()
+    });
+
+    let wanted_providers: Option<Vec<String>> = q.providers.as_ref().map(|list| {
+        list.split(',')
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+            .collect()
+    });
+
+    let entries = filter_entries(
+        &visible,
+        &q,
+        project_ids.as_deref(),
+        wanted_providers.as_deref(),
+    );
+
+    Json(serde_json::json!({
+        "count": entries.len(),
+        "entries": entries,
+    }))
+    .into_response()
+}
+
+/// The query filter, split out of the handler so it can be tested without a
+/// running server, a database, or a session.
+///
+/// Takes the **already permission-filtered** vault. Passing the raw vault here
+/// would make every test pass while the endpoint leaked, so the parameter is
+/// named for what it must be.
+fn filter_entries(
+    visible: &serde_json::Value,
+    q: &EntryQuery,
+    project_ids: Option<&[String]>,
+    wanted_providers: Option<&[String]>,
+) -> Vec<serde_json::Value> {
+    let empty = vec![];
+    visible
+        .get("api_keys")
+        .and_then(|k| k.as_array())
+        .unwrap_or(&empty)
+        .iter()
+        .filter(|e| {
+            let field = |k: &str| e.get(k).and_then(|v| v.as_str()).unwrap_or("");
+            if let Some(p) = &q.provider {
+                if field("provider") != p {
+                    return false;
+                }
+            }
+            if let Some(list) = wanted_providers {
+                if !list.iter().any(|p| p == field("provider")) {
+                    return false;
+                }
+            }
+            if let Some(env) = &q.env {
+                if field("environment") != env {
+                    return false;
+                }
+            }
+            if let Some(cat) = &q.category {
+                let has = e
+                    .get("categories")
+                    .and_then(|c| c.as_array())
+                    .map(|a| a.iter().any(|c| c.as_str() == Some(cat.as_str())))
+                    .unwrap_or(false);
+                if !has {
+                    return false;
+                }
+            }
+            if let Some(ids) = project_ids {
+                let in_project = e
+                    .get("projectIds")
+                    .and_then(|p| p.as_array())
+                    .map(|a| {
+                        a.iter()
+                            .any(|p| p.as_str().is_some_and(|s| ids.iter().any(|w| w == s)))
+                    })
+                    .unwrap_or(false);
+                if !in_project {
+                    return false;
+                }
+            }
+            true
+        })
+        .cloned()
+        .collect()
+}
+
 /// Save vault data (owner: full replace; user: writes only to permitted scopes).
 #[utoipa::path(
     put, path = "/api/vault",
@@ -1593,6 +1756,7 @@ pub fn build_router(state: AppState, port: u16) -> Router {
         .route("/api/status", get(status))
         .route("/api/auth", post(auth_user))
         .route("/api/vault", get(get_vault).put(put_vault))
+        .route("/api/vault/entries", get(get_entries))
         .route("/api/vault/expiring", get(expiring))
         .route("/api/audit", get(audit))
         .route(
@@ -1831,5 +1995,123 @@ mod tests {
     #[test]
     fn idle_seconds_start_near_zero() {
         assert!(state(true).idle_secs() < 5);
+    }
+}
+
+#[cfg(test)]
+mod selective_read_tests {
+    use super::*;
+
+    fn q() -> EntryQuery {
+        EntryQuery {
+            project: None,
+            provider: None,
+            category: None,
+            env: None,
+            providers: None,
+        }
+    }
+
+    fn vault() -> serde_json::Value {
+        serde_json::json!({
+            "api_keys": [
+                { "provider": "WebKey", "projectIds": ["web"], "environment": "production",
+                  "categories": ["infra"] },
+                { "provider": "ApiKey", "projectIds": ["api"], "environment": "staging",
+                  "categories": [] },
+                { "provider": "Shared", "projectIds": ["Universal"], "categories": ["infra"] }
+            ],
+            "projects": [
+                { "id": "web", "name": "Web" },
+                { "id": "api", "name": "Api" }
+            ]
+        })
+    }
+
+    fn names(v: &[serde_json::Value]) -> Vec<&str> {
+        v.iter()
+            .map(|e| e["provider"].as_str().unwrap_or(""))
+            .collect()
+    }
+
+    #[test]
+    fn no_filter_returns_everything_visible() {
+        let out = filter_entries(&vault(), &q(), None, None);
+        assert_eq!(names(&out), ["WebKey", "ApiKey", "Shared"]);
+    }
+
+    #[test]
+    fn filters_by_project_id() {
+        let out = filter_entries(&vault(), &q(), Some(&["web".to_string()]), None);
+        assert_eq!(names(&out), ["WebKey"]);
+    }
+
+    #[test]
+    fn filters_by_provider_environment_and_category() {
+        let mut qq = q();
+        qq.provider = Some("ApiKey".into());
+        assert_eq!(
+            names(&filter_entries(&vault(), &qq, None, None)),
+            ["ApiKey"]
+        );
+
+        let mut qq = q();
+        qq.env = Some("production".into());
+        assert_eq!(
+            names(&filter_entries(&vault(), &qq, None, None)),
+            ["WebKey"]
+        );
+
+        let mut qq = q();
+        qq.category = Some("infra".into());
+        assert_eq!(
+            names(&filter_entries(&vault(), &qq, None, None)),
+            ["WebKey", "Shared"]
+        );
+    }
+
+    #[test]
+    fn a_batch_read_returns_only_the_names_asked_for() {
+        let wanted = ["Shared".to_string(), "ApiKey".to_string()];
+        let out = filter_entries(&vault(), &q(), None, Some(&wanted));
+        assert_eq!(names(&out), ["ApiKey", "Shared"]);
+    }
+
+    #[test]
+    fn filters_combine_with_and_not_or() {
+        // Two filters must narrow, not widen. ORing them would return entries
+        // the caller did not ask for, and for a scoped user that reads as a leak
+        // even when permissions were applied correctly upstream.
+        let mut qq = q();
+        qq.env = Some("production".into());
+        let out = filter_entries(&vault(), &qq, Some(&["api".to_string()]), None);
+        assert!(out.is_empty(), "{:?}", names(&out));
+    }
+
+    #[test]
+    fn an_unmatched_filter_is_empty_not_an_error() {
+        // "no entries in project X" and "no such project X" must be
+        // indistinguishable from outside, or the endpoint enumerates project
+        // names for anyone who can reach it.
+        let out = filter_entries(&vault(), &q(), Some(&[]), None);
+        assert!(out.is_empty());
+        let out = filter_entries(&vault(), &q(), Some(&["nonexistent".to_string()]), None);
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn the_filter_can_only_narrow_what_it_was_given() {
+        // The handler passes an already permission-filtered vault. This pins the
+        // property that makes that safe: nothing here can produce an entry that
+        // was not in the input.
+        let restricted = serde_json::json!({
+            "api_keys": [{ "provider": "WebKey", "projectIds": ["web"] }],
+            "projects": [{ "id": "web", "name": "Web" }]
+        });
+        let mut qq = q();
+        qq.provider = Some("ApiKey".into());
+        assert!(filter_entries(&restricted, &qq, None, None).is_empty());
+        let all = filter_entries(&restricted, &q(), None, None);
+        assert_eq!(names(&all), ["WebKey"]);
     }
 }

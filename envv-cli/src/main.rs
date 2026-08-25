@@ -17,8 +17,8 @@
 
 use envv_cli::error::{CliError, CliResult};
 use envv_cli::{
-    access, agentio, backup, chunks, data, doctor, enrich, entries, envfile, exec, fmt, gen, out,
-    pool, projects, render, scan, session, users_cmd,
+    access, agentio, backup, chunks, data, doctor, enrich, entries, envfile, exec, fmt, gen,
+    import_vaults, out, pool, projects, render, scan, session, users_cmd,
 };
 
 use access::{open_access, Access, AuthOpts};
@@ -328,6 +328,29 @@ enum Commands {
     },
     /// Where this CLI is pointed and what the vault holds.
     Status,
+    /// Import from another password manager (Bitwarden, 1Password, Proton Pass).
+    ///
+    /// Preview by default — nothing is written without `--apply`, and the
+    /// preview shows fingerprints rather than values.
+    ImportVault {
+        /// Which product the file came from.
+        #[arg(value_parser = ["bitwarden", "onepassword", "proton"])]
+        vendor: String,
+        /// The exported JSON file.
+        file: PathBuf,
+        /// Actually write. Without it this is a dry run.
+        #[arg(long)]
+        apply: bool,
+        /// Assign imported entries to this project.
+        #[arg(long)]
+        project: Option<String>,
+        /// Put every imported entry in this category.
+        #[arg(long)]
+        category: Option<String>,
+        /// Use the source folder / vault name as the category.
+        #[arg(long)]
+        keep_folders: bool,
+    },
     /// Check the vault: database integrity, salt, file modes, audit chain, pools.
     ///
     /// Exits non-zero when something is actually wrong, so a script can branch
@@ -1877,6 +1900,24 @@ fn dispatch(cli: &Cli, a: &Access) -> CliResult {
             },
         ),
         Commands::Scan { severity, json } => scan::cmd_scan(a, severity, *json),
+        Commands::ImportVault {
+            vendor,
+            file,
+            apply,
+            project,
+            category,
+            keep_folders,
+        } => import_vaults::run(
+            a,
+            vendor,
+            file,
+            &import_vaults::ImportOpts {
+                apply: *apply,
+                project: project.as_deref(),
+                category: category.as_deref(),
+                keep_folders: *keep_folders,
+            },
+        ),
         Commands::Status => scan::cmd_status(a),
         Commands::Doctor => doctor::run(Some(a), None),
 
