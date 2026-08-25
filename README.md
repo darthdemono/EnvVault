@@ -604,8 +604,10 @@ exec          Run a command with secrets in its environment
 render        Substitute ${refs} in a template file (`-` for stdin)
 enrich        Fill entry metadata from names and public key prefixes
 describe      The machine-readable contract
-login         Authenticate once and cache the session
-logout        Forget cached sessions
+login         Authenticate once and cache the session (--user NAME for a sub-user)
+whoami        Which identity this CLI would use, and whether its session still works
+sessions      Every cached session: server, user, which one is default
+logout        Forget a cached session (--user NAME for one, --all for every server)
 ```
 
 Global flags: `--json`, `--reveal`, `--yes`, `--dry-run`, `--db-path`, `--salt-path`, `--init`, `--server`, `--user`, `--token`, `--password-file`, `--password-command`, `--env-file`.
@@ -632,7 +634,37 @@ envv login --server https://vault.example.com
 envv list                                       # uses the cached session
 ```
 
-The session token goes in `sessions.json`, mode 0600, under `$XDG_STATE_HOME/envv/` (or `%LOCALAPPDATA%` on Windows — per-user, not roamed, since a cached session token should not follow you onto another machine). A rejected session is cleared rather than retried, and the error tells you to log in again — otherwise every later command fails identically with an unhelpful 401 and you spend twenty minutes debugging the wrong thing.
+### Signing in as a named user
+
+The owner is whoever can derive the vault key. Everyone else is a sub-user with a
+password or an API token, and `--user` is how you become one:
+
+```bash
+envv login --server https://vault.example.com                 # as the owner
+envv login --server https://vault.example.com --user alice    # as a sub-user
+envv --user alice list                                        # uses alice's cached session
+envv list                                                     # uses the most recent login
+```
+
+Sessions are cached **per server and per user**, so one machine can hold several
+identities against one server — an admin login beside a scoped one, or two people
+sharing a workstation. The most recent login becomes that server's default, which
+is what a bare `envv list` uses.
+
+```bash
+envv whoami                     # who you are, and whether the session is still accepted
+envv sessions                   # every cached identity; the * is the default
+envv logout --user alice        # forget one identity
+envv logout                     # forget every identity for this server
+envv logout --all               # forget every server
+```
+
+`whoami` proves the session rather than describing it — it calls the authenticated
+`/api/ping`, because a token the server has since rejected looks identical on disk
+to a working one. A scoped user seeing fewer entries than expected otherwise has
+no way to tell a permission problem from being signed in as the wrong person.
+
+The session token goes in `sessions.json`, mode 0600, under `$XDG_STATE_HOME/envv/` (or `%LOCALAPPDATA%` on Windows — per-user, not roamed, since a cached session token should not follow you onto another machine). A rejected session clears **only the identity that was used** — expiring one login must not sign the other cached users out — and the error names the exact command to run again, otherwise every later command fails identically with an unhelpful 401 and you spend twenty minutes debugging the wrong thing.
 
 ### Idempotency
 

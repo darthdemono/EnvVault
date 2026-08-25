@@ -587,9 +587,14 @@ export function applyGridSettings() {
   grid.dataset.cardSize = size;
   const minW = { compact: 280, medium: 360, large: 460 }[size];
   const cols = Settings.get('gridColumns');
+  // An explicit column count floors at 0, not at minW. `repeat(8, minmax(360px, 1fr))`
+  // demands 2880px of track before gaps and simply overflows the workspace
+  // sideways on any normal window — asking for 8 columns has to mean 8 narrower
+  // columns, not a horizontal scrollbar. The `min(100%, …)` on the auto branch is
+  // the same protection for a window narrower than one card.
   grid.style.gridTemplateColumns = cols === 'auto'
-    ? `repeat(auto-fill, minmax(${minW}px, 1fr))`
-    : `repeat(${cols}, minmax(${minW}px, 1fr))`;
+    ? `repeat(auto-fill, minmax(min(100%, ${minW}px), 1fr))`
+    : `repeat(${cols}, minmax(0, 1fr))`;
 }
 
 /** All toggleable/reorderable sidebar section keys, in default order. */

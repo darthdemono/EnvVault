@@ -26,6 +26,19 @@
   --cs-foot-h: 40px;
   --cs-btn-h: 26px;
   --cs-card-h: 236px;
+
+  /* One rendered line of description, in px. Every clamp below is an exact
+     multiple of this, which is the whole point: a ceiling that is not a whole
+     number of line boxes cuts the last line in half instead of ellipsising it. */
+  --cs-desc-line: calc(var(--cs-desc) * var(--cs-desc-lh));
+
+  /* One rendered tag chip, and how many rows of them a collapsed card shows.
+     The chip is given this exact height in activity-tools.css rather than being
+     left to font metrics, so the row arithmetic here cannot drift from what the
+     browser actually paints. */
+  --cs-tag-h: 17px;
+  --cs-tag-gap: 4px;
+  --cs-tag-rows: 1;
 }
 
 #card-grid[data-card-size="compact"] {
@@ -39,7 +52,10 @@
   --cs-acct: 9.5px;
   --cs-desc: 11px;
   --cs-desc-lh: 1.5;
-  --cs-desc-lines: 2;
+  /* Three lines at every card size — the description section is sized to hold
+     three and ellipsise the rest, so compact showing two made it the only size
+     where a short description was still truncated. */
+  --cs-desc-lines: 3;
   --cs-foot-h: 34px;
   --cs-btn-h: 22px;
   --cs-card-h: 200px;
@@ -84,13 +100,23 @@
   animation: cardIn .2s ease both
 }
 
-/* A collapsed card is exactly --cs-card-h tall at every card size. That is what
-   pins .card-foot to a constant offset from the card's bottom edge: without it
-   the footer floated up and down with however many description lines, badges or
-   tags the entry happened to have. The head absorbs the slack (flex:1) while
-   every variable-length region below clamps, so nothing can push past the edge. */
+/* --cs-card-h is a *floor*, not a fixed height.
+
+   It used to be `height`, which pinned the footer to a constant offset and kept
+   every card identical — but the card is `overflow:hidden` and three of its four
+   children (`.card-apidesc`, `.card-tags`, `.card-foot`) are `flex-shrink:0`. So
+   any entry whose description, badge rows and tags together exceeded the height
+   did not shrink to fit; it overflowed and was sliced off. A description ending
+   mid-line, a half-row of tags, and a copy button with its bottom edge cut away
+   were all the same bug, and it got much easier to hit as the column count went
+   up and cards got narrower.
+
+   With min-height the common card is still exactly --cs-card-h — the clamps below
+   (description line-clamp, badge rows, one row of tags) bound how far a card can
+   grow — and a content-heavy one grows instead of losing content. `align-items:
+   start` on the grid means a taller card does not stretch its neighbours. */
 .card:not(.expanded) {
-  height: var(--cs-card-h, 236px)
+  min-height: var(--cs-card-h, 236px)
 }
 
 .card.expanded {
@@ -130,10 +156,17 @@
   overflow: hidden
 }
 
-/* Collapsed only: the head takes the leftover height so the footer sits on the
-   bottom edge. align-items:flex-start keeps its content at the top. */
+/* Collapsed only: the head sits at its natural height at the top of the card and
+   does not absorb slack.
+
+   It used to be `flex: 1 1 auto`, which made it grow into whatever space the
+   fixed-height card had spare. On a content-light entry that inflated an empty
+   box under the header text and left the description and tags floating well
+   below it, reading as "the text is at the bottom of the card". The footer no
+   longer needs the head to push it down — `.card-foot { margin-top: auto }` does
+   that on its own, and now does it against a min-height rather than a hard one. */
 .card:not(.expanded) .card-head {
-  flex: 1 1 auto;
+  flex: 0 0 auto;
   min-height: 0
 }
 
@@ -363,6 +396,19 @@
   border-color: rgba(201, 100, 100, .3)
 }
 
+/* ── DESCRIPTION SECTION ───────────────────────────────
+   Its own band, sized to exactly --cs-desc-lines line boxes and no other value.
+
+   `-webkit-line-clamp` alone was not enough. It ellipsises, but it sets no
+   height, so the section's real height was whatever the text happened to need —
+   and when the stack overran the card, the card's `overflow:hidden` did the
+   cutting instead, slicing a line through its middle. A ceiling that is an exact
+   multiple of the line box means the last visible line is always whole, and the
+   clamp turns the remainder into "…" rather than a half-height smear.
+
+   box-sizing:content-box is explicit because the height below describes the text
+   area; the padding sits outside it. Switching that to border-box silently costs
+   the third line. */
 .card-apidesc {
   font-size: var(--cs-desc);
   color: var(--text2);
@@ -370,15 +416,22 @@
   /* Left inset lines the text up under the header text, past the icon. */
   padding: 0 var(--cs-pad-x) calc(var(--cs-head-pb) + 1px)
            calc(var(--cs-pad-x) + var(--cs-icon) + var(--cs-gap));
+  box-sizing: content-box;
+  max-height: calc(var(--cs-desc-line) * var(--cs-desc-lines));
   display: -webkit-box;
   -webkit-box-orient: vertical;
   overflow: hidden;
+  text-overflow: ellipsis;
   flex: 0 0 auto;
   line-clamp: var(--cs-desc-lines);
   -webkit-line-clamp: var(--cs-desc-lines);
 }
 
+/* Expanding shows the whole description. The max-height has to come off with the
+   clamp — leaving it would keep the three-line ceiling and hide the rest with no
+   ellipsis to say so, which is worse than the clamp it replaced. */
 .card.expanded .card-apidesc {
+  max-height: none;
   line-clamp: unset;
   -webkit-line-clamp: unset;
   overflow: visible;

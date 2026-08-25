@@ -953,16 +953,29 @@
 
 /* ── Tags on cards ───────────────────────────────────────────────────────────── */
 
+/* ── TAGS SECTION ─────────────────────────────────────────────────────────────
+   Its own band between the description and the footer, exactly --cs-tag-rows
+   chip rows tall.
+
+   The previous ceiling was `--cs-row-h + 6px` = 25px, described in its own
+   comment as "an exact multiple, so no chip is sliced". It was not: a chip is
+   --cs-tag-h (17px), so a second row began at 21px and was cut 4px into it —
+   the sliced band of half-chips under the tag row. The height below is computed
+   from the chip's own height and the flex gap, so the two cannot disagree. */
 .card-tags {
   display: flex;
   flex-wrap: wrap;
-  gap: 4px;
-  padding: 0 12px 6px;
-  /* Collapsed cards have a fixed height; an entry with fifteen tags used to
-     grow this row until it shoved the footer off the card. Clamped to one row
-     (an exact multiple, so no chip is sliced), unclamped when expanded. */
+  gap: var(--cs-tag-gap, 4px);
+  /* A visible band of its own, like the footer below it. Without the rule the
+     tags read as a stray continuation of the description. */
+  border-top: 1px solid var(--border);
+  padding: 6px 12px;
+  box-sizing: content-box;
   flex: 0 0 auto;
-  max-height: calc(var(--cs-row-h, 19px) + 6px);
+  max-height: calc(
+    var(--cs-tag-rows, 1) * var(--cs-tag-h, 17px) +
+    (var(--cs-tag-rows, 1) - 1) * var(--cs-tag-gap, 4px)
+  );
   overflow: hidden;
 }
 
@@ -977,6 +990,11 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  /* Declared, not inherited from font metrics. The row clamp on .card-tags is
+     computed from this number, and a chip whose real height came out a pixel or
+     two off its assumed height is exactly how the old clamp ended up slicing. */
+  height: var(--cs-tag-h, 17px);
+  box-sizing: border-box;
 }
 .tag-chip-card {
   /* Mono, like every other badge in the app. These chips used to inherit Syne

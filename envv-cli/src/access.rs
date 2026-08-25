@@ -85,9 +85,24 @@ pub fn default_salt_path() -> PathBuf {
 // ── Password helper ───────────────────────────────────────────────────────────
 
 pub fn get_password(provided: Option<&str>) -> String {
-    provided
-        .map(|s| s.to_string())
-        .unwrap_or_else(|| rpassword::prompt_password("Vault password: ").unwrap_or_default())
+    get_password_for(provided, None)
+}
+
+/// Prompt for a password, naming whose it is.
+///
+/// A sub-user's password is not the vault master password, and prompting for
+/// "Vault password" while authenticating `alice` invites someone to type the
+/// master password into a form that sends it to a server as a sub-user
+/// credential. Naming the subject is the whole fix.
+pub fn get_password_for(provided: Option<&str>, user: Option<&str>) -> String {
+    if let Some(p) = provided {
+        return p.to_string();
+    }
+    let prompt = match user {
+        Some(u) => format!("Password for {u}: "),
+        None => "Vault password: ".to_string(),
+    };
+    rpassword::prompt_password(prompt).unwrap_or_default()
 }
 
 // ── Local key derivation ──────────────────────────────────────────────────────
@@ -157,6 +172,14 @@ impl RemoteClient {
             client: reqwest::blocking::Client::new(),
             token: session_token.to_string(),
         }
+    }
+
+    /// Cheapest possible proof that this session is still accepted.
+    ///
+    /// `GET /api/ping` is authenticated and slides the idle deadline, so it both
+    /// answers the question and is the thing worth doing anyway.
+    pub fn ping(&self) -> CliResult<()> {
+        self.get_json("/api/ping").map(|_| ())
     }
 
     fn auth(base: &str, body: &serde_json::Value) -> CliResult<Self> {
@@ -396,7 +419,7 @@ pub fn open_access(opts: &AuthOpts<'_>) -> CliResult<Access> {
             return Ok(Access::Remote(RemoteClient::connect_with_api_token(base, tok)?));
         }
         if let Some(username) = opts.user {
-            let pw = get_password(opts.password);
+            let pw = get_password_for(opts.password, Some(username));
             return Ok(Access::Remote(RemoteClient::connect_as_user(base, username, &pw)?));
         }
         let pw = get_password(opts.password);

@@ -333,13 +333,21 @@ enum Commands {
     /// Print the machine-readable contract: commands, flags, exit codes, schemas.
     Describe,
     /// Authenticate once and cache the session (remote servers).
+    ///
+    /// Pass --user NAME to sign in as a sub-user; without it you authenticate as
+    /// the vault owner. Sessions are cached per server *and* per user, so you can
+    /// hold several identities against one server and pick one with --user.
     Login,
+    /// Show which identity this CLI would use, and whether its session still works.
+    Whoami,
     /// Forget cached sessions.
     Logout {
         /// Forget every server, not just this one.
         #[arg(long)]
         all: bool,
     },
+    /// List the cached sessions: which servers, which users, which is default.
+    Sessions,
 }
 
 #[derive(Subcommand)]
@@ -825,10 +833,19 @@ fn run(cli: &Cli) -> CliResult {
 
     // A cached session stands in for a password, so an agent can run every
     // command in this CLI without ever holding a credential.
+    //
+    // `--user` used to disable this, which made the documented flow fail in the
+    // most confusing way available: `envv login --user alice` cached a session,
+    // and then `envv --user alice list` ignored it and prompted for a password
+    // every single time — while dropping `--user` worked. Sessions are filed by
+    // subject now, so naming the subject selects one instead of suppressing it.
+    //
+    // An explicit `--token` or password still wins: passing a credential is an
+    // instruction to use it.
     let cached = server
         .as_deref()
-        .filter(|_| cli.api_token.is_none() && cli.as_user.is_none() && password.is_none())
-        .and_then(session::load);
+        .filter(|_| cli.api_token.is_none() && password.is_none())
+        .and_then(|url| session::load(url, cli.as_user.as_deref()));
 
     let auth = AuthOpts {
         server: server.as_deref(),
@@ -841,6 +858,8 @@ fn run(cli: &Cli) -> CliResult {
 
     match &cli.command {
         Commands::Login => return cmd_login(cli, password.as_deref()),
+        Commands::Whoami => return cmd_whoami(cli),
+        Commands::Sessions => return cmd_sessions(),
         Commands::Logout { all } => return cmd_logout(cli, *all),
         _ => {}
     }
@@ -855,9 +874,21 @@ fn run(cli: &Cli) -> CliResult {
         (&result, server.as_deref(), cached.is_some())
     {
         if e.code == envv_cli::error::Code::Denied {
-            let _ = session::clear(server);
+            // Clear only the identity that was actually used. Dropping every
+            // session for the server because one expired would log the other
+            // cached users out too, which they would discover one at a time.
+            let subject = cli
+                .as_user
+                .clone()
+                .or_else(|| session::describe(server)?.get("default")?.as_str().map(String::from));
+            let _ = session::clear(server, subject.as_deref());
+            let as_who = subject
+                .as_deref()
+                .filter(|s| *s != session::OWNER_SUBJECT)
+                .map(|s| format!(" --user {s}"))
+                .unwrap_or_default();
             return Err(CliError::denied(format!(
-                "{}\nThe cached session was rejected and has been cleared — run `envv login --server {server}` again.",
+                "{}\nThe cached session was rejected and has been cleared — run `envv login --server {server}{as_who}` again.",
                 e.message
             )));
         }
@@ -903,8 +934,12 @@ fn cmd_login(cli: &Cli, password: Option<&str>) -> CliResult {
     let Some(remote) = access.remote() else {
         return Err(CliError::invalid("login is only meaningful in remote mode"));
     };
-    let subject = cli.as_user.as_deref().unwrap_or("owner");
+    // `<owner>` rather than "owner": this is a key in the session file alongside
+    // real usernames, and a sub-user actually named "owner" must not be able to
+    // occupy the owner's slot.
+    let subject = cli.as_user.as_deref().unwrap_or(session::OWNER_SUBJECT);
     session::save(server, &remote.token, subject)?;
+    let label = if subject == session::OWNER_SUBJECT { "the vault owner" } else { subject };
     out::ok(
         "login",
         serde_json::json!({
@@ -913,8 +948,79 @@ fn cmd_login(cli: &Cli, password: Option<&str>) -> CliResult {
             "session_file": session::session_path().display().to_string(),
         }),
         || {
-            println!("Logged in to {server} as {subject}");
+            println!("Logged in to {server} as {label}");
             println!("Session cached in {}", session::session_path().display());
+        },
+    );
+    Ok(())
+}
+
+/// Who this CLI would authenticate as, and whether that still works.
+///
+/// Exists because every other answer to "who am I?" was indirect: the session
+/// file is redacted on principle, and the only way to find out was to run a
+/// command and see whose data came back. A scoped user seeing fewer entries than
+/// expected cannot tell a permission problem from being logged in as the wrong
+/// person.
+fn cmd_whoami(cli: &Cli) -> CliResult {
+    let Some(server) = cli.server.as_deref() else {
+        out::ok("whoami", serde_json::json!({ "mode": "local", "subject": "owner" }), || {
+            println!("Local vault at {}", access::default_db_path().display());
+            println!("Authenticated as the vault owner (by deriving the key).");
+        });
+        return Ok(());
+    };
+
+    let entry = session::describe(server);
+    let subject = cli
+        .as_user
+        .clone()
+        .or_else(|| entry.as_ref()?.get("default")?.as_str().map(String::from));
+
+    let Some(subject) = subject else {
+        return Err(CliError::denied(format!(
+            "No cached session for {server}. Run: envv login --server {server} [--user NAME]"
+        )));
+    };
+    let Some(token) = session::load(server, Some(&subject)) else {
+        return Err(CliError::denied(format!(
+            "No cached session for {subject} at {server}. Run: envv login --server {server} --user {subject}"
+        )));
+    };
+
+    // Prove the session rather than describe it. A cached token that the server
+    // has since rejected looks identical on disk to a working one, and reporting
+    // a dead session as a live identity is worse than reporting nothing.
+    let client = access::RemoteClient::with_session(server, &token);
+    let live = client.ping().is_ok();
+
+    let created = entry
+        .as_ref()
+        .and_then(|e| e.get("subjects")?.get(&subject)?.get("created_at")?.as_str())
+        .unwrap_or("unknown")
+        .to_string();
+    let others: Vec<String> = entry
+        .as_ref()
+        .and_then(|e| e.get("subjects")?.as_object().map(|m| m.keys().cloned().collect()))
+        .unwrap_or_default();
+
+    out::ok(
+        "whoami",
+        serde_json::json!({
+            "mode": "remote",
+            "server": server,
+            "subject": subject,
+            "session_valid": live,
+            "created_at": created,
+            "cached_subjects": others,
+        }),
+        || {
+            let label = if subject == session::OWNER_SUBJECT { "the vault owner" } else { &subject };
+            println!("{label} @ {server}");
+            println!("Session cached {created}, {}", if live { "valid" } else { "REJECTED — log in again" });
+            if others.len() > 1 {
+                println!("Other cached identities here: {}", others.join(", "));
+            }
         },
     );
     Ok(())
@@ -931,10 +1037,65 @@ fn cmd_logout(cli: &Cli, all: bool) -> CliResult {
     let Some(server) = cli.server.as_deref() else {
         return Err(CliError::invalid("Pass --server URL, or --all to clear every session"));
     };
-    session::clear(server)?;
-    out::ok("logout", serde_json::json!({ "cleared": server }), || {
-        println!("Cleared the cached session for {server}")
-    });
+    // `--user alice` forgets only alice; without it the server's every identity
+    // goes. Logging one person out of a shared workstation must not silently log
+    // everyone else out too.
+    let subject = cli.as_user.as_deref();
+    session::clear(server, subject)?;
+    out::ok(
+        "logout",
+        serde_json::json!({ "cleared": server, "subject": subject }),
+        || match subject {
+            Some(u) => println!("Cleared the cached session for {u} at {server}"),
+            None => println!("Cleared every cached session for {server}"),
+        },
+    );
+    Ok(())
+}
+
+/// Every cached identity, without the tokens.
+///
+/// The session file is 0600 and holds live bearer credentials; this prints who
+/// is cached where, which is the part a human needs and the part that is safe to
+/// put on a terminal.
+fn cmd_sessions() -> CliResult {
+    let all = session::list_all();
+    let mut rows: Vec<serde_json::Value> = Vec::new();
+    if let Some(obj) = all.as_object() {
+        for (url, entry) in obj {
+            let default = entry.get("default").and_then(|d| d.as_str()).unwrap_or("");
+            if let Some(subs) = entry.get("subjects").and_then(|s| s.as_object()) {
+                for (subject, meta) in subs {
+                    rows.push(serde_json::json!({
+                        "server": url,
+                        "subject": subject,
+                        "default": subject == default,
+                        "created_at": meta.get("created_at").cloned().unwrap_or(serde_json::Value::Null),
+                    }));
+                }
+            }
+        }
+    }
+    out::ok(
+        "sessions",
+        serde_json::json!({ "sessions": rows, "session_file": session::session_path().display().to_string() }),
+        || {
+            if rows.is_empty() {
+                println!("No cached sessions. Run: envv login --server URL [--user NAME]");
+                return;
+            }
+            for r in &rows {
+                let mark = if r["default"].as_bool() == Some(true) { "*" } else { " " };
+                println!(
+                    "{mark} {:<24} {:<40} {}",
+                    r["subject"].as_str().unwrap_or(""),
+                    r["server"].as_str().unwrap_or(""),
+                    r["created_at"].as_str().unwrap_or("")
+                );
+            }
+            println!("\n* = used when --user is omitted");
+        },
+    );
     Ok(())
 }
 
@@ -1038,7 +1199,12 @@ fn emit_generated(command: &str, value: &str) {
 fn dispatch(cli: &Cli, a: &Access) -> CliResult {
     let yes = cli.yes;
     match &cli.command {
-        Commands::Completions { .. } | Commands::Describe | Commands::Login | Commands::Logout { .. } => Ok(()),
+        Commands::Completions { .. }
+        | Commands::Describe
+        | Commands::Login
+        | Commands::Whoami
+        | Commands::Sessions
+        | Commands::Logout { .. } => Ok(()),
 
         Commands::List { project, r#type, tag, env, category, search, json } => entries::cmd_list(
             a,

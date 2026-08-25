@@ -96,34 +96,130 @@ fn restrict(path: &std::path::Path) -> CliResult {
     Ok(())
 }
 
-/// The stored session token for a server URL, if any.
-pub fn load(url: &str) -> Option<String> {
-    read_all()
-        .get(url)
-        .and_then(|s| s.get("token"))
-        .and_then(|t| t.as_str())
+/// The name a session is filed under when no `--user` was given.
+///
+/// The owner is not a sub-user and cannot log in through `/api/auth`; it
+/// authenticates by proving it can derive the vault key. It still needs a
+/// key in this file, and it must be one no real username can collide with —
+/// hence the angle brackets, which `create_user` rejects.
+pub const OWNER_SUBJECT: &str = "<owner>";
+
+/// Sessions are filed per **server *and* subject**, not per server.
+///
+/// Keying by URL alone meant logging in as a second user silently replaced the
+/// first, and every later command ran as whoever logged in last — with nothing
+/// on screen saying so. Two people sharing a workstation, or one person holding
+/// an admin identity beside a scoped one, is an ordinary thing to want.
+///
+/// ```json
+/// { "https://vault.example.com": {
+///     "default": "alice",
+///     "subjects": { "alice": { "token": "…", "created_at": "…" } } } }
+/// ```
+///
+/// Entries written before this shape existed are `{token, subject, created_at}`
+/// directly under the URL. [`read_all`] migrates those on read, so an existing
+/// login survives the upgrade rather than silently failing to authenticate.
+fn migrate(entry: &Value) -> Value {
+    if entry.get("subjects").is_some() {
+        return entry.clone();
+    }
+    let subject = entry.get("subject").and_then(|s| s.as_str()).unwrap_or(OWNER_SUBJECT);
+    json!({
+        "default": subject,
+        "subjects": {
+            subject: {
+                "token": entry.get("token").cloned().unwrap_or(Value::Null),
+                "created_at": entry.get("created_at").cloned().unwrap_or(Value::Null),
+            }
+        }
+    })
+}
+
+/// The stored session token for a server, for `subject` if named and the
+/// server's default identity otherwise.
+pub fn load(url: &str, subject: Option<&str>) -> Option<String> {
+    let all = read_all();
+    let entry = migrate(all.get(url)?);
+    let want = match subject {
+        Some(s) => s.to_string(),
+        None => entry.get("default")?.as_str()?.to_string(),
+    };
+    entry
+        .get("subjects")?
+        .get(&want)?
+        .get("token")?
+        .as_str()
         .map(String::from)
 }
 
+/// Every cached identity for one server: `{default, subjects}`.
 pub fn describe(url: &str) -> Option<Value> {
-    read_all().get(url).cloned()
+    read_all().get(url).map(migrate)
 }
 
+/// Every cached session, as `{url: {default, subjects}}`. Tokens included —
+/// callers that print this must redact.
+pub fn list_all() -> Value {
+    let all = read_all();
+    let mut out = json!({});
+    if let Some(obj) = all.as_object() {
+        for (url, entry) in obj {
+            out[url] = migrate(entry);
+        }
+    }
+    out
+}
+
+/// Cache a session. The newest login becomes the server's default identity,
+/// which is what makes `envv login --user alice` followed by a bare `envv list`
+/// do the obvious thing.
 pub fn save(url: &str, token: &str, subject: &str) -> CliResult {
     let mut all = read_all();
-    all[url] = json!({
+    let mut entry = all.get(url).map(migrate).unwrap_or_else(|| json!({ "subjects": {} }));
+    entry["default"] = json!(subject);
+    entry["subjects"][subject] = json!({
         "token": token,
-        "subject": subject,
         "created_at": vault_core::iso_now(),
     });
+    all[url] = entry;
     write_all(&all)
 }
 
-pub fn clear(url: &str) -> CliResult {
+/// Forget one identity, or every identity for the server when `subject` is None.
+///
+/// Dropping the last subject drops the server too, so a cleared file is empty
+/// rather than a husk of URLs with no sessions behind them.
+pub fn clear(url: &str, subject: Option<&str>) -> CliResult {
     let mut all = read_all();
-    if let Some(obj) = all.as_object_mut() {
-        obj.remove(url);
+    let Some(subject) = subject else {
+        if let Some(obj) = all.as_object_mut() {
+            obj.remove(url);
+        }
+        return write_all(&all);
+    };
+    let Some(mut entry) = all.get(url).map(migrate) else {
+        return Ok(());
+    };
+    let mut survivor: Option<String> = None;
+    let mut emptied = false;
+    if let Some(subs) = entry["subjects"].as_object_mut() {
+        subs.remove(subject);
+        emptied = subs.is_empty();
+        survivor = subs.keys().next().cloned();
     }
+    if emptied {
+        if let Some(obj) = all.as_object_mut() {
+            obj.remove(url);
+        }
+        return write_all(&all);
+    }
+    // The default just went away; promote a survivor rather than leaving a
+    // dangling pointer that makes every later command fail to find a session.
+    if entry["default"].as_str() == Some(subject) {
+        entry["default"] = json!(survivor.unwrap_or_default());
+    }
+    all[url] = entry;
     write_all(&all)
 }
 

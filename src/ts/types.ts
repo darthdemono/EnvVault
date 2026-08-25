@@ -387,7 +387,7 @@ export interface AppSettings {
   /** Visual density of secret cards in the grid. */
   cardSize: 'compact' | 'medium' | 'large';
   /** Number of grid columns, or `"auto"` for responsive `auto-fill`. */
-  gridColumns: 'auto' | '2' | '3' | '4';
+  gridColumns: 'auto' | '2' | '3' | '4' | '5' | '6' | '8';
   /** Prefilled value for the "Account" field when adding a new secret. */
   defaultAccount: string;
   /** Format used by "Copy All" and the single-entry copy button on cards. */
