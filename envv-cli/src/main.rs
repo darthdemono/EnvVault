@@ -17,8 +17,8 @@
 
 use envv_cli::error::{CliError, CliResult};
 use envv_cli::{
-    access, agentio, backup, chunks, data, doctor, enrich, entries, envfile, exec, fmt, gen,
-    import_vaults, out, pool, projects, render, scan, session, users_cmd,
+    access, agentio, backup, calendar, chunks, data, doctor, enrich, entries, envfile, exec, fmt,
+    gen, import_vaults, out, pool, projects, render, scan, session, users_cmd,
 };
 
 use access::{open_access, Access, AuthOpts};
@@ -221,6 +221,30 @@ enum Commands {
         #[arg(long, short = 'o')]
         out: Option<PathBuf>,
     },
+    /// Write an iCalendar (.ics) feed of every date the vault knows.
+    ///
+    /// Creation dates, expiries and rotation deadlines, in the one format every
+    /// calendar reads. UIDs are stable per entry and per kind, so re-importing
+    /// updates the existing events instead of duplicating them.
+    ///
+    /// The file carries secret NAMES and dates. It carries no values and no
+    /// fingerprints — a fingerprint is stable per value, so a feed full of them
+    /// would tell whoever holds two feeds which secrets match.
+    Calendar {
+        /// Which events to include: created, expires, rotation. Repeatable;
+        /// defaults to all three.
+        #[arg(long = "kind", value_name = "KIND")]
+        kinds: Vec<String>,
+        /// Only include entries in this project.
+        #[arg(long)]
+        project: Option<String>,
+        /// Write to this file instead of stdout.
+        #[arg(long, short = 'o')]
+        out: Option<PathBuf>,
+        /// Calendar display name (X-WR-CALNAME).
+        #[arg(long, default_value = "EnvVault")]
+        name: String,
+    },
     /// List entries expiring within N days (default: 30).
     RotateCheck {
         #[arg(long, default_value_t = 30)]
@@ -350,6 +374,26 @@ enum Commands {
         /// Use the source folder / vault name as the category.
         #[arg(long)]
         keep_folders: bool,
+    },
+    /// Pin a project and environment to this directory (writes `.envv.json`).
+    ///
+    /// Later commands run here inherit them, so `--project` stops being typed
+    /// on every line. An explicit flag still wins, and `ENVV_PROJECT` /
+    /// `ENVV_ENV` sit between the two — which is the order CI needs.
+    ///
+    /// The file names things; it never holds a value, so it is safe to commit.
+    Use {
+        /// Project id or name to pin. Omit to show the current context.
+        project: Option<String>,
+        /// Environment to pin (production, staging, development, testing).
+        #[arg(long)]
+        env: Option<String>,
+        /// Print the context in effect and where it came from.
+        #[arg(long)]
+        show: bool,
+        /// Remove `.envv.json` from this directory.
+        #[arg(long)]
+        clear: bool,
     },
     /// Check the vault: database integrity, salt, file modes, audit chain, pools.
     ///
@@ -633,8 +677,9 @@ enum ProjectCmd {
     /// Export a project's config in its native format.
     Export {
         project: String,
-        /// wireguard, compose, nginx, env, json. Defaults to the project's type.
-        #[arg(long)]
+        /// Output format. Defaults to the exporter for the project's own type —
+        /// all eleven of them, not the four that used to be wired up.
+        #[arg(long, value_parser = clap::builder::PossibleValuesParser::new(envv_cli::chunks::EXPORT_FORMATS))]
         format: Option<String>,
         /// Write to this file instead of stdout (compose also writes .env beside it).
         #[arg(long, short = 'o')]
@@ -953,6 +998,15 @@ enum PermCmd {
 
 fn main() {
     let cli = Cli::parse();
+
+    // `error` by default, and the default is the whole point: this binary's
+    // stdout is a machine-readable contract, and its stderr is what a human or
+    // an agent reads when something failed. Logs go to stderr (see
+    // `vault_core::telemetry`), so `ENVV_LOG=debug envv get X --json | jq`
+    // still parses. Raise it with `ENVV_LOG` when diagnosing.
+    vault_core::telemetry::init("envv", "error");
+    tracing::debug!(json = cli.json, dry_run = cli.dry_run, "cli start");
+
     out::init(out::Mode {
         json: cli.json,
         reveal: cli.reveal,
@@ -1093,6 +1147,25 @@ fn run(cli: &Cli) -> CliResult {
                 Ok(a) => doctor::run(Some(&a), None),
                 Err(e) => doctor::run(None, Some(e.to_string())),
             }
+        }
+        // Showing or clearing a context touches no vault, and the state it is
+        // most needed in — a directory pinned to a vault that is gone, or one
+        // whose file is malformed — is exactly the state where opening one
+        // fails. Requiring an unlock first would make `--clear` unusable in the
+        // situation it exists to get out of.
+        Commands::Use {
+            project,
+            env,
+            show,
+            clear,
+        } if *show || *clear || (project.is_none() && env.is_none()) => {
+            return envv_cli::context::cmd_use(
+                None,
+                project.as_deref(),
+                env.as_deref(),
+                *show,
+                *clear,
+            )
         }
         Commands::Backup {
             cmd:
@@ -1240,6 +1313,132 @@ fn cmd_login(cli: &Cli, password: Option<&str>) -> CliResult {
 /// command and see whose data came back. A scoped user seeing fewer entries than
 /// expected cannot tell a permission problem from being logged in as the wrong
 /// person.
+/// `envv calendar` — an iCalendar feed of every date in the vault.
+///
+/// Unlike the `.env` and config exporters, this one may write to stdout under
+/// the default redacting policy, and that is a deliberate exception rather than
+/// an oversight. Those exporters are refused because a masked `.env` still
+/// *looks* deployable; an `.ics` contains no values to mask in the first place.
+/// It carries names and dates, which `envv list` already prints.
+fn cmd_calendar(
+    a: &Access,
+    kinds: &[String],
+    project: Option<&str>,
+    out_path: Option<&std::path::Path>,
+    name: &str,
+) -> CliResult {
+    let vault = a.load_vault()?;
+    let list = match project {
+        Some(p) => envv_cli::data::entries_in_project(&vault, p),
+        None => envv_cli::data::entries(&vault),
+    };
+
+    let selected = if kinds.is_empty() {
+        vec![
+            calendar::EventKind::Created,
+            calendar::EventKind::Expires,
+            calendar::EventKind::Rotation,
+        ]
+    } else {
+        let mut out = Vec::new();
+        for k in kinds {
+            match calendar::EventKind::parse(k) {
+                Some(kind) => {
+                    if !out.contains(&kind) {
+                        out.push(kind);
+                    }
+                }
+                None => {
+                    return Err(CliError::invalid(format!(
+                        "Unknown --kind '{k}'. Supported: created, expires, rotation."
+                    )))
+                }
+            }
+        }
+        out
+    };
+
+    let ics = calendar::build_ics(
+        &list,
+        &calendar::IcsOptions {
+            kinds: selected,
+            calendar_name: name.to_string(),
+            ..Default::default()
+        },
+    );
+    let events = calendar::event_count(&ics);
+
+    // An empty calendar is not an error — a vault where nothing has a date is a
+    // perfectly ordinary vault — but silently writing a file with no events in
+    // it looks like the command failed, so say so.
+    if events == 0 {
+        out::ok(
+            "calendar",
+            serde_json::json!({ "events": 0, "written": out_path.map(|p| p.display().to_string()) }),
+            || println!("No entry has any of the selected dates — nothing to put in a calendar."),
+        );
+        return Ok(());
+    }
+
+    match out_path {
+        Some(path) => {
+            // Written here rather than through `fmt::emit`, which prints its own
+            // "Wrote <path>" to stderr — two success messages for one action.
+            std::fs::write(path, &ics).map_err(|e| {
+                envv_cli::error::CliError::from(format!("Cannot write {}: {e}", path.display()))
+            })?;
+            out::ok(
+                "calendar",
+                serde_json::json!({ "events": events, "written": path.display().to_string() }),
+                || println!("Wrote {events} event(s) → {}", path.display()),
+            );
+            Ok(())
+        }
+        // Straight to stdout, unwrapped: piping into a file or into a calendar
+        // import is the point, and a JSON envelope around 4 KB of escaped ICS
+        // would be unusable for either.
+        None => fmt::emit(&ics, None),
+    }
+}
+
+/// `--project` with the per-directory context applied.
+///
+/// A name that came from a context file or from `ENVV_PROJECT` is validated
+/// against the vault before it is used, and an explicit flag is not — the flag
+/// is checked by the command itself, and duplicating that here would report the
+/// same problem twice in different words.
+///
+/// The validation exists because an unresolvable context is invisible
+/// otherwise: `envv list` in a directory pinned to a deleted project would
+/// simply list everything, which looks exactly like a vault with no scoping at
+/// all. Invariant 7, one directory at a time.
+fn scoped_project(a: &Access, explicit: Option<&str>) -> Result<Option<String>, CliError> {
+    let resolved = envv_cli::context::project(explicit)?;
+    let (Some(name), true) = (
+        resolved.as_deref(),
+        envv_cli::context::is_from_context(explicit),
+    ) else {
+        return Ok(resolved);
+    };
+    let vault = a.load_vault()?;
+    if envv_cli::context::resolve_in_vault(&vault, name).is_none() {
+        return Err(CliError::not_found(format!(
+            "This directory is pinned to project '{name}', which is not in the vault.\n\
+             Run `envv use <project>` to point it somewhere real, or `envv use --clear`."
+        )));
+    }
+    Ok(resolved)
+}
+
+/// `--env` with the per-directory context applied.
+///
+/// Not validated against anything: the environment is a free-text field on an
+/// entry, so "matches nothing" is an ordinary answer rather than a stale
+/// reference.
+fn scoped_env(explicit: Option<&str>) -> Result<Option<String>, CliError> {
+    envv_cli::context::environment(explicit)
+}
+
 fn cmd_whoami(cli: &Cli) -> CliResult {
     let Some(server) = cli.server.as_deref() else {
         out::ok(
@@ -1534,16 +1733,20 @@ fn dispatch(cli: &Cli, a: &Access) -> CliResult {
             category,
             search,
             json,
-        } => entries::cmd_list(
-            a,
-            project.as_deref(),
-            r#type.as_deref(),
-            tag.as_deref(),
-            env.as_deref(),
-            category.as_deref(),
-            search.as_deref(),
-            *json,
-        ),
+        } => {
+            let project = scoped_project(a, project.as_deref())?;
+            let env = scoped_env(env.as_deref())?;
+            entries::cmd_list(
+                a,
+                project.as_deref(),
+                r#type.as_deref(),
+                tag.as_deref(),
+                env.as_deref(),
+                category.as_deref(),
+                search.as_deref(),
+                *json,
+            )
+        }
         Commands::Get {
             provider,
             field,
@@ -1563,7 +1766,19 @@ fn dispatch(cli: &Cli, a: &Access) -> CliResult {
             project,
             name,
             out,
-        } => envfile::export_vault(a, format, project.as_deref(), name, out.as_deref()),
+        } => {
+            let project = scoped_project(a, project.as_deref())?;
+            envfile::export_vault(a, format, project.as_deref(), name, out.as_deref())
+        }
+        Commands::Calendar {
+            kinds,
+            project,
+            out: out_path,
+            name,
+        } => {
+            let project = scoped_project(a, project.as_deref())?;
+            cmd_calendar(a, kinds, project.as_deref(), out_path.as_deref(), name)
+        }
         Commands::RotateCheck { days } => {
             let list = a.expiring(*days)?;
             let safe = out::redact_entries(&list);
@@ -1593,6 +1808,8 @@ fn dispatch(cli: &Cli, a: &Access) -> CliResult {
             if *json {
                 envfile::import_json(a, file, yes)
             } else {
+                let project = scoped_project(a, project.as_deref())?;
+                let env = scoped_env(env.as_deref())?;
                 envfile::import(
                     a,
                     file,
@@ -1617,17 +1834,20 @@ fn dispatch(cli: &Cli, a: &Access) -> CliResult {
             file,
             project,
             category,
-        } => envfile::watch(
-            a,
-            file,
-            &envfile::ImportOpts {
-                project: project.as_deref(),
-                category: category.as_deref(),
-                environment: None,
-                price: "local",
-                allow_duplicates: false,
-            },
-        ),
+        } => {
+            let project = scoped_project(a, project.as_deref())?;
+            envfile::watch(
+                a,
+                file,
+                &envfile::ImportOpts {
+                    project: project.as_deref(),
+                    category: category.as_deref(),
+                    environment: None,
+                    price: "local",
+                    allow_duplicates: false,
+                },
+            )
+        }
         Commands::Env { project, out } => chunks::export(a, project, Some("env"), out.as_deref()),
 
         Commands::Exec {
@@ -1638,6 +1858,7 @@ fn dispatch(cli: &Cli, a: &Access) -> CliResult {
             clean,
             argv,
         } => {
+            let project = scoped_project(a, project.as_deref())?;
             let opts = exec::ExecOpts {
                 project: project.as_deref(),
                 entries: entry_specs,
@@ -1689,16 +1910,20 @@ fn dispatch(cli: &Cli, a: &Access) -> CliResult {
                 category,
                 search,
                 json,
-            } => entries::cmd_list(
-                a,
-                project.as_deref(),
-                r#type.as_deref(),
-                tag.as_deref(),
-                env.as_deref(),
-                category.as_deref(),
-                search.as_deref(),
-                *json,
-            ),
+            } => {
+                let project = scoped_project(a, project.as_deref())?;
+                let env = scoped_env(env.as_deref())?;
+                entries::cmd_list(
+                    a,
+                    project.as_deref(),
+                    r#type.as_deref(),
+                    tag.as_deref(),
+                    env.as_deref(),
+                    category.as_deref(),
+                    search.as_deref(),
+                    *json,
+                )
+            }
             EntryCmd::Get { provider, field } => entries::cmd_get(a, provider, field.as_deref()),
             EntryCmd::Add {
                 provider,
@@ -1907,17 +2132,26 @@ fn dispatch(cli: &Cli, a: &Access) -> CliResult {
             project,
             category,
             keep_folders,
-        } => import_vaults::run(
-            a,
-            vendor,
-            file,
-            &import_vaults::ImportOpts {
-                apply: *apply,
-                project: project.as_deref(),
-                category: category.as_deref(),
-                keep_folders: *keep_folders,
-            },
-        ),
+        } => {
+            let project = scoped_project(a, project.as_deref())?;
+            import_vaults::run(
+                a,
+                vendor,
+                file,
+                &import_vaults::ImportOpts {
+                    apply: *apply,
+                    project: project.as_deref(),
+                    category: category.as_deref(),
+                    keep_folders: *keep_folders,
+                },
+            )
+        }
+        Commands::Use {
+            project,
+            env,
+            show,
+            clear,
+        } => envv_cli::context::cmd_use(Some(a), project.as_deref(), env.as_deref(), *show, *clear),
         Commands::Status => scan::cmd_status(a),
         Commands::Doctor => doctor::run(Some(a), None),
 

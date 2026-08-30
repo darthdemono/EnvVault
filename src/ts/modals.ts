@@ -493,6 +493,10 @@ export function saveModal() {
       st.vault.api_keys[idx] = {
         ...entry,
         id: old.id ?? newEntryId(),
+        // A creation date that moves on edit is not a creation date. The form
+        // never offers it, so an edit must carry the old value through — the
+        // same reasoning as `id` above.
+        created_at: old.created_at,
         last_rotated_at: old.last_rotated_at,
         version_history: old.version_history,
         pinned: old.pinned,
@@ -505,7 +509,11 @@ export function saveModal() {
           showToast(`Updated ${moved} project reference${moved === 1 ? '' : 's'}`, 'ok', 2500);
       }
     } else {
-      st.vault.api_keys.push({ ...entry, id: newEntryId() });
+      st.vault.api_keys.push({
+        ...entry,
+        id: newEntryId(),
+        created_at: new Date().toISOString(),
+      });
     }
     persist();
     closeModal();
@@ -607,13 +615,28 @@ export function pushUndo(msg: string, fn: () => void) {
 
 // ── Form helpers ──────────────────────────────────────────────────────────
 
+/**
+ * Puts a generated value into the Add/Edit form's secret field.
+ *
+ * The guard is on the *overlay being open*, not on the field existing. `#f-key`
+ * is static markup in `index.html`, so it is in the document whether or not the
+ * modal is showing — which meant every "→ Inject" button in the Tools panel
+ * reported "Injected into form" with the form closed, wrote the value into a
+ * hidden input nobody could see, and then lost it: `openModal` does not read
+ * that field, and `closeModal` clears the draft. The user pressed a button, was
+ * told it worked, and nothing happened. Same class as invariant 8 — presence in
+ * the DOM is not the same as being on screen.
+ */
 export function injectIntoForm(value: string) {
+  const open = document.getElementById('modal-overlay')?.classList.contains('open');
   const fKey = document.getElementById('f-key') as HTMLInputElement | null;
-  if (fKey) {
-    fKey.value = value;
-    fKey.focus();
-    showToast('Injected into form', 'ok');
-  } else showToast('Open Add/Edit form first', 'err');
+  if (!open || !fKey) {
+    showToast('Open the Add/Edit form first, then Inject', 'err');
+    return;
+  }
+  fKey.value = value;
+  fKey.focus();
+  showToast('Injected into form', 'ok');
 }
 
 export async function quickGenerate() {

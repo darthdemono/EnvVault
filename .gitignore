@@ -47,3 +47,6 @@ pattern1.md
 CLAUDE.md
 Handoff.md
 coverage/
+# Repo-wide design/architecture reviews (review/review-01.md …). Local working
+# documents like handoff/, kept out of the tree for the same reason.
+review/

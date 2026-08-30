@@ -1721,6 +1721,39 @@
   box-shadow: 0 0 0 1.5px var(--accent);
 }
 
+/* ── Key-pool chips in the sidebar ───────────────────────────────────────────── */
+
+/*
+ * Mono, like every other sidebar badge. A pool name is an identifier the user
+ * also types into the `pool` field and into `envv pool report <pool>`, so it is
+ * set in the same face as the CLI prints it — a display face here made the two
+ * look like different strings.
+ */
+.pool-chip-sidebar {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 500;
+  line-height: 1.5;
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 10px;
+  letter-spacing: 0;
+  opacity: 0.9;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 32%, transparent);
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pool-filter-btn.active .pool-chip-sidebar {
+  opacity: 1;
+  box-shadow: 0 0 0 1.5px var(--accent);
+}
+
 /* ── Rotation age on cards ───────────────────────────────────────────────────── */
 
 .rotation-age-badge {
@@ -2060,4 +2093,92 @@ mark.search-hl {
   background: color-mix(in srgb, var(--warn, #d98a3a) 18%, transparent);
   color: var(--warn, #d98a3a);
   border: 1px solid color-mix(in srgb, var(--warn, #d98a3a) 35%, transparent);
+}
+
+/* ── Secret Timeline pane ─────────────────────────────────────────────────────
+
+   Every date in this table is either known, bounded or absent, and the styling
+   has to keep those three apart at a glance: `.tl-muted` is the visual form of
+   "we do not actually know this", and it is applied to inferred bounds as well
+   as to missing values on purpose. A bound rendered at full contrast reads as a
+   creation date, which is the one thing this pane must not imply. */
+.tl-summary {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 11px;
+  color: var(--text3);
+  margin: 12px 0 8px;
+  line-height: 1.7;
+}
+.tl-summary strong {
+  color: var(--text1);
+  font-weight: 600;
+}
+/* The table is wider than the pane on a narrow window. It scrolls inside its
+   own box rather than pushing the whole workspace sideways. */
+.tl-table-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.tl-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 11.5px;
+}
+.tl-table th {
+  text-align: left;
+  padding: 9px 12px;
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text3);
+  border-bottom: 1px solid var(--border);
+  background: var(--bg2);
+  position: sticky;
+  top: 0;
+}
+.tl-table td {
+  padding: 8px 12px;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
+  color: var(--text1);
+  white-space: nowrap;
+}
+.tl-table tr:last-child td {
+  border-bottom: none;
+}
+.tl-muted {
+  color: var(--text3);
+}
+.tl-warn {
+  color: var(--warn, #d98a3a);
+}
+.tl-bad {
+  color: var(--err, #d95a5a);
+}
+.tl-export {
+  margin-top: 20px;
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg2);
+}
+.tl-export h4 {
+  margin: 0 0 6px;
+  font-size: 12px;
+}
+.tl-note {
+  margin: 0 0 12px;
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--text3);
+  max-width: 68ch;
+}
+.tl-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11.5px;
+  color: var(--text2);
+  cursor: pointer;
 }

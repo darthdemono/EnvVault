@@ -822,6 +822,10 @@ mod commands {
             salt,
             fingerprint.clone(),
             480,
+            // Absolute session ceiling, in hours. A LAN share is a deliberate,
+            // supervised act with a stop button on screen; 24h outlives any
+            // realistic session while still bounding a peer token that leaks.
+            24,
             /* lan_mode */ true,
         );
         // Hand the server the key we already hold: nobody re-enters a password.
@@ -1021,8 +1025,18 @@ fn configure_linux_webkit() {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Structured logging first, so anything the platform setup below reports is
+    // captured. `info` matches the server: a desktop session is long-lived and
+    // its log is read after the fact, when something has already gone wrong.
+    //
+    // The rule from `vault_core::telemetry` applies here too and matters most in
+    // this binary: log fingerprints, entry ids and provider names — never a
+    // stored value, never the master password, never a session token.
+    vault_core::telemetry::init("envvault-desktop", "info");
+
     #[cfg(target_os = "linux")]
     configure_linux_webkit();
+    tracing::info!(version = env!("CARGO_PKG_VERSION"), "desktop starting");
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())

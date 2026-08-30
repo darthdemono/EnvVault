@@ -1,4 +1,11 @@
-import type { VaultData, AppSettings, VaultEntry, RemoteVaultConfig, PersistedView } from './types';
+import type {
+  VaultData,
+  AppSettings,
+  VaultEntry,
+  RemoteVaultConfig,
+  PersistedView,
+  AuditRow,
+} from './types';
 import { dump as yamlDump } from 'js-yaml';
 import { hexAlpha, showToast } from './utils';
 
@@ -382,6 +389,15 @@ export const st = {
   activeTagFilter: null as string | null,
   /** Active env-prefix filter — null means no prefix filter applied. */
   activePrefixFilter: null as string | null,
+  /**
+   * Active key-pool filter — null means no pool filter applied.
+   *
+   * Holds the pool *name*, which is what `VaultEntry.pool` stores. Names are
+   * not ids: renaming a pool means editing every member's `pool` field, and the
+   * filter must be dropped on restore when nothing carries it any more
+   * (invariant 7) — the same treatment tags get, for the same reason.
+   */
+  activePoolFilter: null as string | null,
   /** True while the embedded "Open to LAN" server is serving this vault (Pass 3). */
   lanServerRunning: false,
   /** True after a successful finishInit(); false after lockVault(). Prevents visibility-change from stacking the relock overlay before the vault is ever opened. */
@@ -418,6 +434,7 @@ export function resetViewState(): void {
   st.currentEnvFilter = '';
   st.activeTagFilter = null;
   st.activePrefixFilter = null;
+  st.activePoolFilter = null;
   st.expanded.clear();
   st.allExpanded = false;
   st.revealed = {};
@@ -449,6 +466,7 @@ export function clearAllFilters(): void {
   st.currentEnvFilter = '';
   st.activeTagFilter = null;
   st.activePrefixFilter = null;
+  st.activePoolFilter = null;
 
   const searchEl = document.getElementById('search') as HTMLInputElement | null;
   if (searchEl) searchEl.value = '';
@@ -483,6 +501,75 @@ export function ensureEntryIds(entries: VaultEntry[]): boolean {
     seen.add(e.id);
   }
   return changed;
+}
+
+/**
+ * Fills in `created_at` for entries written before the field existed, using
+ * evidence already in the vault rather than a guess.
+ *
+ * The only evidence that actually dates a creation is an `add` row in the audit
+ * log, which has been written since Phase 3. Two rules make it safe to use:
+ *
+ * 1. **The oldest matching row wins.** An entry deleted and re-added would have
+ *    two; the first is when the name first appeared.
+ * 2. **An ambiguous provider is skipped entirely.** Audit rows identify an
+ *    entry by `entry_provider` alone, so two entries sharing a provider cannot
+ *    be told apart — and attributing one entry's creation date to its neighbour
+ *    is the same class of mistake as identifying an entry by array index. The
+ *    CLI refuses ambiguous lookups for exactly this reason; so does this.
+ *
+ * Everything else stays unset. `version_history` is deliberately not used as a
+ * source: its oldest `saved_at` is when a value was *replaced*, which is an
+ * upper bound on the creation date and not the date itself. The timeline panel
+ * shows that bound as "before <date>" without writing it to the vault, because
+ * a stored date is indistinguishable from a known one the moment it is read
+ * back by anything else — the CLI, an export, the calendar feed.
+ *
+ * @returns true when anything was assigned, so the caller can persist.
+ */
+export function backfillCreatedAt(entries: VaultEntry[], auditRows: AuditRow[]): boolean {
+  const missing = entries.filter((e) => !e.created_at);
+  if (!missing.length || !auditRows.length) return false;
+
+  const providerCount = new Map<string, number>();
+  for (const e of entries) {
+    providerCount.set(e.provider, (providerCount.get(e.provider) ?? 0) + 1);
+  }
+
+  // Oldest `add` row per provider. Rows arrive newest-first, and `id` is the
+  // only reliable ordering — timestamps are strings written by whichever build
+  // was running at the time.
+  const firstAdd = new Map<string, string>();
+  for (const row of [...auditRows].sort((a, b) => a.id - b.id)) {
+    if (row.action !== 'add' || !row.entry_provider) continue;
+    if (!firstAdd.has(row.entry_provider)) firstAdd.set(row.entry_provider, row.timestamp);
+  }
+
+  let changed = false;
+  for (const e of missing) {
+    if ((providerCount.get(e.provider) ?? 0) !== 1) continue;
+    const ts = firstAdd.get(e.provider);
+    if (!ts || Number.isNaN(Date.parse(ts))) continue;
+    e.created_at = new Date(ts).toISOString();
+    changed = true;
+  }
+  return changed;
+}
+
+/**
+ * The earliest moment an entry is *known* to have existed, when its creation
+ * date is unknown.
+ *
+ * This is an upper bound, never a creation date, and every caller has to render
+ * it as one ("before 4 Mar"). It exists because "unknown" for an entry with ten
+ * revisions going back two years is less true than "at least two years old".
+ */
+export function earliestEvidence(entry: VaultEntry): string | null {
+  const stamps = (entry.version_history ?? [])
+    .map((v) => v.saved_at)
+    .filter((s): s is string => !!s && !Number.isNaN(Date.parse(s)))
+    .sort();
+  return stamps[0] ?? null;
 }
 
 /** Stable id for an entry, assigning one if somehow still absent. */
@@ -578,7 +665,7 @@ const DEFAULT_SETTINGS: AppSettings = {
   showExpiryWarning: true,
   expiryWarningDays: 30,
   customCss: '',
-  sidebarSections: ['all', 'price', 'env', 'category', 'project', 'tags', 'prefixes'],
+  sidebarSections: ['all', 'price', 'env', 'category', 'project', 'tags', 'pools', 'prefixes'],
   groupByType: false,
   activityBarPosition: 'left' as const,
   activityBarStyle: 'icon' as const,
@@ -642,6 +729,7 @@ export const Settings = {
         };
         insertAfter('price', 'env');
         if (!secs.includes('tags' as any)) secs.push('tags' as any);
+        if (!secs.includes('pools' as any)) secs.push('pools' as any);
         if (!secs.includes('prefixes' as any)) secs.push('prefixes' as any);
         this._data.sidebarSections = secs as any;
         localStorage.setItem('envvault-sb-migrated', '1');
@@ -725,10 +813,11 @@ export const ALL_SIDEBAR_SECTIONS = [
   'category',
   'project',
   'tags',
+  'pools',
   'prefixes',
 ] as const;
 /** Sections whose visibility is also gated on having data (handled by render). */
-const DATA_GATED_SECTIONS = ['tags', 'prefixes'];
+const DATA_GATED_SECTIONS = ['tags', 'pools', 'prefixes'];
 
 export function isSidebarSectionEnabled(key: string): boolean {
   const sections = Settings.get('sidebarSections') || [...ALL_SIDEBAR_SECTIONS];
@@ -756,10 +845,11 @@ export function applySidebarOrder() {
     }
   });
   const collapsed = Settings.get('collapsedSections') || [];
-  (['all', 'price', 'env', 'category', 'project', 'tags', 'prefixes'] as const).forEach((key) =>
-    document
-      .getElementById(`sidebar-section-${key}`)
-      ?.classList.toggle('collapsed', collapsed.includes(key)),
+  (['all', 'price', 'env', 'category', 'project', 'tags', 'pools', 'prefixes'] as const).forEach(
+    (key) =>
+      document
+        .getElementById(`sidebar-section-${key}`)
+        ?.classList.toggle('collapsed', collapsed.includes(key)),
   );
 }
 
@@ -816,6 +906,7 @@ export function saveViewState(): void {
     envFilter: st.currentEnvFilter,
     tagFilter: st.activeTagFilter,
     prefixFilter: st.activePrefixFilter,
+    poolFilter: st.activePoolFilter,
     projectIds: [...st.currentSelectedProjectIds],
   });
 }
@@ -863,6 +954,13 @@ export function restoreViewState(): boolean {
   }
   if (v.prefixFilter && entries.some((e) => (e.provider || '').startsWith(v.prefixFilter!))) {
     st.activePrefixFilter = v.prefixFilter;
+    applied = true;
+  }
+  // A pool is named, not identified, so it stops existing the moment its last
+  // member's `pool` field is cleared or renamed. Restoring it unvalidated opens
+  // the app to an empty grid under a filter the user never set this session.
+  if (v.poolFilter && entries.some((e) => e.pool === v.poolFilter)) {
+    st.activePoolFilter = v.poolFilter;
     applied = true;
   }
 

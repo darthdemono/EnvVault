@@ -19,6 +19,7 @@ import {
   persist,
   entryId,
   ensureEntryIds,
+  backfillCreatedAt,
   applyUsersPanelVisibility,
   applySidebarLayout,
   restoreViewState,
@@ -219,6 +220,20 @@ async function finishInit() {
       // Backfill stable ids for vaults written before the field existed, and
       // repair any duplicates. Runs once; afterwards every entry carries an id.
       if (ensureEntryIds(st.vault.api_keys)) needsSave = true;
+
+      // Creation dates, from the audit log's `add` rows. Wrapped because the
+      // audit read can fail in ways that must not stop a vault opening: a
+      // scoped sub-user gets 403 from `/api/audit`, and a vault restored
+      // without its audit table has no rows at all. Either way the entries
+      // simply stay undated.
+      if (st.vault.api_keys.some((e) => !e.created_at)) {
+        try {
+          const { loadAuditRows } = await import('./audit');
+          const rows = await loadAuditRows();
+          if (backfillCreatedAt(st.vault.api_keys, rows)) needsSave = true;
+        } catch {}
+      }
+
       if (needsSave) await persist();
 
       document.getElementById('load-banner')!.style.display = 'none';
@@ -324,6 +339,13 @@ async function init() {
       triggerRender();
       return;
     }
+    // Key-pool filter button
+    if (btn.classList.contains('pool-filter-btn')) {
+      const pool = btn.dataset.pool ?? '';
+      st.activePoolFilter = st.activePoolFilter === pool ? null : pool;
+      triggerRender();
+      return;
+    }
     const filterType = btn.dataset.filterType;
     const filterValue = btn.dataset.filterValue;
     if (filterType && filterValue !== undefined) {
@@ -339,6 +361,7 @@ async function init() {
           // added to it, so "All" left the grid narrowed with nothing in the
           // sidebar looking active to explain why.
           st.activePrefixFilter = null;
+          st.activePoolFilter = null;
         }
         doSetFilter(filterType, filterValue);
       }

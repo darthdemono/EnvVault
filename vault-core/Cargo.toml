@@ -18,6 +18,12 @@ bundled = ["rusqlite/bundled-sqlcipher-vendored-openssl"]
 # desktop app and the CLI both turn it on — and they must both build from it, or
 # the split that this module exists to close reopens.
 tls = ["dep:rustls", "dep:rustls-pki-types", "dep:rustls-pemfile", "dep:webpki-roots"]
+# Structured logging (`telemetry.rs`). Off by default so a library consumer does
+# not inherit a subscriber it never asked for; all three binaries turn it on.
+# It is one feature rather than three copies of the same subscriber setup
+# because the stderr-only rule has to hold identically in every binary — the
+# CLI's JSON envelope on stdout is what breaks the moment one of them differs.
+telemetry = ["dep:tracing", "dep:tracing-subscriber"]
 
 [dependencies]
 # Unix links the system SQLCipher by default: it builds in seconds instead of
@@ -49,6 +55,10 @@ rustls           = { version = "0.23", default-features = false, features = ["aw
 rustls-pki-types = { version = "1", optional = true }
 rustls-pemfile   = { version = "2", optional = true }
 webpki-roots     = { version = "0.26", optional = true }
+
+# Structured logging, feature-gated behind `telemetry`.
+tracing            = { version = "0.1", optional = true }
+tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "env-filter", "json", "ansi", "std"], optional = true }
 
 # Windows has no system SQLCipher to link against, so it always vendors —
 # otherwise the first thing a Windows contributor meets is a linker error about

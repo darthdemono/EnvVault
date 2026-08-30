@@ -16,6 +16,38 @@ pub fn entries(vault: &Value) -> Vec<Value> {
         .unwrap_or_default()
 }
 
+/// Entries belonging to `project`, matched by id or by a case-insensitive
+/// substring of the name.
+///
+/// Extracted from `envfile::export_vault` when `envv calendar` needed the same
+/// filter. A second copy would be a second definition of what "--project web"
+/// means, and the two would agree right up until one of them learned about
+/// sub-projects.
+pub fn entries_in_project(vault: &Value, project: &str) -> Vec<Value> {
+    let proj_lc = project.to_lowercase();
+    let matching_ids: Vec<String> = projects(vault)
+        .iter()
+        .filter(|p| {
+            p.get("id").and_then(|i| i.as_str()) == Some(project)
+                || p.get("name")
+                    .and_then(|n| n.as_str())
+                    .is_some_and(|n| n.to_lowercase().contains(&proj_lc))
+        })
+        .filter_map(|p| p.get("id").and_then(|i| i.as_str()).map(String::from))
+        .collect();
+
+    let mut list = entries(vault);
+    list.retain(|e| {
+        e.get("projectIds")
+            .and_then(|v| v.as_array())
+            .is_some_and(|ids| {
+                ids.iter()
+                    .any(|id| matching_ids.iter().any(|m| Some(m.as_str()) == id.as_str()))
+            })
+    });
+    list
+}
+
 pub fn projects(vault: &Value) -> Vec<Value> {
     vault
         .get("projects")

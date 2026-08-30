@@ -57,9 +57,19 @@ const SIDEBAR_SECTION_DEFS = [
   { key: 'category', label: 'Categories' },
   { key: 'project', label: 'Projects' },
   { key: 'tags', label: 'Tags' },
+  { key: 'pools', label: 'Key Pools' },
   { key: 'prefixes', label: 'Env Prefixes' },
 ];
-const DEFAULT_SIDEBAR_SECTIONS = ['all', 'price', 'env', 'category', 'project', 'tags', 'prefixes'];
+const DEFAULT_SIDEBAR_SECTIONS = [
+  'all',
+  'price',
+  'env',
+  'category',
+  'project',
+  'tags',
+  'pools',
+  'prefixes',
+];
 
 export function buildSidebarOrderEditor() {
   const container = document.getElementById('s-sidebar-sections');

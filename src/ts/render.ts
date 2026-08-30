@@ -26,6 +26,7 @@ import {
 import { getFiltered, sorted, buildProjectTree, getDescendantProjectIds } from './filters';
 import { iconHTML } from './icons';
 import { normalizeRateLimit } from './ratelimit';
+import { poolsOf } from './pools';
 import {
   esc,
   escAttr,
@@ -193,7 +194,49 @@ function renderSidebar() {
   renderProjectList(catList, st.vault.projects || [], all);
 
   renderTagSection(all);
+  renderPoolSection(all);
   renderPrefixSection(all);
+}
+
+/**
+ * Key Pools in the sidebar — every entry grouped under its pool name.
+ *
+ * Membership is the `pool` field on the entry and lives in the vault, so this
+ * section needs no IPC and works on a remote vault and in the browser dev
+ * server exactly as it does in Tauri. The *swap state* — cursor, cooldowns, use
+ * counts — deliberately does not live in the vault (see `pools.ts`), so it is
+ * not shown here; Tools → Key Pools is where that belongs, because it needs a
+ * refresh cycle and this does not.
+ *
+ * Grouping goes through `poolsOf()` rather than a second pass over `pool`, so
+ * the sidebar and the tool pane can never disagree about what a pool contains —
+ * including the trim, and including the guard against a non-string `pool` in an
+ * untrusted vault becoming a pool named "[object Object]" (invariant 4).
+ */
+function renderPoolSection(all: VaultEntry[]) {
+  const container = document.getElementById('pool-filter-list');
+  if (!container) return;
+
+  // `poolsOf` reads a vault-shaped object, and `all` is the entry array the rest
+  // of the sidebar is counting — filtered by the active workspace, not the raw
+  // vault — so the counts here match the grid rather than the whole file.
+  const pools = poolsOf({ api_keys: all });
+
+  const section = document.getElementById('sidebar-section-pools');
+  if (section)
+    section.style.display = isSidebarSectionEnabled('pools') && pools.size > 0 ? '' : 'none';
+
+  container.innerHTML = [...pools.entries()]
+    .map(([name, members]) => {
+      const active = st.activePoolFilter === name;
+      return `<div class="sidebar-cat-row">
+        <button class="sidebar-item pool-filter-btn${active ? ' active' : ''}" data-pool="${escAttr(name)}" title="${escAttr(`${members.length} interchangeable credential${members.length === 1 ? '' : 's'}`)}">
+          <span class="pool-chip-sidebar">${esc(name)}</span>
+          <span class="sidebar-count">${members.length}</span>
+        </button>
+      </div>`;
+    })
+    .join('');
 }
 
 function renderPrefixSection(all: VaultEntry[]) {
@@ -1998,6 +2041,7 @@ export function activeFilterLabels(): string[] {
   if (st.currentEnvFilter) out.push(`env: ${st.currentEnvFilter}`);
   if (st.activeTagFilter) out.push(`tag: ${st.activeTagFilter}`);
   if (st.activePrefixFilter) out.push(`prefix: ${st.activePrefixFilter}`);
+  if (st.activePoolFilter) out.push(`pool: ${st.activePoolFilter}`);
   if (st.searchQ) out.push(`search: ${st.searchQ}`);
   const proj = st.currentSelectedProjectIds.filter((id) => id !== 'Universal');
   proj.forEach((id) => {

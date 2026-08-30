@@ -705,14 +705,27 @@ describe('CustomSelect', () => {
 });
 
 describe('injectIntoForm', () => {
-  it('writes the generated value into the key field', () => {
+  // These two used to assert the bug rather than the behaviour, and passed
+  // because of it: the first called `injectIntoForm` with the modal *closed* and
+  // expected the write to land, which is exactly what made every "→ Inject"
+  // button in the Tools panel silently discard the user's generated secret.
+  // `#f-key` is static markup, so it is in the document either way. Behavioural
+  // coverage lives in `tests/inject-into-form.test.ts`.
+  it('writes the generated value into the key field when the form is open', () => {
+    openModal('Add', -1);
     injectIntoForm('generated-secret');
     expect(($('f-key') as HTMLInputElement).value).toBe('generated-secret');
   });
 
-  it('warns instead of throwing when the form is not present', () => {
+  it('refuses, without throwing, when the form is not open', () => {
+    injectIntoForm('generated-secret');
+    expect(($('f-key') as HTMLInputElement).value).toBe('');
+    expect($('toast').textContent).toMatch(/open the add\/edit form first/i);
+  });
+
+  it('warns instead of throwing when the form is not present at all', () => {
     document.body.innerHTML = '<div id="toast"></div>';
     expect(() => injectIntoForm('x')).not.toThrow();
-    expect($('toast').textContent).toMatch(/open add\/edit form/i);
+    expect($('toast').textContent).toMatch(/open the add\/edit form first/i);
   });
 });

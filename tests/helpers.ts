@@ -80,6 +80,7 @@ export function resetState(st: any, vault: VaultData = makeVault()): void {
   st.currentEnvFilter = '';
   st.activeTagFilter = null;
   st.activePrefixFilter = null;
+  st.activePoolFilter = null;
   st.selectedUserId = null;
   st.activeRemoteId = null;
   st.undoStack = [];

@@ -90,6 +90,14 @@ export function getFiltered(): VaultEntry[] {
     // Env-prefix sidebar filter
     if (st.activePrefixFilter && !(k.env_prefixes ?? []).includes(st.activePrefixFilter))
       return false;
+    // Key-pool sidebar filter. Compared against the trimmed name, matching
+    // `poolsOf()` — a pool written as "openai " and one written as "openai" are
+    // the same pool everywhere else, so they must be here too.
+    if (
+      st.activePoolFilter &&
+      (typeof k.pool !== 'string' || k.pool.trim() !== st.activePoolFilter)
+    )
+      return false;
     if (text) {
       const hay = [
         k.provider,

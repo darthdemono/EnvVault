@@ -9,7 +9,9 @@
 pub mod access;
 pub mod agentio;
 pub mod backup;
+pub mod calendar;
 pub mod chunks;
+pub mod context;
 pub mod data;
 pub mod doctor;
 pub mod enrich;

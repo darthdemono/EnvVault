@@ -26,6 +26,9 @@ pub mod entropy;
 
 #[cfg(feature = "tls")]
 pub mod tls;
+
+#[cfg(feature = "telemetry")]
+pub mod telemetry;
 pub use permex::{
     eval as eval_perm_expr, parse as parse_perm_expr, EntryView, Expr as PermExpr,
     Field as PermField,
@@ -238,10 +241,79 @@ pub fn entry_ck(entry: &serde_json::Value) -> String {
     )
 }
 
+// ── Schema versioning ─────────────────────────────────────────────────────────
+
+/// The vault-document schema this build writes.
+///
+/// Three binaries — the desktop app, `envv-server` and `envv` — read and write
+/// one untyped JSON blob, and until this existed nothing recorded which shape it
+/// was in. The problem had already been hit once and solved by convention: the
+/// legacy `rate_limit` string is dual-written so a vault edited by a current
+/// build stays readable to an older one. The next field that skips that
+/// convention breaks old readers with no way to detect it and no way to refuse.
+///
+/// Bump this when a change makes a document unreadable to the previous build —
+/// not for an added optional field, which older readers ignore harmlessly.
+///
+/// Version 1 is the document shape as of 0.8.1. Vaults written before this
+/// constant existed carry no version at all; that is treated as 1, because it
+/// is, and the next save stamps it.
+pub const VAULT_SCHEMA_VERSION: u32 = 1;
+
+/// Marker prefix on the error returned when the stored vault was written by a
+/// newer build than this one. Callers match on it to tell "upgrade me" from a
+/// real failure.
+pub const SCHEMA_ERR: &str = "VAULT_SCHEMA_TOO_NEW";
+
+/// The schema version stamped on the stored vault, or `None` for a vault
+/// written before versioning existed (or an empty database).
+pub fn vault_schema_version(conn: &Connection) -> Result<Option<u32>, String> {
+    let raw: Option<String> = conn
+        .query_row(
+            "SELECT value FROM vault_meta WHERE key = 'schema_version'",
+            [],
+            |r| r.get(0),
+        )
+        .optional()
+        .map_err(|e| e.to_string())?;
+    match raw {
+        None => Ok(None),
+        // An unparseable stamp is not "no stamp": something wrote a value this
+        // build cannot interpret, which is the same situation as a future
+        // version and gets the same refusal.
+        Some(s) => s
+            .trim()
+            .parse::<u32>()
+            .map(Some)
+            .map_err(|_| format!("{SCHEMA_ERR}: unreadable schema_version {s:?}")),
+    }
+}
+
+/// Refuses to touch a vault written by a newer build.
+///
+/// Refuse-with-a-message beats corrupt-on-round-trip: an old binary that reads a
+/// future document, drops the fields it does not know and writes it back has
+/// silently destroyed data, which is this project's worst bug class.
+pub fn check_schema_version(conn: &Connection) -> Result<(), String> {
+    match vault_schema_version(conn)? {
+        Some(v) if v > VAULT_SCHEMA_VERSION => Err(format!(
+            "{SCHEMA_ERR}: this vault was written by a newer version of EnvVault \
+             (vault schema v{v}, this build understands v{VAULT_SCHEMA_VERSION}). \
+             Upgrade EnvVault to open it — writing it with this build would drop \
+             the fields it does not understand."
+        )),
+        _ => Ok(()),
+    }
+}
+
 // ── Vault I/O ─────────────────────────────────────────────────────────────────
 
 /// Loads the raw vault JSON from an open connection.
+///
+/// Refuses a vault stamped with a schema this build does not understand, rather
+/// than handing back a document it would silently truncate on the next save.
 pub fn load_vault(conn: &Connection) -> Result<Option<serde_json::Value>, String> {
+    check_schema_version(conn)?;
     let raw: Option<String> = conn
         .query_row("SELECT data FROM vault WHERE id = 1", [], |row| row.get(0))
         .optional()
@@ -337,6 +409,10 @@ fn save_vault_txn(
 
     let actor = ctx.actor;
     let now_str = iso_now();
+
+    // Refuse before doing any work: a newer document read by this build would
+    // lose every field this build does not know about.
+    check_schema_version(conn)?;
 
     // Compare-and-swap. Inside the transaction, so no writer can slip between
     // this check and the write below.
@@ -442,6 +518,14 @@ fn save_vault_txn(
     conn.execute(
         "INSERT OR REPLACE INTO vault_meta (key, value) VALUES ('data_hash', ?1)",
         rusqlite::params![hash],
+    )
+    .map_err(|e| e.to_string())?;
+    // Stamp the shape alongside the data, in the same transaction. A vault that
+    // has been written by this build is by definition in this build's schema,
+    // so there is no separate migration step to forget to run.
+    conn.execute(
+        "INSERT OR REPLACE INTO vault_meta (key, value) VALUES ('schema_version', ?1)",
+        rusqlite::params![VAULT_SCHEMA_VERSION.to_string()],
     )
     .map_err(|e| e.to_string())?;
 
@@ -708,6 +792,98 @@ mod tests {
         let conn = open_db(&dir.join("vault.db"), &key).unwrap();
         init_schema(&conn).unwrap();
         (conn, dir)
+    }
+
+    // ── Schema version ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn saving_stamps_the_schema_version() {
+        let (conn, _d) = open_scratch("schemastamp");
+        assert_eq!(
+            vault_schema_version(&conn).unwrap(),
+            None,
+            "a fresh database carries no stamp until something is written"
+        );
+        save_vault(
+            &conn,
+            serde_json::json!({ "api_keys": [] }),
+            SaveCtx::default(),
+        )
+        .unwrap();
+        assert_eq!(
+            vault_schema_version(&conn).unwrap(),
+            Some(VAULT_SCHEMA_VERSION)
+        );
+    }
+
+    #[test]
+    fn an_unstamped_vault_still_opens() {
+        // Every vault written before this constant existed has no stamp. Treating
+        // "absent" as a failure would refuse to open every vault in the field.
+        let (conn, _d) = open_scratch("schemalegacy");
+        save_vault(
+            &conn,
+            serde_json::json!({ "api_keys": [] }),
+            SaveCtx::default(),
+        )
+        .unwrap();
+        conn.execute("DELETE FROM vault_meta WHERE key = 'schema_version'", [])
+            .unwrap();
+        assert!(load_vault(&conn).unwrap().is_some());
+    }
+
+    #[test]
+    fn a_future_schema_is_refused_for_both_read_and_write() {
+        // Refuse-with-a-message beats corrupt-on-round-trip. An old binary that
+        // reads a newer document, drops the fields it does not know and saves it
+        // back has silently destroyed data — the exact failure mode this project
+        // hunts everywhere else.
+        let (conn, _d) = open_scratch("schemafuture");
+        save_vault(
+            &conn,
+            serde_json::json!({ "api_keys": [], "projects": [] }),
+            SaveCtx::default(),
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT OR REPLACE INTO vault_meta (key, value) VALUES ('schema_version', ?1)",
+            rusqlite::params![(VAULT_SCHEMA_VERSION + 1).to_string()],
+        )
+        .unwrap();
+
+        let read = load_vault(&conn).unwrap_err();
+        assert!(read.starts_with(SCHEMA_ERR), "load said: {read}");
+        let write = save_vault(
+            &conn,
+            serde_json::json!({ "api_keys": [] }),
+            SaveCtx::default(),
+        )
+        .unwrap_err();
+        assert!(write.starts_with(SCHEMA_ERR), "save said: {write}");
+
+        // And the refusal must not have been a partial write.
+        conn.execute(
+            "INSERT OR REPLACE INTO vault_meta (key, value) VALUES ('schema_version', '1')",
+            [],
+        )
+        .unwrap();
+        let v = load_vault(&conn).unwrap().unwrap();
+        assert!(
+            v.get("projects").is_some(),
+            "the refused save wrote nothing"
+        );
+    }
+
+    #[test]
+    fn an_unparseable_stamp_is_treated_as_unknown_not_as_absent() {
+        let (conn, _d) = open_scratch("schemajunk");
+        conn.execute(
+            "INSERT OR REPLACE INTO vault_meta (key, value) VALUES ('schema_version', 'tomorrow')",
+            [],
+        )
+        .unwrap();
+        let e = load_vault(&conn).unwrap_err();
+        assert!(e.starts_with(SCHEMA_ERR), "said: {e}");
     }
 
     // ── KDF ────────────────────────────────────────────────────────────────────

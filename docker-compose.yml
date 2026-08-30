@@ -19,6 +19,11 @@ services:
       # Raise if you actually serve concurrent clients; 2 is right for a vault.
       - ENVV_WORKER_THREADS=${ENVV_WORKER_THREADS:-2}
       - MALLOC_ARENA_MAX=2
+      # Structured logging. `info` is the built-in default; set `ENVV_LOG=debug`
+      # to get one line per request with its id, or `ENVV_LOG_FORMAT=json` to
+      # ship the log somewhere that parses it.
+      - ENVV_LOG=${ENVV_LOG:-info}
+      - ENVV_LOG_FORMAT=${ENVV_LOG_FORMAT:-}
     restart: unless-stopped
 
     # A hard ceiling, not a target. Steady state is a few MB; the spikes are
@@ -32,10 +37,23 @@ services:
     shm_size: 16m
 
     healthcheck:
-      # Actually open the port rather than asking the binary its version — a
-      # process that started and then wedged still answers --version. bash's
-      # /dev/tcp avoids adding curl to the image for one check.
-      test: ["CMD-SHELL", "timeout 2 bash -c '</dev/tcp/127.0.0.1/8743' || exit 1"]
+      # Ask the application whether it works, not whether it is bound.
+      #
+      # This used to open the TCP port with bash's /dev/tcp, which is already
+      # better than `--version` — but a wedged process still accepts a
+      # connection. `GET /api/health` answers 503 when the server is listening
+      # and cannot reach its own vault, which is the state `restart:
+      # unless-stopped` above exists to recover from and the only state the old
+      # check could not see. The endpoint reports no counts, so exposing it to a
+      # monitor discloses nothing about the vault's contents.
+      #
+      # Still no curl in the image: bash writes the request and greps the status
+      # line. `-s` matches a 200 only, so a 503 fails the check.
+      test:
+        [
+          "CMD-SHELL",
+          "timeout 3 bash -c 'exec 3<>/dev/tcp/127.0.0.1/8743; printf \"GET /api/health HTTP/1.0\r\n\r\n\" >&3; head -n1 <&3 | grep -q \" 200 \"' || exit 1",
+        ]
       interval: 30s
       timeout: 3s
       retries: 3

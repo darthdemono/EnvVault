@@ -502,6 +502,11 @@ fn merge(
                     "categories": categories,
                     "projectIds": projects,
                     "scopes": [],
+                    // Import time, not issue time. Bitwarden and 1Password both
+                    // record a creation date, but it is the date the *other*
+                    // vault first held it — carrying it over would date this
+                    // entry to a history this vault does not have.
+                    "created_at": vault_core::iso_now(),
                 });
                 if let Some(u) = &rec.username {
                     e["account_name"] = json!(u);

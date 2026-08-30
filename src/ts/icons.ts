@@ -6,13 +6,20 @@
  */
 
 import { esc, escAttr, showToast } from './utils';
+import { ICON_PATHS } from './icon-paths';
 
 /**
  * Master registry of supported Simple Icons entries.
  *
- * Each tuple is `[slug, displayName, category]` where `slug` is the
- * Simple Icons identifier used to construct CDN URLs, `displayName` is shown
- * in the picker, and `category` groups icons in the picker UI.
+ * Each tuple is `[slug, displayName, category]` where `slug` is the Simple
+ * Icons identifier — now a key into the bundled {@link ICON_PATHS} rather than a
+ * CDN URL — and `displayName` is what the picker shows.
+ *
+ * `category` is **not currently rendered**: the picker grid is flat and filters
+ * by substring. It stayed as a grouping hint, and because it was never read,
+ * 29 providers were listed twice under two different categories and appeared
+ * twice in the picker. Slugs are unique now and `tests/icon-bundle.test.ts`
+ * keeps them that way.
  *
  * @see {@link https://simpleicons.org} for slug reference.
  */
@@ -42,7 +49,7 @@ const SI_REGISTRY: [string, string, string][] = [
   ['julia', 'Julia', 'Dev'],
   ['zig', 'Zig', 'Dev'],
   ['ocaml', 'OCaml', 'Dev'],
-  ['groovy', 'Groovy', 'Dev'],
+  ['apachegroovy', 'Groovy', 'Dev'],
   ['r', 'R', 'Dev'],
   ['dotnet', '.NET', 'Dev'],
   // ── Runtimes & Package Managers ────────────────────────────────────────────
@@ -63,7 +70,7 @@ const SI_REGISTRY: [string, string, string][] = [
   ['svelte', 'Svelte', 'Dev'],
   ['angular', 'Angular', 'Dev'],
   ['nextdotjs', 'Next.js', 'Dev'],
-  ['nuxtdotjs', 'Nuxt.js', 'Dev'],
+  ['nuxt', 'Nuxt.js', 'Dev'],
   ['gatsby', 'Gatsby', 'Dev'],
   ['astro', 'Astro', 'Dev'],
   ['lit', 'Lit', 'Dev'],
@@ -87,7 +94,7 @@ const SI_REGISTRY: [string, string, string][] = [
   ['webpack', 'webpack', 'Dev'],
   ['vite', 'Vite', 'Dev'],
   ['parcel', 'Parcel', 'Dev'],
-  ['rollup', 'Rollup', 'Dev'],
+  ['rollupdotjs', 'Rollup', 'Dev'],
   ['gradle', 'Gradle', 'Dev'],
   ['apachemaven', 'Maven', 'Dev'],
   ['cmake', 'CMake', 'Dev'],
@@ -161,7 +168,7 @@ const SI_REGISTRY: [string, string, string][] = [
   ['datagrip', 'DataGrip', 'Dev'],
   ['androidstudio', 'Android Studio', 'Dev'],
   ['xcode', 'Xcode', 'Dev'],
-  ['emacs', 'Emacs', 'Dev'],
+  ['gnuemacs', 'Emacs', 'Dev'],
   ['eclipseide', 'Eclipse', 'Dev'],
   ['notepadplusplus', 'Notepad++', 'Dev'],
   ['obsidian', 'Obsidian', 'Dev'],
@@ -184,7 +191,7 @@ const SI_REGISTRY: [string, string, string][] = [
   ['vercel', 'Vercel', 'Cloud'],
   ['heroku', 'Heroku', 'Cloud'],
   ['railway', 'Railway', 'Cloud'],
-  ['fly', 'Fly.io', 'Cloud'],
+  ['flydotio', 'Fly.io', 'Cloud'],
   ['render', 'Render', 'Cloud'],
   ['nginx', 'nginx', 'Cloud'],
   ['traefik', 'Traefik', 'Cloud'],
@@ -231,7 +238,7 @@ const SI_REGISTRY: [string, string, string][] = [
   ['unrealengine', 'Unreal Engine', 'Gaming'],
   ['godotengine', 'Godot', 'Gaming'],
   ['itchdotio', 'itch.io', 'Gaming'],
-  ['gog', 'GOG', 'Gaming'],
+  ['gogdotcom', 'GOG', 'Gaming'],
   ['ea', 'EA', 'Gaming'],
   ['ubisoft', 'Ubisoft', 'Gaming'],
   ['nexusmods', 'Nexus Mods', 'Gaming'],
@@ -242,7 +249,7 @@ const SI_REGISTRY: [string, string, string][] = [
   ['jellyfin', 'Jellyfin', 'Media'],
   ['plex', 'Plex', 'Media'],
   ['kodi', 'Kodi', 'Media'],
-  ['vlc', 'VLC', 'Media'],
+  ['vlcmediaplayer', 'VLC', 'Media'],
   ['obsstudio', 'OBS Studio', 'Media'],
   ['streamlabs', 'Streamlabs', 'Media'],
   ['themoviedatabase', 'TMDB', 'Media'],
@@ -412,7 +419,7 @@ const SI_REGISTRY: [string, string, string][] = [
   ['anthropic', 'Anthropic', 'AI'],
   ['huggingface', 'Hugging Face', 'AI'],
   ['googlegemini', 'Gemini', 'AI'],
-  ['mistral', 'Mistral', 'AI'],
+  ['mistralai', 'Mistral', 'AI'],
   ['ollama', 'Ollama', 'AI'],
   ['perplexity', 'Perplexity', 'AI'],
 
@@ -431,21 +438,10 @@ const SI_REGISTRY: [string, string, string][] = [
   ['pocketbase', 'PocketBase', 'Misc'],
 
   // ── Cloud (extended) ───────────────────────────────────────────────────────
-  ['hetzner', 'Hetzner', 'Cloud'],
-  ['linode', 'Linode', 'Cloud'],
-  ['ovh', 'OVH', 'Cloud'],
-  ['scaleway', 'Scaleway', 'Cloud'],
-  ['vultr', 'Vultr', 'Cloud'],
   ['exoscale', 'Exoscale', 'Cloud'],
-  ['render', 'Render', 'Cloud'],
-  ['railway', 'Railway', 'Cloud'],
-  ['fly', 'Fly.io', 'Cloud'],
-  ['netlify', 'Netlify', 'Cloud'],
   ['surge', 'Surge', 'Cloud'],
 
   // ── Monitoring & Observability ─────────────────────────────────────────────
-  ['prometheus', 'Prometheus', 'Monitoring'],
-  ['grafana', 'Grafana', 'Monitoring'],
   ['loki', 'Loki', 'Monitoring'],
   ['jaeger', 'Jaeger', 'Monitoring'],
   ['opentelemetry', 'OpenTelemetry', 'Monitoring'],
@@ -457,17 +453,7 @@ const SI_REGISTRY: [string, string, string][] = [
   ['statuspage', 'Statuspage', 'Monitoring'],
 
   // ── Databases (extended) ───────────────────────────────────────────────────
-  ['redis', 'Redis', 'Database'],
-  ['mongodb', 'MongoDB', 'Database'],
-  ['cassandra', 'Cassandra', 'Database'],
-  ['elasticsearch', 'Elasticsearch', 'Database'],
-  ['influxdb', 'InfluxDB', 'Database'],
-  ['neo4j', 'Neo4j', 'Database'],
-  ['mariadb', 'MariaDB', 'Database'],
-  ['sqlite', 'SQLite', 'Database'],
-  ['cockroachdb', 'CockroachDB', 'Database'],
-  ['clickhouse', 'ClickHouse', 'Database'],
-  ['planetscale', 'PlanetScale', 'Database'],
+  ['apachecassandra', 'Cassandra', 'Database'],
   ['neon', 'Neon', 'Database'],
   ['turso', 'Turso', 'Database'],
 
@@ -480,44 +466,35 @@ const SI_REGISTRY: [string, string, string][] = [
   ['stytch', 'Stytch', 'Auth'],
 
   // ── Messaging & Queues ─────────────────────────────────────────────────────
-  ['rabbitmq', 'RabbitMQ', 'Messaging'],
-  ['apachekafka', 'Apache Kafka', 'Messaging'],
-  ['nats', 'NATS', 'Messaging'],
-  ['mosquitto', 'Mosquitto', 'Messaging'],
+  ['natsdotio', 'NATS', 'Messaging'],
+  ['eclipsemosquitto', 'Mosquitto', 'Messaging'],
   ['apachepulsar', 'Apache Pulsar', 'Messaging'],
   ['amazonsqs', 'Amazon SQS', 'Messaging'],
   ['pusher', 'Pusher', 'Messaging'],
 
   // ── Storage ────────────────────────────────────────────────────────────────
-  ['minio', 'MinIO', 'Storage'],
   ['backblaze', 'Backblaze', 'Storage'],
   ['cloudflarer2', 'Cloudflare R2', 'Storage'],
   ['amazons3', 'Amazon S3', 'Storage'],
   ['googlecloudstorage', 'GCS', 'Storage'],
 
   // ── DevOps (extended) ─────────────────────────────────────────────────────
-  ['argocd', 'Argo CD', 'DevOps'],
+  ['argo', 'Argo CD', 'DevOps'],
   ['flux', 'Flux', 'DevOps'],
   ['consul', 'Consul', 'DevOps'],
   ['vault', 'Vault', 'DevOps'],
   ['packer', 'Packer', 'DevOps'],
-  ['vagrant', 'Vagrant', 'DevOps'],
-  ['ansible', 'Ansible', 'DevOps'],
   ['chef', 'Chef', 'DevOps'],
   ['puppet', 'Puppet', 'DevOps'],
 
   // ── CDN / Edge ─────────────────────────────────────────────────────────────
-  ['cloudflare', 'Cloudflare', 'CDN'],
-  ['fastly', 'Fastly', 'CDN'],
-  ['bunny', 'Bunny.net', 'CDN'],
-  ['akamai', 'Akamai', 'CDN'],
+  ['bunnydotnet', 'Bunny.net', 'CDN'],
 
   // ── Homelab ────────────────────────────────────────────────────────────────
   ['truenas', 'TrueNAS', 'Homelab'],
   ['unraid', 'Unraid', 'Homelab'],
   ['opnsense', 'OPNsense', 'Homelab'],
   ['pfsense', 'pfSense', 'Homelab'],
-  ['portainer', 'Portainer', 'Homelab'],
   ['unifi', 'UniFi', 'Homelab'],
   ['pihole', 'Pi-hole', 'Homelab'],
   ['adguard', 'AdGuard', 'Homelab'],
@@ -773,10 +750,50 @@ export function validateEmbeddedIcon(value: string): string | null {
   return null;
 }
 
+/**
+ * Colour the bundled monochrome paths are filled with. Matches the value the
+ * CDN URL used to request, so nothing changes visually.
+ */
+const ICON_FILL = '#e4e4e4';
+
+/** Built data URIs, memoised — the picker grid renders ~370 of these per keystroke. */
+const iconUrlCache = new Map<string, string>();
+
+/**
+ * A `data:` URI for a bundled provider icon, or `''` when the slug is unknown.
+ *
+ * **This used to be `https://cdn.simpleicons.org/<slug>/e4e4e4`.** Every card
+ * render therefore asked a third party for `/stripe`, `/github`, `/aws`,
+ * `/openai` — so that third party, and anyone on the path, learned the exact set
+ * of services the user holds credentials for, the entry count per service, their
+ * IP, and when they opened their vault. That is the most sensitive metadata this
+ * application holds, and it left the machine by default, from a product whose
+ * README opens with "runs on your machine and talks to nothing else … no
+ * telemetry". (review-01 §3.3.)
+ *
+ * The paths are now bundled by `scripts/gen-icons.mjs` and
+ * `https://cdn.simpleicons.org` is gone from the CSP, so the leak cannot come
+ * back by accident: a stray remote icon URL is now blocked rather than fetched.
+ *
+ * An unknown slug returns `''` and the caller falls back to a letter avatar —
+ * the same thing that happened before when the CDN answered 404, which it had
+ * been doing for 55 registry entries nobody had noticed.
+ */
 function iconImgURL(slug: string): string {
-  // encodeURIComponent prevents a user-controlled custom_icon slug from breaking
-  // out of the src="" attribute (e.g. `x" onerror=...`) — a stored XSS vector.
-  return `https://cdn.simpleicons.org/${encodeURIComponent(slug)}/e4e4e4`;
+  const cached = iconUrlCache.get(slug);
+  if (cached !== undefined) return cached;
+  const d = Object.prototype.hasOwnProperty.call(ICON_PATHS, slug) ? ICON_PATHS[slug] : undefined;
+  // encodeURIComponent on the whole document, not just the path: it escapes the
+  // `#` of the fill colour (which would otherwise truncate the URI at a
+  // fragment) along with `<`, `>` and `"`.
+  const url = d
+    ? 'data:image/svg+xml,' +
+      encodeURIComponent(
+        `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="${ICON_FILL}"><path d="${d}"/></svg>`,
+      )
+    : '';
+  iconUrlCache.set(slug, url);
+  return url;
 }
 
 /**
@@ -803,10 +820,14 @@ export function iconHTML(provider: string, customIcon?: string | null): string {
           alt="${escAttr(provider || '')}" loading="lazy">`;
   }
   const slug = getIconSlug(provider, customIcon);
-  if (slug) {
-    return `<img class="si-icon" src="${escAttr(iconImgURL(slug))}"
+  const url = slug ? iconImgURL(slug) : '';
+  if (url) {
+    return `<img class="si-icon" src="${escAttr(url)}"
           alt="${escAttr(provider || '')}" loading="lazy">`;
   }
+  // A slug with no bundled path renders as a letter here rather than as an
+  // <img> with an empty src. The global error listener would have caught that
+  // eventually, but only after painting a broken image first.
   return `<span class="si-fallback">${esc(letter)}</span>`;
 }
 
@@ -852,16 +873,23 @@ function renderIconGrid(query: string) {
   // routes failures to the global capture-phase error listener in
   // initIconPicker(), which swaps in a letter fallback for real.
   grid.innerHTML = items
-    .map(
-      ([slug, name]) => `
+    .map(([slug, name]) => {
+      const url = iconImgURL(slug);
+      // A registry entry whose icon is not in the bundle still appears in the
+      // picker — it is a real, selectable provider — it just shows its initial,
+      // which is exactly what the card will show once it is picked.
+      const art = url
+        ? `<img class="si-icon" src="${escAttr(url)}" alt="${escAttr(name)}"
+           width="24" height="24" loading="lazy">`
+        : `<span class="si-fallback">${esc((name || '?')[0].toUpperCase())}</span>`;
+      return `
     <div class="icon-item${iconPicker.selected === slug ? ' selected' : ''}"
          data-action="select" data-slug="${escAttr(slug)}" title="${escAttr(name)}">
-      <img class="si-icon" src="${escAttr(iconImgURL(slug))}" alt="${escAttr(name)}"
-           width="24" height="24" loading="lazy">
+      ${art}
       <div class="icon-item-name">${esc(name)}</div>
     </div>
-  `,
-    )
+  `;
+    })
     .join('');
 }
 

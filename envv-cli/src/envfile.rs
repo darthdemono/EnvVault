@@ -132,6 +132,10 @@ pub fn import(access: &Access, file: &PathBuf, opts: &ImportOpts<'_>) -> CliResu
                     "categories": categories,
                     "projectIds": project_ids,
                     "scopes": [],
+                    // When it entered *this* vault. An imported credential is
+                    // usually older than that, and there is nothing in a .env
+                    // that says how much older.
+                    "created_at": vault_core::iso_now(),
                 });
                 if let Some(e) = opts.environment.filter(|s| !s.is_empty()) {
                     entry["environment"] = json!(e);
@@ -204,25 +208,7 @@ pub fn export_vault(
     let mut list = data::entries(&vault);
 
     if let Some(proj) = project {
-        let proj_lc = proj.to_lowercase();
-        let matching_ids: Vec<String> = projects(&vault)
-            .iter()
-            .filter(|p| {
-                p.get("id").and_then(|i| i.as_str()) == Some(proj)
-                    || p.get("name")
-                        .and_then(|n| n.as_str())
-                        .is_some_and(|n| n.to_lowercase().contains(&proj_lc))
-            })
-            .filter_map(|p| p.get("id").and_then(|i| i.as_str()).map(String::from))
-            .collect();
-        list.retain(|e| {
-            e.get("projectIds")
-                .and_then(|v| v.as_array())
-                .is_some_and(|ids| {
-                    ids.iter()
-                        .any(|id| matching_ids.iter().any(|m| Some(m.as_str()) == id.as_str()))
-                })
-        });
+        list = data::entries_in_project(&vault, proj);
     }
 
     // Same rule as `project export`: values reach a file, never stdout.

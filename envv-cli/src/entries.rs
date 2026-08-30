@@ -497,6 +497,12 @@ pub fn cmd_add(
         "categories": [],
         "projectIds": ["Universal"],
         "scopes": [],
+        // Stamped here and never rewritten. It is a creation date, not a
+        // modification date — `cmd_set` deliberately leaves it alone, and
+        // `version_history` is where "when did this last change" lives. The
+        // desktop app stamps the same field on the same event, so an entry made
+        // in either half of the product dates itself the same way.
+        "created_at": vault_core::iso_now(),
     });
     fields.apply(&mut entry, &projs)?;
     let fingerprint = out::fingerprint(entry.get("api_key").and_then(|v| v.as_str()).unwrap_or(""));

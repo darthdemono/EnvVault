@@ -10,11 +10,20 @@
 use serde_json::Value;
 
 /// Map an env-var field suffix to the canonical vault-entry JSON field name.
+///
+/// **This table is one half of a twin pair** — `FIELD_ALIASES` in
+/// `src/ts/chunk-ops.ts` is the other — and it had already drifted: `PASSWORD`,
+/// `PASS` and `PWD` were missing here, so `${PgProd/password}` resolved in the
+/// desktop app and reached `.pgpass`, a rendered template, a `.env` and every
+/// exporter as the literal text `${PgProd/password}` from the CLI.
+///
+/// Pinned from both sides by `tests/fixtures/parity/field-aliases.json`.
 pub fn canonical_field(field: &str) -> &str {
     match field.to_uppercase().as_str() {
-        "APIKEY" | "API_KEY" | "KEY" | "TOKEN" | "ACCESS_TOKEN" | "BEARER" | "SECRET_KEY" => {
-            "api_key"
-        }
+        // A password entry stores its secret in `api_key`, which is why
+        // PASSWORD/PASS/PWD belong in this arm rather than in one of their own.
+        "APIKEY" | "API_KEY" | "KEY" | "TOKEN" | "ACCESS_TOKEN" | "BEARER" | "SECRET_KEY"
+        | "PASSWORD" | "PASS" | "PWD" => "api_key",
         "SECRET" | "API_SECRET" | "CLIENT_SECRET" | "SHARED_SECRET" => "api_secret",
         "USERNAME" | "USER" | "LOGIN" | "USER_NAME" => "username",
         "URL" | "URI" | "ENDPOINT" | "API_URL" | "BASE_URL" => "api_url",

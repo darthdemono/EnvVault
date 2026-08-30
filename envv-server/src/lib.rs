@@ -44,10 +44,26 @@ struct Session {
     vault_key: VaultKey,
     user_id: String,
     is_owner: bool,
-    /// Absolute deadline. Refreshed on every authenticated request (rolling
+    /// Idle deadline. Refreshed on every authenticated request (rolling
     /// window), so an active client never gets logged out mid-session while an
-    /// abandoned one — or a stolen token — stops working after `session_ttl`.
+    /// abandoned one stops working after `session_ttl`.
+    ///
+    /// This alone does **not** bound a stolen token: the desktop pings every 90
+    /// seconds by design, so any token an attacker actually uses slides its own
+    /// deadline forward forever. `hard_expires_at` is what bounds it.
     expires_at: Instant,
+    /// Absolute ceiling, fixed when the session was minted and never moved.
+    /// `extract_session` clamps the rolling deadline to it, so a session dies at
+    /// `issued_at + session_max_lifetime` however busy it is — which is the only
+    /// thing that limits a leaked bearer token to a finite window.
+    hard_expires_at: Instant,
+}
+
+impl Session {
+    /// The deadline that actually governs: whichever of the two comes first.
+    fn deadline(&self) -> Instant {
+        self.expires_at.min(self.hard_expires_at)
+    }
 }
 
 /// Drops every session past its deadline, zeroizing the vault key it held.
@@ -55,7 +71,7 @@ struct Session {
 fn purge_expired(sessions: &mut HashMap<String, Session>) {
     let now = Instant::now();
     sessions.retain(|_, s| {
-        if s.expires_at > now {
+        if s.deadline() > now {
             return true;
         }
         s.vault_key.zeroize();
@@ -80,16 +96,36 @@ struct RateBucket {
 
 /// Returns `true` when the caller is **not** rate-limited (i.e. they may proceed).
 /// Does NOT increment the counter — call `record_auth_failure` on a failed attempt.
-fn rate_is_allowed(buckets: &mut HashMap<String, RateBucket>, key: &str) -> bool {
+/// Length of the failure window. Ten failures inside it and the caller waits.
+const RATE_WINDOW: Duration = Duration::from_secs(60);
+
+/// `None` when the caller may proceed; `Some(secs)` when it is rate limited,
+/// carrying the whole seconds until the current window resets.
+///
+/// The seconds matter as much as the refusal. A script driving this API cannot
+/// tell "slow down" from "denied" without them, so it either gives up on a
+/// transient block or hammers a server that has already said no — and the
+/// agent-driven CLI is the main consumer here. The value goes out as
+/// `Retry-After`, which is the header every HTTP client already understands.
+fn rate_retry_after(buckets: &mut HashMap<String, RateBucket>, key: &str) -> Option<u64> {
     let bucket = buckets.entry(key.to_string()).or_default();
     let now = Instant::now();
     match bucket.window_start {
-        Some(ws) if now.duration_since(ws) < Duration::from_secs(60) => bucket.failures < 10,
+        Some(ws) if now.duration_since(ws) < RATE_WINDOW => {
+            if bucket.failures < 10 {
+                None
+            } else {
+                // Round *up*: a client told to wait 0 seconds retries instantly
+                // and is refused again, which reads as a broken server.
+                let remaining = RATE_WINDOW.saturating_sub(now.duration_since(ws));
+                Some(remaining.as_secs().max(1))
+            }
+        }
         _ => {
             // Reset window on expiry
             bucket.window_start = Some(now);
             bucket.failures = 0;
-            true
+            None
         }
     }
 }
@@ -114,6 +150,81 @@ fn record_auth_failure(buckets: &mut HashMap<String, RateBucket>, key: &str) {
                 .is_some_and(|ws| now.duration_since(ws) < Duration::from_secs(300))
         });
     }
+}
+
+// ── Request context ───────────────────────────────────────────────────────────
+
+tokio::task_local! {
+    /// Correlation id for the request currently being served on this task.
+    ///
+    /// A task-local rather than an `Extension`: [`err_json`] is a free function
+    /// called from every handler and from helpers several frames deep
+    /// (`forbidden`, `guard_manage_user`), none of which can reach an extractor.
+    /// Scoping the id to the request future gives all of them the same answer
+    /// without threading a parameter through forty call sites.
+    static REQUEST_ID: String;
+}
+
+/// The current request's id, or `None` outside a request (unit tests, the
+/// desktop app calling a handler directly).
+fn current_request_id() -> Option<String> {
+    REQUEST_ID.try_with(Clone::clone).ok()
+}
+
+/// Middleware: assigns a request id, opens a span, echoes the id back.
+///
+/// The id is honoured from the caller when it supplies `X-Request-Id` — a
+/// caller correlating across several services has already made one up, and
+/// overwriting it destroys the only link between the two logs. It is truncated
+/// and filtered rather than trusted verbatim: this value is echoed into a
+/// response header and a log line, and neither is a place to put 4 KB of
+/// attacker-chosen bytes.
+async fn request_context(
+    req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    let inbound = req
+        .headers()
+        .get("x-request-id")
+        .and_then(|v| v.to_str().ok())
+        .map(|v| {
+            v.chars()
+                .filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_')
+                .take(64)
+                .collect::<String>()
+        })
+        .filter(|v| !v.is_empty());
+
+    let id = inbound.unwrap_or_else(|| uuid::Uuid::new_v4().simple().to_string());
+    let method = req.method().clone();
+    let path = req.uri().path().to_string();
+
+    let span = tracing::info_span!("request", %method, path = %path, request_id = %id);
+    let started = Instant::now();
+
+    let mut resp = REQUEST_ID
+        .scope(id.clone(), async move {
+            tracing::Instrument::instrument(next.run(req), span).await
+        })
+        .await;
+
+    let status = resp.status().as_u16();
+    let elapsed_ms = started.elapsed().as_millis();
+    // One line per request, at a level that matches what happened: a 500 is not
+    // something an operator should have to raise the log level to see, and a
+    // 200 is not something they should have to filter out.
+    if resp.status().is_server_error() {
+        tracing::error!(request_id = %id, %method, path = %path, status, elapsed_ms, "request failed");
+    } else if resp.status().is_client_error() {
+        tracing::warn!(request_id = %id, %method, path = %path, status, elapsed_ms, "request rejected");
+    } else {
+        tracing::debug!(request_id = %id, %method, path = %path, status, elapsed_ms, "request served");
+    }
+
+    if let Ok(v) = axum::http::HeaderValue::from_str(&id) {
+        resp.headers_mut().insert("x-request-id", v);
+    }
+    resp
 }
 
 // ── TLS certificate helpers ───────────────────────────────────────────────────
@@ -179,6 +290,10 @@ pub struct AppState {
     cert_fingerprint: Option<String>,
     /// Idle lifetime of a session. Every authenticated request resets the clock.
     session_ttl: Duration,
+    /// Hard ceiling on a session's total life, measured from when it was minted
+    /// and never extended. Without it the rolling `session_ttl` bounds only
+    /// *abandoned* sessions — a token being actively used refreshes itself.
+    session_max_lifetime: Duration,
     /// True when embedded in the desktop app serving an already-open vault.
     ///
     /// Refuses `POST /api/unlock` so the master password never travels over the
@@ -187,15 +302,23 @@ pub struct AppState {
     lan_mode: bool,
     /// Instant of the last request from a non-owner session, for idle shutdown.
     last_peer_activity: Arc<Mutex<Instant>>,
+    /// When this state was constructed — reported by `/api/health` as uptime.
+    started_at: Instant,
 }
 
+/// "Never expires", as a duration rather than a special case at every
+/// comparison site. A decade outlives any process that could hold the session.
+const NEVER: Duration = Duration::from_secs(86_400 * 365 * 10);
+
 impl AppState {
-    /// Builds server state. `session_ttl_mins == 0` disables session expiry.
+    /// Builds server state. `session_ttl_mins == 0` disables idle expiry;
+    /// `session_max_hours == 0` disables the absolute ceiling.
     pub fn new(
         db_path: PathBuf,
         salt_path: PathBuf,
         cert_fingerprint: Option<String>,
         session_ttl_mins: u64,
+        session_max_hours: u64,
         lan_mode: bool,
     ) -> Self {
         AppState {
@@ -207,12 +330,18 @@ impl AppState {
             // "Never" is represented as a decade rather than special-casing every
             // comparison site.
             session_ttl: if session_ttl_mins == 0 {
-                Duration::from_secs(86_400 * 365 * 10)
+                NEVER
             } else {
                 Duration::from_secs(session_ttl_mins * 60)
             },
+            session_max_lifetime: if session_max_hours == 0 {
+                NEVER
+            } else {
+                Duration::from_secs(session_max_hours * 3600)
+            },
             lan_mode,
             last_peer_activity: Arc::new(Mutex::new(Instant::now())),
+            started_at: Instant::now(),
         }
     }
 
@@ -231,8 +360,11 @@ impl AppState {
                 user_id: owner_id,
                 is_owner: true,
                 // The host holds this for as long as it serves; peers have their own
-                // expiring sessions.
-                expires_at: Instant::now() + Duration::from_secs(86_400 * 365 * 10),
+                // expiring sessions. This token is never handed out over the
+                // network, so the ceiling that bounds a leaked bearer token has
+                // nothing to bound here.
+                expires_at: Instant::now() + NEVER,
+                hard_expires_at: Instant::now() + NEVER,
             },
         );
         token
@@ -335,6 +467,24 @@ fn default_days() -> u32 {
 }
 
 #[derive(Serialize, ToSchema)]
+struct HealthResponse {
+    /// `"ok"` or `"degraded"`. Anything but `"ok"` is also a 503.
+    status: &'static str,
+    version: &'static str,
+    /// Whether an owner session currently holds the vault key.
+    unlocked: bool,
+    /// Whether the database file is present. False is not a fault — a server
+    /// that has never been unlocked has no file yet.
+    vault_exists: bool,
+    /// Seconds since this process began serving.
+    uptime_secs: u64,
+    /// Present only when `status` is not `"ok"`; says what failed, without
+    /// naming a path or anything about the vault's contents.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    detail: Option<String>,
+}
+
+#[derive(Serialize, ToSchema)]
 struct StatsResponse {
     secrets_stored: usize,
     users_total: usize,
@@ -355,9 +505,12 @@ fn extract_session(
         .ok_or_else(|| err_json(StatusCode::UNAUTHORIZED, "Missing Bearer token"))?;
 
     let mut sessions = live_sessions(state);
-    // Slide the deadline forward: activity keeps a session alive, idleness kills it.
+    // Slide the idle deadline forward: activity keeps a session alive, idleness
+    // kills it. The slide is clamped to `hard_expires_at`, which never moves —
+    // otherwise a token that is being used (by its owner or by whoever stole it)
+    // renews itself indefinitely and `session_ttl` bounds nothing that matters.
     let session = sessions.get_mut(token).map(|s| {
-        s.expires_at = Instant::now() + state.session_ttl;
+        s.expires_at = (Instant::now() + state.session_ttl).min(s.hard_expires_at);
         s.clone()
     });
     drop(sessions);
@@ -444,8 +597,38 @@ fn guard_manage_user(
     Ok(())
 }
 
+/// Error envelope. Every failure the server emits goes through here, so every
+/// failure carries the same `request_id` the response header does.
+///
+/// The id is what makes a user's "it returned 403" reportable: it appears in
+/// the response, in the log line for that request, and in nothing else. Without
+/// it the only way to find the matching log entry on a busy server is a
+/// timestamp and a guess.
 fn err_json(status: StatusCode, msg: &str) -> (StatusCode, Json<serde_json::Value>) {
-    (status, Json(serde_json::json!({ "error": msg })))
+    match current_request_id() {
+        Some(id) => (
+            status,
+            Json(serde_json::json!({ "error": msg, "request_id": id })),
+        ),
+        None => (status, Json(serde_json::json!({ "error": msg }))),
+    }
+}
+
+/// As [`err_json`], plus a `Retry-After` header.
+///
+/// Split out rather than folded into `err_json` because `Retry-After` is
+/// meaningful on exactly one status here (429) and a header that appears on
+/// unrelated errors trains clients to ignore it.
+fn err_json_retry(
+    status: StatusCode,
+    msg: &str,
+    retry_after_secs: u64,
+) -> axum::response::Response {
+    let mut resp = err_json(status, msg).into_response();
+    if let Ok(v) = axum::http::HeaderValue::from_str(&retry_after_secs.to_string()) {
+        resp.headers_mut().insert("retry-after", v);
+    }
+    resp
 }
 
 fn owner_vault_key(state: &AppState) -> Option<VaultKey> {
@@ -485,12 +668,13 @@ async fn unlock(
 
     // Rate-limit by socket address — not by X-Forwarded-For (spoofable).
     let ip = addr.ip().to_string();
-    if !rate_is_allowed(&mut state.rate_limiter.lock().unwrap(), &ip) {
-        return err_json(
+    if let Some(retry) = rate_retry_after(&mut state.rate_limiter.lock().unwrap(), &ip) {
+        tracing::warn!(retry_after_secs = retry, "rate limited");
+        return err_json_retry(
             StatusCode::TOO_MANY_REQUESTS,
-            "Too many failed attempts — try again in a minute",
-        )
-        .into_response();
+            &format!("Too many failed attempts — try again in {retry}s"),
+            retry,
+        );
     }
 
     let salt = match read_or_create_salt(&state.salt_path) {
@@ -540,6 +724,7 @@ async fn unlock(
             user_id: owner_id,
             is_owner: true,
             expires_at: Instant::now() + state.session_ttl,
+            hard_expires_at: Instant::now() + state.session_max_lifetime,
         },
     );
     (StatusCode::OK, Json(serde_json::json!({ "token": token }))).into_response()
@@ -643,12 +828,13 @@ async fn auth_user(
 ) -> impl IntoResponse {
     // Rate-limit by socket address — not by X-Forwarded-For (spoofable).
     let ip = addr.ip().to_string();
-    if !rate_is_allowed(&mut state.rate_limiter.lock().unwrap(), &ip) {
-        return err_json(
+    if let Some(retry) = rate_retry_after(&mut state.rate_limiter.lock().unwrap(), &ip) {
+        tracing::warn!(retry_after_secs = retry, "rate limited");
+        return err_json_retry(
             StatusCode::TOO_MANY_REQUESTS,
-            "Too many failed attempts — try again in a minute",
-        )
-        .into_response();
+            &format!("Too many failed attempts — try again in {retry}s"),
+            retry,
+        );
     }
 
     let key = match owner_vault_key(&state) {
@@ -688,6 +874,7 @@ async fn auth_user(
                     user_id: user.id,
                     is_owner: false,
                     expires_at: Instant::now() + state.session_ttl,
+                    hard_expires_at: Instant::now() + state.session_max_lifetime,
                 },
             );
             (
@@ -1004,7 +1191,14 @@ async fn put_vault(
         Ok(None) => serde_json::json!({ "api_keys": [], "user_categories": [], "projects": [] }),
         Err(e) => return err_json(StatusCode::INTERNAL_SERVER_ERROR, &e).into_response(),
     };
-    let merged = match merge_user_vault_write(full_vault, data, write.as_ref()) {
+    // The merge needs the read expression too: the submission is the *filtered*
+    // document this user was served, so an absent project or category means
+    // "deleted" only if they could see it in the first place.
+    let read = match effective_permission_expr(&conn, &session.user_id, "read") {
+        Ok(p) => p,
+        Err(e) => return err_json(StatusCode::INTERNAL_SERVER_ERROR, &e).into_response(),
+    };
+    let merged = match merge_user_vault_write(full_vault, data, read.as_ref(), write.as_ref()) {
         Ok(v) => v,
         Err(e) => return err_json(StatusCode::FORBIDDEN, &e).into_response(),
     };
@@ -1617,7 +1811,81 @@ async fn ping(headers: HeaderMap, State(state): State<AppState>) -> impl IntoRes
     }
 }
 
-// ── Public stats (Homepage / Homarr widget) ───────────────────────────────────
+// ── Health and public stats ───────────────────────────────────────────────────
+
+/// Liveness and lock state, deliberately without any counts.
+///
+/// Distinct from `/api/stats` on purpose, and the distinction is a security
+/// one: usage data about a secrets manager is itself sensitive, so the
+/// unauthenticated endpoint a monitor polls every few seconds must never grow a
+/// field that answers "how much is in there".
+///
+/// It also has to fail when the process is *wedged* rather than merely bound.
+/// The old Docker healthcheck opened the TCP port, which a hung process answers
+/// perfectly well; supervised restart is worthless on top of a check that
+/// cannot go red. So when an owner session claims the vault is unlocked, this
+/// actually opens the database and runs a query. If that cannot be done, the
+/// answer is 503 — which is the signal `restart: unless-stopped` needs.
+#[utoipa::path(
+    get, path = "/api/health",
+    responses(
+        (status = 200, description = "Serving normally", body = HealthResponse),
+        (status = 503, description = "Wedged — bound but not functional", body = HealthResponse),
+    ),
+    tag = "ops"
+)]
+async fn health(State(state): State<AppState>) -> impl IntoResponse {
+    let unlocked = live_sessions(&state).values().any(|s| s.is_owner);
+    let vault_exists = state.db_path.exists();
+    let uptime_secs = state.started_at.elapsed().as_secs();
+
+    // Only probe when there is something to probe. A locked server holds no key,
+    // so "cannot open the database" is its normal state and not a fault.
+    let detail = if unlocked {
+        match owner_vault_key(&state) {
+            Some(key) => match open_db(&state.db_path, &key) {
+                Ok(conn) => match conn.query_row("SELECT 1", [], |r| r.get::<_, i64>(0)) {
+                    Ok(_) => None,
+                    Err(_) => Some("vault is open but not answering queries".into()),
+                },
+                // Deliberately not the underlying error. SQLCipher reports a
+                // corrupt database as "wrong master password", because it cannot
+                // tell the two apart — the header simply fails to decrypt. Passing
+                // that through unedited sends an operator hunting for a password
+                // problem when the file underneath the running server was replaced
+                // or truncated.
+                Err(_) => Some(
+                    "vault unreadable with this session's key — the database file may have been replaced or truncated"
+                        .into(),
+                ),
+            },
+            // Raced with a lock between the two reads. Not a fault.
+            None => None,
+        }
+    } else {
+        None
+    };
+
+    let degraded = detail.is_some();
+    if let Some(d) = &detail {
+        tracing::error!(detail = %d, "health check degraded");
+    }
+
+    let body = Json(HealthResponse {
+        status: if degraded { "degraded" } else { "ok" },
+        version: env!("CARGO_PKG_VERSION"),
+        unlocked,
+        vault_exists,
+        uptime_secs,
+        detail,
+    });
+
+    if degraded {
+        (StatusCode::SERVICE_UNAVAILABLE, body).into_response()
+    } else {
+        (StatusCode::OK, body).into_response()
+    }
+}
 
 /// Public statistics — no auth required.
 /// Returns 0 for vault-backed counts when locked.
@@ -1661,8 +1929,8 @@ async fn stats(State(state): State<AppState>) -> Json<StatsResponse> {
 
 #[derive(OpenApi)]
 #[openapi(
-    paths(unlock, lock, status, auth_user, get_vault, put_vault, expiring, audit, stats),
-    components(schemas(UnlockRequest, UnlockResponse, StatusResponse, ErrorResponse, AuthRequest, StatsResponse)),
+    paths(unlock, lock, status, auth_user, get_vault, put_vault, expiring, audit, stats, health),
+    components(schemas(UnlockRequest, UnlockResponse, StatusResponse, ErrorResponse, AuthRequest, StatsResponse, HealthResponse)),
     info(
         title   = "EnvVault Server",
         version = env!("CARGO_PKG_VERSION"),
@@ -1719,7 +1987,10 @@ pub fn auto_unlock(state: &AppState, password: &str) -> Result<(), String> {
             is_owner: true,
             // Auto-unlock is for unattended deployments (Docker + ENVV_PASSWORD).
             // Nothing ever pings this session, so it must not be allowed to lapse.
-            expires_at: Instant::now() + Duration::from_secs(86_400 * 365 * 10),
+            // Its token is never returned to any caller — it exists so the key
+            // stays reachable for `POST /api/auth` — so no ceiling applies.
+            expires_at: Instant::now() + NEVER,
+            hard_expires_at: Instant::now() + NEVER,
         },
     );
     Ok(())
@@ -1802,6 +2073,7 @@ pub fn build_router(state: AppState, port: u16) -> Router {
         )
         .route("/api/ping", get(ping))
         .route("/api/stats", get(stats))
+        .route("/api/health", get(health))
         .with_state(state);
 
     Router::new()
@@ -1811,6 +2083,9 @@ pub fn build_router(state: AppState, port: u16) -> Router {
             get(|| async { Json(ApiDoc::openapi()) }),
         )
         .layer(cors)
+        // Outermost, so the id exists before any handler runs and the log line
+        // covers the whole request including CORS rejections.
+        .layer(axum::middleware::from_fn(request_context))
 }
 
 /// TLS material for [`serve`].
@@ -1927,7 +2202,118 @@ mod tests {
 
     fn state(lan: bool) -> AppState {
         let d = scratch("state");
-        AppState::new(d.join("vault.db"), d.join("vault.salt"), None, 480, lan)
+        AppState::new(d.join("vault.db"), d.join("vault.salt"), None, 480, 24, lan)
+    }
+
+    #[test]
+    fn rate_limit_reports_seconds_until_the_window_resets() {
+        // Regression: the limiter used to answer only "no". A client that cannot
+        // tell "slow down" from "denied" either gives up on a transient block or
+        // retries into it forever, and the agent-driven CLI is the main caller.
+        let mut buckets = HashMap::new();
+        for _ in 0..10 {
+            assert!(rate_retry_after(&mut buckets, "1.2.3.4").is_none());
+            record_auth_failure(&mut buckets, "1.2.3.4");
+        }
+        let retry = rate_retry_after(&mut buckets, "1.2.3.4").expect("11th attempt is limited");
+        assert!(
+            (1..=60).contains(&retry),
+            "Retry-After must be inside the window, got {retry}"
+        );
+    }
+
+    #[test]
+    fn rate_limit_never_tells_a_client_to_retry_in_zero_seconds() {
+        // Retry-After: 0 means "immediately", which is refused again — the
+        // server reads as broken rather than busy. The value is floored at 1.
+        let mut buckets = HashMap::new();
+        for _ in 0..10 {
+            record_auth_failure(&mut buckets, "ip");
+        }
+        // Age the window to the very last moment before it resets.
+        buckets.get_mut("ip").unwrap().window_start =
+            Some(Instant::now() - RATE_WINDOW + Duration::from_millis(1));
+        assert_eq!(rate_retry_after(&mut buckets, "ip"), Some(1));
+    }
+
+    #[test]
+    fn a_separate_ip_is_not_caught_by_another_ip_s_window() {
+        let mut buckets = HashMap::new();
+        for _ in 0..10 {
+            record_auth_failure(&mut buckets, "noisy");
+        }
+        assert!(rate_retry_after(&mut buckets, "noisy").is_some());
+        assert!(rate_retry_after(&mut buckets, "quiet").is_none());
+    }
+
+    #[tokio::test]
+    async fn error_envelopes_carry_the_request_id_inside_a_request() {
+        // The id in the body is what makes a report actionable: it appears in
+        // the response and in that request's log line, and nowhere else.
+        let body = REQUEST_ID
+            .scope("abc123".to_string(), async {
+                let (_, Json(v)) = err_json(StatusCode::FORBIDDEN, "nope");
+                v
+            })
+            .await;
+        assert_eq!(body["request_id"], "abc123");
+        assert_eq!(body["error"], "nope");
+    }
+
+    #[test]
+    fn error_envelopes_omit_the_request_id_outside_a_request() {
+        // The desktop app calls into these helpers directly. A null or empty id
+        // would look like a correlation handle that leads nowhere.
+        let (_, Json(v)) = err_json(StatusCode::NOT_FOUND, "gone");
+        assert!(v.get("request_id").is_none());
+    }
+
+    #[tokio::test]
+    async fn health_is_ok_and_reports_no_counts_when_locked() {
+        // /api/stats may report counts; /api/health must not. It is polled by
+        // unauthenticated monitors, and how much is in a vault is itself
+        // sensitive.
+        let s = state(false);
+        let resp = health(State(s)).await.into_response();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let bytes = axum::body::to_bytes(resp.into_body(), 64 * 1024)
+            .await
+            .unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(v["status"], "ok");
+        assert_eq!(v["unlocked"], false);
+        for leaky in ["secrets_stored", "users_total", "users_connected"] {
+            assert!(
+                v.get(leaky).is_none(),
+                "/api/health must not report {leaky}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn health_is_degraded_when_unlocked_but_the_vault_cannot_be_read() {
+        // The state the old TCP-port healthcheck could not see: bound, accepting
+        // connections, and unable to reach its own database. Without this,
+        // `restart: unless-stopped` sits on top of a check that never goes red.
+        let s = state(false);
+        std::fs::write(&s.db_path, b"not a database").unwrap();
+        s.adopt_owner_key([9u8; 32], "owner".into());
+
+        let resp = health(State(s)).await.into_response();
+        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+
+        let bytes = axum::body::to_bytes(resp.into_body(), 64 * 1024)
+            .await
+            .unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(v["status"], "degraded");
+        let detail = v["detail"].as_str().unwrap_or_default();
+        assert!(
+            !detail.to_lowercase().contains("password"),
+            "SQLCipher calls a corrupt file a wrong password; passing that on \
+             sends the operator after the wrong problem: {detail}"
+        );
     }
 
     #[test]
@@ -1960,10 +2346,59 @@ mod tests {
                 user_id: "u".into(),
                 is_owner: false,
                 expires_at: Instant::now() - Duration::from_secs(1),
+                hard_expires_at: Instant::now() + NEVER,
             },
         );
         assert_eq!(s.peer_count(), 0);
         assert!(s.sessions.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn the_rolling_deadline_cannot_outlive_the_hard_ceiling() {
+        // Regression: `extract_session` set `expires_at = now + session_ttl` on
+        // every authenticated request, `/api/ping` included, and the desktop
+        // pings every 90 seconds. So the only token the idle timeout ever
+        // expired was one nobody was using — a stolen bearer token, which is
+        // being used by definition, renewed itself forever. The comment on
+        // `Session` claimed otherwise, which is worse than no comment.
+        let s = state(false);
+        let issued = Instant::now();
+        let sess = Session {
+            vault_key: [7u8; 32],
+            user_id: "u".into(),
+            is_owner: false,
+            // A full idle window ahead, as a request that just landed would set.
+            expires_at: issued + s.session_ttl,
+            // …but the session was minted a minute ago with a ceiling that has
+            // already passed.
+            hard_expires_at: issued - Duration::from_secs(1),
+        };
+        assert!(
+            sess.deadline() < Instant::now(),
+            "a session past its ceiling must be dead however recently it was used"
+        );
+
+        let mut map = HashMap::new();
+        map.insert("stolen".to_string(), sess);
+        purge_expired(&mut map);
+        assert!(
+            map.is_empty(),
+            "purge must drop it, zeroizing the vault key"
+        );
+    }
+
+    #[test]
+    fn a_zero_ceiling_means_no_ceiling() {
+        let d = scratch("nocap");
+        let s = AppState::new(
+            d.join("vault.db"),
+            d.join("vault.salt"),
+            None,
+            480,
+            0,
+            false,
+        );
+        assert_eq!(s.session_max_lifetime, NEVER);
     }
 
     #[test]

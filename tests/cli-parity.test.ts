@@ -31,7 +31,9 @@ import {
   exportAnsible,
   exportPostgres,
   chunkToString,
+  resolveFieldRef,
 } from '../src/ts/chunk-ops';
+import { buildIcs } from '../src/ts/calendar';
 import { loadRealIndexHtml, resetState } from './helpers';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -156,6 +158,67 @@ describe('exporter parity fixtures', () => {
       (c: any) => c.chunk_type === 'docker_service',
     );
     golden('chunk-docker-service.txt', chunkToString(chunk));
+  });
+
+  /**
+   * The calendar is the fourth format written twice — `src/ts/calendar.ts` and
+   * `envv-cli/src/calendar.rs` — so it gets the same treatment as the config
+   * exporters: one golden file, asserted from both sides.
+   *
+   * `now` is pinned. A DTSTAMP taken from the wall clock makes the fixture fail
+   * one second after it is written, and means the two implementations can never
+   * produce identical bytes even when they agree perfectly.
+   */
+  it('icalendar feed', () => {
+    golden(
+      'calendar.ics',
+      buildIcs(st.vault.api_keys as any, {
+        now: '2026-08-26T12:00:00Z',
+        calendarName: 'EnvVault',
+      }),
+    );
+  });
+
+  it('the calendar carries no secret value from the fixture vault', () => {
+    // The guarantee, asserted against the real fixture rather than a toy entry:
+    // an .ics is handed to a third-party calendar service.
+    const ics = buildIcs(st.vault.api_keys as any, { now: '2026-08-26T12:00:00Z' });
+    for (const e of st.vault.api_keys as any[]) {
+      if (e.api_key) expect(ics).not.toContain(e.api_key);
+      if (e.api_secret) expect(ics).not.toContain(e.api_secret);
+    }
+  });
+
+  /**
+   * The `${Provider/field}` alias table — a fourth twin pair, and one that had
+   * already drifted silently before it was pinned. `PASSWORD`, `PASS` and `PWD`
+   * were in this file's `FIELD_ALIASES` and missing from `canonical_field` in
+   * `envv-cli/src/refs.rs`, so `${PgProd/password}` resolved here and reached
+   * `.pgpass`, `envv render`, `envv exec` and every CLI export as the literal
+   * text `${PgProd/password}`.
+   *
+   * Asserted through `resolveFieldRef` rather than by importing the table, so it
+   * tests the resolution path the exporters actually take.
+   */
+  it('field aliases', () => {
+    const doc = JSON.parse(readFileSync(join(FIXTURES, 'field-aliases.json'), 'utf8'));
+    // Every field holds its own name, so a resolved reference reports which
+    // field it landed on.
+    st.vault.api_keys = [
+      {
+        provider: 'E',
+        api_key: 'api_key',
+        api_secret: 'api_secret',
+        username: 'username',
+        api_url: 'api_url',
+        email: 'email',
+        key_id: 'key_id',
+      },
+    ] as any;
+    st.vault.projects = [];
+    for (const [alias, expected] of Object.entries(doc.aliases as Record<string, string>)) {
+      expect(resolveFieldRef(`\${E/${alias}}`, true).resolved, `\${E/${alias}}`).toBe(expected);
+    }
   });
 
   it('nginx_upstream chunk', () => {

@@ -20,6 +20,17 @@ const invoke = (cmd: string, args?: Record<string, unknown>) =>
 /** Rows from the last successful load, newest-first (as the backend returns them). */
 let _rows: AuditRow[] = [];
 
+/**
+ * Audit rows for callers outside this module.
+ *
+ * `finishInit` uses it to date entries written before `created_at` existed. It
+ * is the same read the viewer does, exported rather than duplicated so there is
+ * one place that knows whether the rows come over IPC or over HTTP.
+ */
+export async function loadAuditRows(): Promise<AuditRow[]> {
+  return loadRows();
+}
+
 async function loadRows(): Promise<AuditRow[]> {
   if (st.store instanceof RemoteVaultStore) {
     return (await (st.store as RemoteVaultStore).getAuditLog()) as AuditRow[];

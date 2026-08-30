@@ -49,7 +49,14 @@ function envKey(provider: string): string {
   return provider.toUpperCase().replace(/[^A-Z0-9]/g, '_');
 }
 
-function downloadText(content: string, filename: string, okMsg: string) {
+/**
+ * Writes `content` to the user's downloads as `filename`.
+ *
+ * Exported for the timeline panel's `.ics` export, which needs the identical
+ * blob-and-anchor dance. A second copy of it there would be a second place for
+ * the CSP `blob:` requirement and the `revokeObjectURL` cleanup to drift.
+ */
+export function downloadText(content: string, filename: string, okMsg: string) {
   const blob = new Blob([content], { type: 'text/plain' });
   const url = URL.createObjectURL(blob);
   const a = Object.assign(document.createElement('a'), { href: url, download: filename });
@@ -318,6 +325,9 @@ export function confirmEnvImport() {
     categories: cats,
     projectIds: ids,
     scopes: [],
+    // When it entered this vault — see the field's doc comment. A .env file
+    // carries no date of its own to use instead.
+    created_at: new Date().toISOString(),
   }));
   st.vault.api_keys.push(...imported);
   persist();

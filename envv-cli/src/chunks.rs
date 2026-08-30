@@ -377,6 +377,52 @@ pub fn rename(access: &Access, project: &str, chunk: &str, new_name: &str) -> Cl
 /// Only the four stable project types have exporters here. The experimental
 /// types stay UI-only rather than existing as a second implementation that can
 /// silently drift from the one the app uses.
+/// Every value `--format` accepts. Also the `value_parser` for the flag, so an
+/// unknown format is a clap usage error (exit 2) at parse time rather than a
+/// runtime error after the vault has already been opened.
+pub const EXPORT_FORMATS: &[&str] = &[
+    "wireguard",
+    "compose",
+    "nginx",
+    "apache",
+    "haproxy",
+    "ansible",
+    "postgres",
+    "k8s",
+    "ssh",
+    "traefik",
+    "env",
+    "json",
+];
+
+/// The format a project of this type exports as when `--format` is omitted.
+///
+/// Every one of the eleven project types maps to the exporter for its own
+/// format. Before Phase 18's graduation only four did, and the other seven fell
+/// through to `env` — so the CLI silently wrote the wrong file format for
+/// haproxy, kubernetes, traefik, apache, ansible, postgres and ssh_config
+/// projects, or refused with an error about env_file chunks that named neither
+/// the cause nor the fix.
+pub fn default_format_for(ptype: &str) -> &'static str {
+    match ptype {
+        "wireguard" => "wireguard",
+        "docker" => "compose",
+        "nginx" => "nginx",
+        "apache" => "apache",
+        "haproxy" => "haproxy",
+        "ansible" => "ansible",
+        "postgres" => "postgres",
+        "kubernetes" => "k8s",
+        "ssh_config" => "ssh",
+        "traefik" => "traefik",
+        // `generic` holds env_file chunks by definition, so .env is right for it
+        // — and it is the right answer for an unknown type from a newer build
+        // too, since a .env of the project's env chunks is the one output that
+        // cannot be wrong about a format it does not know.
+        _ => "env",
+    }
+}
+
 pub fn export(
     access: &Access,
     project: &str,
@@ -400,16 +446,26 @@ pub fn export(
         .get("project_type")
         .and_then(|v| v.as_str())
         .unwrap_or("generic");
-    let fmt = format.unwrap_or(match ptype {
-        "wireguard" => "wireguard",
-        "docker" => "compose",
-        "nginx" => "nginx",
-        _ => "env",
-    });
+    // The default format is now *derived from the project type for every type*,
+    // not for three of them with a silent `.env` fallback for the rest.
+    //
+    // The old fallback meant `envv project export my-lb` on an haproxy project
+    // either wrote a file that was not an haproxy config, or failed with
+    // "Project 'my-lb' has no env_file chunks" — a diagnosis naming neither the
+    // cause nor the fix. `generic` still defaults to `.env`, which is correct:
+    // that is the type for a project whose chunks *are* env files.
+    let fmt = format.unwrap_or(default_format_for(ptype));
 
     match fmt {
         "wireguard" => emit(&exporters::export_wireguard(&p, &r), out),
         "nginx" => emit(&exporters::export_nginx(&p, &r), out),
+        "apache" => emit(&exporters::export_apache(&p, &r), out),
+        "haproxy" => emit(&exporters::export_haproxy(&p, &r), out),
+        "ansible" => emit(&exporters::export_ansible(&p, &r), out),
+        "postgres" => emit(&exporters::export_postgres(&p, &r), out),
+        "k8s" => emit(&exporters::export_k8s(&p, &r), out),
+        "ssh" => emit(&exporters::export_ssh_config(&p, &r), out),
+        "traefik" => emit(&exporters::export_traefik(&p, &r), out),
         "compose" => {
             let c = exporters::export_docker_compose(&p, &r);
             match out {
@@ -460,9 +516,8 @@ pub fn export(
             out,
         ),
         other => Err(CliError::invalid(format!(
-            "Unknown format '{other}'. Supported: wireguard, compose, nginx, env, json.\n\
-             The experimental project types (kubernetes, traefik, apache, haproxy, ansible, \
-             postgres, ssh_config) export from the desktop app only."
+            "Unknown format '{other}'. Supported: {}.",
+            EXPORT_FORMATS.join(", ")
         ))),
     }
 }

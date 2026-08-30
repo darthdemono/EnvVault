@@ -36,6 +36,13 @@ struct Args {
     /// resets the clock; `GET /api/ping` exists to do exactly that. 0 disables expiry.
     #[arg(long, default_value_t = 480)]
     session_ttl_mins: u64,
+    /// Absolute hours a session may live, counted from when it was issued and
+    /// never extended by activity. `--session-ttl-mins` alone bounds only
+    /// *abandoned* sessions: a token that keeps being used slides its own idle
+    /// deadline forward forever, so a leaked one would never expire. 0 disables
+    /// the ceiling.
+    #[arg(long, default_value_t = 24)]
+    session_max_hours: u64,
 }
 
 fn main() {
@@ -74,6 +81,12 @@ fn main() {
 
 async fn async_main() {
     let args = Args::parse();
+
+    // Structured logging before anything that can fail, so a bad path or a
+    // refused bind is reported through the same channel as everything else.
+    // `info` by default: a long-lived server should say what it did, unlike the
+    // CLI, which must stay silent to keep its stdout envelope clean.
+    vault_core::telemetry::init("envv-server", "info");
     // Where the vault lives when the operator has not said. There is no
     // hardcoded fallback path on purpose: `/var/lib` is meaningless on Windows,
     // where it resolves to `\var\lib` on whatever the current drive happens to
@@ -139,6 +152,7 @@ async fn async_main() {
         salt_path,
         fingerprint.clone(),
         args.session_ttl_mins,
+        args.session_max_hours,
         /* lan_mode */ false,
     );
 
@@ -146,14 +160,30 @@ async fn async_main() {
     if let Ok(pw) = std::env::var("ENVV_PASSWORD") {
         if !pw.is_empty() {
             match auto_unlock(&state, &pw) {
-                Ok(()) => println!("Vault auto-unlocked (ENVV_PASSWORD)"),
-                Err(e) => eprintln!("Auto-unlock failed: {e}"),
+                Ok(()) => {
+                    tracing::info!("vault auto-unlocked from ENVV_PASSWORD");
+                    println!("Vault auto-unlocked (ENVV_PASSWORD)");
+                }
+                // The password itself never reaches the log; `e` is a reason,
+                // not an echo of the input.
+                Err(e) => {
+                    tracing::error!(error = %e, "auto-unlock failed");
+                    eprintln!("Auto-unlock failed: {e}");
+                }
             }
         }
     }
 
     let scheme = if args.tls { "https" } else { "http" };
     let addr_str = format!("{}:{}", args.host, args.port);
+    tracing::info!(
+        %scheme,
+        addr = %addr_str,
+        tls = args.tls,
+        session_ttl_mins = args.session_ttl_mins,
+        session_max_hours = args.session_max_hours,
+        "starting"
+    );
     println!("envv-server  →  {scheme}://{addr_str}");
     println!("OpenAPI JSON →  {scheme}://{addr_str}/api/openapi.json");
     if let Some(fp) = &fingerprint {
@@ -165,6 +195,7 @@ async fn async_main() {
     let (_tx, rx) = tokio::sync::oneshot::channel();
 
     if let Err(e) = serve(state, addr, tls, rx).await {
+        tracing::error!(error = %e, "server stopped");
         eprintln!("{e}");
         std::process::exit(1);
     }

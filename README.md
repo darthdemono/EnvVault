@@ -10,7 +10,7 @@ It ships as three programs that share one storage engine:
 | **`envv`**          | A CLI built so an automated caller can drive the whole vault without a single secret value entering its output. |
 | **`envv-server`**   | An optional HTTP/HTTPS server, so the desktop app and the CLI on other machines can reach one vault.            |
 
-Current version **0.7.1**. The version in `src-tauri/tauri.conf.json` is the authoritative one. `package.json`, the four `Cargo.toml` files and the git tag are all checked against it by the `meta` job in `.github/workflows/build.yml`.
+Current version **0.8.1**. The version in `src-tauri/tauri.conf.json` is the authoritative one. `package.json`, the four `Cargo.toml` files and the git tag are all checked against it by the `meta` job in `.github/workflows/build.yml`.
 
 ---
 
@@ -1020,7 +1020,6 @@ Every project has a list like this. Most do not publish it.
 - **There is no structured logging.** No `tracing` anywhere in the workspace. A failure in somebody else's deployment currently leaves `println!` output, and everything else in this section depends on fixing that first.
 - **There is no real `/api/health`.** `/api/status` and `/api/stats` exist, and the Docker healthcheck only opens the port, so a wedged process passes it.
 - **The rate limiter sends no `Retry-After`,** and errors carry no request id. A script that cannot tell "slow down" from "denied" has to guess, and this CLI is built for callers that should not have to.
-- **No release has been published yet.** The pipeline has never cut a tag end to end. That is the next thing to prove, and proving it before 1.0 rather than during is the whole point.
 - **`envv` collides with an unrelated product of the same name** at envvault.dev, which has an incompatible command tree. Whoever installs both gets whichever `PATH` finds first. This has to be decided before 1.0, because afterwards it is a breaking change.
 - **The audit table has no index and is read whole.** It is fine now. It will not be fine forever. Retention is a harder problem than it looks: pruning rows breaks the chain that makes the log tamper-evident, so any scheme needs a checkpoint record attesting to the pruned prefix.
 - **237 lint violations are suppressed**, and somebody has to decide whether they ship in a 1.0.

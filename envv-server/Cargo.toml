@@ -15,7 +15,8 @@ name = "envv-server"
 path = "src/main.rs"
 
 [dependencies]
-vault-core   = { path = "../vault-core" }
+vault-core   = { path = "../vault-core", features = ["telemetry"] }
+tracing      = "0.1"
 axum         = "0.8"
 axum-server  = { version = "0.8", features = ["tls-rustls"] }
 tokio        = { version = "1", features = ["full"] }

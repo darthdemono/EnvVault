@@ -354,6 +354,58 @@ export const TOOLS_PANES_HTML = String.raw`
           </div>
         </div>
 
+        <!-- Tool: Secret Timeline -->
+        <div id="tool-timeline" class="tool-pane" style="display:none">
+          <div class="tool-header">
+            <h3>Secret Timeline</h3>
+            <p>Creation dates, expiries and rotation deadlines — and a calendar feed of all three.</p>
+          </div>
+          <div class="tool-body wide">
+            <div class="tool-row" style="gap:12px;align-items:center;flex-wrap:wrap">
+              <label class="tool-label" for="tl-sort">Sort</label>
+              <select id="tl-sort" class="tool-input" style="max-width:220px">
+                <option value="created-desc">Newest first</option>
+                <option value="created-asc">Oldest first</option>
+                <option value="expires-asc">Expiring soonest</option>
+                <option value="provider">Name</option>
+              </select>
+              <button id="tl-refresh" class="btn btn-ghost btn-sm" type="button">Refresh</button>
+            </div>
+
+            <p id="tl-summary" class="tl-summary"></p>
+
+            <div class="tl-table-wrap">
+              <table class="tl-table">
+                <thead>
+                  <tr>
+                    <th scope="col">Secret</th>
+                    <th scope="col">Created</th>
+                    <th scope="col">Age</th>
+                    <th scope="col">Expires</th>
+                    <th scope="col">Rotation due</th>
+                  </tr>
+                </thead>
+                <tbody id="tl-rows"></tbody>
+              </table>
+            </div>
+
+            <div class="tl-export">
+              <h4>Calendar feed (.ics)</h4>
+              <p class="tl-note">
+                Import into Google Calendar, Outlook, Apple Calendar or anything else that reads
+                iCalendar. Re-importing updates the existing events rather than duplicating them.
+                The file carries secret <em>names</em> and dates — never values, never fingerprints.
+              </p>
+              <div class="tool-row" style="gap:16px;flex-wrap:wrap;align-items:center">
+                <label class="tl-check"><input type="checkbox" id="tl-kind-created" checked /> Created</label>
+                <label class="tl-check"><input type="checkbox" id="tl-kind-expires" checked /> Expires</label>
+                <label class="tl-check"><input type="checkbox" id="tl-kind-rotation" checked /> Rotation due</label>
+                <button id="tl-export-ics" class="btn btn-primary btn-sm" type="button">Export .ics</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
         <!-- Tool: Expiry Calendar -->
         <div id="tool-expiry-calendar" class="tool-pane" style="display:none">
           <div class="tool-header"><h3>Expiry Calendar</h3><p>Month view of secrets with expiry dates.</p></div>

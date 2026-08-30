@@ -196,6 +196,23 @@ export interface VaultEntry {
     | 'url'
     | 'date'
     | 'json';
+  /**
+   * ISO-8601 timestamp of when this entry was first written to the vault.
+   *
+   * Optional because vaults written before this field existed have no such
+   * record, and there is no honest way to invent one. `backfillCreatedAt()` in
+   * `state.ts` infers a date for those from evidence already in the vault —
+   * the oldest `version_history` snapshot, or the earliest audit row naming the
+   * entry — and leaves it unset when there is none. An entry with no
+   * `created_at` renders as "unknown" and is omitted from the calendar feed,
+   * which is the truthful answer: stamping "today" onto every pre-existing
+   * secret would make the timeline panel and every exported `.ics` repeat a
+   * date nobody chose.
+   *
+   * Never rewritten on edit. This is a creation date, not a modification date;
+   * `version_history[0].saved_at` is where "when did it last change" lives.
+   */
+  created_at?: string | null;
   /** ISO-8601 timestamp of the last manual rotation (set via "Mark as rotated"). */
   last_rotated_at?: string | null;
   /** Rotation cadence in days. When set, health scan flags entries overdue since `last_rotated_at`. */
@@ -503,6 +520,13 @@ export interface PersistedView {
   envFilter: string;
   tagFilter: string | null;
   prefixFilter: string | null;
+  /**
+   * Optional because it was added after this interface shipped: a `lastView`
+   * written by an earlier build has no such key, and `localStorage` is read
+   * back without a migration. `restoreViewState()` guards on it being present
+   * *and* still resolving against the loaded vault (invariant 7).
+   */
+  poolFilter?: string | null;
   projectIds: string[];
 }
 
@@ -547,7 +571,9 @@ export interface AppSettings {
    * Ordered array of sidebar section keys to display.
    * Sections absent from this array are hidden.
    */
-  sidebarSections: ('all' | 'price' | 'env' | 'category' | 'project' | 'tags' | 'prefixes')[];
+  sidebarSections: (
+    'all' | 'price' | 'env' | 'category' | 'project' | 'tags' | 'pools' | 'prefixes'
+  )[];
   /** When `true`, the main grid renders section headers grouping cards by secret type. */
   groupByType: boolean;
   /** Position of the activity bar. */
@@ -555,7 +581,9 @@ export interface AppSettings {
   /** Activity bar display style. */
   activityBarStyle: 'icon' | 'icon-label';
   /** Section keys that are currently collapsed in the secrets sidebar. */
-  collapsedSections: ('all' | 'price' | 'env' | 'category' | 'project' | 'tags' | 'prefixes')[];
+  collapsedSections: (
+    'all' | 'price' | 'env' | 'category' | 'project' | 'tags' | 'pools' | 'prefixes'
+  )[];
   /** Currently active top-level panel. */
   activePanel: 'secrets' | 'tools' | 'users' | 'remote';
   /** ID of the currently active tool pane (e.g. `'secret-gen'`). */

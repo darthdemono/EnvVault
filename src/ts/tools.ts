@@ -9,6 +9,7 @@ import * as yaml from 'js-yaml';
 import type { VaultEntry } from './types';
 import { Settings, switchPanel, switchTool, st, persist, entryId, ensureEntryIds } from './state';
 import { initPoolsPane, renderPoolsPane } from './pools';
+import { initTimelinePane, renderTimeline } from './timeline';
 import { showToast, clipboardWrite, generateULID, showConfirm, esc } from './utils';
 import {
   showDropdown,
@@ -181,10 +182,15 @@ export function initTools() {
       // CLI also writes, so a pane painted once at startup would show counts
       // that stopped being true the moment CI ran.
       if (btn.dataset.tool === 'pools') void renderPoolsPane();
+      // Same reasoning as pools: dates move on their own. An expiry two days
+      // away when the pane was first painted is not two days away next week.
+      if (btn.dataset.tool === 'timeline') renderTimeline();
     });
   });
 
   initPoolsPane();
+  initTimelinePane();
+  if ((Settings.get('activeTool') || '') === 'timeline') renderTimeline();
   document.getElementById('pools-refresh-btn')?.addEventListener('click', () => {
     void renderPoolsPane();
   });
@@ -199,11 +205,11 @@ export function initTools() {
     btn.addEventListener('click', (e) => {
       e.stopPropagation();
       const section = btn.dataset.section as
-        'all' | 'price' | 'env' | 'category' | 'project' | 'tags' | 'prefixes';
+        'all' | 'price' | 'env' | 'category' | 'project' | 'tags' | 'pools' | 'prefixes';
       const el = document.getElementById(`sidebar-section-${section}`)!;
       el.classList.toggle('collapsed');
       const collapsed = (Settings.get('collapsedSections') || []) as (
-        'all' | 'price' | 'env' | 'category' | 'project' | 'tags' | 'prefixes'
+        'all' | 'price' | 'env' | 'category' | 'project' | 'tags' | 'pools' | 'prefixes'
       )[];
       const isNowCollapsed = el.classList.contains('collapsed');
       const updated = isNowCollapsed

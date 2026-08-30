@@ -1369,16 +1369,132 @@ pub fn filter_vault_for_user(
     })
 }
 
+/// Is every entry currently referencing `pid` writable by this user?
+///
+/// The same ALL-scope rule entry writes already use: a container is writable
+/// only when the user could write everything it holds. Anything weaker lets a
+/// user with one entry in a shared project rename or delete the project for
+/// everybody.
+///
+/// A project nothing references is vacuously writable, which is correct — it is
+/// also invisible, so the caller only reaches this for one the user was served.
+fn project_write_allowed(
+    pid: &str,
+    full_keys: &[serde_json::Value],
+    writable: &dyn Fn(&serde_json::Value) -> bool,
+) -> bool {
+    full_keys
+        .iter()
+        .filter(|e| {
+            e.get("projectIds")
+                .and_then(|v| v.as_array())
+                .is_some_and(|a| a.iter().any(|v| v.as_str() == Some(pid)))
+        })
+        .all(writable)
+}
+
+/// The category equivalent of [`project_write_allowed`].
+fn category_write_allowed(
+    cat: &str,
+    full_keys: &[serde_json::Value],
+    writable: &dyn Fn(&serde_json::Value) -> bool,
+) -> bool {
+    full_keys
+        .iter()
+        .filter(|e| {
+            e.get("categories")
+                .and_then(|v| v.as_array())
+                .is_some_and(|a| a.iter().any(|v| v.as_str() == Some(cat)))
+        })
+        .all(writable)
+}
+
+/// Merges one collection of named, string-keyed objects (`projects`) or plain
+/// strings (`user_categories`) from a sub-user's submission.
+///
+/// The submission is a *filtered* view, so "absent" is ambiguous: it means
+/// either "deleted" or "you were never shown it". `served` — recomputed here
+/// from the read expression, which is exactly what the client was handed —
+/// resolves it. Anything outside `served` is preserved untouched; anything
+/// inside it is honoured, subject to `allowed`.
+fn merge_named_collection(
+    full: &[serde_json::Value],
+    submitted: &[serde_json::Value],
+    served: &HashSet<String>,
+    key_of: &dyn Fn(&serde_json::Value) -> Option<String>,
+    allowed: &dyn Fn(&str) -> bool,
+    what: &str,
+) -> Result<Vec<serde_json::Value>, String> {
+    let sub_map: HashMap<String, &serde_json::Value> = submitted
+        .iter()
+        .filter_map(|v| key_of(v).map(|k| (k, v)))
+        .collect();
+
+    let mut out: Vec<serde_json::Value> = Vec::new();
+    for item in full {
+        let Some(k) = key_of(item) else {
+            out.push(item.clone());
+            continue;
+        };
+        if !served.contains(&k) {
+            // The client never saw it, so it cannot have meant to change it.
+            out.push(item.clone());
+            continue;
+        }
+        match sub_map.get(&k) {
+            Some(&sub) if sub == item => out.push(item.clone()),
+            Some(&sub) => {
+                if !allowed(&k) {
+                    return Err(format!("Write permission denied for {what} '{k}'"));
+                }
+                out.push(sub.clone());
+            }
+            None => {
+                if !allowed(&k) {
+                    return Err(format!("Delete permission denied for {what} '{k}'"));
+                }
+                // omitted from a view that contained it → deleted
+            }
+        }
+    }
+
+    // Genuinely new ones. A submitted key that exists in `full` but was not
+    // served is deliberately *not* treated as new: it would overwrite something
+    // the user was never allowed to see.
+    let full_keys: HashSet<String> = full.iter().filter_map(key_of).collect();
+    for item in submitted {
+        if let Some(k) = key_of(item) {
+            if !full_keys.contains(&k) {
+                out.push(item.clone());
+            }
+        }
+    }
+    Ok(out)
+}
+
 /// Merges a user's submitted vault data into the full vault, respecting write permissions.
 ///
 /// - Entries the user submitted within their write scope → applied (add / update).
 /// - Entries in the user's write scope that are absent from the submission → deleted.
 /// - Entries outside the user's write scope → unchanged from `full_vault`.
+/// - `projects` and `user_categories` are merged the same way, against what the
+///   read expression would have served, with container writability defined as
+///   "every entry inside it is writable".
 ///
-/// Returns `Err` if the user's submission contains an entry outside their write scope.
+/// Returns `Err` if the user's submission contains an entry outside their write
+/// scope, or changes a project or category they may not change.
+///
+/// **`projects` and `user_categories` used to be dropped silently.** The merge
+/// rebuilt `api_keys` only and took both collections from `full_vault`, and the
+/// server answered `204 No Content`. A sub-user creating a project, renaming a
+/// category, editing a WireGuard peer or adding a chunk got a success toast and
+/// a UI that showed the change — because the frontend had already applied it to
+/// its own copy — while the server persisted nothing. It surfaced on the next
+/// reload, attributable to nothing.
 pub fn merge_user_vault_write(
     full_vault: serde_json::Value,
     user_data: serde_json::Value,
+    read: Option<&crate::permex::Expr>,
     write: Option<&crate::permex::Expr>,
 ) -> Result<serde_json::Value, String> {
     let project_names = build_project_names(&full_vault);
@@ -1454,9 +1570,77 @@ pub fn merge_user_vault_write(
         }
     }
 
+    // ── projects and user_categories ──────────────────────────────────────────
+    //
+    // Recompute what a GET would have handed this user. That is the only way to
+    // read the submission correctly: it is a filtered document, so an absent
+    // project means "deleted" when the user could see it and "never shown"
+    // otherwise, and the two must not be confused.
+    let served = filter_vault_for_user(full_vault.clone(), read);
+    let served_projects: HashSet<String> = served
+        .get("projects")
+        .and_then(|v| v.as_array())
+        .unwrap_or(&empty)
+        .iter()
+        .filter_map(|p| p.get("id").and_then(|v| v.as_str()).map(str::to_string))
+        .collect();
+    let served_cats: HashSet<String> = served
+        .get("user_categories")
+        .and_then(|v| v.as_array())
+        .unwrap_or(&empty)
+        .iter()
+        .filter_map(|c| c.as_str().map(str::to_string))
+        .collect();
+
+    // An *absent* key is not an empty one. A caller that PUTs only `api_keys` —
+    // which the server's payload validation permits, and which any hand-rolled
+    // agent client will do — means "I am not touching the taxonomy", not "delete
+    // every project I can see". Only a key that is present is merged.
+    let full_projects = full_vault
+        .get("projects")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+    let merged_projects = match user_data.get("projects").and_then(|v| v.as_array()) {
+        None => full_projects.clone(),
+        Some(user_projects) => merge_named_collection(
+            &full_projects,
+            user_projects,
+            &served_projects,
+            &|p| p.get("id").and_then(|v| v.as_str()).map(str::to_string),
+            &|pid| project_write_allowed(pid, full_keys, &writable),
+            "project",
+        )?,
+    };
+
+    let full_cats = full_vault
+        .get("user_categories")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+    let merged_cats = match user_data.get("user_categories").and_then(|v| v.as_array()) {
+        None => full_cats.clone(),
+        Some(user_cats) => merge_named_collection(
+            &full_cats,
+            user_cats,
+            &served_cats,
+            &|c| c.as_str().map(str::to_string),
+            &|cat| category_write_allowed(cat, full_keys, &writable),
+            "category",
+        )?,
+    };
+
     let mut out = full_vault.clone();
     if let Some(obj) = out.as_object_mut() {
         obj.insert("api_keys".to_string(), serde_json::Value::Array(result));
+        obj.insert(
+            "projects".to_string(),
+            serde_json::Value::Array(merged_projects),
+        );
+        obj.insert(
+            "user_categories".to_string(),
+            serde_json::Value::Array(merged_cats),
+        );
     }
     Ok(out)
 }
@@ -1873,8 +2057,13 @@ mod tests {
         let submitted = json!({ "api_keys": [
             { "id": "2", "provider": "Theirs", "categories": ["ops"], "projectIds": ["Universal", "p2"] }
         ]});
-        let err = merge_user_vault_write(full, submitted, Some(&ex("project:Alpha")))
-            .expect_err("writing an out-of-scope entry must be refused");
+        let err = merge_user_vault_write(
+            full,
+            submitted,
+            Some(&ex("vault:*")),
+            Some(&ex("project:Alpha")),
+        )
+        .expect_err("writing an out-of-scope entry must be refused");
         assert!(
             err.contains("Theirs"),
             "error should name the offending entry, got: {err}"
@@ -1883,8 +2072,13 @@ mod tests {
 
     #[test]
     fn merge_requires_some_write_permission() {
-        let err = merge_user_vault_write(sample_vault(), json!({ "api_keys": [] }), None)
-            .expect_err("read-only users must not be able to write at all");
+        let err = merge_user_vault_write(
+            sample_vault(),
+            json!({ "api_keys": [] }),
+            Some(&ex("vault:*")),
+            None,
+        )
+        .expect_err("read-only users must not be able to write at all");
         assert_eq!(err, "No write permissions");
     }
 
@@ -1897,8 +2091,13 @@ mod tests {
             { "id": "1", "provider": "Mine", "api_key": "updated",
               "categories": ["dev"], "projectIds": ["Universal", "p1"] }
         ]});
-        let out =
-            merge_user_vault_write(sample_vault(), submitted, Some(&ex("project:Alpha"))).unwrap();
+        let out = merge_user_vault_write(
+            sample_vault(),
+            submitted,
+            Some(&ex("vault:*")),
+            Some(&ex("project:Alpha")),
+        )
+        .unwrap();
         let keys = out["api_keys"].as_array().unwrap();
         assert_eq!(keys.len(), 2, "the out-of-scope entry must survive");
         let mine = keys.iter().find(|e| e["id"] == "1").unwrap();
@@ -1914,12 +2113,176 @@ mod tests {
         let out = merge_user_vault_write(
             sample_vault(),
             json!({ "api_keys": [] }),
+            Some(&ex("vault:*")),
             Some(&ex("project:Alpha")),
         )
         .unwrap();
         let keys = out["api_keys"].as_array().unwrap();
         assert_eq!(keys.len(), 1, "the in-scope entry is deleted");
         assert_eq!(keys[0]["id"], "2", "the out-of-scope entry is not");
+    }
+
+    // ── projects and categories (regression: they used to vanish) ─────────────
+    //
+    // `merge_user_vault_write` rebuilt `api_keys` only and took `projects` and
+    // `user_categories` straight from `full_vault`. The server then answered
+    // 204. A sub-user creating a project or editing a chunk saw the change (the
+    // frontend applies it to its own copy first) and the server kept nothing.
+
+    /// A read+write grant over Alpha, which is what a project-scoped sub-user has.
+    fn alpha() -> (crate::permex::Expr, crate::permex::Expr) {
+        (ex("project:Alpha"), ex("project:Alpha"))
+    }
+
+    #[test]
+    fn a_new_project_from_a_sub_user_is_persisted() {
+        let (r, w) = alpha();
+        let served = filter_vault_for_user(sample_vault(), Some(&r));
+        let mut submitted = served.clone();
+        submitted["projects"].as_array_mut().unwrap().push(json!({
+            "id": "p9", "name": "Fresh", "project_type": "generic", "chunks": []
+        }));
+        let out = merge_user_vault_write(sample_vault(), submitted, Some(&r), Some(&w)).unwrap();
+        let ids: Vec<&str> = out["projects"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|p| p["id"].as_str())
+            .collect();
+        assert!(ids.contains(&"p9"), "the new project must survive: {ids:?}");
+        assert!(ids.contains(&"p2"), "Beta, which they cannot see, must too");
+    }
+
+    #[test]
+    fn editing_a_project_they_fully_own_is_persisted() {
+        // Alpha is referenced only by entry "Mine", which this user can write,
+        // so the whole project is theirs to change — chunks included.
+        let (r, w) = alpha();
+        let mut submitted = filter_vault_for_user(sample_vault(), Some(&r));
+        for p in submitted["projects"].as_array_mut().unwrap() {
+            if p["id"] == "p1" {
+                p["chunks"] = json!([{ "id": "c1", "name": "peer", "chunk_type": "wg_peer",
+                                       "fields": [] }]);
+            }
+        }
+        let out = merge_user_vault_write(sample_vault(), submitted, Some(&r), Some(&w)).unwrap();
+        let alpha_out = out["projects"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p["id"] == "p1")
+            .unwrap();
+        assert_eq!(
+            alpha_out["chunks"][0]["name"], "peer",
+            "the chunk the user added must be stored, not silently dropped"
+        );
+    }
+
+    #[test]
+    fn a_project_they_do_not_fully_own_is_refused_not_silently_ignored() {
+        // Universal is referenced by both entries, one of which is out of scope.
+        // Under the same ALL-scope rule entry writes use, it is not theirs.
+        let (r, w) = alpha();
+        let mut submitted = filter_vault_for_user(sample_vault(), Some(&r));
+        for p in submitted["projects"].as_array_mut().unwrap() {
+            if p["id"] == "Universal" {
+                p["name"] = json!("Hijacked");
+            }
+        }
+        let err = merge_user_vault_write(sample_vault(), submitted, Some(&r), Some(&w))
+            .expect_err("must refuse rather than accept-and-discard");
+        assert!(err.contains("Universal"), "must name the refusal: {err}");
+    }
+
+    #[test]
+    fn a_project_the_user_cannot_see_survives_a_full_submission() {
+        // The submission is a filtered document. Beta's absence from it means
+        // "never shown", not "deleted" — confusing the two deletes other
+        // people's projects on every sub-user save.
+        let (r, w) = alpha();
+        let submitted = filter_vault_for_user(sample_vault(), Some(&r));
+        assert!(
+            !submitted["projects"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|p| p["id"] == "p2"),
+            "fixture precondition: Beta is not served to this user"
+        );
+        let out = merge_user_vault_write(sample_vault(), submitted, Some(&r), Some(&w)).unwrap();
+        assert!(
+            out["projects"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|p| p["id"] == "p2"),
+            "Beta must survive"
+        );
+    }
+
+    #[test]
+    fn a_hidden_category_is_neither_deleted_nor_overwritable() {
+        let (r, w) = alpha();
+        let mut submitted = filter_vault_for_user(sample_vault(), Some(&r));
+        submitted["user_categories"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!("newcat"));
+        let out = merge_user_vault_write(sample_vault(), submitted, Some(&r), Some(&w)).unwrap();
+        let cats: Vec<&str> = out["user_categories"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|c| c.as_str())
+            .collect();
+        assert!(cats.contains(&"newcat"), "the added category persists");
+        assert!(
+            cats.contains(&"secret/taxonomy"),
+            "a category never served must not be pruned away: {cats:?}"
+        );
+        assert!(cats.contains(&"ops"), "nor one belonging to hidden entries");
+    }
+
+    #[test]
+    fn omitting_the_collections_entirely_changes_nothing() {
+        // A hand-rolled agent client PUTs only `api_keys`. Absent must mean
+        // "unchanged", never "empty" — otherwise one such call wipes the
+        // taxonomy for everybody.
+        let (r, w) = alpha();
+        let out = merge_user_vault_write(
+            sample_vault(),
+            json!({ "api_keys": [
+                { "id": "1", "provider": "Mine", "categories": ["dev"],
+                  "projectIds": ["Universal", "p1"] }
+            ]}),
+            Some(&r),
+            Some(&w),
+        )
+        .unwrap();
+        assert_eq!(out["projects"].as_array().unwrap().len(), 3);
+        assert_eq!(out["user_categories"].as_array().unwrap().len(), 3);
+    }
+
+    #[test]
+    fn a_sub_user_cannot_overwrite_a_project_by_guessing_its_id() {
+        // p2 exists but was never served. Submitting it as if it were new must
+        // not clobber it — that would be a read-scope bypass through the write
+        // path.
+        let (r, w) = alpha();
+        let mut submitted = filter_vault_for_user(sample_vault(), Some(&r));
+        submitted["projects"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({ "id": "p2", "name": "Stolen" }));
+        let out = merge_user_vault_write(sample_vault(), submitted, Some(&r), Some(&w)).unwrap();
+        let betas: Vec<&serde_json::Value> = out["projects"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|p| p["id"] == "p2")
+            .collect();
+        assert_eq!(betas.len(), 1, "must not duplicate it either");
+        assert_eq!(betas[0]["name"], "Beta", "the real Beta is untouched");
     }
 
     #[test]
@@ -1938,7 +2301,13 @@ mod tests {
             { "provider": "AWS", "account_name": "acct", "key_id": "mine",
               "api_key": "changed", "categories": ["dev"], "projectIds": ["Universal", "p1"] }
         ]});
-        let out = merge_user_vault_write(full, submitted, Some(&ex("project:Alpha"))).unwrap();
+        let out = merge_user_vault_write(
+            full,
+            submitted,
+            Some(&ex("vault:*")),
+            Some(&ex("project:Alpha")),
+        )
+        .unwrap();
         let keys = out["api_keys"].as_array().unwrap();
         let locked = keys.iter().find(|e| e["key_id"] == "locked").unwrap();
         assert_eq!(
