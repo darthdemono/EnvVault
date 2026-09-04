@@ -163,6 +163,9 @@ function debouncedSearch() {
 let _openFilePicker: ((accept: string) => void) | null = null;
 
 async function finishInit() {
+  // See `html.booting` in base.css: the shell paints only once boot knows
+  // whether a lock screen is going up in front of it.
+  document.documentElement.classList.remove('booting');
   try {
     const r = await fetch('./schema.json');
     if (r.ok) st.schema = await r.json();
@@ -1061,4 +1064,11 @@ async function init() {
   await finishInit();
 }
 
-init();
+// A boot that throws must not leave the shell hidden forever: `html.booting`
+// is removed by whichever of `showUnlockModal()` / `finishInit()` runs, and a
+// failure before either would otherwise present a blank window with no error.
+init().catch((e) => {
+  document.documentElement.classList.remove('booting');
+  console.error('EnvVault failed to start', e);
+  showToast('Failed to start — see the console', 'err', 6000);
+});

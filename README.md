@@ -10,7 +10,7 @@ It ships as three programs that share one storage engine:
 | **`envv`**          | A CLI built so an automated caller can drive the whole vault without a single secret value entering its output. |
 | **`envv-server`**   | An optional HTTP/HTTPS server, so the desktop app and the CLI on other machines can reach one vault.            |
 
-Current version **0.8.1**. The version in `src-tauri/tauri.conf.json` is the authoritative one. `package.json`, the four `Cargo.toml` files and the git tag are all checked against it by the `meta` job in `.github/workflows/build.yml`.
+Current version **0.20.0**. The version in `src-tauri/tauri.conf.json` is the authoritative one. `package.json`, the four `Cargo.toml` files and the git tag are all checked against it by the `meta` job in `.github/workflows/build.yml`.
 
 ---
 
@@ -104,7 +104,7 @@ Everything listed here is implemented and in the shipping build. The sections af
 - Nineteen tool panes: generators, a health scan, an audit viewer, a diff, a formatter, a CIDR calculator, a cron reader and more.
 - Themes, an activity bar you can move, a resizable sidebar and a layout that remembers itself.
 - Auto-lock, a dedicated re-lock screen, and window state that survives a restart.
-- 814 frontend tests and 183 Rust tests, run on Linux and Windows on every push.
+- 931 frontend tests and 252 Rust tests, run on Linux and Windows on every push, plus a Playwright layout lab that measures the app in a real browser at nine window sizes.
 
 ---
 
@@ -371,6 +371,16 @@ The audit viewer reads the whole table, which is fine now and will not be fine f
 
 Themes, accent colour, card density, the activity bar side, which sidebar sections appear and in what order, and custom CSS injected after every built-in stylesheet. Under Security: the auto-lock timeout, whether hiding the window locks the vault, and whether the local vault stays unlocked when you switch to a remote.
 
+### The first-run wizard
+
+It runs once on a new vault: master password, theme, auto-lock, and whether secrets are masked by default. Skipping it marks it complete and commits nothing — re-showing something dismissed on purpose is how a welcome screen becomes an obstacle, and committing settings the user only _looked_ at is worse. Settings carries an explicit **Run setup again**.
+
+### Accessibility
+
+Phase 19 was an accessibility pass, and the contract is asserted mechanically rather than by inspection (`tests/a11y.test.ts`). Every button and form control must have an accessible name; no `for=`, `aria-labelledby`, `aria-controls` or `aria-describedby` may name an id that does not exist; the activity tablist has exactly one tab stop and it is the selected tab; every overlay is a named modal dialog with a focus trap. Adding a button with no text and no `aria-label` fails the suite. A reading pass had already walked past thirteen unnamed controls that these tests found.
+
+The Caps Lock hint on the password fields is derived from the character a key produced, never from `getModifierState('CapsLock')` — WebKitGTK reports that from GDK's raw modifier mask, which said "on" with Caps Lock off for every user. The platform's own claim is scored against each derived reading and believed only after two agreements, never again after one disagreement; that is what lets the hint appear on click-into-field where the browser tells the truth.
+
 ### Keyboard shortcuts
 
 | Key         | Action                           |
@@ -517,6 +527,8 @@ One exception, named for what it is. `enrich --online` talks to github.com and s
 | `pool`                                      | Key pools                                                   |
 | `user` `user token` `class` `perm`          | Users, tokens, classes, permissions                         |
 | `login` `logout` `whoami` `sessions`        | Sessions against a remote                                   |
+| `use`                                       | Pin a project and environment to the current directory      |
+| `user totp`                                 | Enroll, confirm, disable a sub-user's second factor         |
 | `enrich`                                    | Filling in metadata                                         |
 | `describe` `completions`                    | The contract, and shell completion                          |
 
@@ -753,7 +765,7 @@ Idle RSS is 1.32 MiB on a four-core host, and 1.36 MiB after an Argon2id unlock.
 
 Compose sets `mem_limit: 256m`, which is two concurrent Argon2id unlocks without the OOM killer turning a login into a restart, plus `shm_size: 16m`.
 
-The healthcheck opens the port rather than running `--version`, because a wedged process still answers `--version` perfectly happily. That is still not a real liveness check, and a proper `/api/health` is on the list below.
+The healthcheck opens the port rather than running `--version`, because a wedged process still answers `--version` perfectly happily. Phase 20 added `/api/health` on top of that: it reports liveness and lock state without leaking counts, and it is what a supervisor should watch.
 
 ---
 
@@ -834,7 +846,7 @@ Reads are deliberately not audited. Every `GET /api/vault` used to write a row, 
 
 ### Things deliberately removed
 
-- **TOTP.** It existed with anti-replay and was removed in Phase 7 because nothing ever reached it. If it returns it belongs on sub-user login only. The owner authenticates by deriving the key, so there is nothing for a second factor to gate.
+- **TOTP was removed in Phase 7** because nothing in the product ever reached it — no enrollment surface, no CLI verb, no UI, so the only thing the code did was carry a schema column. It came back in Phase 19 with all three, and on the terms this list predicted: sub-user login only. The owner authenticates by deriving the key, so there is nothing for a second factor to gate, and that refusal lives in `vault-core` where the app and the CLI cannot disagree about it.
 - **A global paste hotkey.** `Ctrl+Shift+V` intercepted the system paste shortcut and caused a lock. Gone.
 - **Reset from the unlock screen.** A button that destroys the vault should not sit on the screen you see before you have proven you own it.
 
@@ -843,7 +855,7 @@ Reads are deliberately not audited. Every `GET /api/vault` used to write a row, 
 - `/api/vault` returned `200` with `{"api_keys": []}` when no data existed. It returns 404 now, since the first response told an unauthenticated caller the vault existed and was empty.
 - `merge_user_vault_write` keyed entries on `provider|account_name` and dropped `key_id`, so two keys from one provider collided and a scoped user could overwrite or delete an entry in a project they had no access to.
 - `revoke_token` authorized against the `user_id` in the path while deleting by `token_id`, so a low-privilege user could pass their own path and revoke a higher user's token.
-- `verify_totp_code` returned `Ok(true)` when the secret was NULL. It failed open. That is now closed, and the function is gone with the rest of TOTP.
+- `verify_totp_code` returned `Ok(true)` when the secret was NULL. It failed open. Closed, and the rewritten implementation fails closed by construction. Its successor shipped with a bug of the same family: `totp_confirm` passed `None` for the anti-replay mark, so the confirming code worked twice and re-confirming with an _earlier_ code moved the mark backwards, re-opening every step between it for replay. Twenty-one unit tests passed while that was true; an end-to-end CLI run found it.
 - `/api/vault/expiring` returned full secrets to non-owners.
 - `filter_vault_for_user` leaked the complete category taxonomy to users who could see none of it.
 
@@ -981,7 +993,21 @@ npm run docs:rust   # cargo doc over the four crates
 
 Two tools because there is no one tool. Doxygen has no Rust front end and rustdoc has no TypeScript one.
 
-**N.B.** Do not put an outer `///` doc on a `pub mod` line when the module file already has `//!` docs. rustdoc merges the two and resolves the combined text in the _parent's_ scope, so every intra-doc link written inside the module fails with "no item named ... in scope", and `-D warnings` turns that into a failed docs build.
+**N.B.** Do not put an outer `///` doc on a `pub mod` line when the module file already has `//!` docs. rustdoc merges the two and resolves the combined text in the _parent's_ scope, so every intra-doc link written inside the module fails with "no item named ... in scope", and `-D warnings` turns that into a failed docs build. This note was written after it happened to `vault-core::entropy`, and it happened again to `vault-core::totp` two phases later — the comment sits in `lib.rs` two declarations above the line that reintroduced it.
+
+### The UI lab
+
+```bash
+npx playwright install chromium   # once
+npm run ui-lab                    # the layout audit + the behaviour suite
+npm run ui-lab:report             # the findings, grouped by rule
+```
+
+Vitest runs in jsdom, which has no layout engine and no CSS cascade. It cannot see a clipped label, a control pushed off a panel, a 12x12 hit target, or a class that lost to an inline style — and the last of those is not hypothetical: the sidebar collapse toggle was broken for every user who had ever dragged the sidebar, and five passing unit tests said otherwise.
+
+So there are two specs. `ui-lab/layout.spec.ts` boots the app against a deliberately hostile seed vault at nine viewports, from the declared 860x600 minimum to 3440x1440, and _measures_ rather than eyeballs: content wider than its box with nothing clipping or scrolling it, controls under 24x24, controls overlapping other controls, controls with no accessible name. Findings land in `ui-lab/.artifacts/layout-findings.md` with a selector, the numbers, and the viewport, and screenshots land beside them. `ui-lab/behaviour.spec.ts` asserts the handful of interactions whose outcome _is_ the cascade.
+
+Both are gitignored outputs; the harness is committed.
 
 ---
 
@@ -1017,12 +1043,10 @@ Every job carries a control case. If the validator accepts deliberate nonsense, 
 
 Every project has a list like this. Most do not publish it.
 
-- **There is no structured logging.** No `tracing` anywhere in the workspace. A failure in somebody else's deployment currently leaves `println!` output, and everything else in this section depends on fixing that first.
-- **There is no real `/api/health`.** `/api/status` and `/api/stats` exist, and the Docker healthcheck only opens the port, so a wedged process passes it.
-- **The rate limiter sends no `Retry-After`,** and errors carry no request id. A script that cannot tell "slow down" from "denied" has to guess, and this CLI is built for callers that should not have to.
+- **Small hit targets at small windows.** The UI lab's first real run reports 27 controls under 24×24 CSS pixels, and `#add-btn` and `#vault-switcher` are under it at _every_ viewport. `#search-syntax-hint` is clipped on both axes at the 860×600 minimum. Measured, not fixed.
 - **`envv` collides with an unrelated product of the same name** at envvault.dev, which has an incompatible command tree. Whoever installs both gets whichever `PATH` finds first. This has to be decided before 1.0, because afterwards it is a breaking change.
 - **The audit table has no index and is read whole.** It is fine now. It will not be fine forever. Retention is a harder problem than it looks: pruning rows breaks the chain that makes the log tamper-evident, so any scheme needs a checkpoint record attesting to the pruned prefix.
-- **237 lint violations are suppressed**, and somebody has to decide whether they ship in a 1.0.
+- **The suppressed lint backlog** still has to be decided before a 1.0. It shrinks by `npx eslint --prune-suppressions` and never by `--suppress-all`, which would absorb real regressions along with the old debt.
 - **Parts of `render.ts` and `tools.ts` are untested**, specifically the config-view click handlers and the generator and calculator panes.
 - **SVG is refused as a custom icon.** Permanently and on purpose, listed here only so nobody files it as a bug. It is a script container and a vault is untrusted input.
 
@@ -1054,6 +1078,8 @@ The sections above describe the current state. This is the order it arrived in, 
 | 16    | ESLint, Prettier and clippy, auto-versioning, release and docs CI, key pools, structured rate limits                                   |
 | 17    | CLI certificate pinning on a shared verifier, entropy sources, context zeroize, `backup archive`, strict write scoping                 |
 | 18    | `envv doctor`, vendor importers, selective reads, chunk test coverage, and all eleven project types graduated on live-service evidence |
+| 19    | UX and accessibility: the first-run wizard, TOTP for sub-users, the mechanical accessibility contract, `envv use`                      |
+| 20    | Operability: `tracing` in all three binaries, a real `/api/health`, `Retry-After` and request ids on every error                       |
 
 ---
 

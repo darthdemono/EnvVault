@@ -24,7 +24,11 @@ export default defineConfig({
     launchOptions: { args: ['--force-prefers-reduced-motion'] },
   },
   webServer: {
-    command: 'npx vite --port 5173 --strictPort',
+    // `--host 127.0.0.1`: Vite's default bind answers on ::1 only on this
+    // machine, so a `baseURL` written as 127.0.0.1 never connects and the whole
+    // run dies at "Timed out waiting 60000ms from config.webServer" — which
+    // names nothing about addresses. Pin both ends to the same literal.
+    command: 'npx vite --port 5173 --strictPort --host 127.0.0.1',
     url: 'http://127.0.0.1:5173',
     reuseExistingServer: true,
     timeout: 60_000,

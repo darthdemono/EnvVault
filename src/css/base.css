@@ -181,3 +181,20 @@ body::before {
   background: var(--border2);
   border-radius: 3px;
 }
+
+/* ── Boot: the shell stays hidden until the vault state is known ─────────────
+ *
+ * `#unlock-overlay` is `display:none` until JavaScript adds `.open`, which does
+ * not happen until the modules have loaded and `vault_exists()` has answered.
+ * Until then the header, an empty sidebar and a "0 secrets" grid were fully
+ * painted, and the lock screen then dropped over them — every launch flashed a
+ * vault the user had not unlocked yet.
+ *
+ * The class is written into `index.html`, so the very first paint is already
+ * suppressed; `showUnlockModal()` and `finishInit()` remove it, and those are
+ * the only two states boot can end in. `visibility` rather than `display`, so
+ * the layout is already settled when it becomes visible and nothing reflows. */
+html.booting #header,
+html.booting #layout {
+  visibility: hidden;
+}

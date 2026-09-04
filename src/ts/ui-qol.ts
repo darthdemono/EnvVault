@@ -80,10 +80,84 @@ export function resetReveal(inputId: string): void {
  * `A` unshifted means on, and holding Shift inverts both — and it is the same
  * answer on every platform.
  *
- * The cost is that the hint cannot appear before the first letter is typed. That
- * is the right trade: a warning that is silent for one keystroke is strictly
- * better than one that is confidently wrong for the whole session.
+ * The cost was that the hint could not appear before the first letter is typed.
+ * That is the right trade against a warning that is confidently wrong all
+ * session — but it is not the only option, and [[`_capsProbe`]] buys most of it
+ * back: every derived reading is also used to *check* what
+ * `getModifierState('CapsLock')` claimed, and once the platform has agreed with
+ * observed reality it is believed for the cheap paths (a click into the field, a
+ * press of the Caps Lock key itself) where there is no character to derive from.
+ * A platform that contradicts itself once is never asked again.
  */
+/**
+ * Whether `getModifierState('CapsLock')` has earned being believed *on this
+ * platform*, in this session.
+ *
+ * `unknown` until typed characters have said what the lock really was;
+ * `trusted` after `CAPS_PROBE_QUORUM` consecutive agreements; `untrusted`
+ * permanently on the first disagreement — which is what WebKitGTK's always-true
+ * mask produces on the first lowercase letter anyone types.
+ *
+ * There is deliberately no "consistently inverted" state. A mask that is always
+ * one value looks exactly like an inverted one until the lock changes, so
+ * believing an inversion would reintroduce the original bug in mirror image:
+ * a hint shown to every user, all session, from a platform that never knew.
+ * Disagreement is treated as evidence of lying, not of a sign error.
+ *
+ * Module-level because it is a property of the platform, not of one field.
+ */
+let _capsProbe: 'unknown' | 'trusted' | 'untrusted' = 'unknown';
+
+/** Agreeing samples required before the platform's own claim is read. */
+const CAPS_PROBE_QUORUM = 2;
+let _capsProbeAgreed = 0;
+
+/**
+ * Clears the platform calibration.
+ *
+ * Test hook. The calibration describes the platform and so is deliberately
+ * session-lived; a test file that plays several different fake platforms inside
+ * one process has to reset it between them or the second one inherits the
+ * first's verdict.
+ */
+export function resetCapsProbe(): void {
+  _capsProbe = 'unknown';
+  _capsProbeAgreed = 0;
+}
+
+/**
+ * What the event says about Caps Lock, or null when the event cannot say.
+ *
+ * `getModifierState` is missing on synthetic events and on old engines, and it
+ * is called on every keystroke in a password field, so this must never throw.
+ */
+function reportedCaps(e: KeyboardEvent | MouseEvent): boolean | null {
+  const fn = (e as { getModifierState?: (k: string) => boolean }).getModifierState;
+  return typeof fn === 'function' ? !!fn.call(e, 'CapsLock') : null;
+}
+
+/** Caps Lock per the platform, or null while the platform is not believed. */
+function capsFromProbe(e: KeyboardEvent | MouseEvent): boolean | null {
+  if (_capsProbe !== 'trusted') return null;
+  return reportedCaps(e);
+}
+
+/** Scores the platform's claim against a reading derived from a real character. */
+function calibrateCapsProbe(e: KeyboardEvent, derived: boolean): void {
+  if (_capsProbe === 'untrusted') return;
+  const reported = reportedCaps(e);
+  if (reported === null) return;
+  if (reported !== derived) {
+    // One contradiction is enough, and it is permanent: the observed character
+    // is ground truth, and a platform that disagreed with it once has nothing
+    // left to offer that could be checked any harder.
+    _capsProbe = 'untrusted';
+    _capsProbeAgreed = 0;
+    return;
+  }
+  if (++_capsProbeAgreed >= CAPS_PROBE_QUORUM) _capsProbe = 'trusted';
+}
+
 export function wireCapsLockHint(inputId: string, hintId: string): void {
   const input = document.getElementById(inputId) as HTMLInputElement | null;
   const hint = document.getElementById(hintId);
@@ -114,15 +188,43 @@ export function wireCapsLockHint(inputId: string, hintId: string): void {
 
   const update = (e: KeyboardEvent) => {
     const seen = evidence(e);
-    if (seen === null) return; // no evidence: keep whatever we last knew
+    if (seen === null) {
+      // No character to derive from. The platform may still be able to answer,
+      // but only if it has already proved it tells the truth.
+      const probed = capsFromProbe(e);
+      if (probed === null) return; // keep whatever we last knew
+      known = probed;
+      paint();
+      return;
+    }
+    calibrateCapsProbe(e, seen);
     known = seen;
     paint();
   };
 
-  // keydown only. Binding keyup as well doubled every update, and was how the
-  // two events' disagreeing modifier masks became a visible flicker.
+  // keydown carries the character. Binding keyup for characters as well doubled
+  // every update, and was how the two events' disagreeing modifier masks became
+  // a visible flicker — so keyup is bound for exactly one key.
   input.onkeydown = update;
-  input.onkeyup = null;
+  input.onkeyup = (e) => {
+    // The Caps Lock key itself produces no character, so it is the one press
+    // that can change the answer without any evidence following it. On keyup the
+    // lock has already toggled, unlike on keydown.
+    if (e.key !== 'CapsLock') return;
+    const probed = capsFromProbe(e);
+    if (probed !== null) known = probed;
+    else if (known !== null) known = !known; // no belief in the API, but we knew
+    paint();
+  };
+  // Clicking in is the one moment a hint can appear before a single keystroke —
+  // a MouseEvent carries the modifier state too, and by now the platform may
+  // have earned being believed.
+  input.onmousedown = (e) => {
+    const probed = capsFromProbe(e);
+    if (probed === null) return;
+    known = probed;
+    paint();
+  };
   input.onblur = () => {
     // Caps Lock can be toggled while the field is unfocused, so the old reading
     // is not merely hidden, it is void.

@@ -219,6 +219,10 @@ export function recentServers() {
 }
 
 export async function showUnlockModal(isFirstRun: boolean) {
+  // The shell is hidden until boot has decided what to show (see `html.booting`
+  // in base.css). This is one of the two states it can end in; the other is
+  // `finishInit()`.
+  document.documentElement.classList.remove('booting');
   const overlay = document.getElementById('unlock-overlay')!;
   const titleEl = document.getElementById('unlock-title')!;
   const subtitleEl = document.getElementById('unlock-subtitle')!;

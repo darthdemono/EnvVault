@@ -199,6 +199,40 @@
   display: block;
 }
 
+/* Text and number controls in a settings row.
+ *
+ * Sizing used to be an inline `width:` on each element and nothing else, which
+ * left two problems the drawer showed at every window size. A number input keeps
+ * its native spin buttons, and WebKitGTK draws those *inside* the box, on top of
+ * a value that a 70px field has no room to move out of the way; and the value
+ * sat hard left inside a box sitting hard right, so a two-digit number read as
+ * floating in the middle of the row.
+ *
+ * Spinners are dropped rather than made room for: both fields carry `min`/`max`,
+ * arrow keys still step the value, and at this size the arrows were never a
+ * usable hit target. Numbers are right-aligned so the digits line up with the
+ * edge the eye is already following down the column.
+ *
+ * `[type=...]` rather than a class, because these are the only inputs in the
+ * panel and a class would have to be remembered on the next one added. */
+.settings-row input.form-input[type="number"] {
+  width: 84px;
+  text-align: right;
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
+.settings-row input.form-input[type="number"]::-webkit-outer-spin-button,
+.settings-row input.form-input[type="number"]::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  appearance: none;
+  margin: 0;
+}
+.settings-row input.form-input[type="text"],
+.settings-row input.form-input[type="password"] {
+  width: 200px;
+  max-width: 100%;
+}
+
 .settings-unit {
   font-size: 11px;
   color: var(--text3);

@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en" data-theme="dark">
+<html lang="en" data-theme="dark" class="booting">
 
 <head>
   <meta charset="UTF-8">
@@ -994,7 +994,7 @@
             <div class="settings-row">
               <div class="settings-label" id="s-autolock-label">Lock after inactivity</div>
               <div style="display:flex;align-items:center;gap:8px">
-                <input type="number" id="s-autolock" aria-labelledby="s-autolock-label" class="form-input" style="width:70px" min="0" max="480">
+                <input type="number" id="s-autolock" aria-labelledby="s-autolock-label" class="form-input" min="0" max="480">
                 <span class="settings-unit">min (0 = never)</span>
               </div>
             </div>
@@ -1042,7 +1042,7 @@
             </div>
             <div class="settings-row">
               <div class="settings-label" id="s-expiry-days-label">Warn days before expiry</div>
-              <input type="number" id="s-expiry-days" aria-labelledby="s-expiry-days-label" class="form-input" style="width:70px" min="1" max="365">
+              <input type="number" id="s-expiry-days" aria-labelledby="s-expiry-days-label" class="form-input" min="1" max="365">
             </div>
           </div>
         </div>
@@ -1053,7 +1053,7 @@
             <div class="settings-section-title">Defaults</div>
             <div class="settings-row">
               <div class="settings-label" id="s-default-account-label">Default account name</div>
-              <input type="text" id="s-default-account" aria-labelledby="s-default-account-label" class="form-input" style="width:160px" placeholder="e.g. username">
+              <input type="text" id="s-default-account" aria-labelledby="s-default-account-label" class="form-input" placeholder="e.g. username">
             </div>
             <div class="settings-row">
               <div class="settings-label" id="s-export-format-label">Default export format</div>
@@ -1091,7 +1091,7 @@
             <div class="settings-row">
               <div class="settings-label" id="settings-backup-pw-label">Encrypted backup (AES-256-GCM)</div>
               <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
-                <input id="settings-backup-pw" aria-labelledby="settings-backup-pw-label" type="password" class="form-input" placeholder="backup password" style="width:150px">
+                <input id="settings-backup-pw" aria-labelledby="settings-backup-pw-label" type="password" class="form-input" placeholder="backup password">
                 <button id="settings-export-encrypted" class="btn btn-ghost btn-sm">Export .vaultbak</button>
                 <button id="settings-import-encrypted" class="btn btn-ghost btn-sm">Restore .vaultbak</button>
               </div>

@@ -1623,15 +1623,13 @@ export function renderDockerServicesCard(project: Project): HTMLElement {
       <span class="chunk-card-title">Services</span>
       ${svcChunks.length ? `<span class="chunk-type-badge">${svcChunks.length} service${svcChunks.length !== 1 ? 's' : ''}</span>` : ''}
       <div style="display:flex;gap:4px;margin-left:auto;flex-shrink:0">
-        <button class="btn btn-ghost btn-sm" data-action="import-docker"          data-project-id="${pid}">Import</button>
         <button class="btn btn-ghost btn-sm" data-action="add-docker-service"     data-project-id="${pid}">+ Service</button>
-        <button class="btn btn-ghost btn-sm" data-action="export-docker"          data-project-id="${pid}">Export</button>
         <button class="btn btn-ghost btn-sm" data-action="export-docker-services" data-project-id="${pid}" title="Copy services: block">${copySVG} All</button>
       </div>
     </div>
     <div class="docker-services-body">
       ${svcChunks.map(renderSvcCard).join('')}
-      ${!svcChunks.length ? '<div class="chunk-no-fields">No services yet — click Import or + Service</div>' : ''}
+      ${!svcChunks.length ? '<div class="chunk-no-fields">No services yet — use “Import compose” above, or + Service</div>' : ''}
     </div>
   `;
   return card;
@@ -1665,8 +1663,14 @@ export function makeConfigViewHeaderBtns(project: Project): string {
               <button class="btn btn-ghost btn-sm" data-action="add-wg-peer" data-project-id="${pid}">+ Add Peer</button>
               <button class="btn btn-ghost btn-sm" data-action="export-wg" data-project-id="${pid}">Export wg0.conf</button>`;
     case 'docker':
-      return `<button class="btn btn-ghost btn-sm" data-action="add-docker-network" data-project-id="${pid}">+ Network</button>
-              <button class="btn btn-ghost btn-sm" data-action="add-docker-volume" data-project-id="${pid}">+ Volume</button>`;
+      // Import/Export sit here, as they do for every other project type. They
+      // used to exist only inside the Services card, which is the one header in
+      // the app that does not carry them — so the way into a docker project from
+      // a compose file was findable only by already knowing where it was.
+      return `<button class="btn btn-ghost btn-sm" data-action="import-docker" data-project-id="${pid}">Import compose</button>
+              <button class="btn btn-ghost btn-sm" data-action="add-docker-network" data-project-id="${pid}">+ Network</button>
+              <button class="btn btn-ghost btn-sm" data-action="add-docker-volume" data-project-id="${pid}">+ Volume</button>
+              <button class="btn btn-ghost btn-sm" data-action="export-docker" data-project-id="${pid}">Export compose</button>`;
     case 'nginx':
       return `<button class="btn btn-ghost btn-sm" data-action="import-nginx" data-project-id="${pid}">Import site config</button>
               <button class="btn btn-ghost btn-sm" data-action="add-nginx-server" data-project-id="${pid}">+ Server</button>

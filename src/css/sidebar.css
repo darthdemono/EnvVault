@@ -14,8 +14,15 @@
     padding 0.15s;
 }
 
+/* `!important` on the width, and only there.
+ *
+ * `applySidebarLayout()` writes a *persisted* width as an inline style, and an
+ * inline declaration outranks any class. So for every user who had ever dragged
+ * the sidebar, the collapse toggle removed the padding and left the panel at its
+ * full width — the hamburger visibly did almost nothing, and only for the people
+ * who had customised the thing it was meant to hide. */
 #sidebar.collapsed {
-  width: 0;
+  width: 0 !important;
   padding: 0;
   overflow: hidden;
 }

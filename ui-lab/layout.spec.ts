@@ -46,6 +46,21 @@ const SCREENS: { name: string; go: (p: Page) => Promise<void> }[] = [
       await p.waitForTimeout(150);
     },
   },
+  // Settings is five panes behind a tab strip, and the panes nobody sees in a
+  // screenshot are the ones that rot: every reported settings-layout defect so
+  // far has been a row whose control and label fight for the same width.
+  { name: 'settings-appearance', go: async (p) => void (await openSettings(p, 'appearance')) },
+  { name: 'settings-layout', go: async (p) => void (await openSettings(p, 'layout')) },
+  { name: 'settings-security', go: async (p) => void (await openSettings(p, 'security')) },
+  { name: 'settings-data', go: async (p) => void (await openSettings(p, 'data')) },
+  { name: 'settings-advanced', go: async (p) => void (await openSettings(p, 'advanced')) },
+  {
+    name: 'modal-project-create',
+    go: async (p) => {
+      await p.locator('#new-project-btn').click();
+      await p.waitForTimeout(150);
+    },
+  },
   {
     name: 'project-config-view',
     go: async (p) => {
@@ -57,6 +72,13 @@ const SCREENS: { name: string; go: (p: Page) => Promise<void> }[] = [
 
 async function openPanel(page: Page, panel: string) {
   await page.locator(`#activity-bar [data-panel="${panel}"]`).click();
+  await page.waitForTimeout(120);
+}
+
+async function openSettings(page: Page, tab: string) {
+  await page.locator('#settings-btn').click();
+  await page.waitForTimeout(120);
+  await page.locator(`.settings-tab[data-stab="${tab}"]`).click();
   await page.waitForTimeout(120);
 }
 
@@ -76,6 +98,10 @@ async function openTool(page: Page, tool: string) {
 async function boot(page: Page) {
   await page.addInitScript((vault) => {
     sessionStorage.setItem('envvault', JSON.stringify(vault));
+    // Phase 19 added a first-run wizard, which is modal and covers everything
+    // this file exists to measure. The lab was written before it and every
+    // screen timed out at 30s against an overlay the audit never mentions.
+    localStorage.setItem('envvault-settings', JSON.stringify({ onboardingCompleted: true }));
   }, SEED_VAULT);
   const errors: string[] = [];
   page.on('pageerror', (e) => errors.push(String(e)));
@@ -100,7 +126,11 @@ for (const vp of VIEWPORTS) {
         await screen.go(page);
         await page.waitForTimeout(150);
 
-        const findings = (await page.evaluate(AUDIT_FN)) as LayoutFinding[];
+        // `(fn)()`, not `fn`. A string handed to `page.evaluate` is evaluated as
+        // an *expression*, and the expression here is a function literal — so
+        // the page returned an unserialisable function and every screen died on
+        // "findings is not iterable", before the screenshot was ever taken.
+        const findings = (await page.evaluate(`(${AUDIT_FN})()`)) as LayoutFinding[];
         for (const f of findings) all.push({ ...f, viewport: vp.name, screen: screen.name });
 
         await page.screenshot({

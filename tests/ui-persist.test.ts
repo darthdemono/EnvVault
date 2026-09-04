@@ -30,6 +30,7 @@ import {
   wireRevealButtons,
   resetReveal,
   wireCapsLockHint,
+  resetCapsProbe,
 } from '../src/ts/ui-qol';
 import { updateActiveFilterBar, activeFilterLabels } from '../src/ts/render';
 import { loadRealIndexHtml, makeEntry, makeProject, makeVault } from './helpers';
@@ -463,6 +464,10 @@ describe('caps lock hint', () => {
   };
   const shown = () => $('unlock-capslock').style.display === 'flex';
 
+  // The calibration is a property of the platform and lives for the session, so
+  // one test's fake platform would otherwise be inherited by the next.
+  beforeEach(resetCapsProbe);
+
   it('reads caps lock off an unshifted letter', () => {
     const input = wire();
     input.dispatchEvent(key('A'));
@@ -518,6 +523,63 @@ describe('caps lock hint', () => {
     expect(shown()).toBe(false);
     input.dispatchEvent(key('1'));
     expect(shown()).toBe(false);
+  });
+
+  it('believes getModifierState only after a typed character agreed with it', () => {
+    // The trade the derived reading made was that nothing could be said before
+    // the first keystroke. A platform that has been *checked* against reality
+    // can be believed for the cheap paths — clicking into the field — which is
+    // where the warning is most useful.
+    const input = wire();
+    expect(shown()).toBe(false);
+    // Honest samples: caps is on, and the platform says so — twice, because one
+    // agreement cannot tell an honest mask from a stuck one.
+    input.dispatchEvent(key('A', { modifierSays: true }));
+    input.dispatchEvent(key('A', { modifierSays: true }));
+    expect(shown()).toBe(true);
+    input.dispatchEvent(new FocusEvent('blur'));
+    expect(shown()).toBe(false);
+
+    const down = new MouseEvent('mousedown');
+    Object.defineProperty(down, 'getModifierState', { value: () => true });
+    input.dispatchEvent(down);
+    expect(shown()).toBe(true);
+  });
+
+  it('never believes a platform that contradicted itself', () => {
+    // WebKitGTK's mask: always true. The first lowercase letter contradicts it,
+    // and after that the API is never read again however many times it happens
+    // to be right — so a click reveals nothing rather than lying.
+    const input = wire();
+    input.dispatchEvent(key('a', { modifierSays: true })); // caps off, says on
+    input.dispatchEvent(key('A', { modifierSays: true })); // caps on,  says on
+    input.dispatchEvent(key('A', { modifierSays: true }));
+    expect(shown()).toBe(true); // derived, not probed
+    input.dispatchEvent(new FocusEvent('blur'));
+
+    const down = new MouseEvent('mousedown');
+    Object.defineProperty(down, 'getModifierState', { value: () => true });
+    input.dispatchEvent(down);
+    expect(shown()).toBe(false);
+  });
+
+  it('flips on the Caps Lock key itself once the state is known', () => {
+    // The one press that changes the answer and produces no character. Without
+    // this the hint stayed up until the user typed another letter.
+    const input = wire();
+    // No modifier state at all, so the platform is never calibrated and the
+    // flip is the only thing that can move the reading.
+    const bare = (type: string, k: string) => {
+      const e = new KeyboardEvent(type, { key: k });
+      Object.defineProperty(e, 'getModifierState', { value: undefined });
+      return e;
+    };
+    input.dispatchEvent(bare('keydown', 'A'));
+    expect(shown()).toBe(true);
+    input.dispatchEvent(bare('keyup', 'CapsLock'));
+    expect(shown()).toBe(false);
+    input.dispatchEvent(bare('keyup', 'CapsLock'));
+    expect(shown()).toBe(true);
   });
 
   it('starts hidden and survives an event with no getModifierState at all', () => {
