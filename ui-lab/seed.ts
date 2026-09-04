@@ -5,6 +5,18 @@
  * widest badge row, the deepest project nesting and the character set nobody
  * tested — so the seed is built to be hostile on exactly those axes rather than
  * to be realistic. Anything that renders this at 860×600 renders a real vault.
+ *
+ * **The `api_key` values deliberately carry no real issuer prefix.** They have
+ * always been zero-filled placeholders, but `sk_live_` followed by 48 zeros is
+ * still a syntactic match for a Stripe live key, and GitHub push protection
+ * blocked a push over it — the fix was a history rewrite of two unpushed
+ * commits. Only the *length* of these strings matters to this file, because
+ * length is what decides whether a card wraps, so each prefix now names the
+ * provider it stands in for, at exactly the character count the real one has.
+ *
+ * Do not "correct" them back. A secrets manager whose own repository carries an
+ * allowlisted "Stripe API key" in its security tab is a poor advertisement, and
+ * the next person to hit the block would have no way to tell the value was fake.
  */
 export const SEED_VAULT = {
   api_keys: [
