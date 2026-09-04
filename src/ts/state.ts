@@ -116,6 +116,19 @@ export class TauriVaultStore implements VaultStore {
 export const inTauri = !!(window as any).__TAURI__;
 const _invoke = (window as any).__TAURI__?.core?.invoke?.bind((window as any).__TAURI__?.core);
 
+/**
+ * Thrown when a password was accepted but the account also has a second factor.
+ *
+ * A distinct type rather than a message match: the string is server-supplied and
+ * a caller branching on it would break the moment the wording changed.
+ */
+export class TotpRequiredError extends Error {
+  constructor() {
+    super('Second factor required');
+    this.name = 'TotpRequiredError';
+  }
+}
+
 export class RemoteVaultStore implements VaultStore {
   private token = '';
   /** ETag (vault content version) from the last successful load — sent as If-Match to detect drift. */
@@ -195,14 +208,24 @@ export class RemoteVaultStore implements VaultStore {
     return !!this.token;
   }
 
-  async authUser(username: string, password: string): Promise<boolean> {
+  /**
+   * Authenticate as a sub-user.
+   *
+   * `totp` is sent only when the caller has one. A server whose user has a
+   * confirmed second factor answers 401 with `totp_required: true` for a correct
+   * password and no code — that is a *prompt*, not a failure, and it is thrown
+   * as [`TotpRequiredError`] so the caller can ask for the code and retry rather
+   * than telling the user their password was wrong.
+   */
+  async authUser(username: string, password: string, totp?: string): Promise<boolean> {
     const r = await this._apiFetch('/api/auth', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username, password }),
+      body: JSON.stringify({ username, password, totp: totp ?? null }),
     });
     if (!r.ok) {
       const body = await r.json().catch(() => ({}));
+      if (r.status === 401 && body?.totp_required) throw new TotpRequiredError();
       throw new Error(body?.error ?? `Auth failed ${r.status}`);
     }
     const { token } = await r.json();
@@ -685,6 +708,7 @@ const DEFAULT_SETTINGS: AppSettings = {
   // Off by default: the safe behaviour is the default, and the convenience is
   // the thing you opt into.
   keepLocalUnlocked: false,
+  onboardingCompleted: false,
 };
 
 export const Settings = {
@@ -871,8 +895,17 @@ export function applySidebarLayout(): void {
   const sidebar = document.getElementById('sidebar');
   if (!sidebar) return;
   const w = Number(Settings.get('sidebarWidth')) || 0;
-  sidebar.style.width = w > 0 ? `${Math.max(SIDEBAR_MIN_W, Math.min(SIDEBAR_MAX_W, w))}px` : '';
-  sidebar.classList.toggle('collapsed', !!Settings.get('sidebarCollapsed'));
+  const clamped = w > 0 ? Math.max(SIDEBAR_MIN_W, Math.min(SIDEBAR_MAX_W, w)) : 0;
+  sidebar.style.width = clamped > 0 ? `${clamped}px` : '';
+  const collapsed = !!Settings.get('sidebarCollapsed');
+  sidebar.classList.toggle('collapsed', collapsed);
+  // The toggle button *controls* the sidebar, so it — not the sidebar — carries
+  // aria-expanded. Restored state has to reach it too, or the very first launch
+  // after a collapse announces the opposite of what is on screen.
+  document.getElementById('sidebar-toggle')?.setAttribute('aria-expanded', String(!collapsed));
+  document
+    .getElementById('sidebar-resizer')
+    ?.setAttribute('aria-valuenow', String(clamped || SIDEBAR_MIN_W));
 }
 
 // ── Recent searches ────────────────────────────────────────────────────────
@@ -1033,9 +1066,15 @@ export function switchPanel(panel: string) {
     if (el) el.style.display = '';
   });
 
-  document
-    .querySelectorAll<HTMLButtonElement>('.activity-btn')
-    .forEach((btn) => btn.classList.toggle('active', btn.dataset.panel === panel));
+  // `active` is paint; `aria-selected` is the same fact told to a screen reader,
+  // and the roving `tabindex` is what stops a four-button tablist costing four
+  // Tab presses to get past. All three must move together or the tablist lies.
+  document.querySelectorAll<HTMLButtonElement>('.activity-btn').forEach((btn) => {
+    const on = btn.dataset.panel === panel;
+    btn.classList.toggle('active', on);
+    btn.setAttribute('aria-selected', on ? 'true' : 'false');
+    btn.tabIndex = on ? 0 : -1;
+  });
   Settings.set('activePanel', panel as any);
 
   if (panel === 'users') import('./users').then((m) => m.renderUsersPanel()).catch(() => {});
@@ -1047,9 +1086,15 @@ export function switchTool(toolId: string) {
   document
     .querySelectorAll<HTMLElement>('.tool-pane')
     .forEach((p) => (p.style.display = p.id === `tool-${toolId}` ? '' : 'none'));
-  document
-    .querySelectorAll<HTMLButtonElement>('.tool-nav-btn')
-    .forEach((btn) => btn.classList.toggle('active', btn.dataset.tool === toolId));
+  document.querySelectorAll<HTMLButtonElement>('.tool-nav-btn').forEach((btn) => {
+    const on = btn.dataset.tool === toolId;
+    btn.classList.toggle('active', on);
+    // aria-current rather than aria-selected: these are navigation links into a
+    // list of tools, not tabs — there is no tablist wrapping them and claiming
+    // otherwise would promise arrow-key semantics that do not exist here.
+    if (on) btn.setAttribute('aria-current', 'true');
+    else btn.removeAttribute('aria-current');
+  });
   Settings.set('activeTool', toolId);
 }
 

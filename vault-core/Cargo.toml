@@ -1,6 +1,6 @@
 [package]
 name    = "vault-core"
-version = "0.8.1"
+version = "0.20.0"
 edition = "2021"
 license = "MIT"
 
@@ -41,6 +41,10 @@ sha2       = "0.10"
 # expand steps are ten lines, and `entropy.rs` needs them to be readable — the
 # mixing rule is the security property of that module.
 hmac       = "0.12"
+# RFC 6238 pins HMAC-SHA1 for TOTP interoperability. Every authenticator app
+# assumes it; the newer variants exist in the spec and are read by almost
+# nothing, so using one would produce codes that are correct and rejected.
+sha1       = "0.10"
 serde      = { version = "1", features = ["derive"] }
 serde_json = "1"
 # Locating the per-user state directory for pools.json ($XDG_STATE_HOME on Unix,

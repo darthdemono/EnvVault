@@ -61,6 +61,16 @@ async function invoke(cmd: string, args: Record<string, any> = {}): Promise<any>
       return api(`/api/users/${uid}/tokens`, 'POST', { description: args.description ?? '' });
     case 'revoke_user_token':
       return api(`/api/users/${args.userId}/tokens/${args.tokenId}`, 'DELETE');
+    case 'totp_status':
+      return api(`/api/users/${uid}/totp`);
+    case 'totp_enroll':
+      return api(`/api/users/${uid}/totp/enroll`, 'POST');
+    case 'totp_confirm':
+      return api(`/api/users/${uid}/totp/confirm`, 'POST', { code: args.code }).then(
+        (r: any) => !!r?.enabled,
+      );
+    case 'totp_disable':
+      return api(`/api/users/${uid}/totp`, 'DELETE');
     case 'get_user_permissions':
       return api(`/api/users/${uid}/permissions`);
     case 'set_user_permissions':
@@ -107,6 +117,7 @@ export async function renderUsersPanel() {
       <span class="user-info">
         <span class="user-name">${esc(u.username)}
           ${u.is_owner ? '<span class="user-badge owner-badge">Owner</span>' : ''}
+          ${u.totp_enabled ? '<span class="user-badge totp-badge-on">2FA</span>' : ''}
         </span>
         <span class="user-meta">
           ${u.has_password ? '⬤ password' : '⬤ token-only'}
@@ -131,6 +142,7 @@ export async function renderUserDetail(userId: string) {
   let tokens: TokenInfo[] = [];
   let perms: PermExprs = { read: '', write: '' };
   let classes: UserClass[] = [];
+  let totp: TotpState = { enrolled: false, enabled: false };
 
   try {
     // NOTE: Tauri 2 expects camelCase arg names for command parameters
@@ -160,6 +172,18 @@ export async function renderUserDetail(userId: string) {
     return;
   }
 
+  // Separate from the Promise.all above because it is only asked for non-owners,
+  // and because a server that predates the TOTP routes answers 404 — which must
+  // degrade to "no second factor" rather than blanking the whole detail view.
+  if (!user.is_owner) {
+    try {
+      const st = await invoke?.('totp_status', { userId });
+      if (st) totp = { enrolled: !!st.enrolled, enabled: !!st.enabled };
+    } catch {
+      totp = { enrolled: false, enabled: false };
+    }
+  }
+
   ws.innerHTML = `
     <div class="users-detail">
 
@@ -171,6 +195,7 @@ export async function renderUserDetail(userId: string) {
             <span id="detail-username-label">${esc(user.username)}</span>
             ${user.is_owner ? '<span class="user-badge owner-badge">Owner</span>' : ''}
             ${user.has_password ? '' : '<span class="user-badge token-badge">token-only</span>'}
+            ${user.totp_enabled ? '<span class="user-badge totp-badge-on">2FA</span>' : ''}
             <button class="icon-action-btn" id="rename-user-btn" title="Rename user">
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
                 <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
@@ -247,6 +272,9 @@ export async function renderUserDetail(userId: string) {
         </div>
       </section>
 
+      <!-- Two-factor (sub-users only) -->
+      ${user.is_owner ? '' : totpSectionHtml(totp)}
+
       <!-- Permissions -->
       <section class="users-section">
         <div class="users-section-head"><span>Permissions</span></div>
@@ -292,6 +320,181 @@ export async function renderUserDetail(userId: string) {
   document.querySelectorAll<HTMLButtonElement>('.revoke-token-btn').forEach((btn) => {
     btn.addEventListener('click', () => revokeToken(btn.dataset.tokenId!, userId));
   });
+
+  wireTotpSection(userId);
+}
+
+// ── Two-factor authentication (sub-users only) ────────────────────────────────
+//
+// The owner authenticates by deriving the SQLCipher key from the master
+// password, so there is no login for a second factor to gate — `vault-core`
+// refuses an owner outright and this panel never offers it.
+
+interface TotpState {
+  enrolled: boolean;
+  enabled: boolean;
+}
+
+/**
+ * The section body for a user's second factor.
+ *
+ * Three states, and the middle one is the reason enrollment is two-phase: a
+ * secret exists but was never confirmed, so the account is **not** protected and
+ * must not look as though it is.
+ */
+function totpSectionHtml(totp: TotpState): string {
+  const body = totp.enabled
+    ? `<div class="totp-state">
+         <span class="user-badge totp-badge-on">Enabled</span>
+         <span class="users-detail-sub">This user must enter a code from their authenticator to sign in.</span>
+       </div>
+       <button class="btn btn-xs danger" id="totp-disable-btn">Remove</button>`
+    : totp.enrolled
+      ? `<div class="totp-state">
+           <span class="user-badge totp-badge-pending">Not confirmed</span>
+           <span class="users-detail-sub">A secret was generated but never confirmed, so sign-in is <strong>not</strong> protected. The secret is only ever shown once — start again to get a new one.</span>
+         </div>
+         <button class="btn btn-xs accent" id="totp-enroll-btn">Start Again</button>`
+      : `<div class="totp-state">
+           <span class="users-detail-sub">Not enabled. Sign-in needs only this user&rsquo;s password.</span>
+         </div>
+         <button class="btn btn-xs accent" id="totp-enroll-btn">Enable Two-Factor</button>`;
+
+  return `
+      <section class="users-section">
+        <div class="users-section-head"><span>Two-Factor Authentication</span></div>
+        <div class="totp-row">${body}</div>
+        <div id="totp-enroll-panel" class="totp-enroll" style="display:none"></div>
+      </section>`;
+}
+
+/**
+ * Binds the section's buttons.
+ *
+ * Assignment, not `addEventListener`: `renderUserDetail` rewrites this markup on
+ * every visit and after every action, and the enrollment panel is shown, hidden
+ * and shown again within one render — invariant 9.
+ */
+function wireTotpSection(userId: string): void {
+  const enrollBtn = document.getElementById('totp-enroll-btn') as HTMLButtonElement | null;
+  if (enrollBtn) enrollBtn.onclick = () => startTotpEnrollment(userId, enrollBtn);
+
+  const disableBtn = document.getElementById('totp-disable-btn') as HTMLButtonElement | null;
+  if (disableBtn)
+    disableBtn.onclick = async () => {
+      if (
+        !(await showConfirm(
+          'Remove this user&rsquo;s second factor? They will sign in with a password alone, and the secret is destroyed — their authenticator entry becomes useless.',
+        ))
+      )
+        return;
+      try {
+        await invoke?.('totp_disable', { userId });
+        showToast('Second factor removed', 'ok');
+        await renderUserDetail(userId);
+      } catch (e: any) {
+        showToast('Failed: ' + (e?.message ?? e), 'err');
+      }
+    };
+}
+
+/**
+ * Phase one: mint a secret and show it for manual entry.
+ *
+ * There is no QR code. Drawing one needs a library, and the CSP allows no
+ * external script — relaxing it so that a *secret* can be rendered would be an
+ * odd trade. Every authenticator accepts manual entry, so the secret is shown in
+ * groups of four, which is the difference between typing 32 characters right and
+ * typing them wrong.
+ */
+async function startTotpEnrollment(userId: string, btn: HTMLButtonElement): Promise<void> {
+  const panel = document.getElementById('totp-enroll-panel');
+  if (!panel) return;
+  btn.disabled = true;
+  let res: any;
+  try {
+    res = await invoke?.('totp_enroll', { userId });
+  } catch (e: any) {
+    btn.disabled = false;
+    showToast('Could not start enrollment: ' + (e?.message ?? e), 'err');
+    return;
+  }
+  const secret: string = res?.secret ?? '';
+  const uri: string = res?.uri ?? '';
+  if (!secret) {
+    btn.disabled = false;
+    showToast('Server returned no secret', 'err');
+    return;
+  }
+
+  // Everything interpolated below is escaped even though it originates in Rust:
+  // the remote branch of `invoke` reads it off the network, and invariant 4 does
+  // not make an exception for a server we happen to trust.
+  panel.innerHTML = `
+    <div class="totp-enroll-step">
+      <div class="totp-enroll-label">1 &middot; Add this secret to your authenticator</div>
+      <div class="totp-secret" id="totp-secret-display">${esc(groupSecret(secret))}</div>
+      <div class="totp-enroll-actions">
+        <button class="btn btn-xs" id="totp-copy-secret">Copy Secret</button>
+        <button class="btn btn-xs" id="totp-copy-uri">Copy otpauth:// URI</button>
+      </div>
+    </div>
+    <div class="totp-enroll-step">
+      <div class="totp-enroll-label">2 &middot; Enter the six-digit code it shows</div>
+      <div class="totp-confirm-row">
+        <input id="totp-code-input" class="tool-input mono" inputmode="numeric" autocomplete="one-time-code"
+               maxlength="7" placeholder="000000" aria-label="Six-digit code from your authenticator">
+        <button class="btn btn-xs accent" id="totp-confirm-btn">Confirm &amp; Enable</button>
+        <button class="btn btn-xs btn-ghost" id="totp-cancel-btn">Cancel</button>
+      </div>
+      <div class="users-detail-sub">Two-factor is not on until a code is accepted, so a mistyped secret costs a retry rather than the account.</div>
+    </div>`;
+  panel.style.display = 'block';
+
+  const copySecret = document.getElementById('totp-copy-secret') as HTMLButtonElement;
+  copySecret.onclick = () => clipboardWrite(secret).then(() => showToast('Copied ✓', 'ok', 1500));
+  const copyUri = document.getElementById('totp-copy-uri') as HTMLButtonElement;
+  copyUri.onclick = () => clipboardWrite(uri).then(() => showToast('Copied ✓', 'ok', 1500));
+
+  const input = document.getElementById('totp-code-input') as HTMLInputElement;
+  const confirmBtn = document.getElementById('totp-confirm-btn') as HTMLButtonElement;
+  const submit = async () => {
+    const code = input.value.replace(/\D/g, '');
+    if (code.length !== 6) {
+      showToast('Enter the six-digit code', 'err');
+      return;
+    }
+    confirmBtn.disabled = true;
+    try {
+      const ok = await invoke?.('totp_confirm', { userId, code });
+      if (!ok) {
+        confirmBtn.disabled = false;
+        showToast('Incorrect code — check the clock on the device generating it', 'err');
+        input.select();
+        return;
+      }
+      showToast('Two-factor enabled', 'ok');
+      await renderUserDetail(userId);
+    } catch (e: any) {
+      confirmBtn.disabled = false;
+      showToast('Failed: ' + (e?.message ?? e), 'err');
+    }
+  };
+  confirmBtn.onclick = submit;
+  input.onkeydown = (e) => {
+    if (e.key === 'Enter') void submit();
+  };
+  (document.getElementById('totp-cancel-btn') as HTMLButtonElement).onclick = () => {
+    // The enrollment stands on the server; only this panel closes. The section
+    // repaints as "Not confirmed", which is the truth.
+    void renderUserDetail(userId);
+  };
+  input.focus();
+}
+
+/** Base32 in groups of four, matching `vault_core::totp::grouped`. */
+function groupSecret(secret: string): string {
+  return (secret.match(/.{1,4}/g) ?? []).join(' ');
 }
 
 // ── Actions ───────────────────────────────────────────────────────────────────

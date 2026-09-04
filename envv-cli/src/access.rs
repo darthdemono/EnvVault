@@ -161,8 +161,17 @@ impl RemoteClient {
     /// The desktop app's "Open to LAN" host refuses `/api/unlock` outright, and a
     /// scoped user has no business sending the master password anywhere — so this
     /// is the only way the CLI reaches either.
-    pub fn connect_as_user(base: &str, username: &str, password: &str) -> CliResult<Self> {
-        let body = serde_json::json!({ "username": username, "password": password });
+    pub fn connect_as_user(
+        base: &str,
+        username: &str,
+        password: &str,
+        totp: Option<&str>,
+    ) -> CliResult<Self> {
+        let body = serde_json::json!({
+            "username": username,
+            "password": password,
+            "totp": totp,
+        });
         Self::auth(base, &body)
     }
 
@@ -466,6 +475,10 @@ pub struct AuthOpts<'a> {
     /// A session token cached by `envv login`. Used only when no other
     /// credential was supplied, so an explicit flag always wins.
     pub session_token: Option<&'a str>,
+    /// Second-factor code, for a `--user` login whose account has one enabled.
+    /// Ignored on every other path: token auth deliberately skips TOTP, and the
+    /// owner has no factor to present.
+    pub totp: Option<&'a str>,
     /// Create the local vault if it does not exist yet (`--init`).
     pub init: bool,
 }
@@ -485,7 +498,7 @@ pub fn open_access(opts: &AuthOpts<'_>) -> CliResult<Access> {
         if let Some(username) = opts.user {
             let pw = get_password_for(opts.password, Some(username));
             return Ok(Access::Remote(RemoteClient::connect_as_user(
-                base, username, &pw,
+                base, username, &pw, opts.totp,
             )?));
         }
         let pw = get_password(opts.password);

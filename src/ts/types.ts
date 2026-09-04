@@ -425,6 +425,12 @@ export interface UserInfo {
   created_at: string;
   last_seen_at: string | null;
   class_id: string | null;
+  /**
+   * True when this user has a *confirmed* second factor. Enrollment alone does
+   * not set it — a secret that was never confirmed must not make the account
+   * look protected.
+   */
+  totp_enabled?: boolean;
 }
 
 /** A stored API token descriptor (actual token shown only on creation). */
@@ -636,4 +642,12 @@ export interface AppSettings {
    * not being resident, unseen, for the rest of the session.
    */
   keepLocalUnlocked: boolean;
+  /**
+   * Whether the first-run wizard has been shown.
+   *
+   * Set when the wizard is finished *or* skipped: re-showing something the user
+   * dismissed on purpose is how a welcome screen becomes an obstacle. Settings
+   * has a button to run it again deliberately.
+   */
+  onboardingCompleted: boolean;
 }

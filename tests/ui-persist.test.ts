@@ -446,35 +446,98 @@ describe('password reveal', () => {
 });
 
 describe('caps lock hint', () => {
-  const keyEvent = (capsOn: boolean) => {
-    const e = new KeyboardEvent('keyup', { key: 'a' });
-    Object.defineProperty(e, 'getModifierState', { value: () => capsOn });
+  /**
+   * A key event as the browser would deliver it, plus a deliberately *lying*
+   * `getModifierState`. Both bugs this block covers came from trusting that
+   * method under WebKitGTK, so every fixture here disagrees with it.
+   */
+  const key = (k: string, opts: { shift?: boolean; modifierSays?: boolean } = {}) => {
+    const e = new KeyboardEvent('keydown', { key: k, shiftKey: !!opts.shift });
+    Object.defineProperty(e, 'getModifierState', { value: () => !!opts.modifierSays });
     return e;
   };
 
-  it('shows while caps lock is on and hides when it is off', () => {
+  const wire = () => {
     wireCapsLockHint('unlock-password', 'unlock-capslock');
-    const input = $('unlock-password');
-    input.dispatchEvent(keyEvent(true));
-    expect($('unlock-capslock').style.display).toBe('flex');
-    input.dispatchEvent(keyEvent(false));
-    expect($('unlock-capslock').style.display).toBe('none');
+    return $('unlock-password');
+  };
+  const shown = () => $('unlock-capslock').style.display === 'flex';
+
+  it('reads caps lock off an unshifted letter', () => {
+    const input = wire();
+    input.dispatchEvent(key('A'));
+    expect(shown()).toBe(true);
+    input.dispatchEvent(key('a'));
+    expect(shown()).toBe(false);
   });
 
-  it('hides on blur', () => {
-    wireCapsLockHint('unlock-password', 'unlock-capslock');
-    const input = $('unlock-password');
-    input.dispatchEvent(keyEvent(true));
+  it('inverts the reading while shift is held', () => {
+    const input = wire();
+    // Caps on + Shift produces the *lower* case letter.
+    input.dispatchEvent(key('a', { shift: true }));
+    expect(shown()).toBe(true);
+    input.dispatchEvent(key('A', { shift: true }));
+    expect(shown()).toBe(false);
+  });
+
+  it('ignores getModifierState, which WebKitGTK reported as on with caps off', () => {
+    // The bug: the hint was shown to every user on every unlock screen because
+    // GDK's modifier mask said CapsLock regardless of the actual lock state.
+    const input = wire();
+    input.dispatchEvent(key('a', { modifierSays: true }));
+    expect(shown()).toBe(false);
+  });
+
+  it('keeps the warning up across keys that carry no case evidence', () => {
+    // The other half of the bug: the hint vanished as soon as the user typed on,
+    // because a second (disagreeing) event blanked it. Digits, punctuation and
+    // editing keys say nothing about caps lock and must not clear it.
+    const input = wire();
+    input.dispatchEvent(key('A'));
+    expect(shown()).toBe(true);
+    ['1', '-', 'Backspace', 'Shift', 'Enter'].forEach((k) =>
+      input.dispatchEvent(key(k, { modifierSays: false })),
+    );
+    expect(shown()).toBe(true);
+  });
+
+  it('ignores a ctrl/alt chord, which does not produce the letter it names', () => {
+    const input = wire();
+    const e = new KeyboardEvent('keydown', { key: 'A', ctrlKey: true });
+    input.dispatchEvent(e);
+    expect(shown()).toBe(false);
+  });
+
+  it('hides on blur and forgets the reading', () => {
+    // Caps lock can be toggled while the field is unfocused, so the old reading
+    // is void rather than merely hidden — a later no-evidence key must not
+    // resurrect it.
+    const input = wire();
+    input.dispatchEvent(key('A'));
     input.dispatchEvent(new FocusEvent('blur'));
-    expect($('unlock-capslock').style.display).toBe('none');
+    expect(shown()).toBe(false);
+    input.dispatchEvent(key('1'));
+    expect(shown()).toBe(false);
   });
 
-  it('treats an event without getModifierState as caps-off rather than throwing', () => {
-    wireCapsLockHint('unlock-password', 'unlock-capslock');
-    const e = new KeyboardEvent('keyup', { key: 'a' });
+  it('starts hidden and survives an event with no getModifierState at all', () => {
+    const input = wire();
+    expect(shown()).toBe(false);
+    const e = new KeyboardEvent('keydown', { key: 'a' });
     Object.defineProperty(e, 'getModifierState', { value: undefined });
-    expect(() => $('unlock-password').dispatchEvent(e)).not.toThrow();
-    expect($('unlock-capslock').style.display).toBe('none');
+    expect(() => input.dispatchEvent(e)).not.toThrow();
+    expect(shown()).toBe(false);
+  });
+
+  it('rebinds rather than stacks when the screen is shown again', () => {
+    // invariant 9: the unlock screen is shown, hidden and shown again across a
+    // lock cycle; a second wiring must replace the first, not add to it.
+    const input = wire();
+    wireCapsLockHint('unlock-password', 'unlock-capslock');
+    input.dispatchEvent(key('A'));
+    expect(shown()).toBe(true);
+    input.dispatchEvent(key('a'));
+    expect(shown()).toBe(false);
   });
 });
 

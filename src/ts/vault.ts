@@ -95,6 +95,7 @@ import {
   switchToLocalVault,
 } from './remote-panel';
 import { initLanPanel } from './lan';
+import { showOnboarding, shouldShowOnboarding } from './onboarding';
 import {
   render,
   renderGrid,
@@ -111,7 +112,7 @@ import {
   renderChunkEditFields,
   readChunkEditFields,
 } from './chunk-ops';
-import { wireSearchHistory, closeSearchHistory, wireCloseGuard } from './ui-qol';
+import { wireSearchHistory, closeSearchHistory, wireCloseGuard, wireModalFocus } from './ui-qol';
 import type { ProjectType } from './types';
 
 // Wire the global render callback so all modules can call triggerRender()
@@ -153,6 +154,13 @@ function debouncedSearch() {
     updateCopyAllBtn();
   }, 150);
 }
+
+/**
+ * The dynamic file picker, hoisted so `finishInit` can hand it to the onboarding
+ * wizard. It is created inside `init()` because it closes over nothing else —
+ * see the WebKitGTK ghost-widget note there.
+ */
+let _openFilePicker: ((accept: string) => void) | null = null;
 
 async function finishInit() {
   try {
@@ -259,6 +267,17 @@ async function finishInit() {
   initRemotePanel();
   initLanPanel();
   setRemoteFinishInitFn(finishInit);
+
+  // First-run wizard, last so it opens over a fully painted app rather than a
+  // half-built one. Local vaults only: connecting to a remote is not a first
+  // run, and the wizard writes local display settings that have nothing to do
+  // with the server you just reached.
+  if (!st.store.isRemote && st.vaultOpen && shouldShowOnboarding()) {
+    showOnboarding({
+      onAdd: () => openAdd(),
+      onImport: () => _openFilePicker?.('.json,.env,text/plain'),
+    });
+  }
 }
 
 async function init() {
@@ -282,6 +301,9 @@ async function init() {
     updateCopyAllBtn();
   });
   wireCloseGuard();
+  // Focus trapping and restoration for every overlay. See its doc comment for
+  // why it observes classes instead of hooking each open/close site.
+  wireModalFocus();
 
   // Wrap form selects as custom dropdowns (WebKitGTK compositing workaround)
   ['f-secret-type', 'f-price', 'f-env'].forEach((id) => {
@@ -316,6 +338,7 @@ async function init() {
     inp.click();
     setTimeout(() => window.addEventListener('focus', cleanup, { once: true }), 300);
   };
+  _openFilePicker = openFilePicker;
 
   document
     .getElementById('load-banner-browse-btn')
@@ -457,7 +480,9 @@ async function init() {
     const sb = document.getElementById('sidebar');
     if (!sb) return;
     sb.classList.toggle('collapsed');
-    Settings.set('sidebarCollapsed', sb.classList.contains('collapsed'));
+    const collapsed = sb.classList.contains('collapsed');
+    Settings.set('sidebarCollapsed', collapsed);
+    document.getElementById('sidebar-toggle')!.setAttribute('aria-expanded', String(!collapsed));
   });
   document.getElementById('add-btn')!.addEventListener('click', openAdd);
 
@@ -476,6 +501,7 @@ async function init() {
         const onMove = (ev: MouseEvent) => {
           _w = Math.max(SIDEBAR_MIN_W, Math.min(SIDEBAR_MAX_W, _startW + ev.clientX - _startX));
           sidebar.style.width = _w + 'px';
+          resizer.setAttribute('aria-valuenow', String(Math.round(_w)));
         };
         const onUp = () => {
           resizer.classList.remove('dragging');
@@ -495,7 +521,36 @@ async function init() {
       resizer.addEventListener('dblclick', () => {
         Settings.set('sidebarWidth', 0);
         sidebar.style.width = '';
+        resizer.setAttribute('aria-valuenow', String(SIDEBAR_MIN_W));
         showToast('Sidebar width reset', 'ok', 1500);
+      });
+
+      // Keyboard resizing. Without it the sidebar width is a mouse-only setting
+      // that persists across restarts — so a keyboard user who inherits a
+      // 150px sidebar has no way to widen it. Home/End jump to the bounds and
+      // Enter restores the default, matching the double-click.
+      resizer.addEventListener('keydown', (e) => {
+        const cur = Math.round(sidebar.getBoundingClientRect().width);
+        const step = e.shiftKey ? 40 : 10;
+        let next: number | null = null;
+        if (e.key === 'ArrowLeft') next = cur - step;
+        else if (e.key === 'ArrowRight') next = cur + step;
+        else if (e.key === 'Home') next = SIDEBAR_MIN_W;
+        else if (e.key === 'End') next = SIDEBAR_MAX_W;
+        else if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          Settings.set('sidebarWidth', 0);
+          sidebar.style.width = '';
+          resizer.setAttribute('aria-valuenow', String(SIDEBAR_MIN_W));
+          showToast('Sidebar width reset', 'ok', 1500);
+          return;
+        }
+        if (next === null) return;
+        e.preventDefault();
+        const w = Math.max(SIDEBAR_MIN_W, Math.min(SIDEBAR_MAX_W, next));
+        sidebar.style.width = w + 'px';
+        resizer.setAttribute('aria-valuenow', String(w));
+        Settings.set('sidebarWidth', w);
       });
     }
   }
@@ -713,10 +768,12 @@ async function init() {
   });
   document.querySelectorAll<HTMLButtonElement>('.project-type-btn').forEach((btn) => {
     btn.addEventListener('click', () => {
-      document
-        .querySelectorAll<HTMLButtonElement>('.project-type-btn')
-        .forEach((b) => b.classList.remove('active'));
+      document.querySelectorAll<HTMLButtonElement>('.project-type-btn').forEach((b) => {
+        b.classList.remove('active');
+        b.setAttribute('aria-checked', 'false');
+      });
       btn.classList.add('active');
+      btn.setAttribute('aria-checked', 'true');
       setProjectCreateType((btn.dataset.ptype || 'generic') as ProjectType);
     });
   });
@@ -881,6 +938,9 @@ async function init() {
       case 'toggle-desc':
         el.classList.toggle('open');
         (el.nextElementSibling as HTMLElement)?.classList.toggle('open');
+        // A disclosure button that never updates aria-expanded reads as
+        // permanently collapsed, whatever is on screen.
+        el.setAttribute('aria-expanded', String(el.classList.contains('open')));
         break;
     }
   });

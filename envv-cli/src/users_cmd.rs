@@ -859,3 +859,164 @@ pub fn perm_check(expr: &str) -> CliResult {
     );
     Ok(())
 }
+
+// ── TOTP (sub-user second factor) ─────────────────────────────────────────────
+//
+// Invariant 10: the Users panel grows an enrollment flow, so the CLI grows the
+// same four verbs. Both halves talk to the same `vault_core::users` functions —
+// locally by calling them, remotely through `/api/users/{id}/totp` — so the
+// two-phase rule and the anti-replay rule cannot drift between them.
+
+/// Phase one. Prints the secret and the `otpauth://` URI, once.
+///
+/// The secret is a credential and this is therefore a **materialising** path in
+/// the Phase 14 sense: there is no redacted form of it that is any use, because
+/// its entire purpose is to be copied into an authenticator. `--out` writes it
+/// to a file (0600) so it need not pass through a transcript; without `--out` it
+/// is printed, exactly as `entry ... --reveal` is.
+pub fn totp_enroll(access: &Access, query: &str, out_path: Option<&std::path::Path>) -> CliResult {
+    // Refuse *before* minting, the same way `user token new` does. Enrolling and
+    // then declining to print leaves a secret in the database that nobody can
+    // reach and that a later `confirm` cannot be run against — a half-armed
+    // factor is worse than no factor.
+    if out_path.is_none() && !crate::out::revealing() {
+        return Err(CliError::redacted(
+            "A TOTP secret is a live credential, so it is not printed by default.\n\
+             Pass --out <file> to write it to a 0600 file, or --reveal to print it.\n\
+             Nothing was enrolled.",
+        ));
+    }
+    let id = resolve_user(access, query)?;
+    let st: Value = match access {
+        Access::Remote(c) => c.send_json(
+            Method::POST,
+            &format!("/api/users/{id}/totp/enroll"),
+            None::<&Value>,
+        )?,
+        Access::Local(_) => {
+            let conn = access.conn()?;
+            serde_json::to_value(vault_core::users::totp_enroll(&conn, &id, "EnvVault")?)
+                .unwrap_or(Value::Null)
+        }
+    };
+    let secret = st.get("secret").and_then(|v| v.as_str()).unwrap_or("");
+    let uri = st.get("uri").and_then(|v| v.as_str()).unwrap_or("");
+
+    if let Some(p) = out_path {
+        crate::fmt::write_secret_file(p, &format!("{}\n{}\n", secret, uri))?;
+        out::ok(
+            "user.totp.enroll",
+            json!({ "user": query, "enabled": false, "written": p.display().to_string() }),
+            || {
+                println!("Secret written to {}", p.display());
+                println!("Confirm with: envv user totp confirm {query} <code>");
+            },
+        );
+        return Ok(());
+    }
+
+    out::ok(
+        "user.totp.enroll",
+        json!({ "user": query, "enabled": false, "secret": secret, "uri": uri }),
+        || {
+            println!("Secret:  {}", vault_core::totp::grouped(secret));
+            println!("URI:     {uri}");
+            println!();
+            // Saying this out loud is the point of two-phase enrollment: the
+            // factor is not on yet, so a mistyped secret costs a retype rather
+            // than an account.
+            println!("Not enabled yet. Add it to your authenticator, then run:");
+            println!("  envv user totp confirm {query} <code>");
+        },
+    );
+    Ok(())
+}
+
+/// Phase two. A working code is what turns the factor on.
+pub fn totp_confirm(access: &Access, query: &str, code: &str) -> CliResult {
+    let id = resolve_user(access, query)?;
+    let ok = match access {
+        Access::Remote(c) => {
+            let r: Value = c.send_json(
+                Method::POST,
+                &format!("/api/users/{id}/totp/confirm"),
+                Some(&json!({ "code": code })),
+            )?;
+            r.get("enabled").and_then(|v| v.as_bool()).unwrap_or(false)
+        }
+        Access::Local(_) => {
+            let conn = access.conn()?;
+            vault_core::users::totp_confirm(&conn, &id, code)?
+        }
+    };
+    if !ok {
+        // `denied` (exit 5), not `invalid` (10): the input was well-formed and
+        // the credential was wrong, which is the distinction an agent branches on.
+        return Err(CliError::denied(
+            "Incorrect code — check the clock on the device generating it",
+        ));
+    }
+    out::ok(
+        "user.totp.confirm",
+        json!({ "user": query, "enabled": true }),
+        || println!("Second factor enabled for {query}"),
+    );
+    Ok(())
+}
+
+pub fn totp_disable(access: &Access, query: &str, yes: bool) -> CliResult {
+    let id = resolve_user(access, query)?;
+    if !confirm(&format!("Remove the second factor for {query}?"), yes)? {
+        return Err(CliError::invalid("Cancelled"));
+    }
+    match access {
+        Access::Remote(c) => {
+            c.send_json(
+                Method::DELETE,
+                &format!("/api/users/{id}/totp"),
+                None::<&Value>,
+            )?;
+        }
+        Access::Local(_) => {
+            let conn = access.conn()?;
+            vault_core::users::totp_disable(&conn, &id)?;
+        }
+    }
+    out::ok(
+        "user.totp.disable",
+        json!({ "user": query, "enabled": false }),
+        || println!("Second factor removed for {query}"),
+    );
+    Ok(())
+}
+
+pub fn totp_status(access: &Access, query: &str) -> CliResult {
+    let id = resolve_user(access, query)?;
+    let st: Value = match access {
+        Access::Remote(c) => c.get_json(&format!("/api/users/{id}/totp"))?,
+        Access::Local(_) => {
+            let conn = access.conn()?;
+            serde_json::to_value(vault_core::users::totp_status(&conn, &id)?).unwrap_or(Value::Null)
+        }
+    };
+    let enrolled = st
+        .get("enrolled")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let enabled = st.get("enabled").and_then(|v| v.as_bool()).unwrap_or(false);
+    out::ok(
+        "user.totp.status",
+        json!({ "user": query, "enrolled": enrolled, "enabled": enabled }),
+        || {
+            println!(
+                "{query}: {}",
+                match (enrolled, enabled) {
+                    (_, true) => "enabled",
+                    (true, false) => "enrolled, not confirmed",
+                    (false, false) => "not enrolled",
+                }
+            );
+        },
+    );
+    Ok(())
+}

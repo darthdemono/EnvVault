@@ -698,6 +698,88 @@
   border-bottom: 1px solid var(--border);
 }
 
+/* ── Two-factor (sub-user TOTP) ──────────────────────────────────────────── */
+
+.totp-badge-on {
+  background: rgba(62, 201, 138, 0.12);
+  color: var(--ok, #3ec98a);
+  border: 1px solid rgba(62, 201, 138, 0.35);
+}
+/* Amber, not green: an unconfirmed enrollment protects nothing, and a badge that
+   reads as "on" is worse than no badge at all. */
+.totp-badge-pending {
+  background: rgba(232, 163, 61, 0.12);
+  color: var(--warn, #e8a33d);
+  border: 1px solid rgba(232, 163, 61, 0.35);
+}
+
+.totp-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  background: var(--surface2);
+  border-radius: 7px;
+  border: 1px solid var(--border);
+}
+.totp-state {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+
+.totp-enroll {
+  margin-top: 10px;
+  padding: 14px;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.totp-enroll-step {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.totp-enroll-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text2);
+  letter-spacing: 0.02em;
+}
+/* The secret is typed by hand into a phone, so it is set large, in groups of
+   four, and allowed to wrap rather than being clipped — a truncated secret is a
+   support request. */
+.totp-secret {
+  font-family: var(--font-mono);
+  font-size: 15px;
+  letter-spacing: 0.08em;
+  word-break: break-all;
+  padding: 10px 12px;
+  background: var(--surface3);
+  border: 1px solid var(--border2);
+  border-radius: 6px;
+  user-select: all;
+}
+.totp-enroll-actions,
+.totp-confirm-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.totp-confirm-row .tool-input {
+  width: 120px;
+  font-size: 16px;
+  letter-spacing: 0.18em;
+  text-align: center;
+}
+
 /* ── Tokens ──────────────────────────────────────────────────────────────── */
 
 .tokens-list {
@@ -880,6 +962,146 @@
 .user-form-field {
   width: 100%;
   flex: unset;
+}
+
+/* ── Onboarding wizard ───────────────────────────────────────────────────── */
+
+.onboard-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.72);
+  z-index: 2100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  box-sizing: border-box;
+}
+.onboard-card {
+  background: var(--surface2);
+  border: 1px solid var(--border2);
+  border-radius: 12px;
+  padding: 24px 26px 20px;
+  max-width: 560px;
+  width: 100%;
+  /* The wizard must fit a small window without the footer scrolling out of
+     reach — a Next button below the fold is a dead end. */
+  max-height: calc(100vh - 48px);
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.onboard-progress {
+  display: flex;
+  gap: 6px;
+}
+.onboard-dot {
+  height: 3px;
+  flex: 1;
+  border-radius: 2px;
+  background: var(--surface3);
+}
+.onboard-dot.done {
+  background: var(--accent-mid, var(--accent));
+}
+.onboard-dot.active {
+  background: var(--accent);
+}
+
+.onboard-head {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.onboard-title {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 700;
+}
+.onboard-blurb {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text2);
+}
+
+.onboard-body {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  overflow-y: auto;
+  min-height: 0;
+}
+.onboard-facts {
+  margin: 0;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--text2);
+}
+.onboard-facts strong {
+  color: var(--text);
+}
+.onboard-note {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text3);
+}
+.onboard-note code {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  background: var(--surface3);
+  padding: 1px 4px;
+  border-radius: 3px;
+}
+
+.onboard-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.onboard-field-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text2);
+}
+.onboard-field .tool-input {
+  width: 120px;
+}
+.onboard-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text2);
+  cursor: pointer;
+}
+.onboard-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.onboard-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+}
+.onboard-foot-right {
+  display: flex;
+  gap: 8px;
+}
+/* A disabled Back on step one must read as unavailable rather than broken. */
+.onboard-foot button:disabled {
+  opacity: 0.4;
+  cursor: default;
 }
 
 /* ── Token created overlay ───────────────────────────────────────────────── */

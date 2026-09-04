@@ -292,7 +292,10 @@ export function openProjectCreateModal() {
   }
   applyExperimentalTypeVisibility();
   document.querySelectorAll<HTMLButtonElement>('.project-type-btn').forEach((btn) => {
-    btn.classList.toggle('active', btn.dataset.ptype === 'generic');
+    const on = btn.dataset.ptype === 'generic';
+    btn.classList.toggle('active', on);
+    btn.setAttribute('role', 'radio');
+    btn.setAttribute('aria-checked', String(on));
   });
   overlay.classList.add('open');
   setTimeout(() => nameEl.focus(), 60);

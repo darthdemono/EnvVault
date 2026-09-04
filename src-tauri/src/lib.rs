@@ -642,6 +642,61 @@ mod commands {
         vault_core::set_user_password(&conn, &user_id, password.as_deref())
     }
 
+    // ── TOTP (sub-user second factor) ────────────────────────────────────────
+    //
+    // The owner is refused inside `vault-core` rather than here, so the CLI and
+    // the app cannot disagree about who may have a factor.
+
+    #[tauri::command]
+    pub fn totp_status(
+        app: AppHandle,
+        state: State<VaultState>,
+        user_id: String,
+    ) -> Result<vault_core::users::TotpStatus, String> {
+        let g = state.0.lock().map_err(|_| "State lock poisoned")?;
+        let key = g.as_ref().ok_or("Vault is locked")?;
+        let conn = vault_core::open_db(&db_path(&app)?, key)?;
+        vault_core::users::totp_status(&conn, &user_id)
+    }
+
+    /// Phase one. This is the **only** call that ever returns the secret.
+    #[tauri::command]
+    pub fn totp_enroll(
+        app: AppHandle,
+        state: State<VaultState>,
+        user_id: String,
+    ) -> Result<vault_core::users::TotpStatus, String> {
+        let g = state.0.lock().map_err(|_| "State lock poisoned")?;
+        let key = g.as_ref().ok_or("Vault is locked")?;
+        let conn = vault_core::open_db(&db_path(&app)?, key)?;
+        vault_core::users::totp_enroll(&conn, &user_id, "EnvVault")
+    }
+
+    #[tauri::command]
+    pub fn totp_confirm(
+        app: AppHandle,
+        state: State<VaultState>,
+        user_id: String,
+        code: String,
+    ) -> Result<bool, String> {
+        let g = state.0.lock().map_err(|_| "State lock poisoned")?;
+        let key = g.as_ref().ok_or("Vault is locked")?;
+        let conn = vault_core::open_db(&db_path(&app)?, key)?;
+        vault_core::users::totp_confirm(&conn, &user_id, &code)
+    }
+
+    #[tauri::command]
+    pub fn totp_disable(
+        app: AppHandle,
+        state: State<VaultState>,
+        user_id: String,
+    ) -> Result<(), String> {
+        let g = state.0.lock().map_err(|_| "State lock poisoned")?;
+        let key = g.as_ref().ok_or("Vault is locked")?;
+        let conn = vault_core::open_db(&db_path(&app)?, key)?;
+        vault_core::users::totp_disable(&conn, &user_id)
+    }
+
     #[tauri::command]
     pub fn rename_user(
         app: AppHandle,
@@ -1086,6 +1141,10 @@ pub fn run() {
             commands::list_users,
             commands::create_user,
             commands::set_user_password,
+            commands::totp_status,
+            commands::totp_enroll,
+            commands::totp_confirm,
+            commands::totp_disable,
             commands::rename_user,
             commands::delete_user,
             commands::list_user_classes,

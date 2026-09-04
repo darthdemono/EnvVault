@@ -70,23 +70,203 @@ export function resetReveal(inputId: string): void {
  *
  * A masked field gives no feedback at all about case, so a Caps Lock slip on a
  * master password reads as "wrong password" with no way to tell the difference.
+ *
+ * **The state is derived from the character a key actually produced, never from
+ * `KeyboardEvent.getModifierState('CapsLock')`.** WebKitGTK reports that from
+ * GDK's raw modifier mask, which is not the Caps Lock state: it was true on this
+ * app's unlock screen with Caps Lock off, so the hint appeared for every user,
+ * and keydown and keyup disagreed about it, so it flickered off again as soon as
+ * anyone typed. A cased letter is unambiguous evidence — `a` unshifted means off,
+ * `A` unshifted means on, and holding Shift inverts both — and it is the same
+ * answer on every platform.
+ *
+ * The cost is that the hint cannot appear before the first letter is typed. That
+ * is the right trade: a warning that is silent for one keystroke is strictly
+ * better than one that is confidently wrong for the whole session.
  */
 export function wireCapsLockHint(inputId: string, hintId: string): void {
   const input = document.getElementById(inputId) as HTMLInputElement | null;
   const hint = document.getElementById(hintId);
   if (!input || !hint) return;
 
+  // null = no evidence yet. Distinct from false: only evidence may show the
+  // hint, and only evidence may hide it once shown.
+  let known: boolean | null = null;
+
+  const paint = () => {
+    hint.style.display = known === true ? 'flex' : 'none';
+  };
+
+  /**
+   * Caps Lock state implied by a key event, or null when the event carries no
+   * evidence (a modifier, an editing key, a digit, a chorded shortcut).
+   */
+  const evidence = (e: KeyboardEvent): boolean | null => {
+    const k = e.key;
+    if (typeof k !== 'string' || Array.from(k).length !== 1) return null;
+    // Ctrl/Alt/Meta chords do not produce the character they name.
+    if (e.ctrlKey || e.altKey || e.metaKey) return null;
+    const lower = k.toLowerCase();
+    const upper = k.toUpperCase();
+    if (lower === upper) return null; // digits, punctuation, uncased scripts
+    return e.shiftKey ? k === lower : k === upper;
+  };
+
   const update = (e: KeyboardEvent) => {
-    // getModifierState is absent on synthetic events in tests and on some
-    // older WebKit builds — treat "unknown" as "off" rather than throwing.
-    const on = typeof e.getModifierState === 'function' && e.getModifierState('CapsLock');
-    hint.style.display = on ? 'flex' : 'none';
+    const seen = evidence(e);
+    if (seen === null) return; // no evidence: keep whatever we last knew
+    known = seen;
+    paint();
   };
-  input.onkeyup = update;
+
+  // keydown only. Binding keyup as well doubled every update, and was how the
+  // two events' disagreeing modifier masks became a visible flicker.
   input.onkeydown = update;
+  input.onkeyup = null;
   input.onblur = () => {
-    hint.style.display = 'none';
+    // Caps Lock can be toggled while the field is unfocused, so the old reading
+    // is not merely hidden, it is void.
+    known = null;
+    paint();
   };
+  paint();
+}
+
+// ── Modal focus management ────────────────────────────────────────────────────
+
+/**
+ * Every overlay in this app is a `div` that gains a class, not a `<dialog>`.
+ *
+ * That means the browser does nothing for us: focus stays wherever it was, Tab
+ * walks straight out of the modal into the grid behind it, and closing the
+ * modal leaves focus on an element that is now hidden — at which point a
+ * keyboard user is somewhere with no visible cursor and no way to tell where.
+ *
+ * These are the three things a `<dialog>` would have done.
+ */
+const MODAL_SELECTOR = '.modal-overlay.open, .shortcuts-overlay.open, .onboard-backdrop';
+
+/**
+ * Whether an element is actually on screen.
+ *
+ * Not `offsetParent !== null`, which is the usual shorthand and wrong twice
+ * over: it is null for *every* `position: fixed` element even when visible —
+ * and every overlay in this app is fixed — and jsdom does no layout, so it is
+ * null for everything under test as well. Walking computed styles is correct in
+ * both, and also catches `visibility: hidden`, which offsetParent misses.
+ */
+function isVisible(el: HTMLElement): boolean {
+  if (el.hasAttribute('hidden')) return false;
+  for (let node: HTMLElement | null = el; node; node = node.parentElement) {
+    if (node.hasAttribute('hidden')) return false;
+    const style = node.ownerDocument.defaultView?.getComputedStyle(node);
+    if (!style) break;
+    if (style.display === 'none' || style.visibility === 'hidden') return false;
+  }
+  return true;
+}
+
+/** Elements that can hold focus, in DOM order, excluding anything hidden. */
+function focusablesIn(root: Element): HTMLElement[] {
+  const sel =
+    'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), ' +
+    'textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+  return Array.from(root.querySelectorAll<HTMLElement>(sel)).filter(
+    // This app hides the halves of a modal it is not using with `display:none`
+    // (the confirm field on the unlock screen, for one). Tabbing into an
+    // invisible field is worse than not trapping focus at all.
+    (el) => isVisible(el) || el === document.activeElement,
+  );
+}
+
+/** The open overlay nearest the top of the stack, or null. */
+function topmostModal(): HTMLElement | null {
+  // The observer below is asynchronous, so it can still fire after the document
+  // it was watching has gone — on teardown in the test environment, and on
+  // navigation in the app. Both surfaced as an unhandled ReferenceError with a
+  // stack that named this function and nothing that called it.
+  if (typeof document === 'undefined') return null;
+  const open = Array.from(document.querySelectorAll<HTMLElement>(MODAL_SELECTOR));
+  return open.length ? open[open.length - 1] : null;
+}
+
+let _returnFocusTo: HTMLElement | null = null;
+let _modalFocusWired = false;
+
+/**
+ * Installs focus trapping and restoration for every overlay.
+ *
+ * Idempotent by flag, because `init()` is not the only thing that has ever
+ * called a `wire*` helper twice — see invariant 9.
+ */
+export function wireModalFocus(): void {
+  if (_modalFocusWired) return;
+  _modalFocusWired = true;
+
+  // Watching classes rather than patching every open/close site: there are
+  // thirteen overlays and at least four modules that open one, and a rule that
+  // has to be remembered at each of them is a rule that will be missed at one.
+  const observer = new MutationObserver(() => {
+    if (typeof document === 'undefined') return;
+    const modal = topmostModal();
+    if (modal) {
+      if (!modal.contains(document.activeElement)) {
+        _returnFocusTo = (document.activeElement as HTMLElement | null) ?? _returnFocusTo;
+        // Deferred: several open paths call `.focus()` themselves a tick or two
+        // later, and theirs is the better choice — a password field rather than
+        // whatever happens to be first in the markup.
+        setTimeout(() => {
+          if (typeof document === 'undefined') return;
+          const still = topmostModal();
+          if (still && !still.contains(document.activeElement)) focusablesIn(still)[0]?.focus();
+        }, 0);
+      }
+    } else if (_returnFocusTo) {
+      // Restore only if the element is still in the document and visible: a
+      // modal that replaced the thing that opened it (deleting the card whose
+      // Edit button you pressed) must not throw focus at a detached node.
+      const target = _returnFocusTo;
+      _returnFocusTo = null;
+      if (document.contains(target) && isVisible(target)) target.focus();
+    }
+  });
+  observer.observe(document.body, {
+    subtree: true,
+    childList: true,
+    attributes: true,
+    attributeFilter: ['class'],
+  });
+
+  document.addEventListener(
+    'keydown',
+    (e) => {
+      if (e.key !== 'Tab') return;
+      const modal = topmostModal();
+      if (!modal) return;
+      const items = focusablesIn(modal);
+      if (!items.length) return;
+      const first = items[0];
+      const last = items[items.length - 1];
+      const active = document.activeElement as HTMLElement | null;
+      // Focus outside the modal entirely (it was never moved in, or something
+      // stole it) is pulled back rather than left where it is.
+      if (!active || !modal.contains(active)) {
+        e.preventDefault();
+        (e.shiftKey ? last : first).focus();
+        return;
+      }
+      if (e.shiftKey && active === first) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && active === last) {
+        e.preventDefault();
+        first.focus();
+      }
+    },
+    // Capture: the app binds its own Escape/Enter handlers on document, and the
+    // trap has to run before anything can stop propagation.
+    true,
+  );
 }
 
 // ── Password strength ─────────────────────────────────────────────────────────

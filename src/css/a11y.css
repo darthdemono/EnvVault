@@ -1,0 +1,102 @@
+/* ── Accessibility primitives ─────────────────────────────────────────────────
+ *
+ * Everything here exists because the app is built from `div`s with click
+ * handlers rather than native controls, so the affordances a browser normally
+ * provides have to be authored.
+ *
+ * Imported last in index.css so its focus ring wins over the component
+ * stylesheets, several of which set `outline: none` on the elements they style.
+ */
+
+/* Visible only to assistive technology. Used for the search-syntax hint, which
+   lives in a placeholder that vanishes the instant anything is typed. */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* The skip link. Off-screen until focused, then pinned over the header — a
+   keyboard user otherwise crosses the header, the activity bar and the entire
+   sidebar before reaching a single secret. */
+.skip-link {
+  position: absolute;
+  left: 8px;
+  top: -60px;
+  z-index: 3000;
+  padding: 8px 14px;
+  border-radius: 0 0 7px 7px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 600;
+  text-decoration: none;
+  transition: top 0.12s ease;
+}
+.skip-link:focus {
+  top: 0;
+}
+
+/* One focus ring for the whole app.
+ *
+ * `:focus-visible`, not `:focus`: the browser then shows it for keyboard
+ * navigation and withholds it for mouse clicks, which is the reason the
+ * component stylesheets reached for `outline: none` in the first place. The
+ * `!important` is deliberate and load-bearing — several of those rules are more
+ * specific than anything reasonable this file could write, and a focus ring
+ * that loses a specificity argument is a focus ring that is not there. */
+:focus-visible {
+  outline: 2px solid var(--accent) !important;
+  outline-offset: 2px !important;
+  border-radius: 3px;
+}
+/* Inside a card the accent ring can sit on an accent background; a second,
+   darker ring keeps it legible on both. */
+.card :focus-visible,
+.tool-pane :focus-visible {
+  box-shadow: 0 0 0 4px rgba(0, 0, 0, 0.45);
+}
+
+/* `#content` takes focus programmatically from the skip link. It must not then
+   draw a ring around the entire workspace. */
+#content:focus,
+#content:focus-visible {
+  outline: none !important;
+}
+
+/* Respect a system-level request for less motion. The app animates overlays,
+   toasts, card expansion and the sidebar; for a user with a vestibular disorder
+   that is not decoration, it is a symptom trigger. Transitions are reduced to
+   near-instant rather than removed, so state changes still read as changes. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* Windows high-contrast mode and `forced-colors` strip author colours. Borders
+   drawn with `background` rather than `border` vanish entirely there, which is
+   how a card grid becomes one undifferentiated block of text. */
+@media (forced-colors: active) {
+  .card,
+  .modal,
+  .tool-pane,
+  .sidebar-item.active,
+  .onboard-card {
+    border: 1px solid CanvasText;
+  }
+  :focus-visible {
+    outline: 2px solid Highlight !important;
+  }
+}

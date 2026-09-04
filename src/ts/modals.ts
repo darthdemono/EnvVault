@@ -298,7 +298,9 @@ export function fillForm(entry: Partial<VaultEntry>) {
   st.formCustomSelects.get('f-env')?.setValue(entry.environment || '');
   if (entry.projectIds) {
     document.querySelectorAll<HTMLElement>('#f-project .project-pick-item').forEach((el) => {
-      el.classList.toggle('selected', entry.projectIds!.includes(el.dataset.value!));
+      const on = entry.projectIds!.includes(el.dataset.value!);
+      el.classList.toggle('selected', on);
+      el.setAttribute('aria-selected', String(on));
     });
   }
   (document.getElementById('f-apiurl') as HTMLInputElement).value = entry.api_url || '';
@@ -368,11 +370,38 @@ export function populateProjectSelect() {
   const container = document.getElementById('f-project')!;
   const cats = st.vault.projects.filter((p) => p.id !== 'Universal');
   container.innerHTML = cats
-    .map((p) => `<div class="project-pick-item" data-value="${escAttr(p.id)}">${esc(p.name)}</div>`)
+    .map(
+      (p) =>
+        `<div class="project-pick-item" role="option" aria-selected="false" tabindex="-1" data-value="${escAttr(p.id)}">${esc(p.name)}</div>`,
+    )
     .join('');
-  container.querySelectorAll<HTMLElement>('.project-pick-item').forEach((item) => {
-    item.addEventListener('click', () => item.classList.toggle('selected'));
+  const items = Array.from(container.querySelectorAll<HTMLElement>('.project-pick-item'));
+  const toggle = (item: HTMLElement) => {
+    const on = item.classList.toggle('selected');
+    item.setAttribute('aria-selected', String(on));
+  };
+  items.forEach((item, i) => {
+    item.addEventListener('click', () => toggle(item));
+    // This replaced a `<select multiple>` (WebKitGTK renders a ghost native
+    // listbox for those), and the native control was keyboard-operable. Space
+    // toggles, arrows move — without this, project assignment is mouse-only.
+    item.addEventListener('keydown', (e) => {
+      if (e.key === ' ' || e.key === 'Enter') {
+        e.preventDefault();
+        toggle(item);
+      } else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault();
+        const next = items[(i + (e.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length];
+        next.tabIndex = 0;
+        item.tabIndex = -1;
+        next.focus();
+      }
+    });
   });
+  // One item in the list is tabbable; arrows reach the rest. A listbox where
+  // every option is a tab stop makes a twenty-project vault twenty Tab presses
+  // deep.
+  if (items[0]) items[0].tabIndex = 0;
 }
 
 // ── Modal open/close/save ─────────────────────────────────────────────────
@@ -725,9 +754,18 @@ export function toggleCard(e: Event, idx: number) {
   if (!entry) return;
   const card = document.querySelector(`.card[data-idx="${idx}"]`);
   card?.classList.toggle('expanded');
+  const open = !!card?.classList.contains('expanded');
   // Track by stable id, not array position — see st.expanded.
-  if (card?.classList.contains('expanded')) st.expanded.add(entryId(entry));
+  if (open) st.expanded.add(entryId(entry));
   else st.expanded.delete(entryId(entry));
+  // The class is the paint; aria-expanded is the same fact for a screen reader.
+  // This path mutates the card in place instead of re-rendering, so the state
+  // computed in `buildCard` never gets a second chance to be right.
+  const chevron = card?.querySelector('.card-chevron');
+  if (chevron) {
+    chevron.setAttribute('aria-expanded', String(open));
+    chevron.setAttribute('aria-label', `${open ? 'Collapse' : 'Expand'} ${entry.provider}`);
+  }
 }
 
 export function toggleReveal(e: Event, field: string, idx: number, value: string) {
@@ -740,7 +778,11 @@ export function toggleReveal(e: Event, field: string, idx: number, value: string
   st.revealed[key] = !st.revealed[key];
   el.textContent = st.revealed[key] ? value : maskKey(value);
   el.classList.toggle('revealed', st.revealed[key]);
-  document.getElementById(`reveal-${field}-${idx}`)?.classList.toggle('active', st.revealed[key]);
+  const btn = document.getElementById(`reveal-${field}-${idx}`);
+  btn?.classList.toggle('active', st.revealed[key]);
+  // Same reason as toggleCard: no re-render happens here, so the pressed state
+  // has to be written where the class is.
+  btn?.setAttribute('aria-pressed', String(!!st.revealed[key]));
 }
 
 export function copyField(e: Event, value: string, btn?: HTMLElement) {

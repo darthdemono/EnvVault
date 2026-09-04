@@ -188,6 +188,17 @@
   margin-bottom: 0;
 }
 
+/* The title half of a settings row that also carries a hint.
+ *
+ * It was a bare text node, which meant `aria-labelledby` on the row's control
+ * had to point at the whole `.settings-label` — and so announced the title plus
+ * a sixty-word hint as the checkbox's *name*. Wrapping it makes the title the
+ * name and leaves the hint as the description. `display: block` reproduces
+ * exactly what the bare text node did inside this block container. */
+.settings-label-text {
+  display: block;
+}
+
 .settings-unit {
   font-size: 11px;
   color: var(--text3);

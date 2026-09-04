@@ -14,9 +14,15 @@
 
 <body>
 
-  <header id="header">
+  <!-- First focusable element on the page. A keyboard user otherwise tabs
+       through the header, the activity bar and the whole sidebar before
+       reaching a single secret. -->
+  <a href="#content" class="skip-link">Skip to secrets</a>
+
+  <header id="header" role="banner">
     <div class="header-left">
-      <button id="sidebar-toggle" class="icon-btn" title="Toggle sidebar (B)">
+      <button id="sidebar-toggle" class="icon-btn" title="Toggle sidebar (B)" aria-label="Toggle sidebar"
+        aria-expanded="true" aria-controls="sidebar">
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <line x1="3" y1="6" x2="21" y2="6" />
           <line x1="3" y1="12" x2="21" y2="12" />
@@ -32,7 +38,7 @@
         EnvVault
       </div>
       <!-- Vault switcher stub — future: multi-vault + remote support -->
-      <button id="vault-switcher" class="vault-pill" title="Vault switching coming in v2">
+      <button id="vault-switcher" class="vault-pill" title="Vault switching coming in v2" aria-label="Switch vault">
         <span class="vault-dot local"></span>
         <span id="vault-name">Local Vault</span>
         <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
@@ -41,15 +47,19 @@
       </button>
     </div>
 
-    <div class="header-center">
+    <div class="header-center" role="search">
       <div class="search-wrap">
         <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <circle cx="11" cy="11" r="8" />
           <line x1="21" y1="21" x2="16.65" y2="16.65" />
         </svg>
-        <input id="search" class="search-input" type="text"
+        <input id="search" class="search-input" type="text" role="searchbox"
+          aria-label="Search secrets" aria-describedby="search-syntax-hint"
           placeholder="Search… Ctrl+K  |  price:free  cat:media  env:prod">
-        <button id="search-clear" class="search-clear-btn" title="Clear search">
+        <!-- A placeholder disappears the moment anything is typed, so the filter
+             syntax it documents is unavailable exactly when it is being used. -->
+        <span id="search-syntax-hint" class="sr-only">Filters: price, cat, env, tag, project. Example: price:free cat:media</span>
+        <button id="search-clear" class="search-clear-btn" title="Clear search" aria-label="Clear search">
           <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
             <line x1="18" y1="6" x2="6" y2="18" />
             <line x1="6" y1="6" x2="18" y2="18" />
@@ -63,20 +73,20 @@
     </div>
 
     <div class="header-right">
-      <button id="shortcuts-btn" class="icon-btn" title="Keyboard shortcuts (?)">
+      <button id="shortcuts-btn" class="icon-btn" title="Keyboard shortcuts (?)" aria-label="Keyboard shortcuts">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <circle cx="12" cy="12" r="10" />
           <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3" />
           <line x1="12" y1="17" x2="12.01" y2="17" />
         </svg>
       </button>
-      <button id="lock-btn" class="icon-btn" title="Lock vault">
+      <button id="lock-btn" class="icon-btn" title="Lock vault" aria-label="Lock vault">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <rect x="3" y="11" width="18" height="11" rx="2" />
           <path d="M7 11V7a5 5 0 0 1 10 0v4" />
         </svg>
       </button>
-      <button id="settings-btn" class="icon-btn" title="Settings (S)">
+      <button id="settings-btn" class="icon-btn" title="Settings (S)" aria-label="Settings">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <circle cx="12" cy="12" r="3" />
           <path
@@ -95,27 +105,30 @@
 
   <div id="layout">
     <!-- Activity Bar — VSCode-style primary navigation -->
-    <div id="activity-bar">
+    <!-- role=tablist, not nav: these buttons swap the panel to their right
+         rather than moving the user somewhere, and each `activity-btn` owns the
+         panel named by its data-panel. `switchPanel()` maintains aria-selected. -->
+    <div id="activity-bar" role="tablist" aria-orientation="vertical" aria-label="Panels">
       <div class="activity-bar-top">
-        <button class="activity-btn active" data-panel="secrets" title="Secrets (A)">
+        <button class="activity-btn active" id="activity-tab-secrets" data-panel="secrets" role="tab" aria-selected="true" tabindex="0" aria-controls="secrets-panel vault-workspace" title="Secrets (A)" aria-label="Secrets">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
             <rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>
           </svg>
           <span class="activity-label">Secrets</span>
         </button>
-        <button class="activity-btn" data-panel="tools" title="Tools">
+        <button class="activity-btn" id="activity-tab-tools" data-panel="tools" role="tab" aria-selected="false" tabindex="-1" aria-controls="tools-panel tools-workspace" title="Tools" aria-label="Tools">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
             <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>
           </svg>
           <span class="activity-label">Tools</span>
         </button>
-        <button class="activity-btn" data-panel="remote" title="Remote Vaults">
+        <button class="activity-btn" id="activity-tab-remote" data-panel="remote" role="tab" aria-selected="false" tabindex="-1" aria-controls="remote-panel remote-workspace" title="Remote Vaults" aria-label="Remote Vaults">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
             <path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z"/>
           </svg>
           <span class="activity-label">Remote</span>
         </button>
-        <button class="activity-btn" data-panel="users" title="Users">
+        <button class="activity-btn" id="activity-tab-users" data-panel="users" role="tab" aria-selected="false" tabindex="-1" aria-controls="users-panel users-workspace" title="Users" aria-label="Users">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
             <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
             <circle cx="9" cy="7" r="4"/>
@@ -127,8 +140,8 @@
       </div>
     </div>
 
-    <aside id="sidebar">
-      <div id="secrets-panel" class="sidebar-panel">
+    <aside id="sidebar" aria-label="Filters">
+      <div id="secrets-panel" class="sidebar-panel" role="tabpanel" aria-labelledby="activity-tab-secrets">
         <div class="sidebar-section" id="sidebar-section-all">
           <div class="sidebar-heading">All Secrets <button class="section-collapse-btn" data-section="all" title="Collapse">▾</button></div>
           <div class="section-body">
@@ -253,7 +266,7 @@
       </div>
 
       <!-- Tools Panel — shows in sidebar when Tools activity is active -->
-      <div id="tools-panel" class="sidebar-panel">
+      <div id="tools-panel" class="sidebar-panel" role="tabpanel" aria-labelledby="activity-tab-tools">
         <div class="tools-nav">
           <button class="tool-nav-btn active" data-tool="secret-gen">
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
@@ -343,7 +356,7 @@
       </div>
 
       <!-- Remote Vaults Panel -->
-      <div id="remote-panel" class="sidebar-panel" style="display:none">
+      <div id="remote-panel" class="sidebar-panel" role="tabpanel" aria-labelledby="activity-tab-remote" style="display:none">
         <div class="users-panel-header">
           <span class="users-panel-title">Remote Vaults</span>
           <button id="add-remote-btn" class="btn btn-xs accent">+ Add</button>
@@ -352,7 +365,7 @@
       </div>
 
       <!-- Users Panel — shown when Users activity is active -->
-      <div id="users-panel" class="sidebar-panel" style="display:none">
+      <div id="users-panel" class="sidebar-panel" role="tabpanel" aria-labelledby="activity-tab-users" style="display:none">
         <div class="users-panel-header">
           <span class="users-panel-title">Users &amp; Classes</span>
           <div style="display:flex;gap:4px">
@@ -381,13 +394,17 @@
         <div id="lock-status" class="lock-status"></div>
       </div>
     </aside>
-    <div id="sidebar-resizer"></div>
+    <!-- Focusable and arrow-key adjustable: a drag handle that only responds to
+         a mouse makes the sidebar width a mouse-only setting. `applySidebarLayout`
+         keeps aria-valuenow in step. -->
+    <div id="sidebar-resizer" role="separator" tabindex="0" aria-orientation="vertical"
+      aria-label="Resize sidebar" aria-valuemin="150" aria-valuemax="480" aria-valuenow="240"></div>
 
-    <main id="content">
+    <main id="content" tabindex="-1">
       <div id="vault-workspace">
       <div class="toolbar">
         <div class="toolbar-left">
-          <span id="result-count" class="result-count">0 secrets</span>
+          <span id="result-count" class="result-count" role="status" aria-live="polite">0 secrets</span>
           <button id="expand-all-btn" class="btn btn-ghost btn-xs">Expand All</button>
           <button id="bulk-select-btn" class="btn btn-ghost btn-xs" title="Select multiple for bulk actions">Select</button>
           <!-- Shown by updateActiveFilterBar() only while something is filtering
@@ -412,7 +429,7 @@
               </svg>
               Copy All
             </button>
-            <button id="copy-all-arrow" class="btn btn-ghost btn-sm btn-icon-only">
+            <button id="copy-all-arrow" class="btn btn-ghost btn-sm btn-icon-only" aria-label="Choose copy format" aria-haspopup="menu">
               <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
                 <polyline points="6 9 12 15 18 9" />
               </svg>
@@ -469,7 +486,9 @@
   <div id="dropdown" class="dropdown" style="display:none"></div>
 
   <!-- Toast -->
-  <div id="toast"></div>
+  <!-- polite, not assertive: a toast reports what just happened and must not
+       interrupt whatever the user is reading or typing. -->
+  <div id="toast" role="status" aria-live="polite" aria-atomic="false"></div>
 
   <!-- Undo bar -->
   <div id="undo-bar" class="undo-bar" style="display:none">
@@ -479,7 +498,7 @@
 
   <!-- ── Master Password Modal (Phase 2) ─────────────────────────────────────── -->
   <!-- Shown on every launch in Tauri. Blocks all other UI until unlocked.        -->
-  <div id="unlock-overlay" class="modal-overlay"
+  <div id="unlock-overlay" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="unlock-title"
     style="z-index:999;backdrop-filter:none;background:var(--bg)">
     <div class="modal" id="unlock-modal" style="max-width:440px;width:100%">
       <div class="modal-header" style="gap:10px;justify-content:flex-start">
@@ -497,7 +516,7 @@
         </p>
 
         <div class="form-group">
-          <label class="form-label" style="display:flex;align-items:center;justify-content:space-between">
+          <label for="unlock-server" class="form-label" style="display:flex;align-items:center;justify-content:space-between">
             Server URL
             <span style="font-size:10px;color:var(--text3);font-weight:400">leave blank for local vault</span>
           </label>
@@ -514,13 +533,13 @@
         </div>
 
         <div class="form-group">
-          <label class="form-label">Username</label>
+          <label for="unlock-username" class="form-label">Username</label>
           <input class="form-input" id="unlock-username" type="text" placeholder="leave blank = vault owner"
             autocomplete="username" spellcheck="false">
         </div>
 
         <div class="form-group">
-          <label class="form-label">Password</label>
+          <label for="unlock-password" class="form-label">Password</label>
           <div class="input-affix">
             <input class="form-input mono" id="unlock-password" type="password" placeholder="Master password"
               autocomplete="current-password">
@@ -536,7 +555,7 @@
         </div>
 
         <div class="form-group" id="unlock-confirm-group" style="display:none">
-          <label class="form-label">Confirm Password</label>
+          <label for="unlock-confirm" class="form-label">Confirm Password</label>
           <input class="form-input mono" id="unlock-confirm" type="password" placeholder="Confirm master password"
             autocomplete="new-password">
           <div class="pw-strength" id="unlock-strength" style="display:none">
@@ -560,7 +579,7 @@
   <!-- ── end master password modal ─────────────────────────────────────────────── -->
 
   <!-- Re-lock screen: shown when vault auto-locks during an active session (not initial unlock) -->
-  <div id="relock-overlay" class="modal-overlay" style="z-index:999;backdrop-filter:none;background:var(--bg)">
+  <div id="relock-overlay" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="relock-title" style="z-index:999;backdrop-filter:none;background:var(--bg)">
     <div class="modal" style="max-width:380px;width:100%">
       <div class="modal-header" style="gap:10px;justify-content:flex-start">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
@@ -568,14 +587,14 @@
           <rect x="3" y="11" width="18" height="11" rx="2"/>
           <path d="M7 11V7a5 5 0 0 1 10 0"/>
         </svg>
-        <div class="modal-title">Vault Locked</div>
+        <div class="modal-title" id="relock-title">Vault Locked</div>
       </div>
       <div class="modal-body">
         <p id="relock-reason" style="font-size:12px;color:var(--text3);margin:0 0 18px;line-height:1.5">
           Auto-locked after inactivity.
         </p>
         <div class="form-group">
-          <label class="form-label">Master Password</label>
+          <label for="relock-password" class="form-label">Master Password</label>
           <div class="input-affix">
             <input class="form-input mono" id="relock-password" type="password"
               placeholder="Enter master password" autocomplete="current-password">
@@ -605,7 +624,7 @@
 
   <!-- Add/Edit Modal -->
   <!-- Add/Edit Modal -->
-  <div id="modal-overlay" class="modal-overlay">
+  <div id="modal-overlay" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="modal-title">
     <div class="modal" id="key-modal">
       <div class="modal-header">
         <div id="modal-title" class="modal-title">Add API Key</div>
@@ -614,7 +633,7 @@
       <div class="modal-body">
         <input type="hidden" id="edit-index" value="-1">
         <div class="form-group" style="margin-bottom:14px">
-          <label class="form-label" data-field="secret_type">Secret Type</label>
+          <label for="f-secret-type" class="form-label" data-field="secret_type">Secret Type</label>
           <select id="f-secret-type" class="form-input">
             <option value="api_key">API Key</option>
             <option value="password">Password</option>
@@ -627,21 +646,21 @@
         </div>
         <div class="form-row-3">
           <div class="form-group">
-            <label class="form-label" id="f-provider-label" data-field="provider">Provider <span
+            <label for="f-provider" class="form-label" id="f-provider-label" data-field="provider">Provider <span
                 class="req">*</span></label>
             <input class="form-input" id="f-provider" type="text" placeholder="e.g. GitHub">
           </div>
           <div class="form-group">
-            <label class="form-label" data-field="key_id">Label <span class="opt">optional</span></label>
+            <label for="f-keyid" class="form-label" data-field="key_id">Label <span class="opt">optional</span></label>
             <input class="form-input mono" id="f-keyid" type="text" placeholder="e.g. 1, prod, v2">
           </div>
           <div class="form-group" id="f-account-group">
-            <label class="form-label" data-field="account_name">Account</label>
+            <label for="f-account" class="form-label" data-field="account_name">Account</label>
             <input class="form-input" id="f-account" type="text" placeholder="username or email">
           </div>
         </div>
         <div class="form-group" id="f-key-group">
-          <label class="form-label" id="f-key-label" data-field="api_key">API Key <span class="req">*</span></label>
+          <label for="f-key" class="form-label" id="f-key-label" data-field="api_key">API Key <span class="req">*</span></label>
           <div class="key-field-wrap">
             <input class="form-input mono" id="f-key" type="text" placeholder="Your API key or access token">
             <button type="button" id="f-key-generate" class="btn btn-ghost btn-sm key-gen-btn" title="Generate value">
@@ -653,7 +672,7 @@
           </div>
         </div>
         <div class="form-group" id="f-envvar-subtype-group" style="display:none">
-          <label class="form-label">Variable Sub-type <span class="opt">optional</span></label>
+          <label for="f-envvar-subtype" class="form-label">Variable Sub-type <span class="opt">optional</span></label>
           <select id="f-envvar-subtype" class="form-input">
             <option value="string">String</option>
             <option value="secret">Secret (mask by default)</option>
@@ -669,12 +688,12 @@
           </select>
         </div>
         <div class="form-group" id="f-secret-group">
-          <label class="form-label" data-field="api_secret">API Secret <span class="opt">optional</span></label>
+          <label for="f-secret" class="form-label" data-field="api_secret">API Secret <span class="opt">optional</span></label>
           <input class="form-input mono" id="f-secret" type="text" placeholder="Client secret or shared secret">
         </div>
         <div class="form-row-2">
           <div class="form-group">
-            <label class="form-label" data-field="price_type">Price Type</label>
+            <label for="f-price" class="form-label" data-field="price_type">Price Type</label>
             <select class="form-input" id="f-price">
               <option value="free">Free</option>
               <option value="local">Local</option>
@@ -683,7 +702,7 @@
             </select>
           </div>
           <div class="form-group">
-            <label class="form-label" data-field="environment">Environment</label>
+            <label for="f-env" class="form-label" data-field="environment">Environment</label>
             <select class="form-input" id="f-env">
               <option value="">— none —</option>
               <option value="production">Production</option>
@@ -695,11 +714,11 @@
         </div>
         <div class="form-row-2" id="f-username-row">
           <div class="form-group">
-            <label class="form-label" data-field="username">Username</label>
+            <label for="f-username" class="form-label" data-field="username">Username</label>
             <input class="form-input" id="f-username" type="text" placeholder="Optional username">
           </div>
           <div class="form-group">
-            <label class="form-label" data-field="email">Email</label>
+            <label for="f-email" class="form-label" data-field="email">Email</label>
             <input class="form-input" id="f-email" type="email" placeholder="Optional email">
           </div>
         </div>
@@ -708,46 +727,50 @@
         <div class="form-group" id="f-username-group" style="display:none"></div>
         <div class="form-group" id="f-email-group" style="display:none"></div>
         <div class="form-group" id="f-cert-issuer-group" style="display:none">
-          <label class="form-label" data-field="cert_issuer">Issuer / Provider</label>
+          <label for="f-cert-issuer" class="form-label" data-field="cert_issuer">Issuer / Provider</label>
           <input class="form-input" id="f-cert-issuer" placeholder="e.g. Let's Encrypt, Google, EnvV">
         </div>
         <div class="form-group" id="f-cert-group" style="display:none">
-          <label class="form-label" data-field="certificate_data">Fullchain (PEM)</label>
+          <label for="f-cert" class="form-label" data-field="certificate_data">Fullchain (PEM)</label>
           <textarea class="form-input mono" id="f-cert" rows="3"
             placeholder="-----BEGIN CERTIFICATE-----\n... (fullchain.pem)"></textarea>
         </div>
         <div class="form-group" id="f-cert-key-group" style="display:none">
-          <label class="form-label" data-field="cert_key_data">Privkey (PEM)</label>
+          <label for="f-cert-key" class="form-label" data-field="cert_key_data">Privkey (PEM)</label>
           <textarea class="form-input mono" id="f-cert-key" rows="3"
             placeholder="-----BEGIN PRIVATE KEY-----&#10;..."></textarea>
         </div>
         <div class="form-group" id="f-blob-group" style="display:none">
-          <label class="form-label" data-field="blob_ref">File Path / Reference</label>
+          <label for="f-blob" class="form-label" data-field="blob_ref">File Path / Reference</label>
           <input class="form-input mono" id="f-blob" placeholder="/path/to/file">
         </div>
 
         <div class="form-group">
-          <label class="form-label" data-field="project">Projects</label>
-          <div id="f-project" class="project-pick-list"></div>
+          <label class="form-label" id="f-project-label" data-field="project">Projects</label>
+          <!-- A div-based picker, not a <select multiple>: WebKitGTK renders a
+               native listbox for those regardless of CSS hiding (Phase 3). It
+               therefore has to declare the semantics the native control had. -->
+          <div id="f-project" class="project-pick-list" role="listbox" aria-multiselectable="true"
+            aria-labelledby="f-project-label" tabindex="0"></div>
           <small style="color:var(--text3); font-size:10px;">Click to toggle project assignment</small>
         </div>
         <div class="form-row-2">
           <div class="form-group">
-            <label class="form-label" data-field="api_url">API URL <span class="opt">optional</span></label>
+            <label for="f-apiurl" class="form-label" data-field="api_url">API URL <span class="opt">optional</span></label>
             <input class="form-input mono" id="f-apiurl" type="text" placeholder="https://api.example.com">
           </div>
           <div class="form-group">
-            <label class="form-label" data-field="callback_url">Callback URL <span class="opt">optional</span></label>
+            <label for="f-cburl" class="form-label" data-field="callback_url">Callback URL <span class="opt">optional</span></label>
             <input class="form-input mono" id="f-cburl" type="text" placeholder="https://yourapp.com/oauth/cb">
           </div>
         </div>
         <div class="form-row-3">
           <div class="form-group">
-            <label class="form-label" data-field="version">Version <span class="opt">optional</span></label>
+            <label for="f-version" class="form-label" data-field="version">Version <span class="opt">optional</span></label>
             <input class="form-input mono" id="f-version" placeholder="v3">
           </div>
           <div class="form-group">
-            <label class="form-label" data-field="rate_limit">Rate Limit <span class="opt">optional</span></label>
+            <label for="f-ratelimit" class="form-label" data-field="rate_limit">Rate Limit <span class="opt">optional</span></label>
             <div style="display:flex;gap:6px">
               <input class="form-input mono" id="f-ratelimit" type="number" min="0" step="1" placeholder="1000"
                 style="flex:1 1 0;min-width:0">
@@ -765,52 +788,52 @@
             <div class="form-hint" id="f-ratelimit-note" hidden></div>
           </div>
           <div class="form-group">
-            <label class="form-label" data-field="expires_at">Expires <span class="opt">optional</span></label>
+            <label for="f-expires" class="form-label" data-field="expires_at">Expires <span class="opt">optional</span></label>
             <input class="form-input mono" id="f-expires" type="text" placeholder="YYYY-MM-DD"
               pattern="\d{4}-\d{2}-\d{2}">
           </div>
           <div class="form-group">
-            <label class="form-label" data-field="rotation_days">Rotate every <span class="opt">optional — days</span></label>
+            <label for="f-rotation-days" class="form-label" data-field="rotation_days">Rotate every <span class="opt">optional — days</span></label>
             <input class="form-input mono" id="f-rotation-days" type="number" min="1" placeholder="90">
           </div>
         </div>
         <div class="form-row-2">
           <div class="form-group">
-            <label class="form-label" data-field="purpose">Purpose <span class="opt">optional — what you told the issuer</span></label>
+            <label for="f-purpose" class="form-label" data-field="purpose">Purpose <span class="opt">optional — what you told the issuer</span></label>
             <input class="form-input" id="f-purpose" placeholder="CI builds for the EnvVault repo">
           </div>
           <div class="form-group">
-            <label class="form-label" data-field="pool">Key Pool <span class="opt">optional — swap between keys</span></label>
+            <label for="f-pool" class="form-label" data-field="pool">Key Pool <span class="opt">optional — swap between keys</span></label>
             <input class="form-input mono" id="f-pool" placeholder="github-ci">
           </div>
         </div>
         <div class="form-group">
-          <label class="form-label" style="display:flex;align-items:center;gap:8px;cursor:pointer">
+          <label for="f-compromised" class="form-label" style="display:flex;align-items:center;gap:8px;cursor:pointer">
             <input type="checkbox" id="f-compromised" style="width:auto;margin:0">
             Mark as compromised <span class="opt">flags as critical until rotated</span>
           </label>
         </div>
         <div class="form-group">
-          <label class="form-label" data-field="scopes">Scopes <span class="opt">optional — comma
+          <label for="f-scopes" class="form-label" data-field="scopes">Scopes <span class="opt">optional — comma
               separated</span></label>
           <input class="form-input mono" id="f-scopes" placeholder="repo, read:user, write:packages">
         </div>
         <div class="form-group">
-          <label class="form-label" data-field="api_description">API Description <span
+          <label for="f-apidesc" class="form-label" data-field="api_description">API Description <span
               class="opt">optional</span></label>
           <input class="form-input" id="f-apidesc" placeholder="What does this key do technically?">
         </div>
         <div class="form-group">
-          <label class="form-label" data-field="description">General Description <span
+          <label for="f-desc" class="form-label" data-field="description">General Description <span
               class="opt">optional</span></label>
           <input class="form-input" id="f-desc" placeholder="Which project / stack uses this? Any caveats?">
         </div>
         <div class="form-group">
-          <label class="form-label" data-field="details">Details <span class="opt">optional</span></label>
+          <label for="f-details" class="form-label" data-field="details">Details <span class="opt">optional</span></label>
           <input class="form-input" id="f-details" placeholder="Extra notes or metadata">
         </div>
         <div class="form-group">
-          <label class="form-label" data-field="custom_icon">Icon <span class="opt">optional</span></label>
+          <label for="f-icon" class="form-label" data-field="custom_icon">Icon <span class="opt">optional</span></label>
           <div class="icon-field">
             <div id="f-icon-preview" class="icon-preview-sm"></div>
             <input class="form-input mono" id="f-icon" placeholder="Simple Icons slug, e.g. github">
@@ -818,22 +841,22 @@
           </div>
         </div>
         <div class="form-group">
-          <label class="form-label" data-field="categories">Projects <span class="opt">optional</span></label>
-          <div id="f-categories" class="cat-chips-wrap"></div>
+          <label class="form-label" id="f-categories-label" data-field="categories">Projects <span class="opt">optional</span></label>
+          <div id="f-categories" class="cat-chips-wrap" role="group" aria-labelledby="f-categories-label"></div>
         </div>
         <div class="form-group">
-          <label class="form-label" data-field="tags">Tags <span class="opt">optional — space separated</span></label>
+          <label for="f-tags-input" class="form-label" data-field="tags">Tags <span class="opt">optional — space separated</span></label>
           <input class="form-input" id="f-tags-input" placeholder="e.g. critical infra prod-only">
         </div>
         <div class="form-group">
-          <label class="form-label" title="Prefixes added by services that consume this credential. For Chunk type, the first prefix is the namespace identifier (e.g. AM for AM_JWT_SECRET). For Key type, each prefix is a context identifier (e.g. ND for ND_LASTFM_APIKEY).">
+          <label for="f-env-prefixes" class="form-label" title="Prefixes added by services that consume this credential. For Chunk type, the first prefix is the namespace identifier (e.g. AM for AM_JWT_SECRET). For Key type, each prefix is a context identifier (e.g. ND for ND_LASTFM_APIKEY).">
             Env Prefixes <span class="opt">optional — comma separated</span>
           </label>
           <input class="form-input mono" id="f-env-prefixes" placeholder="e.g. ND, SPOTIFYD">
         </div>
         <div class="form-group" id="f-extra-vars-section">
-          <label class="form-label">Extra Variables <span class="opt">optional — use for multi-field credentials and chunk fields</span></label>
-          <div id="f-extra-vars-list" class="extra-vars-list"></div>
+          <label class="form-label" id="f-extra-vars-label">Extra Variables <span class="opt">optional — use for multi-field credentials and chunk fields</span></label>
+          <div id="f-extra-vars-list" class="extra-vars-list" role="group" aria-labelledby="f-extra-vars-label"></div>
           <button type="button" id="f-extra-vars-add" class="btn btn-ghost btn-sm" style="margin-top:6px;font-size:11px;align-self:flex-start">+ Add variable</button>
         </div>
       </div><!-- /.modal-body -->
@@ -848,10 +871,10 @@
   </div><!-- /#modal-overlay -->
 
   <!-- Icon Picker Modal -->
-  <div id="icon-picker-overlay" class="modal-overlay">
+  <div id="icon-picker-overlay" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="icon-picker-title">
     <div class="modal modal-wide" id="icon-picker-modal">
       <div class="modal-header">
-        <div class="modal-title">Choose Icon</div>
+        <div class="modal-title" id="icon-picker-title">Choose Icon</div>
         <button id="icon-picker-close" class="icon-btn">✕</button>
       </div>
       <div class="modal-body" style="gap:12px">
@@ -869,10 +892,10 @@
   </div>
 
   <!-- Settings Drawer -->
-  <div id="settings-overlay" class="modal-overlay">
+  <div id="settings-overlay" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="settings-title">
     <div class="settings-drawer" id="settings-drawer">
       <div class="settings-header">
-        <div class="modal-title">Settings</div>
+        <div class="modal-title" id="settings-title">Settings</div>
         <button id="settings-close" class="icon-btn">✕</button>
       </div>
 
@@ -896,9 +919,9 @@
           <div class="settings-section">
             <div class="settings-section-title">Accent Color</div>
             <div class="settings-row">
-              <div class="settings-label">Color</div>
+              <div class="settings-label" id="s-accent-label">Color</div>
               <div style="display:flex;align-items:center;gap:8px">
-                <input type="color" id="s-accent" class="color-input">
+                <input type="color" id="s-accent" aria-labelledby="s-accent-label" class="color-input">
                 <span id="s-accent-val" class="mono-sm"></span>
                 <button id="s-accent-reset" class="btn-xs">Reset</button>
               </div>
@@ -927,8 +950,8 @@
               </div>
             </div>
             <div class="settings-row">
-              <div class="settings-label">Group by secret type</div>
-              <label class="toggle"><input type="checkbox" id="s-group-by-type"><span class="toggle-track"></span></label>
+              <div class="settings-label" id="s-group-by-type-label">Group by secret type</div>
+              <label class="toggle"><input type="checkbox" id="s-group-by-type" aria-labelledby="s-group-by-type-label"><span class="toggle-track"></span></label>
             </div>
           </div>
         </div>
@@ -969,28 +992,28 @@
           <div class="settings-section">
             <div class="settings-section-title">Auto-Lock</div>
             <div class="settings-row">
-              <div class="settings-label">Lock after inactivity</div>
+              <div class="settings-label" id="s-autolock-label">Lock after inactivity</div>
               <div style="display:flex;align-items:center;gap:8px">
-                <input type="number" id="s-autolock" class="form-input" style="width:70px" min="0" max="480">
+                <input type="number" id="s-autolock" aria-labelledby="s-autolock-label" class="form-input" style="width:70px" min="0" max="480">
                 <span class="settings-unit">min (0 = never)</span>
               </div>
             </div>
             <div class="settings-row">
               <div class="settings-label">
-                Lock when window is hidden
-                <div class="settings-hint">Locks the moment you alt-tab or minimise. Off by default — the inactivity timer above already covers walking away.</div>
+                <span class="settings-label-text" id="s-lock-on-hide-label">Lock when window is hidden</span>
+                <div class="settings-hint" id="s-lock-on-hide-hint">Locks the moment you alt-tab or minimise. Off by default — the inactivity timer above already covers walking away.</div>
               </div>
-              <label class="toggle"><input type="checkbox" id="s-lock-on-hide"><span class="toggle-track"></span></label>
+              <label class="toggle"><input type="checkbox" id="s-lock-on-hide" aria-labelledby="s-lock-on-hide-label" aria-describedby="s-lock-on-hide-hint"><span class="toggle-track"></span></label>
             </div>
           </div>
           <div class="settings-section">
             <div class="settings-section-title">Session</div>
             <div class="settings-row">
               <div class="settings-label">
-                Remember filters between sessions
-                <div class="settings-hint">Restores the category, project, tag and environment filter you last had selected. Selections that no longer exist in the vault are dropped.</div>
+                <span class="settings-label-text" id="s-remember-filters-label">Remember filters between sessions</span>
+                <div class="settings-hint" id="s-remember-filters-hint">Restores the category, project, tag and environment filter you last had selected. Selections that no longer exist in the vault are dropped.</div>
               </div>
-              <label class="toggle"><input type="checkbox" id="s-remember-filters"><span class="toggle-track"></span></label>
+              <label class="toggle"><input type="checkbox" id="s-remember-filters" aria-labelledby="s-remember-filters-label" aria-describedby="s-remember-filters-hint"><span class="toggle-track"></span></label>
             </div>
             <div class="settings-row">
               <div class="settings-label">
@@ -999,20 +1022,27 @@
               </div>
               <button id="s-clear-recent" class="btn btn-sm">Clear history</button>
             </div>
+            <div class="settings-row">
+              <div class="settings-label">
+                Setup wizard
+                <div class="settings-hint">Re-runs the first-run walkthrough. It only changes settings you confirm.</div>
+              </div>
+              <button id="s-run-onboarding" class="btn btn-sm">Run setup again</button>
+            </div>
           </div>
           <div class="settings-section">
             <div class="settings-section-title">Secrets Display</div>
             <div class="settings-row">
-              <div class="settings-label">Mask secrets by default</div>
-              <label class="toggle"><input type="checkbox" id="s-mask"><span class="toggle-track"></span></label>
+              <div class="settings-label" id="s-mask-label">Mask secrets by default</div>
+              <label class="toggle"><input type="checkbox" id="s-mask" aria-labelledby="s-mask-label"><span class="toggle-track"></span></label>
             </div>
             <div class="settings-row">
-              <div class="settings-label">Show expiry warnings</div>
-              <label class="toggle"><input type="checkbox" id="s-expiry-warn"><span class="toggle-track"></span></label>
+              <div class="settings-label" id="s-expiry-warn-label">Show expiry warnings</div>
+              <label class="toggle"><input type="checkbox" id="s-expiry-warn" aria-labelledby="s-expiry-warn-label"><span class="toggle-track"></span></label>
             </div>
             <div class="settings-row">
-              <div class="settings-label">Warn days before expiry</div>
-              <input type="number" id="s-expiry-days" class="form-input" style="width:70px" min="1" max="365">
+              <div class="settings-label" id="s-expiry-days-label">Warn days before expiry</div>
+              <input type="number" id="s-expiry-days" aria-labelledby="s-expiry-days-label" class="form-input" style="width:70px" min="1" max="365">
             </div>
           </div>
         </div>
@@ -1022,20 +1052,20 @@
           <div class="settings-section">
             <div class="settings-section-title">Defaults</div>
             <div class="settings-row">
-              <div class="settings-label">Default account name</div>
-              <input type="text" id="s-default-account" class="form-input" style="width:160px" placeholder="e.g. username">
+              <div class="settings-label" id="s-default-account-label">Default account name</div>
+              <input type="text" id="s-default-account" aria-labelledby="s-default-account-label" class="form-input" style="width:160px" placeholder="e.g. username">
             </div>
             <div class="settings-row">
-              <div class="settings-label">Default export format</div>
-              <select id="s-export-format" class="sort-select">
+              <div class="settings-label" id="s-export-format-label">Default export format</div>
+              <select id="s-export-format" aria-labelledby="s-export-format-label" class="sort-select">
                 <option value="dotenv">.env</option>
                 <option value="yaml">YAML</option>
                 <option value="json">JSON</option>
               </select>
             </div>
             <div class="settings-row">
-              <div class="settings-label">.env copy resolves from</div>
-              <select id="s-env-copy-field" class="sort-select">
+              <div class="settings-label" id="s-env-copy-field-label">.env copy resolves from</div>
+              <select id="s-env-copy-field" aria-labelledby="s-env-copy-field-label" class="sort-select">
                 <option value="api_key">API Key (primary secret)</option>
                 <option value="api_secret">API Secret (secondary)</option>
                 <option value="key_id">Label / Key ID</option>
@@ -1059,9 +1089,9 @@
               </div>
             </div>
             <div class="settings-row">
-              <div class="settings-label">Encrypted backup (AES-256-GCM)</div>
+              <div class="settings-label" id="settings-backup-pw-label">Encrypted backup (AES-256-GCM)</div>
               <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
-                <input id="settings-backup-pw" type="password" class="form-input" placeholder="backup password" style="width:150px">
+                <input id="settings-backup-pw" aria-labelledby="settings-backup-pw-label" type="password" class="form-input" placeholder="backup password" style="width:150px">
                 <button id="settings-export-encrypted" class="btn btn-ghost btn-sm">Export .vaultbak</button>
                 <button id="settings-import-encrypted" class="btn btn-ghost btn-sm">Restore .vaultbak</button>
               </div>
@@ -1082,8 +1112,8 @@
             <div class="settings-section-title">Experimental</div>
             <div class="settings-row">
               <div class="settings-label">
-                Experimental project types
-                <div class="settings-hint">
+                <span class="settings-label-text" id="s-experimental-ptypes-label">Experimental project types</span>
+                <div class="settings-hint" id="s-experimental-ptypes-hint">
                   Adds Kubernetes, SSH config, Traefik, Apache, HAProxy, Ansible and PostgreSQL to
                   the project type picker. Only Generic, WireGuard, Docker and Nginx have been
                   tested end to end — the rest generate config this app has never had verified
@@ -1091,19 +1121,19 @@
                   <br>Projects you already created keep working either way.
                 </div>
               </div>
-              <label class="toggle"><input type="checkbox" id="s-experimental-ptypes"><span class="toggle-track"></span></label>
+              <label class="toggle"><input type="checkbox" id="s-experimental-ptypes" aria-labelledby="s-experimental-ptypes-label" aria-describedby="s-experimental-ptypes-hint"><span class="toggle-track"></span></label>
             </div>
             <div class="settings-row">
               <div class="settings-label">
-                Keep the local vault unlocked when switching to a remote
-                <div class="settings-hint">
+                <span class="settings-label-text" id="s-keep-local-unlocked-label">Keep the local vault unlocked when switching to a remote</span>
+                <div class="settings-hint" id="s-keep-local-unlocked-hint">
                   Off by default. When off, connecting to a remote vault zeroizes the local
                   vault's key, so switching back asks for the master password again. When on,
                   the key stays in memory for the rest of the session with nothing on screen
                   to say so — which is what this setting used to do silently.
                 </div>
               </div>
-              <label class="toggle"><input type="checkbox" id="s-keep-local-unlocked"><span class="toggle-track"></span></label>
+              <label class="toggle"><input type="checkbox" id="s-keep-local-unlocked" aria-labelledby="s-keep-local-unlocked-label" aria-describedby="s-keep-local-unlocked-hint"><span class="toggle-track"></span></label>
             </div>
           </div>
           <div class="settings-section">
@@ -1125,23 +1155,23 @@
   </div>
 
   <!-- .env Import Modal -->
-  <div id="env-import-overlay" class="modal-overlay">
+  <div id="env-import-overlay" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="env-import-title">
     <div class="modal-box" style="max-width:540px">
       <div class="modal-header">
-        <div class="modal-title">.env Import</div>
-        <button id="env-import-close" class="icon-btn">✕</button>
+        <div class="modal-title" id="env-import-title">.env Import</div>
+        <button id="env-import-close" class="icon-btn" aria-label="Close">✕</button>
       </div>
       <div class="modal-body">
         <div id="env-import-subtitle" style="font-size:11px;color:var(--text3);margin-bottom:12px"></div>
         <div class="form-row-2" style="margin-bottom:12px">
           <div class="form-group">
-            <label class="form-label">Project tag</label>
+            <label for="env-import-category" class="form-label">Project tag</label>
             <select id="env-import-category" class="form-input">
               <option value="">— none —</option>
             </select>
           </div>
           <div class="form-group">
-            <label class="form-label">Category</label>
+            <label for="env-import-project" class="form-label">Category</label>
             <select id="env-import-project" class="form-input">
               <option value="Universal">Universal</option>
             </select>
@@ -1149,7 +1179,7 @@
         </div>
         <div class="form-row-2" style="margin-bottom:12px">
           <div class="form-group">
-            <label class="form-label">Price Type</label>
+            <label for="env-import-price" class="form-label">Price Type</label>
             <select id="env-import-price" class="form-input">
               <option value="free">Free</option>
               <option value="local">Local</option>
@@ -1158,7 +1188,7 @@
             </select>
           </div>
           <div class="form-group">
-            <label class="form-label">Environment</label>
+            <label for="env-import-env" class="form-label">Environment</label>
             <select id="env-import-env" class="form-input">
               <option value="">— none —</option>
               <option value="production">Production</option>
@@ -1181,9 +1211,9 @@
   </div>
 
   <!-- Keyboard Shortcuts Overlay -->
-  <div id="shortcuts-overlay" class="shortcuts-overlay">
+  <div id="shortcuts-overlay" class="shortcuts-overlay" role="dialog" aria-modal="true" aria-label="Keyboard shortcuts">
     <div class="shortcuts-box">
-      <div class="shortcuts-header">Keyboard Shortcuts<button id="shortcuts-close" class="icon-btn">✕</button></div>
+      <div class="shortcuts-header">Keyboard Shortcuts<button id="shortcuts-close" class="icon-btn" aria-label="Close">✕</button></div>
       <div class="shortcuts-grid">
         <kbd>Ctrl+K</kbd><span>Focus search</span>
         <kbd>Ctrl+N</kbd><span>Add new key</span>
@@ -1198,28 +1228,28 @@
   </div>
 
   <!-- Project Create Modal (Task 8) -->
-  <div id="project-create-overlay" class="modal-overlay">
+  <div id="project-create-overlay" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="project-create-title">
     <div class="modal" style="max-width:420px;width:100%">
       <div class="modal-header">
-        <div class="modal-title">New Project</div>
-        <button id="project-create-close" class="icon-btn">✕</button>
+        <div class="modal-title" id="project-create-title">New Project</div>
+        <button id="project-create-close" class="icon-btn" aria-label="Close">✕</button>
       </div>
       <div class="modal-body">
         <div class="form-group">
-          <label class="form-label">Name <span class="req">*</span></label>
+          <label for="project-create-name" class="form-label">Name <span class="req">*</span></label>
           <input class="form-input" id="project-create-name" type="text" placeholder="e.g. wg0-home or my-app">
           <small style="color:var(--text3);font-size:10px">Use / for hierarchy — ancestor projects auto-created</small>
         </div>
         <div class="form-group">
-          <label class="form-label">Slug <span class="opt">optional</span></label>
+          <label for="project-create-slug" class="form-label">Slug <span class="opt">optional</span></label>
           <input class="form-input mono" id="project-create-slug" type="text" placeholder="derived from the name">
           <small id="project-create-slug-hint" style="color:var(--text3);font-size:10px">
             The stable id entries and permission rules point at. A slug you set here survives renames.
           </small>
         </div>
         <div class="form-group">
-          <label class="form-label">Project Type</label>
-          <div class="project-type-picker">
+          <label class="form-label" id="project-type-label">Project Type</label>
+          <div class="project-type-picker" role="radiogroup" aria-labelledby="project-type-label">
             <button class="project-type-btn active" data-ptype="generic">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/></svg>
               Generic
@@ -1267,7 +1297,7 @@
           </div>
         </div>
         <div class="form-group" id="project-create-desc-group">
-          <label class="form-label">Description <span class="opt">optional</span></label>
+          <label for="project-create-desc" class="form-label">Description <span class="opt">optional</span></label>
           <input class="form-input" id="project-create-desc" type="text" placeholder="Optional description">
         </div>
       </div>
@@ -1279,15 +1309,15 @@
   </div>
 
   <!-- Category Create Modal -->
-  <div id="category-create-overlay" class="modal-overlay">
+  <div id="category-create-overlay" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="category-create-title">
     <div class="modal" style="max-width:380px;width:100%">
       <div class="modal-header">
-        <div class="modal-title">New Category</div>
-        <button id="category-create-close" class="icon-btn">✕</button>
+        <div class="modal-title" id="category-create-title">New Category</div>
+        <button id="category-create-close" class="icon-btn" aria-label="Close">✕</button>
       </div>
       <div class="modal-body">
         <div class="form-group">
-          <label class="form-label">Name <span class="req">*</span></label>
+          <label for="category-create-name" class="form-label">Name <span class="req">*</span></label>
           <input class="form-input" id="category-create-name" type="text" placeholder="e.g. cloud or cloud/aws" maxlength="64">
           <small style="color:var(--text3);font-size:10px">Use / for visual grouping — e.g. cloud/aws</small>
         </div>
@@ -1300,19 +1330,19 @@
   </div>
 
   <!-- Chunk Edit Modal (Task 6d) -->
-  <div id="chunk-edit-overlay" class="modal-overlay">
+  <div id="chunk-edit-overlay" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="chunk-edit-title">
     <div class="modal" style="max-width:580px;width:100%">
       <div class="modal-header">
-        <div class="modal-title">Edit Chunk</div>
-        <button id="chunk-edit-close" class="icon-btn">✕</button>
+        <div class="modal-title" id="chunk-edit-title">Edit Chunk</div>
+        <button id="chunk-edit-close" class="icon-btn" aria-label="Close">✕</button>
       </div>
       <div class="modal-body">
         <div class="form-group">
-          <label class="form-label">Chunk Name <span class="req">*</span></label>
+          <label for="chunk-edit-name" class="form-label">Chunk Name <span class="req">*</span></label>
           <input class="form-input" id="chunk-edit-name" type="text" placeholder="e.g. Interface, Peer — office">
         </div>
         <div class="form-group">
-          <label class="form-label">Notes <span class="opt">optional</span></label>
+          <label for="chunk-edit-notes" class="form-label">Notes <span class="opt">optional</span></label>
           <input class="form-input" id="chunk-edit-notes" type="text" placeholder="Optional notes shown under the chunk header">
         </div>
         <div class="form-group" style="flex-direction:row;align-items:center;gap:8px">
@@ -1333,7 +1363,7 @@
   </div>
 
   <!-- Confirm dialog -->
-  <div id="confirm-overlay" class="modal-overlay">
+  <div id="confirm-overlay" class="modal-overlay" role="dialog" aria-modal="true" aria-describedby="confirm-message">
     <div class="modal" style="max-width:340px;width:100%">
       <div class="modal-body" style="padding-top:24px">
         <p id="confirm-message" style="margin:0;font-size:13px;line-height:1.5;color:var(--text)"></p>
@@ -1346,12 +1376,12 @@
   </div>
 
   <!-- Prompt dialog -->
-  <div id="prompt-overlay" class="modal-overlay">
+  <div id="prompt-overlay" class="modal-overlay" role="dialog" aria-modal="true" aria-describedby="prompt-message">
     <div id="prompt-modal" class="modal" style="max-width:340px;width:100%">
       <div class="modal-body" style="padding-top:24px">
         <p id="prompt-message" style="margin:0 0 12px;font-size:13px;line-height:1.5;color:var(--text)"></p>
-        <input id="prompt-input" class="form-input" type="text" style="width:100%">
-        <textarea id="prompt-textarea" class="form-input mono" rows="14" style="width:100%;resize:vertical;font-size:11px;display:none"></textarea>
+        <input id="prompt-input" class="form-input" type="text" aria-labelledby="prompt-message" style="width:100%">
+        <textarea id="prompt-textarea" class="form-input mono" aria-labelledby="prompt-message" rows="14" style="width:100%;resize:vertical;font-size:11px;display:none"></textarea>
         <p id="prompt-hint" style="margin:6px 0 0;font-size:10px;color:var(--text3);display:none">Ctrl+Enter to confirm</p>
       </div>
       <div class="modal-footer">
@@ -1362,11 +1392,11 @@
   </div>
 
   <!-- ENV Link Modal -->
-  <div id="env-link-overlay" class="modal-overlay">
+  <div id="env-link-overlay" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="env-link-title">
     <div class="modal-box" style="max-width:640px">
       <div class="modal-header">
-        <div class="modal-title">Link .env fields to vault</div>
-        <button id="env-link-close" class="icon-btn">✕</button>
+        <div class="modal-title" id="env-link-title">Link .env fields to vault</div>
+        <button id="env-link-close" class="icon-btn" aria-label="Close">✕</button>
       </div>
       <div class="modal-body" style="padding:0">
         <div id="env-link-subtitle" style="padding:10px 16px 0;font-size:11px;color:var(--text3)"></div>

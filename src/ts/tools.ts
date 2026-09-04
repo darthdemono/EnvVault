@@ -165,10 +165,31 @@ export function initTools() {
   const invoke = (window as any).__TAURI__?.core?.invoke?.bind((window as any).__TAURI__?.core);
 
   // ── Activity bar panel switching ──
-  document.querySelectorAll<HTMLButtonElement>('.activity-btn').forEach((btn) => {
+  const activityBtns = Array.from(document.querySelectorAll<HTMLButtonElement>('.activity-btn'));
+  activityBtns.forEach((btn, i) => {
     btn.addEventListener('click', () =>
       switchPanel(btn.dataset.panel as 'secrets' | 'tools' | 'users'),
     );
+    // Arrow keys move between tabs, which is what `role="tablist"` promises. A
+    // roving tabindex without them leaves the other three tabs unreachable from
+    // the keyboard entirely — worse than the plain button list it replaced.
+    btn.addEventListener('keydown', (e) => {
+      const delta =
+        e.key === 'ArrowDown' || e.key === 'ArrowRight'
+          ? 1
+          : e.key === 'ArrowUp' || e.key === 'ArrowLeft'
+            ? -1
+            : e.key === 'Home'
+              ? -i
+              : e.key === 'End'
+                ? activityBtns.length - 1 - i
+                : 0;
+      if (!delta) return;
+      e.preventDefault();
+      const next = activityBtns[(i + delta + activityBtns.length) % activityBtns.length];
+      next.focus();
+      switchPanel(next.dataset.panel as 'secrets' | 'tools' | 'users');
+    });
   });
 
   // ── Tool nav switching ──
@@ -212,11 +233,18 @@ export function initTools() {
         'all' | 'price' | 'env' | 'category' | 'project' | 'tags' | 'pools' | 'prefixes'
       )[];
       const isNowCollapsed = el.classList.contains('collapsed');
+      btn.setAttribute('aria-expanded', String(!isNowCollapsed));
       const updated = isNowCollapsed
         ? [...new Set([...collapsed, section])]
         : collapsed.filter((s) => s !== section);
       Settings.set('collapsedSections', updated as any);
     });
+    // Seed from the restored state rather than from the markup: collapsed
+    // sections persist, so a fresh launch can open with several already shut and
+    // every one of them announcing "expanded".
+    const el = document.getElementById(`sidebar-section-${btn.dataset.section}`);
+    btn.setAttribute('aria-expanded', String(!el?.classList.contains('collapsed')));
+    btn.setAttribute('aria-controls', `sidebar-section-${btn.dataset.section}`);
   });
 
   // Restore active panel & tool from settings

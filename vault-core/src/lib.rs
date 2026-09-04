@@ -35,6 +35,11 @@ pub use permex::{
 };
 
 pub mod users;
+
+/// RFC 6238 time-based one-time passwords, for **sub-user login only** — the
+/// owner authenticates by deriving the SQLCipher key, so there is nothing for a
+/// second factor to gate. See the module docs for why this was written twice.
+pub mod totp;
 pub use users::{
     assign_user_class, authority_tier, class_authority_tier, create_user, create_user_class,
     create_user_token, delete_user, delete_user_class, effective_permission_expr,

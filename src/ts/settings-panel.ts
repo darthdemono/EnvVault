@@ -351,6 +351,24 @@ export function openSettings() {
       showToast('Search history cleared', 'ok', 1500);
     };
 
+  const runOnboarding = document.getElementById('s-run-onboarding');
+  if (runOnboarding)
+    (runOnboarding as HTMLElement).onclick = async () => {
+      // Closing Settings first: the wizard edits two of the settings this panel
+      // is showing, and leaving the panel open behind it would display stale
+      // values that overwrite the wizard's on the next Save.
+      closeSettings();
+      const { showOnboarding } = await import('./onboarding');
+      const { openAdd } = await import('./modals');
+      showOnboarding({
+        onAdd: () => openAdd(),
+        // Re-running the wizard from Settings has no file picker to hand it —
+        // that closure lives in `init()`. Pointing at the load banner's browse
+        // button is the same action by a different route.
+        onImport: () => document.getElementById('load-banner-browse-btn')?.click(),
+      });
+    };
+
   ['s-card-size', 's-grid-cols', 's-activity-bar-position', 's-activity-bar-style'].forEach(
     (id) => {
       const key =

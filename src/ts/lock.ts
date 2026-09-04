@@ -19,6 +19,7 @@ import {
   findSavedRemote,
   renderRemotePanel,
   markRemoteConnected,
+  authUserInteractive,
 } from './remote-panel';
 import { showDropdown } from './modals';
 import {
@@ -370,7 +371,7 @@ export async function showUnlockModal(isFirstRun: boolean) {
         const remote = new RemoteVaultStore(serverUrl, known?.certFingerprint);
         let ok: boolean;
         if (username) {
-          ok = await remote.authUser(username, pw);
+          ok = await authUserInteractive(remote, username, pw);
         } else {
           ok = await remote.unlock(pw);
         }

@@ -415,6 +415,10 @@ struct AuthRequest {
     username: Option<String>,
     password: Option<String>,
     token: Option<String>,
+    /// Second-factor code. Required only when the user has a confirmed factor
+    /// **and** authenticated by password — never for token auth, which is what
+    /// CI uses and which has no human present to read a phone.
+    totp: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -852,9 +856,10 @@ async fn auth_user(
         Err(e) => return err_json(StatusCode::INTERNAL_SERVER_ERROR, &e).into_response(),
     };
 
-    let user_opt = match (&req.username, &req.password, &req.token) {
-        (Some(u), Some(p), _) => vault_core::verify_user_password(&conn, u, p),
-        (_, _, Some(t)) => vault_core::verify_user_token(&conn, t),
+    // Which credential was used decides whether a second factor applies at all.
+    let (user_opt, via_password) = match (&req.username, &req.password, &req.token) {
+        (Some(u), Some(p), _) => (vault_core::verify_user_password(&conn, u, p), true),
+        (_, _, Some(t)) => (vault_core::verify_user_token(&conn, t), false),
         _ => {
             return err_json(
                 StatusCode::BAD_REQUEST,
@@ -866,6 +871,46 @@ async fn auth_user(
 
     match user_opt {
         Ok(Some(user)) => {
+            // TOTP gates the password path only. Demanding it on token auth
+            // breaks every CI integration, and that exact regression is already
+            // in this project's bug history from Phase 5.1.
+            if via_password {
+                match vault_core::users::totp_required(&conn, &user.id) {
+                    Ok(true) => {
+                        let Some(code) = req.totp.as_deref() else {
+                            // Not a failure to throttle: the password was
+                            // correct, and the client simply has to ask the user
+                            // for the second half. A distinguishable code is what
+                            // lets the CLI prompt instead of guessing.
+                            return (
+                                StatusCode::UNAUTHORIZED,
+                                Json(serde_json::json!({
+                                    "error": "Second factor required",
+                                    "totp_required": true,
+                                })),
+                            )
+                                .into_response();
+                        };
+                        match vault_core::users::verify_user_totp(&conn, &user.id, code) {
+                            Ok(true) => {}
+                            Ok(false) => {
+                                record_auth_failure(&mut state.rate_limiter.lock().unwrap(), &ip);
+                                return err_json(StatusCode::UNAUTHORIZED, "Invalid credentials")
+                                    .into_response();
+                            }
+                            Err(e) => {
+                                return err_json(StatusCode::INTERNAL_SERVER_ERROR, &e)
+                                    .into_response()
+                            }
+                        }
+                    }
+                    Ok(false) => {}
+                    Err(e) => {
+                        return err_json(StatusCode::INTERNAL_SERVER_ERROR, &e).into_response()
+                    }
+                }
+            }
+
             let session_token = uuid::Uuid::new_v4().to_string();
             live_sessions(&state).insert(
                 session_token.clone(),
@@ -1597,6 +1642,111 @@ async fn assign_class_handler(
     }
 }
 
+// ── TOTP (sub-user second factor) ─────────────────────────────────────────────
+//
+// Gated by `guard_manage_user`, the same tier check that governs setting a
+// password: managing someone's second factor is exactly as strong as being able
+// to reset their credentials, so it must not be a weaker door to the same room.
+// A user reaches their *own* factor because `guard_manage_user` already permits
+// acting on oneself.
+
+#[derive(Deserialize)]
+struct TotpCodeRequest {
+    code: String,
+}
+
+async fn totp_status_handler(
+    headers: HeaderMap,
+    State(state): State<AppState>,
+    Path(user_id): Path<String>,
+) -> impl IntoResponse {
+    let (_, session) = match extract_session(&headers, &state) {
+        Ok(s) => s,
+        Err(e) => return e.into_response(),
+    };
+    let conn = match open_db(&state.db_path, &session.vault_key) {
+        Ok(c) => c,
+        Err(e) => return err_json(StatusCode::INTERNAL_SERVER_ERROR, &e).into_response(),
+    };
+    if let Err(e) = guard_manage_user(&conn, &session, &user_id) {
+        return e;
+    }
+    match vault_core::users::totp_status(&conn, &user_id) {
+        Ok(st) => (StatusCode::OK, Json(st)).into_response(),
+        Err(e) => err_json(StatusCode::NOT_FOUND, &e).into_response(),
+    }
+}
+
+/// Phase one of enrollment. Returns the secret **once**; nothing else ever does.
+async fn totp_enroll_handler(
+    headers: HeaderMap,
+    State(state): State<AppState>,
+    Path(user_id): Path<String>,
+) -> impl IntoResponse {
+    let (_, session) = match extract_session(&headers, &state) {
+        Ok(s) => s,
+        Err(e) => return e.into_response(),
+    };
+    let conn = match open_db(&state.db_path, &session.vault_key) {
+        Ok(c) => c,
+        Err(e) => return err_json(StatusCode::INTERNAL_SERVER_ERROR, &e).into_response(),
+    };
+    if let Err(e) = guard_manage_user(&conn, &session, &user_id) {
+        return e;
+    }
+    match vault_core::users::totp_enroll(&conn, &user_id, "EnvVault") {
+        Ok(st) => (StatusCode::OK, Json(st)).into_response(),
+        Err(e) => err_json(StatusCode::BAD_REQUEST, &e).into_response(),
+    }
+}
+
+/// Phase two: a correct code is what enables the factor.
+async fn totp_confirm_handler(
+    headers: HeaderMap,
+    State(state): State<AppState>,
+    Path(user_id): Path<String>,
+    Json(req): Json<TotpCodeRequest>,
+) -> impl IntoResponse {
+    let (_, session) = match extract_session(&headers, &state) {
+        Ok(s) => s,
+        Err(e) => return e.into_response(),
+    };
+    let conn = match open_db(&state.db_path, &session.vault_key) {
+        Ok(c) => c,
+        Err(e) => return err_json(StatusCode::INTERNAL_SERVER_ERROR, &e).into_response(),
+    };
+    if let Err(e) = guard_manage_user(&conn, &session, &user_id) {
+        return e;
+    }
+    match vault_core::users::totp_confirm(&conn, &user_id, &req.code) {
+        Ok(true) => (StatusCode::OK, Json(serde_json::json!({ "enabled": true }))).into_response(),
+        Ok(false) => err_json(StatusCode::UNAUTHORIZED, "Incorrect code").into_response(),
+        Err(e) => err_json(StatusCode::BAD_REQUEST, &e).into_response(),
+    }
+}
+
+async fn totp_disable_handler(
+    headers: HeaderMap,
+    State(state): State<AppState>,
+    Path(user_id): Path<String>,
+) -> impl IntoResponse {
+    let (_, session) = match extract_session(&headers, &state) {
+        Ok(s) => s,
+        Err(e) => return e.into_response(),
+    };
+    let conn = match open_db(&state.db_path, &session.vault_key) {
+        Ok(c) => c,
+        Err(e) => return err_json(StatusCode::INTERNAL_SERVER_ERROR, &e).into_response(),
+    };
+    if let Err(e) = guard_manage_user(&conn, &session, &user_id) {
+        return e;
+    }
+    match vault_core::users::totp_disable(&conn, &user_id) {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(e) => err_json(StatusCode::BAD_REQUEST, &e).into_response(),
+    }
+}
+
 // ── Class management (capability-gated) ───────────────────────────────────────
 
 async fn list_classes_handler(
@@ -2059,6 +2209,21 @@ pub fn build_router(state: AppState, port: u16) -> Router {
             "/api/users/{user_id}/class",
             axum::routing::put(assign_class_handler),
         )
+        // One `.route()` per path, methods chained. Registering the same path
+        // twice is a startup panic in axum 0.8, not a compile error — the same
+        // class of failure as the `:param` syntax change.
+        .route(
+            "/api/users/{user_id}/totp",
+            get(totp_status_handler).delete(totp_disable_handler),
+        )
+        .route(
+            "/api/users/{user_id}/totp/enroll",
+            axum::routing::post(totp_enroll_handler),
+        )
+        .route(
+            "/api/users/{user_id}/totp/confirm",
+            axum::routing::post(totp_confirm_handler),
+        )
         .route(
             "/api/classes",
             get(list_classes_handler).post(create_class_handler),
@@ -2203,6 +2368,15 @@ mod tests {
     fn state(lan: bool) -> AppState {
         let d = scratch("state");
         AppState::new(d.join("vault.db"), d.join("vault.salt"), None, 480, 24, lan)
+    }
+
+    #[test]
+    fn the_router_builds_without_a_duplicate_path_panic() {
+        // axum 0.8 panics at *startup*, not compile time, when two `.route()`
+        // calls name the same path — the TOTP status and disable handlers were
+        // written that way first. A compiling binary that cannot boot is the
+        // worst shape this can take, so the router is constructed in a test.
+        let _ = build_router(state(false), 8080);
     }
 
     #[test]

@@ -40,7 +40,15 @@ type PermissionsBySubject = HashMap<String, (Vec<Scope>, Vec<Scope>)>;
 ///
 /// `password_hash` and `last_seen_at` are nullable — a user created by an
 /// administrator has no hash until first login, and has never been seen.
-type UserRow = (String, String, Option<String>, i32, String, Option<String>);
+type UserRow = (
+    String,
+    String,
+    Option<String>,
+    i32,
+    String,
+    Option<String>,
+    i32,
+);
 
 // ── Public types ──────────────────────────────────────────────────────────────
 
@@ -78,6 +86,9 @@ pub struct UserRecord {
     pub is_owner: bool,
     pub created_at: String,
     pub last_seen_at: Option<String>,
+    /// True when the user has a *confirmed* second factor. Enrollment alone does
+    /// not set it — see [`totp_enroll`] for why the two are separate.
+    pub totp_enabled: bool,
 }
 
 /// A stored API token descriptor.  The actual token is returned only on creation.
@@ -172,6 +183,22 @@ pub fn init_users_schema(conn: &Connection) -> Result<(), String> {
         [],
     )
     .ok();
+    // TOTP, three columns rather than one:
+    //   totp_secret     — base32, present from enrollment onwards
+    //   totp_enabled    — set only once a code has been confirmed
+    //   totp_last_step  — the anti-replay high-water mark
+    // Splitting secret from enabled is what makes enrollment two-phase: a secret
+    // that exists but is not enabled locks nobody out if the authenticator never
+    // actually took the QR-less manual entry.
+    conn.execute("ALTER TABLE users ADD COLUMN totp_secret TEXT", [])
+        .ok();
+    conn.execute(
+        "ALTER TABLE users ADD COLUMN totp_enabled INTEGER NOT NULL DEFAULT 0",
+        [],
+    )
+    .ok();
+    conn.execute("ALTER TABLE users ADD COLUMN totp_last_step INTEGER", [])
+        .ok();
 
     // Seed default classes if none exist
     let class_count: i32 = conn
@@ -606,6 +633,7 @@ pub fn create_user(
         is_owner,
         created_at: now,
         last_seen_at: None,
+        totp_enabled: false,
     })
 }
 
@@ -641,7 +669,7 @@ pub fn verify_user_password(
 ) -> Result<Option<UserRecord>, String> {
     let row: Option<UserRow> = conn
         .query_row(
-            "SELECT id, username, password_hash, is_owner, created_at, last_seen_at \
+            "SELECT id, username, password_hash, is_owner, created_at, last_seen_at, totp_enabled \
              FROM users WHERE username = ?1",
             rusqlite::params![username],
             |r| {
@@ -652,13 +680,14 @@ pub fn verify_user_password(
                     r.get(3)?,
                     r.get(4)?,
                     r.get(5)?,
+                    r.get(6)?,
                 ))
             },
         )
         .optional()
         .map_err(|e| e.to_string())?;
 
-    let Some((id, uname, hash_opt, is_owner_i, created_at, last_seen)) = row else {
+    let Some((id, uname, hash_opt, is_owner_i, created_at, last_seen, totp_on)) = row else {
         return Ok(None);
     };
     // A user with no password (token-only, or the owner row) simply cannot
@@ -691,6 +720,7 @@ pub fn verify_user_password(
         is_owner: is_owner_i != 0,
         created_at,
         last_seen_at: last_seen,
+        totp_enabled: totp_on != 0,
     }))
 }
 
@@ -700,7 +730,8 @@ pub fn verify_user_token(conn: &Connection, token: &str) -> Result<Option<UserRe
     let now = iso_now();
     let row: Option<UserRow> = conn
         .query_row(
-            "SELECT u.id, u.username, u.password_hash, u.is_owner, u.created_at, u.last_seen_at \
+            "SELECT u.id, u.username, u.password_hash, u.is_owner, u.created_at, u.last_seen_at, \
+                     u.totp_enabled \
              FROM user_tokens t JOIN users u ON u.id = t.user_id \
              WHERE t.token_hash = ?1 AND (t.expires_at IS NULL OR t.expires_at > ?2)",
             rusqlite::params![token_hash, now],
@@ -712,13 +743,14 @@ pub fn verify_user_token(conn: &Connection, token: &str) -> Result<Option<UserRe
                     r.get(3)?,
                     r.get(4)?,
                     r.get(5)?,
+                    r.get(6)?,
                 ))
             },
         )
         .optional()
         .map_err(|e| e.to_string())?;
 
-    let Some((id, uname, hash_opt, is_owner_i, created_at, last_seen)) = row else {
+    let Some((id, uname, hash_opt, is_owner_i, created_at, last_seen, totp_on)) = row else {
         return Ok(None);
     };
     touch_last_seen(conn, &id)?;
@@ -729,6 +761,7 @@ pub fn verify_user_token(conn: &Connection, token: &str) -> Result<Option<UserRe
         is_owner: is_owner_i != 0,
         created_at,
         last_seen_at: last_seen,
+        totp_enabled: totp_on != 0,
     }))
 }
 
@@ -736,7 +769,7 @@ pub fn verify_user_token(conn: &Connection, token: &str) -> Result<Option<UserRe
 pub fn list_users(conn: &Connection) -> Result<Vec<UserRecord>, String> {
     let mut stmt = conn
         .prepare(
-            "SELECT id, username, password_hash, is_owner, created_at, last_seen_at \
+            "SELECT id, username, password_hash, is_owner, created_at, last_seen_at, totp_enabled \
          FROM users ORDER BY is_owner DESC, created_at ASC",
         )
         .map_err(|e| e.to_string())?;
@@ -749,6 +782,7 @@ pub fn list_users(conn: &Connection) -> Result<Vec<UserRecord>, String> {
                 is_owner: r.get::<_, i32>(3)? != 0,
                 created_at: r.get(4)?,
                 last_seen_at: r.get(5)?,
+                totp_enabled: r.get::<_, i32>(6)? != 0,
             })
         })
         .map_err(|e| e.to_string())?
@@ -756,6 +790,215 @@ pub fn list_users(conn: &Connection) -> Result<Vec<UserRecord>, String> {
     rows.into_iter()
         .map(|r| r.map_err(|e| e.to_string()))
         .collect()
+}
+
+// ── TOTP (second factor for sub-users) ────────────────────────────────────────
+
+/// What the UI and CLI need to draw a user's second-factor state.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TotpStatus {
+    /// A secret exists. Enrollment has started but may never have been confirmed.
+    pub enrolled: bool,
+    /// A code has been confirmed, and login now requires one.
+    pub enabled: bool,
+    /// Present **only** in the response to [`totp_enroll`]. Never returned by
+    /// [`totp_status`]: the secret is shown once, at the moment the user is
+    /// putting it into their authenticator, and a status endpoint that handed it
+    /// back would make every later read of the user list a way to clone the
+    /// factor.
+    pub secret: Option<String>,
+    /// The `otpauth://` URI for the same secret, on the same terms.
+    pub uri: Option<String>,
+}
+
+/// Refuses anything to do with TOTP for the vault owner.
+///
+/// The owner authenticates by deriving the SQLCipher key from the master
+/// password; there is no stored hash and no login form in that path, so a second
+/// factor here would be a control that gates nothing while appearing to gate
+/// everything. Enforced in `vault-core` rather than at each caller, because a
+/// check that lives in the server is one the CLI and the desktop app each have
+/// to remember separately.
+fn refuse_owner(conn: &Connection, user_id: &str) -> Result<(), String> {
+    let is_owner: i32 = conn
+        .query_row(
+            "SELECT is_owner FROM users WHERE id = ?1",
+            rusqlite::params![user_id],
+            |r| r.get(0),
+        )
+        .optional()
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "no such user".to_string())?;
+    if is_owner != 0 {
+        return Err(
+            "the vault owner authenticates by deriving the vault key; a second factor \
+             there would gate nothing"
+                .into(),
+        );
+    }
+    Ok(())
+}
+
+/// Phase one of enrollment: mints a secret and returns it with its URI.
+///
+/// The factor is **not** enabled by this call. Enabling on enrollment locks out
+/// any user whose authenticator did not actually take the secret — which, with
+/// manual base32 entry and no QR code, is a routine outcome rather than an edge
+/// case. [`totp_confirm`] is what turns it on, and it requires a working code.
+///
+/// Re-enrolling an already-enabled user replaces the secret and switches the
+/// factor back off, so a half-finished re-enrollment cannot leave the account
+/// requiring a code nobody can generate.
+pub fn totp_enroll(conn: &Connection, user_id: &str, issuer: &str) -> Result<TotpStatus, String> {
+    refuse_owner(conn, user_id)?;
+    let username: String = conn
+        .query_row(
+            "SELECT username FROM users WHERE id = ?1",
+            rusqlite::params![user_id],
+            |r| r.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+
+    let secret = crate::totp::generate_secret();
+    conn.execute(
+        "UPDATE users SET totp_secret = ?1, totp_enabled = 0, totp_last_step = NULL WHERE id = ?2",
+        rusqlite::params![secret, user_id],
+    )
+    .map_err(|e| e.to_string())?;
+
+    let uri = crate::totp::otpauth_uri(issuer, &username, &secret);
+    Ok(TotpStatus {
+        enrolled: true,
+        enabled: false,
+        secret: Some(secret),
+        uri: Some(uri),
+    })
+}
+
+/// Phase two: enables the factor once the user proves their authenticator works.
+///
+/// The confirming code's step is recorded, so the very code used to enable the
+/// factor cannot then be replayed to log in with it.
+///
+/// **`confirm` obeys the same anti-replay mark as `verify`, and never moves it
+/// backwards.** Passing `None` here — which the first version did — makes this a
+/// second oracle where one code works twice, and worse: re-confirming with a
+/// code from an *earlier* step wrote that lower step back, re-opening every step
+/// in between for replay on the login path. Enrollment is what clears the mark,
+/// and it does so deliberately (see [`totp_enroll`]).
+pub fn totp_confirm(conn: &Connection, user_id: &str, code: &str) -> Result<bool, String> {
+    refuse_owner(conn, user_id)?;
+    let row: Option<(Option<String>, Option<i64>)> = conn
+        .query_row(
+            "SELECT totp_secret, totp_last_step FROM users WHERE id = ?1",
+            rusqlite::params![user_id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional()
+        .map_err(|e| e.to_string())?;
+    let Some((secret, last_step)) = row else {
+        return Err("no such user".into());
+    };
+    let Some(secret) = secret else {
+        return Err("no enrollment in progress; run enroll first".into());
+    };
+    let last = last_step.and_then(|v| u64::try_from(v).ok());
+    let Some(accepted) = crate::totp::verify(&secret, code, last, crate::totp::now_unix()) else {
+        return Ok(false);
+    };
+    conn.execute(
+        "UPDATE users SET totp_enabled = 1, totp_last_step = ?1 WHERE id = ?2",
+        rusqlite::params![accepted.step as i64, user_id],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(true)
+}
+
+/// Removes the factor entirely, secret included.
+///
+/// Clearing the secret rather than only the flag matters: leaving it behind
+/// means a later `totp_enable` could silently re-arm a secret the user believes
+/// they destroyed, on an authenticator entry they may have deleted.
+pub fn totp_disable(conn: &Connection, user_id: &str) -> Result<(), String> {
+    conn.execute(
+        "UPDATE users SET totp_secret = NULL, totp_enabled = 0, totp_last_step = NULL \
+         WHERE id = ?1",
+        rusqlite::params![user_id],
+    )
+    .map(|_| ())
+    .map_err(|e| e.to_string())
+}
+
+/// Reports enrollment and enabled state. Never returns the secret — see
+/// [`TotpStatus::secret`].
+pub fn totp_status(conn: &Connection, user_id: &str) -> Result<TotpStatus, String> {
+    let (secret, enabled): (Option<String>, i32) = conn
+        .query_row(
+            "SELECT totp_secret, totp_enabled FROM users WHERE id = ?1",
+            rusqlite::params![user_id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .map_err(|e| e.to_string())?;
+    Ok(TotpStatus {
+        enrolled: secret.is_some(),
+        enabled: enabled != 0,
+        secret: None,
+        uri: None,
+    })
+}
+
+/// Whether login for this user must present a code.
+pub fn totp_required(conn: &Connection, user_id: &str) -> Result<bool, String> {
+    let enabled: i32 = conn
+        .query_row(
+            "SELECT totp_enabled FROM users WHERE id = ?1",
+            rusqlite::params![user_id],
+            |r| r.get(0),
+        )
+        .optional()
+        .map_err(|e| e.to_string())?
+        .unwrap_or(0);
+    Ok(enabled != 0)
+}
+
+/// Verifies a login code and advances the anti-replay high-water mark.
+///
+/// Fails **closed**: a NULL secret on an enabled account returns `false` rather
+/// than `true`. That exact inversion is in this project's bug history — the
+/// Phase 5.1 implementation returned `Ok(true)` for a missing secret, which made
+/// "enabled but unconfigured" the same as "authenticated".
+///
+/// The step is written back before the caller is told the code was good, so a
+/// concurrent second attempt with the same code loses the race rather than
+/// winning it.
+pub fn verify_user_totp(conn: &Connection, user_id: &str, code: &str) -> Result<bool, String> {
+    let row: Option<(Option<String>, i32, Option<i64>)> = conn
+        .query_row(
+            "SELECT totp_secret, totp_enabled, totp_last_step FROM users WHERE id = ?1",
+            rusqlite::params![user_id],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .optional()
+        .map_err(|e| e.to_string())?;
+    let Some((secret, enabled, last_step)) = row else {
+        return Ok(false);
+    };
+    if enabled == 0 {
+        return Ok(false);
+    }
+    let Some(secret) = secret else {
+        return Ok(false);
+    };
+    let last = last_step.and_then(|v| u64::try_from(v).ok());
+    let Some(accepted) = crate::totp::verify(&secret, code, last, crate::totp::now_unix()) else {
+        return Ok(false);
+    };
+    conn.execute(
+        "UPDATE users SET totp_last_step = ?1 WHERE id = ?2",
+        rusqlite::params![accepted.step as i64, user_id],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(true)
 }
 
 /// Deletes a user plus all their tokens and permissions.
@@ -2427,5 +2670,192 @@ mod strict_write_tests {
         let c = db();
         assert!(set_strict_write(&c, "user", "no-such-id", true).is_err());
         assert!(set_strict_write(&c, "banana", "x", true).is_err());
+    }
+}
+
+#[cfg(test)]
+mod totp_user_tests {
+    use super::*;
+    use crate::totp;
+
+    fn db() -> Connection {
+        let c = Connection::open_in_memory().unwrap();
+        crate::init_schema(&c).unwrap();
+        init_users_schema(&c).unwrap();
+        c
+    }
+
+    fn a_user(c: &Connection) -> String {
+        create_user(c, "alice", Some("hunter2hunter2"), false)
+            .unwrap()
+            .id
+    }
+
+    #[test]
+    fn enrollment_does_not_enable_the_factor() {
+        // Enabling on enrollment locks out anyone whose authenticator did not
+        // actually take the manually-typed secret — with no QR code, that is a
+        // routine outcome, not an edge case.
+        let c = db();
+        let id = a_user(&c);
+        let st = totp_enroll(&c, &id, "EnvVault").unwrap();
+        assert!(st.enrolled && !st.enabled);
+        assert!(st.secret.is_some() && st.uri.is_some());
+        assert!(!totp_required(&c, &id).unwrap());
+        // And a login code is refused while it is unconfirmed.
+        let code = totp::totp_at(st.secret.as_ref().unwrap(), totp::now_unix()).unwrap();
+        assert!(!verify_user_totp(&c, &id, &code).unwrap());
+    }
+
+    #[test]
+    fn confirming_enables_it_and_burns_the_confirming_code() {
+        let c = db();
+        let id = a_user(&c);
+        let secret = totp_enroll(&c, &id, "EnvVault").unwrap().secret.unwrap();
+        let code = totp::totp_at(&secret, totp::now_unix()).unwrap();
+
+        assert!(totp_confirm(&c, &id, &code).unwrap());
+        assert!(totp_required(&c, &id).unwrap());
+        assert!(list_users(&c).unwrap().iter().any(|u| u.totp_enabled));
+        // The code that enabled the factor must not then log the user in.
+        assert!(!verify_user_totp(&c, &id, &code).unwrap());
+    }
+
+    #[test]
+    fn a_login_code_cannot_be_used_twice() {
+        // The replay window without this is ninety seconds wide, which for a
+        // second factor is the attack it exists to stop.
+        let c = db();
+        let id = a_user(&c);
+        let secret = totp_enroll(&c, &id, "EnvVault").unwrap().secret.unwrap();
+        // Confirm with a code from the previous step so the current one is still
+        // usable for the login this test is about.
+        let prev = totp::totp_at(&secret, totp::now_unix() - totp::STEP_SECS).unwrap();
+        assert!(totp_confirm(&c, &id, &prev).unwrap());
+
+        let code = totp::totp_at(&secret, totp::now_unix()).unwrap();
+        assert!(verify_user_totp(&c, &id, &code).unwrap());
+        assert!(!verify_user_totp(&c, &id, &code).unwrap());
+    }
+
+    #[test]
+    fn confirm_obeys_the_anti_replay_mark_and_never_moves_it_backwards() {
+        // Found by an end-to-end run, not by the unit tests: `confirm` passed
+        // `None` for the last accepted step, so the confirming code worked a
+        // second time — and re-confirming with a code from an *earlier* step
+        // wrote that lower step back, re-opening every step in between for
+        // replay on the login path.
+        let c = db();
+        let id = a_user(&c);
+        let secret = totp_enroll(&c, &id, "EnvVault").unwrap().secret.unwrap();
+        let now = totp::now_unix();
+
+        let code = totp::totp_at(&secret, now).unwrap();
+        assert!(totp_confirm(&c, &id, &code).unwrap());
+        assert!(
+            !totp_confirm(&c, &id, &code).unwrap(),
+            "the confirming code must not be accepted twice"
+        );
+
+        let mark = || -> i64 {
+            c.query_row(
+                "SELECT totp_last_step FROM users WHERE id = ?1",
+                rusqlite::params![id],
+                |r| r.get(0),
+            )
+            .unwrap()
+        };
+        let after_confirm = mark();
+        // An older code, still inside the skew window, must not be accepted and
+        // must not drag the high-water mark back with it.
+        let older = totp::totp_at(&secret, now - totp::STEP_SECS).unwrap();
+        assert!(!totp_confirm(&c, &id, &older).unwrap());
+        assert_eq!(mark(), after_confirm, "the mark moved backwards");
+    }
+
+    #[test]
+    fn an_enabled_factor_with_no_secret_fails_closed() {
+        // This precise inversion is in the bug history: the Phase 5.1 code
+        // returned Ok(true) for a NULL secret, making "enabled but unconfigured"
+        // indistinguishable from "authenticated".
+        let c = db();
+        let id = a_user(&c);
+        c.execute(
+            "UPDATE users SET totp_enabled = 1, totp_secret = NULL WHERE id = ?1",
+            rusqlite::params![id],
+        )
+        .unwrap();
+        assert!(!verify_user_totp(&c, &id, "123456").unwrap());
+        assert!(!verify_user_totp(&c, &id, "").unwrap());
+    }
+
+    #[test]
+    fn status_never_hands_the_secret_back() {
+        // Otherwise every read of the user list is a way to clone the factor.
+        let c = db();
+        let id = a_user(&c);
+        totp_enroll(&c, &id, "EnvVault").unwrap();
+        let st = totp_status(&c, &id).unwrap();
+        assert!(st.enrolled && !st.enabled);
+        assert!(st.secret.is_none() && st.uri.is_none());
+    }
+
+    #[test]
+    fn disabling_destroys_the_secret_rather_than_only_the_flag() {
+        let c = db();
+        let id = a_user(&c);
+        let secret = totp_enroll(&c, &id, "EnvVault").unwrap().secret.unwrap();
+        let code = totp::totp_at(&secret, totp::now_unix()).unwrap();
+        totp_confirm(&c, &id, &code).unwrap();
+
+        totp_disable(&c, &id).unwrap();
+        let st = totp_status(&c, &id).unwrap();
+        assert!(!st.enrolled, "a leftover secret could be silently re-armed");
+        assert!(!st.enabled);
+    }
+
+    #[test]
+    fn re_enrolling_switches_the_factor_back_off() {
+        // A half-finished re-enrollment must not leave the account demanding a
+        // code that only the abandoned secret can produce.
+        let c = db();
+        let id = a_user(&c);
+        let first = totp_enroll(&c, &id, "EnvVault").unwrap().secret.unwrap();
+        let code = totp::totp_at(&first, totp::now_unix()).unwrap();
+        totp_confirm(&c, &id, &code).unwrap();
+        assert!(totp_required(&c, &id).unwrap());
+
+        let second = totp_enroll(&c, &id, "EnvVault").unwrap().secret.unwrap();
+        assert_ne!(first, second);
+        assert!(!totp_required(&c, &id).unwrap());
+    }
+
+    #[test]
+    fn the_owner_is_refused_a_second_factor() {
+        // The owner authenticates by deriving the SQLCipher key. A factor there
+        // gates nothing while looking as though it gates everything.
+        let c = db();
+        let owner = ensure_owner_user(&c).unwrap();
+        assert!(totp_enroll(&c, &owner, "EnvVault").is_err());
+        assert!(totp_confirm(&c, &owner, "123456").is_err());
+    }
+
+    #[test]
+    fn confirm_without_enrollment_is_an_error_not_a_silent_false() {
+        let c = db();
+        let id = a_user(&c);
+        assert!(totp_confirm(&c, &id, "123456").is_err());
+    }
+
+    #[test]
+    fn the_schema_migration_runs_on_a_database_that_predates_it() {
+        // Idempotent ALTER TABLE, run twice, on a users table created before the
+        // columns existed. A migration that throws on second run takes the whole
+        // unlock with it.
+        let c = db();
+        init_users_schema(&c).unwrap();
+        init_users_schema(&c).unwrap();
+        let id = a_user(&c);
+        assert!(!totp_status(&c, &id).unwrap().enrolled);
     }
 }

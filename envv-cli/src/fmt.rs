@@ -76,6 +76,25 @@ pub fn read_stdin() -> CliResult<String> {
     Ok(buf.trim_end_matches('\n').to_string())
 }
 
+/// Write credential material to `path` with 0600 permissions.
+///
+/// Separate from [`emit`], which is for artefacts: this is for a value that is
+/// itself a secret, so the mode is not optional and there is no stdout branch.
+pub fn write_secret_file(path: &std::path::Path, content: &str) -> CliResult {
+    std::fs::write(path, content)
+        .map_err(|e| CliError::from(format!("Cannot write {}: {e}", path.display())))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = std::fs::metadata(path)
+            .map_err(|e| CliError::from(e.to_string()))?
+            .permissions();
+        perms.set_mode(0o600);
+        std::fs::set_permissions(path, perms).map_err(|e| CliError::from(e.to_string()))?;
+    }
+    Ok(())
+}
+
 /// Write `content` to `path`, or to stdout when `path` is `None`.
 pub fn emit(content: &str, path: Option<&std::path::Path>) -> CliResult {
     match path {

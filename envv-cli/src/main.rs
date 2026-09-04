@@ -62,6 +62,14 @@ struct Cli {
     )]
     as_user: Option<String>,
 
+    /// Second-factor code for a `--user` login whose account has TOTP enabled.
+    ///
+    /// Only the password path takes one. Token auth deliberately skips it —
+    /// requiring a code from CI, where no human is present to read a phone, is a
+    /// regression this project has already shipped once.
+    #[arg(long, value_name = "CODE", env = "ENVV_TOTP", global = true)]
+    totp: Option<String>,
+
     /// Authenticate with an API token instead of a password (requires --server).
     #[arg(
         long = "token",
@@ -908,6 +916,35 @@ enum UserCmd {
         #[command(subcommand)]
         cmd: TokenCmd,
     },
+    /// Second factor (TOTP) for a sub-user.
+    ///
+    /// Sub-users only: the vault owner authenticates by deriving the SQLCipher
+    /// key, so there is no login for a second factor to gate.
+    Totp {
+        #[command(subcommand)]
+        cmd: TotpCmd,
+    },
+}
+
+#[derive(Subcommand)]
+enum TotpCmd {
+    /// Show whether a user is enrolled and whether the factor is enabled.
+    Status { user: String },
+    /// Phase one: mint a secret. Does **not** enable the factor.
+    ///
+    /// Enabling here would lock out anyone whose authenticator did not take the
+    /// manually-typed secret; `confirm` is what turns it on.
+    Enroll {
+        user: String,
+        /// Write the secret and otpauth URI to this file (0600) instead of
+        /// printing them.
+        #[arg(long, short = 'o')]
+        out: Option<PathBuf>,
+    },
+    /// Phase two: prove the authenticator works, which enables the factor.
+    Confirm { user: String, code: String },
+    /// Remove the factor and destroy the secret.
+    Disable { user: String },
 }
 
 #[derive(Subcommand)]
@@ -1128,6 +1165,7 @@ fn run(cli: &Cli) -> CliResult {
         user: cli.as_user.as_deref(),
         token: cli.api_token.as_deref(),
         session_token: cached.as_deref(),
+        totp: cli.totp.as_deref(),
         init: cli.init,
     };
 
@@ -1269,6 +1307,7 @@ fn cmd_login(cli: &Cli, password: Option<&str>) -> CliResult {
         user: cli.as_user.as_deref(),
         token: cli.api_token.as_deref(),
         session_token: None,
+        totp: cli.totp.as_deref(),
         init: false,
     };
     let access = open_access(&auth)?;
@@ -2192,6 +2231,12 @@ fn dispatch(cli: &Cli, a: &Access) -> CliResult {
                 TokenCmd::Revoke { user, token_id } => {
                     users_cmd::token_revoke(a, user, token_id, yes)
                 }
+            },
+            UserCmd::Totp { cmd } => match cmd {
+                TotpCmd::Status { user } => users_cmd::totp_status(a, user),
+                TotpCmd::Enroll { user, out } => users_cmd::totp_enroll(a, user, out.as_deref()),
+                TotpCmd::Confirm { user, code } => users_cmd::totp_confirm(a, user, code),
+                TotpCmd::Disable { user } => users_cmd::totp_disable(a, user, yes),
             },
         },
 

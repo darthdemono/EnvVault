@@ -116,13 +116,13 @@ function renderProjectList(container: HTMLElement, projects: Project[], all: Vau
     row.style.paddingLeft = `${depth * 14}px`;
     if (node.virtual) {
       row.innerHTML = `
-        <button class="sidebar-item${isActive ? ' active' : ''}" data-project-id="${escAttr(nodeId)}" style="color:var(--text3)">
+        <button class="sidebar-item${isActive ? ' active' : ''}"${isActive ? ' aria-current="true"' : ''} data-project-id="${escAttr(nodeId)}" style="color:var(--text3)">
           <span class="sidebar-label" style="font-weight:600;font-size:10.5px;text-transform:uppercase;letter-spacing:.06em">${esc(displayName)}</span>
           <span class="sidebar-count">${count}</span>
         </button>`;
     } else {
       row.innerHTML = `
-        <button class="sidebar-item${isActive ? ' active' : ''}" data-project-id="${escAttr(nodeId)}">
+        <button class="sidebar-item${isActive ? ' active' : ''}"${isActive ? ' aria-current="true"' : ''} data-project-id="${escAttr(nodeId)}">
           <span class="sidebar-label">${esc(displayName)}${ptBadge}</span>
           <span class="sidebar-count">${count}</span>
         </button>
@@ -178,15 +178,17 @@ function renderSidebar() {
   document.querySelectorAll<HTMLButtonElement>('.sidebar-item[data-filter-type]').forEach((btn) => {
     const t = btn.dataset.filterType;
     const v = btn.dataset.filterValue ?? '';
-    if (t === 'env') {
-      btn.classList.toggle('active', st.currentEnvFilter === v && v !== '');
-    } else {
-      btn.classList.toggle(
-        'active',
-        (t === 'all' && st.filter.type === 'all' && !st.currentEnvFilter) ||
-          (t === st.filter.type && v === st.filter.value),
-      );
-    }
+    const on =
+      t === 'env'
+        ? st.currentEnvFilter === v && v !== ''
+        : (t === 'all' && st.filter.type === 'all' && !st.currentEnvFilter) ||
+          (t === st.filter.type && v === st.filter.value);
+    btn.classList.toggle('active', on);
+    // Which filter is applied is the single most important piece of state in
+    // this app — invariant 7 exists because a restored filter can hide every
+    // secret. It cannot be conveyed by a colour alone.
+    if (on) btn.setAttribute('aria-current', 'true');
+    else btn.removeAttribute('aria-current');
   });
 
   const catList = document.getElementById('project-list')!;
@@ -230,7 +232,7 @@ function renderPoolSection(all: VaultEntry[]) {
     .map(([name, members]) => {
       const active = st.activePoolFilter === name;
       return `<div class="sidebar-cat-row">
-        <button class="sidebar-item pool-filter-btn${active ? ' active' : ''}" data-pool="${escAttr(name)}" title="${escAttr(`${members.length} interchangeable credential${members.length === 1 ? '' : 's'}`)}">
+        <button class="sidebar-item pool-filter-btn${active ? ' active' : ''}"${active ? ' aria-current="true"' : ''} data-pool="${escAttr(name)}" title="${escAttr(`${members.length} interchangeable credential${members.length === 1 ? '' : 's'}`)}">
           <span class="pool-chip-sidebar">${esc(name)}</span>
           <span class="sidebar-count">${members.length}</span>
         </button>
@@ -255,7 +257,7 @@ function renderPrefixSection(all: VaultEntry[]) {
     .map(([pfx, count]) => {
       const active = st.activePrefixFilter === pfx;
       return `<div class="sidebar-cat-row">
-        <button class="sidebar-item prefix-filter-btn${active ? ' active' : ''}" data-prefix="${escAttr(pfx)}">
+        <button class="sidebar-item prefix-filter-btn${active ? ' active' : ''}"${active ? ' aria-current="true"' : ''} data-prefix="${escAttr(pfx)}">
           <span class="badge badge-prefix">${esc(pfx)}_</span>
           <span class="sidebar-count">${count}</span>
         </button>
@@ -286,7 +288,7 @@ function renderTagSection(all: VaultEntry[]) {
       const active = st.activeTagFilter === tag;
       const style = tagColor(tag);
       return `<div class="sidebar-cat-row">
-        <button class="sidebar-item tag-filter-btn${active ? ' active' : ''}" data-tag="${escAttr(tag)}">
+        <button class="sidebar-item tag-filter-btn${active ? ' active' : ''}"${active ? ' aria-current="true"' : ''} data-tag="${escAttr(tag)}">
           <span class="tag-chip-sidebar" style="${style}">${esc(tag)}</span>
           <span class="sidebar-count">${count}</span>
         </button>
@@ -335,13 +337,13 @@ function renderUserCatTree(container: HTMLElement, cats: string[], all: VaultEnt
     row.style.paddingLeft = `${indent}px`;
     if (!node.real) {
       row.innerHTML = `
-        <button class="sidebar-item${isActive ? ' active' : ''}" data-filter-type="category" data-filter-value="${escAttr(node.name)}" style="color:var(--text3)">
+        <button class="sidebar-item${isActive ? ' active' : ''}"${isActive ? ' aria-current="true"' : ''} data-filter-type="category" data-filter-value="${escAttr(node.name)}" style="color:var(--text3)">
           <span class="sidebar-label" style="font-weight:600;font-size:10.5px;text-transform:uppercase;letter-spacing:.06em">${esc(displayName)}</span>
           <span class="sidebar-count">${count}</span>
         </button>`;
     } else {
       row.innerHTML = `
-        <button class="sidebar-item${isActive ? ' active' : ''}" data-filter-type="category" data-filter-value="${escAttr(node.name)}">
+        <button class="sidebar-item${isActive ? ' active' : ''}"${isActive ? ' aria-current="true"' : ''} data-filter-type="category" data-filter-value="${escAttr(node.name)}">
           <span class="sidebar-label">${esc(displayName)}</span>
           <span class="sidebar-count">${count}</span>
         </button>
@@ -597,7 +599,8 @@ function buildCard(entry: VaultEntry, idx: number, animIdx: number): HTMLElement
       .join('') || '';
 
   card.innerHTML = `
-    <div class="bulk-checkbox" data-action="bulk-toggle" data-idx="${idx}"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 20 4 15"/></svg></div>
+    <div class="bulk-checkbox" data-action="bulk-toggle" data-idx="${idx}" role="checkbox" tabindex="0"
+      aria-checked="${st.bulkSelected.has(eid)}" aria-label="${escAttr('Select ' + entry.provider)}"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 20 4 15"/></svg></div>
     <div class="card-head" data-action="copy-env" data-idx="${idx}">
       <div class="provider-icon-wrap" data-action="icon" data-idx="${idx}">
         ${iconHTML(entry.provider, entry.custom_icon)}
@@ -612,7 +615,8 @@ function buildCard(entry: VaultEntry, idx: number, animIdx: number): HTMLElement
         <div class="card-account">${esc(entry.account_name || entry.username || entry.email || '')}</div>
         <div class="card-projects">${projectBadges}</div>
       </div>
-      <button class="card-chevron" data-action="toggle" data-idx="${idx}"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg></button>
+      <button class="card-chevron" data-action="toggle" data-idx="${idx}"
+        aria-expanded="${isExp}" aria-label="${escAttr((isExp ? 'Collapse ' : 'Expand ') + entry.provider)}"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg></button>
     </div>
     ${entry.api_description ? `<div class="card-apidesc">${esc(entry.api_description)}</div>` : ''}
     <div class="card-body">
@@ -621,35 +625,35 @@ function buildCard(entry: VaultEntry, idx: number, animIdx: number): HTMLElement
           <div class="key-label">${(TYPE_CONFIG[entry.secretType || 'api_key']?.keyLabel || 'API Key').toUpperCase()}</div>
           <div class="key-value${hasMask ? '' : ' revealed'}" id="kv-key-${idx}" data-action="copy-field" data-value="${escAttr(entry.api_key)}">${hasMask ? maskKey(entry.api_key) : esc(entry.api_key)}</div>
           <div class="key-actions">
-            <button class="icon-btn sm${hasMask ? '' : ' active'}" id="reveal-key-${idx}" data-action="reveal" data-field="key" data-idx="${idx}" data-value="${escAttr(entry.api_key)}">${eyeSVG}</button>
-            <button class="icon-btn sm" data-action="copy-field" data-value="${escAttr(entry.api_key)}">${copySVG}</button>
+            <button class="icon-btn sm${hasMask ? '' : ' active'}" id="reveal-key-${idx}" data-action="reveal" data-field="key" data-idx="${idx}" data-value="${escAttr(entry.api_key)}" aria-pressed="${!hasMask}" aria-label="${escAttr('Reveal value for ' + entry.provider)}">${eyeSVG}</button>
+            <button class="icon-btn sm" data-action="copy-field" data-value="${escAttr(entry.api_key)}" aria-label="${escAttr('Copy value for ' + entry.provider)}">${copySVG}</button>
           </div>
         </div>
-        ${entry.api_secret ? `<div class="key-row"><div class="key-label">SECRET</div><div class="key-value${secretMasked ? '' : ' revealed'}" id="kv-secret-${idx}" data-action="copy-field" data-value="${escAttr(entry.api_secret)}">${secretMasked ? maskKey(entry.api_secret) : esc(entry.api_secret)}</div><div class="key-actions"><button class="icon-btn sm${secretMasked ? '' : ' active'}" id="reveal-secret-${idx}" data-action="reveal" data-field="secret" data-idx="${idx}" data-value="${escAttr(entry.api_secret)}">${eyeSVG}</button><button class="icon-btn sm" data-action="copy-field" data-value="${escAttr(entry.api_secret)}">${copySVG}</button></div></div>` : ''}
-        ${entry.username ? `<div class="key-row"><div class="key-label">USERNAME</div><div class="key-value" data-action="copy-field" data-value="${escAttr(entry.username)}">${esc(entry.username)}</div><button class="icon-btn sm" data-action="copy-field" data-value="${escAttr(entry.username)}">${copySVG}</button></div>` : ''}
-        ${entry.email ? `<div class="key-row"><div class="key-label">EMAIL</div><div class="key-value" data-action="copy-field" data-value="${escAttr(entry.email)}">${esc(entry.email)}</div><button class="icon-btn sm" data-action="copy-field" data-value="${escAttr(entry.email)}">${copySVG}</button></div>` : ''}
+        ${entry.api_secret ? `<div class="key-row"><div class="key-label">SECRET</div><div class="key-value${secretMasked ? '' : ' revealed'}" id="kv-secret-${idx}" data-action="copy-field" data-value="${escAttr(entry.api_secret)}">${secretMasked ? maskKey(entry.api_secret) : esc(entry.api_secret)}</div><div class="key-actions"><button class="icon-btn sm${secretMasked ? '' : ' active'}" id="reveal-secret-${idx}" data-action="reveal" data-field="secret" data-idx="${idx}" data-value="${escAttr(entry.api_secret)}" aria-pressed="${!secretMasked}" aria-label="${escAttr('Reveal secret for ' + entry.provider)}">${eyeSVG}</button><button class="icon-btn sm" data-action="copy-field" data-value="${escAttr(entry.api_secret)}" aria-label="${escAttr('Copy secret for ' + entry.provider)}">${copySVG}</button></div></div>` : ''}
+        ${entry.username ? `<div class="key-row"><div class="key-label">USERNAME</div><div class="key-value" data-action="copy-field" data-value="${escAttr(entry.username)}">${esc(entry.username)}</div><button class="icon-btn sm" data-action="copy-field" data-value="${escAttr(entry.username)}" aria-label="Copy username">${copySVG}</button></div>` : ''}
+        ${entry.email ? `<div class="key-row"><div class="key-label">EMAIL</div><div class="key-value" data-action="copy-field" data-value="${escAttr(entry.email)}">${esc(entry.email)}</div><button class="icon-btn sm" data-action="copy-field" data-value="${escAttr(entry.email)}" aria-label="Copy email">${copySVG}</button></div>` : ''}
         ${(entry.extra_vars || [])
           .filter((xv) => xv.key)
           .map((xv) => {
             const display = xv.secret ? maskKey(xv.value) : esc(xv.value);
-            return `<div class="key-row"><div class="key-label">${esc(xv.key.toUpperCase())}</div><div class="key-value${xv.secret ? '' : ' revealed'}" data-action="copy-field" data-value="${escAttr(xv.value)}">${display}</div><button class="icon-btn sm" data-action="copy-field" data-value="${escAttr(xv.value)}">${copySVG}</button></div>`;
+            return `<div class="key-row"><div class="key-label">${esc(xv.key.toUpperCase())}</div><div class="key-value${xv.secret ? '' : ' revealed'}" data-action="copy-field" data-value="${escAttr(xv.value)}">${display}</div><button class="icon-btn sm" data-action="copy-field" data-value="${escAttr(xv.value)}" aria-label="${escAttr('Copy ' + xv.key)}">${copySVG}</button></div>`;
           })
           .join('')}
       </div>
       ${entry.scopes?.length ? `<div class="scopes-row">${entry.scopes.map((s) => `<span class="scope-pill">${esc(s)}</span>`).join('')}</div>` : ''}
-      ${entry.description ? `<div class="desc-section"><button class="desc-toggle" data-action="toggle-desc"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 18 15 12 9 6"/></svg>General Description</button><div class="desc-content">${esc(entry.description)}</div></div>` : ''}
+      ${entry.description ? `<div class="desc-section"><button class="desc-toggle" data-action="toggle-desc" aria-expanded="false"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 18 15 12 9 6"/></svg>General Description</button><div class="desc-content">${esc(entry.description)}</div></div>` : ''}
       ${metaRows.length ? `<div class="meta-section">${metaRows.map(([k, v]) => `<div class="meta-row"><span class="meta-key">${k}</span><span class="meta-val">${v}</span></div>`).join('')}</div>` : ''}
       ${entry.categories?.length ? `<div class="cat-pills">${entry.categories.map((c) => `<span class="cat-pill">${esc(c)}</span>`).join('')}</div>` : ''}
       ${entry.last_rotated_at ? `<div class="meta-section"><div class="meta-row"><span class="meta-key">Last Rotated</span><span class="meta-val" style="color:var(--text2)">${esc(entry.last_rotated_at)}</span> ${rotationAgeBadge(entry)}</div></div>` : ''}
     </div>
     ${entry.tags?.length ? `<div class="card-tags">${entry.tags.map((t) => `<span class="tag-chip-card" style="${tagColor(t)}">${esc(t)}</span>`).join('')}</div>` : ''}
     <div class="card-foot">
-      <button class="env-copy-btn" id="env-btn-${idx}" data-action="copy-env" data-idx="${idx}">${copySVG}<span class="env-format-badge">${envLabel}</span><span id="env-label-${idx}">${dotenvKey(entry)}</span></button>
-      <button class="icon-btn sm" data-action="rotate" data-idx="${idx}" title="Mark as rotated" style="font-size:11px;gap:3px;">↺</button>
-      <button class="icon-btn sm${entry.pinned ? ' pin-btn active' : ' pin-btn'}" data-action="pin" data-idx="${idx}" title="${entry.pinned ? 'Unpin' : 'Pin to top'}"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="17" x2="12" y2="22"/><path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24Z"/></svg></button>
-      <button class="icon-btn sm" data-action="duplicate" data-idx="${idx}" title="Duplicate">${dupSVG}</button>
-      <button class="icon-btn sm" data-action="edit" data-idx="${idx}" title="Edit">${editSVG}</button>
-      <button class="icon-btn sm danger" data-action="delete" data-idx="${idx}" title="Delete">${delSVG}</button>
+      <button class="env-copy-btn" id="env-btn-${idx}" data-action="copy-env" data-idx="${idx}" aria-label="${escAttr('Copy ' + entry.provider + ' as ' + envLabel)}">${copySVG}<span class="env-format-badge">${envLabel}</span><span id="env-label-${idx}">${dotenvKey(entry)}</span></button>
+      <button class="icon-btn sm" data-action="rotate" data-idx="${idx}" title="Mark as rotated" aria-label="${escAttr('Mark ' + entry.provider + ' as rotated')}" style="font-size:11px;gap:3px;">↺</button>
+      <button class="icon-btn sm${entry.pinned ? ' pin-btn active' : ' pin-btn'}" data-action="pin" data-idx="${idx}" title="${entry.pinned ? 'Unpin' : 'Pin to top'}" aria-pressed="${!!entry.pinned}" aria-label="${escAttr((entry.pinned ? 'Unpin ' : 'Pin ') + entry.provider)}"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="17" x2="12" y2="22"/><path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24Z"/></svg></button>
+      <button class="icon-btn sm" data-action="duplicate" data-idx="${idx}" title="Duplicate" aria-label="${escAttr('Duplicate ' + entry.provider)}">${dupSVG}</button>
+      <button class="icon-btn sm" data-action="edit" data-idx="${idx}" title="Edit" aria-label="${escAttr('Edit ' + entry.provider)}">${editSVG}</button>
+      <button class="icon-btn sm danger" data-action="delete" data-idx="${idx}" title="Delete" aria-label="${escAttr('Delete ' + entry.provider)}">${delSVG}</button>
     </div>`;
   return card;
 }

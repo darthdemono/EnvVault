@@ -8,6 +8,7 @@ import {
   st,
   Settings,
   RemoteVaultStore,
+  TotpRequiredError,
   TauriVaultStore,
   LocalVaultStore,
   inTauri,
@@ -15,9 +16,38 @@ import {
   resetViewState,
   triggerRender,
 } from './state';
-import { esc, escAttr, showToast, showConfirm, showPasswordPrompt } from './utils';
+import { esc, escAttr, showToast, showConfirm, showPasswordPrompt, showPrompt } from './utils';
 import { relativeTime } from './ui-qol';
 import { refreshLanPanel } from './lan';
+
+/**
+ * Authenticate as a sub-user, asking for a second-factor code only if one is
+ * actually required.
+ *
+ * The server tells us the difference: a correct password on an account with a
+ * confirmed factor comes back 401 with `totp_required`, which the store raises
+ * as `TotpRequiredError`. Prompting up front instead would show a code box to
+ * every user, most of whom have no factor and nothing to type into it.
+ *
+ * Shared by the Remote panel and the unlock screen so the two cannot drift —
+ * the unlock screen already carries a bug history of diverging from this path.
+ */
+export async function authUserInteractive(
+  remote: RemoteVaultStore,
+  username: string,
+  password: string,
+): Promise<boolean> {
+  try {
+    return await remote.authUser(username, password);
+  } catch (e) {
+    if (!(e instanceof TotpRequiredError)) throw e;
+    const code = await showPrompt(`Two-factor code for "${username}":`);
+    // Cancelling is not a failed login — it is no login. Reported as false so
+    // the caller shows nothing rather than "authentication failed".
+    if (code === null) return false;
+    return await remote.authUser(username, password, code.trim());
+  }
+}
 
 let _finishInitFn: () => Promise<void> = async () => {};
 export function setRemoteFinishInitFn(fn: () => Promise<void>) {
@@ -320,7 +350,7 @@ async function connectRemote(cfg: RemoteVaultConfig) {
   try {
     let ok: boolean;
     if (cfg.username) {
-      ok = await remote.authUser(cfg.username, pw);
+      ok = await authUserInteractive(remote, cfg.username, pw);
     } else {
       ok = await remote.unlock(pw);
     }
