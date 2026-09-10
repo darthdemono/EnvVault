@@ -33,4 +33,5 @@ pub mod scan;
 pub mod session;
 pub mod starters;
 pub mod tls;
+pub mod totp_cmd;
 pub mod users_cmd;

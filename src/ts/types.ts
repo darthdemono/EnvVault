@@ -226,6 +226,38 @@ export interface VaultEntry {
   /** Extra named fields beyond the fixed schema (e.g. db, port, host for database entries). */
   extra_vars?: { key: string; value: string; secret?: boolean }[];
   /**
+   * Base32 TOTP seed this credential's service issued — the authenticator
+   * secret, from which EnvVault generates the six digits you type into that
+   * service's login form.
+   *
+   * **This is the reverse of the Phase 19 TOTP**, which is a second factor on
+   * *EnvVault's own* sub-user login and lives in the `users` table, never here.
+   * Nothing reads both.
+   *
+   * Stored normalised: uppercase base32, no spaces, dashes or padding, so two
+   * entries holding the same seed typed differently are byte-identical and
+   * fingerprint the same. A pasted `otpauth://` URI is split into this field and
+   * the three below at the form rather than stored whole — the URI is a
+   * container, and keeping it would mean a second field that also holds the
+   * secret and has to be masked everywhere this one is.
+   *
+   * It is a secret in every sense the vault means: masked by
+   * `maskKeysByDefault`, in `SECRET_FIELDS` for CLI redaction, and snapshot into
+   * `version_history` on change.
+   */
+  totp_secret?: string | null;
+  /**
+   * HMAC the issuer generates with. Absent means SHA-1, which is what
+   * `otpauth://` means when it omits the parameter and what almost every issuer
+   * uses. Written only when the issuer said something else — a field that reads
+   * "SHA1" on every entry cannot be told apart from a defaulted one.
+   */
+  totp_algorithm?: 'SHA1' | 'SHA256' | 'SHA512' | null;
+  /** Digits in the generated code. Absent means 6. */
+  totp_digits?: number | null;
+  /** Seconds a code is valid for. Absent means 30. */
+  totp_period?: number | null;
+  /**
    * Env-var prefixes added by services that consume this credential.
    * For Key type: e.g. ["ND", "SPOTIFYD"] means Navidrome uses ND_LASTFM_APIKEY.
    * For Chunk type: the first prefix IS the chunk's env-namespace identifier (e.g. ["AM"] for AM_JWT_SECRET).
@@ -578,7 +610,15 @@ export interface AppSettings {
    * Sections absent from this array are hidden.
    */
   sidebarSections: (
-    'all' | 'price' | 'env' | 'category' | 'project' | 'tags' | 'pools' | 'prefixes'
+    | 'all'
+    | 'price'
+    | 'env'
+    | 'category'
+    | 'project'
+    | 'tags'
+    | 'pools'
+    | 'authenticator'
+    | 'prefixes'
   )[];
   /** When `true`, the main grid renders section headers grouping cards by secret type. */
   groupByType: boolean;
@@ -588,7 +628,15 @@ export interface AppSettings {
   activityBarStyle: 'icon' | 'icon-label';
   /** Section keys that are currently collapsed in the secrets sidebar. */
   collapsedSections: (
-    'all' | 'price' | 'env' | 'category' | 'project' | 'tags' | 'pools' | 'prefixes'
+    | 'all'
+    | 'price'
+    | 'env'
+    | 'category'
+    | 'project'
+    | 'tags'
+    | 'pools'
+    | 'authenticator'
+    | 'prefixes'
   )[];
   /** Currently active top-level panel. */
   activePanel: 'secrets' | 'tools' | 'users' | 'remote';

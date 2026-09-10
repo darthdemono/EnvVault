@@ -193,57 +193,98 @@ export function exportPostgres(project: Project): string {
 // ── Field resolution ───────────────────────────────────────────────────────
 
 /** Canonical names for well-known field suffixes used in env var naming conventions. */
+/**
+ * Reference alias → the **vault-entry JSON field name** it resolves to.
+ *
+ * The values are the JSON names (`api_key`, not `key`) so this table and
+ * `canonical_field` in `envv-cli/src/refs.rs` are the same table written twice
+ * rather than two tables that happen to agree. Pinned from both sides by
+ * `tests/fixtures/parity/field-aliases.json`.
+ */
 const FIELD_ALIASES: Readonly<Record<string, string>> = {
-  APIKEY: 'key',
-  API_KEY: 'key',
-  KEY: 'key',
-  TOKEN: 'key',
-  ACCESS_TOKEN: 'key',
-  BEARER: 'key',
-  SECRET_KEY: 'key',
-  PASSWORD: 'key',
-  PASS: 'key',
-  PWD: 'key',
+  APIKEY: 'api_key',
+  API_KEY: 'api_key',
+  KEY: 'api_key',
+  TOKEN: 'api_key',
+  ACCESS_TOKEN: 'api_key',
+  BEARER: 'api_key',
+  SECRET_KEY: 'api_key',
+  PASSWORD: 'api_key',
+  PASS: 'api_key',
+  PWD: 'api_key',
   // ↑ a password entry stores its secret in api_key, so ${name/password} resolves there too
-  SECRET: 'secret',
-  API_SECRET: 'secret',
-  CLIENT_SECRET: 'secret',
-  SHARED_SECRET: 'secret',
+  SECRET: 'api_secret',
+  API_SECRET: 'api_secret',
+  CLIENT_SECRET: 'api_secret',
+  SHARED_SECRET: 'api_secret',
   USERNAME: 'username',
   USER: 'username',
   LOGIN: 'username',
   USER_NAME: 'username',
-  URL: 'url',
-  URI: 'url',
-  ENDPOINT: 'url',
-  API_URL: 'url',
-  BASE_URL: 'url',
+  URL: 'api_url',
+  URI: 'api_url',
+  ENDPOINT: 'api_url',
+  API_URL: 'api_url',
+  BASE_URL: 'api_url',
   EMAIL: 'email',
   MAIL: 'email',
   KEY_ID: 'key_id',
   KEYID: 'key_id',
   KID: 'key_id',
+  // The public half of an OAuth pair: `key_id`, then an `extra_vars` entry
+  // keyed `ID`, which is where a client id lives in vaults written today.
+  // Before this arm existed the app left `${Spotify/ID}` as literal text while
+  // the CLI resolved it to the entry's UUID — the same reference, two wrong
+  // answers, neither of them reported.
+  ID: 'key_id',
+  CLIENT_ID: 'key_id',
+  APP_ID: 'key_id',
+  ACCOUNT_ID: 'key_id',
+  APPLICATION_ID: 'key_id',
 };
 
-/** Resolve a named field from a vault entry. Supports built-in fields, aliases, and extra_vars keys. */
+/**
+ * Entry fields no `${…}` may ever resolve to.
+ *
+ * Metadata, not values: `id` is the row's UUID and the other three are lists
+ * that would stringify into something no config format wants. Checked before the
+ * lookup, so an `extra_vars` entry keyed `id` is unreachable too — `${X/id}` has
+ * to mean one thing everywhere, and making it depend on the entry's own vars is
+ * the divergence this closes.
+ *
+ * Twin of `REFERENCE_DENY` in `envv-cli/src/refs.rs`.
+ */
+const REFERENCE_DENY: ReadonlySet<string> = new Set([
+  'id',
+  'version_history',
+  'projectIds',
+  'categories',
+]);
+
+/**
+ * Resolve a named field from a vault entry: aliases, then the built-in field,
+ * then `extra_vars`.
+ *
+ * The fall-through from an empty built-in to `extra_vars` matches
+ * `entry_field()` in `envv-cli/src/refs.rs` — without it `${Spotify/ID}` would
+ * resolve in the CLI and come back empty here for the entry that keeps its
+ * client id in a var.
+ */
 function getEntryFieldValue(entry: VaultEntry, field: string): string | null | undefined {
   const canonical = FIELD_ALIASES[field.toUpperCase()] ?? field;
-  switch (canonical) {
-    case 'key':
-      return entry.api_key;
-    case 'secret':
-      return entry.api_secret;
-    case 'username':
-      return entry.username;
-    case 'url':
-      return entry.api_url;
-    case 'key_id':
-      return entry.key_id;
-    case 'email':
-      return entry.email;
-    default:
-      return entry.extra_vars?.find((v) => v.key === field || v.key === canonical)?.value;
-  }
+  if (REFERENCE_DENY.has(field) || REFERENCE_DENY.has(canonical)) return undefined;
+  const builtin = (
+    {
+      api_key: entry.api_key,
+      api_secret: entry.api_secret,
+      username: entry.username,
+      api_url: entry.api_url,
+      key_id: entry.key_id,
+      email: entry.email,
+    } as Record<string, string | null | undefined>
+  )[canonical];
+  if (builtin != null && builtin !== '') return builtin;
+  return entry.extra_vars?.find((v) => v.key === field || v.key === canonical)?.value;
 }
 
 export function resolveFieldRef(

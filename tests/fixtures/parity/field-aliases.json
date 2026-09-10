@@ -44,6 +44,37 @@
     "MAIL": "email",
     "KEY_ID": "key_id",
     "KEYID": "key_id",
-    "KID": "key_id"
+    "KID": "key_id",
+    "ID": "key_id",
+    "CLIENT_ID": "key_id",
+    "APP_ID": "key_id",
+    "ACCOUNT_ID": "key_id",
+    "APPLICATION_ID": "key_id"
+  },
+
+  "_unresolvable_comment": [
+    "Phase 21. `ID` used to fall through to `_ => field` in canonical_field, so",
+    "entry_field looked up `entry.id` — the row's UUID — found it non-empty and",
+    "returned it. The CLI therefore wrote a vault UUID into a rendered config",
+    "while the app, whose switch had no `id` case, left ${Spotify/ID} as literal",
+    "text. One reference, two wrong answers, neither reported.",
+    "",
+    "These field names must resolve to nothing on both sides. The entry the",
+    "harness builds carries all four with non-empty values, so removing the",
+    "deny-list makes these cases fail rather than pass by absence."
+  ],
+  "unresolvable": ["id", "version_history", "projectIds", "categories"],
+
+  "_extra_var_fallback_comment": [
+    "A client id lives in extra_vars in every vault written before Phase 22's",
+    "value roles exist. Both sides fall through from an empty built-in field to",
+    "extra_vars, so ${F/ID} resolves there — and both must, or the alias arm",
+    "above is useful in the CLI only."
+  ],
+  "extra_var_fallback": {
+    "provider": "F",
+    "field": "ID",
+    "var_key": "ID",
+    "value": "client-abc123"
   }
 }

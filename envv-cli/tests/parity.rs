@@ -323,17 +323,30 @@ fn field_aliases_match_the_app() {
     let aliases = doc["aliases"].as_object().expect("aliases object");
 
     // Every field holds its own name, so a resolved reference reports which
-    // field it landed on.
+    // field it landed on. The metadata fields carry values too, so the
+    // deny-list assertion below is exercised rather than satisfied by absence.
     let entry = serde_json::json!({
-        "provider":     "E",
-        "api_key":      "api_key",
-        "api_secret":   "api_secret",
-        "username":     "username",
-        "api_url":      "api_url",
-        "email":        "email",
-        "key_id":       "key_id",
+        "provider":         "E",
+        "api_key":          "api_key",
+        "api_secret":       "api_secret",
+        "username":         "username",
+        "api_url":          "api_url",
+        "email":            "email",
+        "key_id":           "key_id",
+        "id":               "b3f1c0de-0000-4000-8000-000000000001",
+        "categories":       ["categories"],
+        "projectIds":       ["Universal"],
+        "version_history":  [{ "value": "old", "saved_at": "2026-01-01T00:00:00Z" }],
     });
-    let r = Resolver::from_parts(vec![entry], vec![], ENV_FIELD, false);
+    let fb = &doc["extra_var_fallback"];
+    let fb_provider = fb["provider"].as_str().expect("fallback provider");
+    let fallback_entry = serde_json::json!({
+        "provider":   fb_provider,
+        "api_key":    "api_key",
+        "id":         "b3f1c0de-0000-4000-8000-000000000002",
+        "extra_vars": [{ "key": fb["var_key"], "value": fb["value"] }],
+    });
+    let r = Resolver::from_parts(vec![entry, fallback_entry], vec![], ENV_FIELD, false);
 
     for (alias, expected) in aliases {
         let expected = expected.as_str().expect("expected field name");
@@ -343,6 +356,31 @@ fn field_aliases_match_the_app() {
             "${{E/{alias}}} must resolve to {expected}, got {got}"
         );
     }
+
+    // Phase 21: entry metadata is not addressable. `ID` used to fall through to
+    // `_ => field`, so `${E/ID}` returned `entry.id` — a UUID — and the CLI
+    // wrote it into a rendered config while the app left the reference literal.
+    // An unresolved reference comes back as its own text.
+    for field in doc["unresolvable"]
+        .as_array()
+        .expect("unresolvable list")
+        .iter()
+        .map(|f| f.as_str().expect("field name"))
+    {
+        let reference = format!("${{E/{field}}}");
+        assert_eq!(
+            r.or_literal(&reference),
+            reference,
+            "${{E/{field}}} must not resolve to anything"
+        );
+    }
+
+    // ...and an empty built-in falls through to extra_vars, as the app does.
+    let fb_field = fb["field"].as_str().expect("fallback field");
+    assert_eq!(
+        r.or_literal(&format!("${{{fb_provider}/{fb_field}}}")),
+        fb["value"].as_str().expect("fallback value"),
+    );
 }
 
 /// the wall clock makes the fixture stale within a second and makes byte

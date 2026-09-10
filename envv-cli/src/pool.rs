@@ -450,7 +450,7 @@ pub fn cmd_next(access: &crate::access::Access, name: &str, field: Option<&str>)
         CliError::not_found(format!("'{}' has no field '{field}'", picked.label()))
     })?;
 
-    let secret = crate::entries::SECRET_FIELD_NAMES.contains(&crate::refs::canonical_field(field));
+    let secret = out::SECRET_FIELDS.contains(&crate::refs::canonical_field(field));
     let reveal = out::revealing();
     let shown = if secret && !reveal {
         out::masked(&value)

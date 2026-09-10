@@ -27,6 +27,7 @@ import { getFiltered, sorted, buildProjectTree, getDescendantProjectIds } from '
 import { iconHTML } from './icons';
 import { normalizeRateLimit } from './ratelimit';
 import { poolsOf } from './pools';
+import { hasTotp, startTotpTicker, stopTotpTicker } from './totp';
 import {
   esc,
   escAttr,
@@ -197,6 +198,7 @@ function renderSidebar() {
 
   renderTagSection(all);
   renderPoolSection(all);
+  renderAuthenticatorSection(all);
   renderPrefixSection(all);
 }
 
@@ -295,6 +297,81 @@ function renderTagSection(all: VaultEntry[]) {
       </div>`;
     })
     .join('');
+}
+
+/**
+ * The Authenticator section of the secrets sidebar (Phase 22).
+ *
+ * Every entry carrying a TOTP seed, with the code it is producing right now.
+ * This is the Bitwarden/1Password authenticator view, and it lives here rather
+ * than as a fifth activity-bar panel on purpose: it is a *filter over the
+ * secrets already in this panel*, so it reuses `sidebar-section` markup and
+ * inherits collapse, reorder and hide from the section machinery instead of
+ * introducing a second navigation idiom next to it.
+ *
+ * The header row filters the grid to seed-carrying entries; a body row copies
+ * its code. The digits themselves are painted by `tickTotp()` in
+ * `src/ts/totp.ts` once a second — this function writes the empty slots and the
+ * ticker fills them, which is what keeps the code out of the HTML string and
+ * therefore out of every re-render.
+ */
+function renderAuthenticatorSection(all: VaultEntry[]) {
+  const container = document.getElementById('authenticator-list');
+  if (!container) return;
+  const withSeed = all.filter((k) => !!k.totp_secret && String(k.totp_secret).trim() !== '');
+
+  const section = document.getElementById('sidebar-section-authenticator');
+  if (section) section.style.display = isSidebarSectionEnabled('authenticator') ? '' : 'none';
+  if (!withSeed.length) {
+    // Not hidden: unlike Tags and Key Pools, which are pure filters with nothing
+    // to say when empty, this section carries the Import button — and an empty
+    // authenticator list is exactly when somebody is looking for it.
+    container.innerHTML =
+      '<div class="sidebar-empty-note">No seeds yet. Import from Ente, Aegis, 2FAS, andOTP, Bitwarden or Google Authenticator.</div>';
+    stopTotpTicker();
+    // Offering "Export" with nothing to write produces an error toast for a
+    // button the user was right to press. Disabling says the same thing first.
+    const emptyExport = document.getElementById('totp-export-btn') as HTMLButtonElement | null;
+    if (emptyExport) emptyExport.disabled = true;
+    return;
+  }
+
+  const active = st.filter.type === 'has_totp';
+  const rows = withSeed
+    .slice()
+    .sort((a, b) => a.provider.localeCompare(b.provider))
+    .map((k) => {
+      // Invariant 1: the row addresses the entry by id, never by its position.
+      // The ticker re-looks-it-up every second, so a delete between renders
+      // leaves an empty slot rather than the neighbour's code.
+      const id = k.id ?? '';
+      const label = k.account_name ? `${k.provider} · ${k.account_name}` : k.provider;
+      return `<div class="sidebar-cat-row">
+        <button class="sidebar-item totp-row" data-action="copy-totp" data-totp-for="${escAttr(id)}"
+          title="${escAttr('Copy the code for ' + label)}">
+          <span class="totp-row-label">${esc(label)}</span>
+          <span class="totp-code" aria-live="off">— — —</span>
+          <span class="totp-countdown"><i class="totp-countdown-fill"></i></span>
+          <span class="totp-secs" aria-hidden="true"></span>
+        </button>
+      </div>`;
+    })
+    .join('');
+
+  container.innerHTML = `<div class="sidebar-cat-row">
+      <button class="sidebar-item${active ? ' active' : ''}"${active ? ' aria-current="true"' : ''}
+        data-filter-type="has_totp" data-filter-value="1">
+        <span class="sidebar-icon">◷</span>
+        <span class="sidebar-label">With a code</span>
+        <span class="sidebar-count">${withSeed.length}</span>
+      </button>
+    </div>${rows}`;
+
+  // Idempotent by assignment (invariant 9): calling this on every render leaves
+  // one interval, not one per render.
+  startTotpTicker();
+  const exportBtn = document.getElementById('totp-export-btn') as HTMLButtonElement | null;
+  if (exportBtn) exportBtn.disabled = false;
 }
 
 function renderUserCatTree(container: HTMLElement, cats: string[], all: VaultEntry[]) {
@@ -630,6 +707,11 @@ function buildCard(entry: VaultEntry, idx: number, animIdx: number): HTMLElement
           </div>
         </div>
         ${entry.api_secret ? `<div class="key-row"><div class="key-label">SECRET</div><div class="key-value${secretMasked ? '' : ' revealed'}" id="kv-secret-${idx}" data-action="copy-field" data-value="${escAttr(entry.api_secret)}">${secretMasked ? maskKey(entry.api_secret) : esc(entry.api_secret)}</div><div class="key-actions"><button class="icon-btn sm${secretMasked ? '' : ' active'}" id="reveal-secret-${idx}" data-action="reveal" data-field="secret" data-idx="${idx}" data-value="${escAttr(entry.api_secret)}" aria-pressed="${!secretMasked}" aria-label="${escAttr('Reveal secret for ' + entry.provider)}">${eyeSVG}</button><button class="icon-btn sm" data-action="copy-field" data-value="${escAttr(entry.api_secret)}" aria-label="${escAttr('Copy secret for ' + entry.provider)}">${copySVG}</button></div></div>` : ''}
+        ${
+          hasTotp(entry)
+            ? `<div class="key-row totp-key-row" data-totp-for="${escAttr(entry.id ?? '')}"><div class="key-label">2FA</div><div class="key-value revealed totp-code" data-action="copy-totp">— — —</div><span class="totp-countdown"><i class="totp-countdown-fill"></i></span><span class="totp-secs" aria-hidden="true"></span><button class="icon-btn sm" data-action="copy-totp" aria-label="${escAttr('Copy the authenticator code for ' + entry.provider)}">${copySVG}</button></div>`
+            : ''
+        }
         ${entry.username ? `<div class="key-row"><div class="key-label">USERNAME</div><div class="key-value" data-action="copy-field" data-value="${escAttr(entry.username)}">${esc(entry.username)}</div><button class="icon-btn sm" data-action="copy-field" data-value="${escAttr(entry.username)}" aria-label="Copy username">${copySVG}</button></div>` : ''}
         ${entry.email ? `<div class="key-row"><div class="key-label">EMAIL</div><div class="key-value" data-action="copy-field" data-value="${escAttr(entry.email)}">${esc(entry.email)}</div><button class="icon-btn sm" data-action="copy-field" data-value="${escAttr(entry.email)}" aria-label="Copy email">${copySVG}</button></div>` : ''}
         ${(entry.extra_vars || [])

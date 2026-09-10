@@ -30,6 +30,7 @@ import {
 import { iconHTML, openIconPicker, iconPicker, setIconField, readIconField } from './icons';
 import { renameProviderRefs } from './chunk-ops';
 import { normalizeRateLimit } from './ratelimit';
+import { parseTotpSeed, TOTP_DEFAULTS } from './totp';
 
 /**
  * Rate-limit text the structured count/period pair cannot express, carried from
@@ -259,6 +260,11 @@ export function formToEntry(): VaultEntry {
       secretType === 'env_var'
         ? (getVal('f-envvar-subtype') as VaultEntry['env_var_subtype']) || undefined
         : undefined,
+    // The seed and its three parameters are read as a unit and normalised, the
+    // same way the rate limit is: a pasted `otpauth://` URI carries all four,
+    // and applying them field by field lets a period left over from a previous
+    // issuer survive onto a seed that does not use it.
+    ...readTotpFields(),
     extra_vars: (() => {
       const rows = [...document.querySelectorAll<HTMLElement>('#f-extra-vars-list .extra-var-row')];
       const result = rows
@@ -279,6 +285,175 @@ export function formToEntry(): VaultEntry {
       return parts.length ? parts : undefined;
     })(),
   };
+}
+
+/**
+ * The four TOTP fields of the form, as the entry writes them.
+ *
+ * An unreadable seed is **kept as typed** rather than dropped: `saveModal`
+ * refuses the save and says why, and a form that silently discarded the field
+ * would leave the user staring at an empty box with no idea it had rejected
+ * anything. `validateTotpField` is what decides; this only reads.
+ *
+ * Parameters equal to the defaults are written as `undefined`, i.e. absent. A
+ * `totp_algorithm: 'SHA1'` on every entry cannot be told apart from a defaulted
+ * one, and then nothing can say whether the issuer chose it or we did.
+ */
+function readTotpFields(): Pick<
+  VaultEntry,
+  'totp_secret' | 'totp_algorithm' | 'totp_digits' | 'totp_period'
+> {
+  const raw = (document.getElementById('f-totp') as HTMLInputElement | null)?.value?.trim() ?? '';
+  if (!raw) {
+    return {
+      totp_secret: undefined,
+      totp_algorithm: undefined,
+      totp_digits: undefined,
+      totp_period: undefined,
+    };
+  }
+  let parsed: ReturnType<typeof parseTotpSeed>;
+  try {
+    parsed = parseTotpSeed(raw);
+  } catch {
+    // Unusable: carry the text through so the user can fix it. saveModal stops
+    // it reaching the vault.
+    return {
+      totp_secret: raw,
+      totp_algorithm: undefined,
+      totp_digits: undefined,
+      totp_period: undefined,
+    };
+  }
+  const num = (id: string) => {
+    const v = (document.getElementById(id) as HTMLInputElement | null)?.value?.trim() ?? '';
+    const n = Number(v);
+    return v && Number.isInteger(n) ? n : null;
+  };
+  const algo =
+    ((document.getElementById('f-totp-algorithm') as HTMLSelectElement | null)?.value as
+      VaultEntry['totp_algorithm'] | undefined) || parsed.algorithm;
+  const digits = num('f-totp-digits') ?? parsed.digits;
+  const period = num('f-totp-period') ?? parsed.period;
+  return {
+    totp_secret: parsed.secret,
+    totp_algorithm: algo === TOTP_DEFAULTS.algorithm ? undefined : algo,
+    totp_digits: digits === TOTP_DEFAULTS.digits ? undefined : digits,
+    totp_period: period === TOTP_DEFAULTS.period ? undefined : period,
+  };
+}
+
+/**
+ * Repaint the seed field's status line, and reveal the parameter row when the
+ * seed is not on the default settings.
+ *
+ * The status line is the whole of the feedback: an `otpauth://` URI is 120
+ * characters of which four matter, and a form that accepts one silently gives
+ * the user no way to know whether it read the right issuer — or read it at all.
+ * It never prints the seed.
+ */
+export function refreshTotpStatus(): void {
+  const input = document.getElementById('f-totp') as HTMLInputElement | null;
+  const status = document.getElementById('f-totp-status');
+  const params = document.getElementById('f-totp-params');
+  if (!input || !status) return;
+  const raw = input.value.trim();
+  status.classList.remove('err');
+  if (!raw) {
+    status.textContent = '';
+    if (params) params.hidden = true;
+    return;
+  }
+  let parsed;
+  try {
+    parsed = parseTotpSeed(raw);
+  } catch (e) {
+    status.textContent = `Not a usable seed: ${(e as Error).message}`;
+    status.classList.add('err');
+    if (params) params.hidden = false;
+    return;
+  }
+  // A pasted URI is split in place, so the field always holds the bare seed and
+  // the parameters are visible and editable rather than buried in a query
+  // string the user cannot see the end of.
+  if (raw !== parsed.secret) {
+    input.value = parsed.secret;
+    setSelect('f-totp-algorithm', parsed.algorithm);
+    setNumber('f-totp-digits', parsed.digits);
+    setNumber('f-totp-period', parsed.period);
+  }
+  const algo =
+    (document.getElementById('f-totp-algorithm') as HTMLSelectElement | null)?.value ||
+    parsed.algorithm;
+  const digits =
+    (document.getElementById('f-totp-digits') as HTMLInputElement | null)?.value || parsed.digits;
+  const period =
+    (document.getElementById('f-totp-period') as HTMLInputElement | null)?.value || parsed.period;
+  const from = parsed.issuer ? ` · from ${parsed.issuer}` : '';
+  status.textContent = `${digits} digits · ${algo} · every ${period}s${from}`;
+  const nonDefault =
+    String(algo) !== TOTP_DEFAULTS.algorithm ||
+    Number(digits) !== TOTP_DEFAULTS.digits ||
+    Number(period) !== TOTP_DEFAULTS.period;
+  if (params) params.hidden = !nonDefault;
+}
+
+function setSelect(id: string, value: string): void {
+  const el = document.getElementById(id) as HTMLSelectElement | null;
+  if (el) el.value = value;
+}
+
+function setNumber(id: string, value: number): void {
+  const el = document.getElementById(id) as HTMLInputElement | null;
+  if (el) el.value = String(value);
+}
+
+/**
+ * Wire the seed field's live feedback and its reveal button.
+ *
+ * Assigned, never added (invariant 9): `openAdd` runs on every modal open, and
+ * `addEventListener` here would stack one handler per open — the failure that
+ * shows up as a reveal toggle flipping an even number of times and appearing to
+ * do nothing.
+ */
+export function wireTotpField(): void {
+  const input = document.getElementById('f-totp') as HTMLInputElement | null;
+  const reveal = document.getElementById('f-totp-reveal') as HTMLButtonElement | null;
+  if (input) {
+    input.oninput = () => refreshTotpStatus();
+    input.onchange = () => refreshTotpStatus();
+    // A URI arrives by paste, and `paste` fires before the value lands.
+    input.onpaste = () => setTimeout(() => refreshTotpStatus(), 0);
+  }
+  for (const id of ['f-totp-algorithm', 'f-totp-digits', 'f-totp-period']) {
+    const el = document.getElementById(id) as HTMLInputElement | HTMLSelectElement | null;
+    if (el) el.onchange = () => refreshTotpStatus();
+  }
+  if (reveal && input) {
+    reveal.onclick = () => {
+      const showing = input.type === 'text';
+      input.type = showing ? 'password' : 'text';
+      reveal.setAttribute('aria-pressed', String(!showing));
+      reveal.classList.toggle('active', !showing);
+    };
+  }
+}
+
+/**
+ * Re-mask the seed field and clear its status.
+ *
+ * Called on every open, not only on close: a reveal toggle left on shows the
+ * seed on every later visit to the form, and the form is opened from a card the
+ * user may be showing somebody.
+ */
+export function resetTotpField(): void {
+  const input = document.getElementById('f-totp') as HTMLInputElement | null;
+  const reveal = document.getElementById('f-totp-reveal') as HTMLButtonElement | null;
+  if (input) input.type = 'password';
+  if (reveal) {
+    reveal.setAttribute('aria-pressed', 'false');
+    reveal.classList.remove('active');
+  }
 }
 
 export function fillForm(entry: Partial<VaultEntry>) {
@@ -323,6 +498,13 @@ export function fillForm(entry: Partial<VaultEntry>) {
     rlNote.textContent = pendingRateLimitNote ? `was: ${pendingRateLimitNote}` : '';
     rlNote.hidden = !pendingRateLimitNote;
   }
+  const fTotp = document.getElementById('f-totp') as HTMLInputElement | null;
+  if (fTotp) fTotp.value = entry.totp_secret || '';
+  setSelect('f-totp-algorithm', entry.totp_algorithm || TOTP_DEFAULTS.algorithm);
+  setNumber('f-totp-digits', entry.totp_digits || TOTP_DEFAULTS.digits);
+  setNumber('f-totp-period', entry.totp_period || TOTP_DEFAULTS.period);
+  resetTotpField();
+  refreshTotpStatus();
   (document.getElementById('f-purpose') as HTMLInputElement).value = entry.purpose || '';
   (document.getElementById('f-pool') as HTMLInputElement).value = entry.pool || '';
   (document.getElementById('f-expires') as HTMLInputElement).value = entry.expires_at || '';
@@ -411,6 +593,8 @@ export function openModal(title: string, idx: number) {
   (document.getElementById('edit-index') as HTMLInputElement).value = String(idx);
   document.getElementById('modal-duplicate')!.style.display = idx >= 0 ? 'block' : 'none';
   applySchemaTooltips();
+  // Assigned, not added — openModal runs on every open (invariant 9).
+  wireTotpField();
   document.getElementById('modal-overlay')!.classList.add('open');
   (document.getElementById('f-provider') as HTMLInputElement).focus();
   populateProjectSelect();
@@ -508,9 +692,25 @@ export function saveModal() {
       showToast('File path/reference is required', 'err');
       return;
     }
-    if (t !== 'certificate' && t !== 'file_blob' && !entry.api_key) {
+    // An entry that carries an authenticator seed and nothing else is a real
+    // thing: it is what an import from Ente, Aegis or 2FAS produces, and the
+    // password beside it may never be stored here at all. Demanding a primary
+    // value would make every imported entry unsaveable the first time somebody
+    // opened it to fix its name.
+    if (t !== 'certificate' && t !== 'file_blob' && !entry.api_key && !entry.totp_secret) {
       showToast(`${TYPE_CONFIG[t]?.keyLabel || 'Value'} is required`, 'err');
       return;
+    }
+    // A seed that cannot produce a code must not reach the vault: the entry
+    // would then show a permanently blank code with nothing saying why, which
+    // is indistinguishable from a bug in the generator.
+    if (entry.totp_secret) {
+      try {
+        parseTotpSeed(entry.totp_secret);
+      } catch (err) {
+        showToast(`Two-factor seed: ${(err as Error).message}`, 'err', 4000);
+        return;
+      }
     }
     const idx = parseInt((document.getElementById('edit-index') as HTMLInputElement).value);
     if (idx >= 0) {

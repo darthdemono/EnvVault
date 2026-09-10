@@ -257,6 +257,16 @@
             <div id="pool-filter-list"></div>
           </div>
         </div>
+        <div class="sidebar-section" id="sidebar-section-authenticator" style="display:none">
+          <div class="sidebar-heading">Authenticator <button class="section-collapse-btn" data-section="authenticator" title="Collapse">▾</button></div>
+          <div class="section-body">
+            <div id="authenticator-list"></div>
+            <div class="totp-io-row">
+              <button class="btn btn-ghost btn-sm" id="totp-import-btn" title="Import from Ente, Aegis, 2FAS, andOTP, Bitwarden or Google Authenticator">Import…</button>
+              <button class="btn btn-ghost btn-sm" id="totp-export-btn" title="Write every seed in a format another authenticator reads">Export…</button>
+            </div>
+          </div>
+        </div>
         <div class="sidebar-section" id="sidebar-section-prefixes" style="display:none">
           <div class="sidebar-heading">Env Prefixes <button class="section-collapse-btn" data-section="prefixes" title="Collapse">▾</button></div>
           <div class="section-body">
@@ -690,6 +700,36 @@
         <div class="form-group" id="f-secret-group">
           <label for="f-secret" class="form-label" data-field="api_secret">API Secret <span class="opt">optional</span></label>
           <input class="form-input mono" id="f-secret" type="text" placeholder="Client secret or shared secret">
+        </div>
+        <div class="form-group" id="f-totp-group">
+          <label for="f-totp" class="form-label" data-field="totp_secret" title="The authenticator seed this service issued you. Paste the whole otpauth:// URI and the algorithm, digits and period are read from it.">
+            Two-Factor Seed <span class="opt">optional — base32, or a whole otpauth:// URI</span>
+          </label>
+          <div class="totp-input-row">
+            <input class="form-input mono" id="f-totp" type="password" autocomplete="off" spellcheck="false" placeholder="JBSW Y3DP EHPK 3PXP  —  or  otpauth://totp/...">
+            <button type="button" class="icon-btn sm" id="f-totp-reveal" aria-pressed="false" aria-label="Reveal the two-factor seed" title="Reveal">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+            </button>
+          </div>
+          <div class="form-hint" id="f-totp-status" role="status" aria-live="polite"></div>
+          <div class="form-row-3" id="f-totp-params" hidden>
+            <div class="form-group">
+              <label for="f-totp-algorithm" class="form-label">Algorithm</label>
+              <select class="form-input" id="f-totp-algorithm">
+                <option value="SHA1">SHA1</option>
+                <option value="SHA256">SHA256</option>
+                <option value="SHA512">SHA512</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label for="f-totp-digits" class="form-label">Digits</label>
+              <input class="form-input" id="f-totp-digits" type="number" min="6" max="10" step="1" placeholder="6">
+            </div>
+            <div class="form-group">
+              <label for="f-totp-period" class="form-label">Period <span class="opt">s</span></label>
+              <input class="form-input" id="f-totp-period" type="number" min="1" max="3600" step="1" placeholder="30">
+            </div>
+          </div>
         </div>
         <div class="form-row-2">
           <div class="form-group">

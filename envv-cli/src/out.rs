@@ -106,7 +106,23 @@ pub fn masked_json(value: &str) -> Value {
 /// `blob_ref` and `api_url` are deliberately absent: a path and a URL are
 /// locating information, and blanking them would make the redacted view useless
 /// for deciding *which* entry you are looking at.
-const SECRET_FIELDS: [&str; 4] = ["api_key", "api_secret", "certificate_data", "cert_key_data"];
+///
+/// `totp_secret` **is** here. It is a stored authenticator seed — it grants a
+/// login on its own, forever, and unlike an API key nothing about it expires.
+/// The six-digit code derived from it is a different thing and prints freely;
+/// see `envv-cli/src/totp_cmd.rs` for why that exemption is written down.
+/// Public because every path that can print one of these has to apply the same
+/// rule. `entries::cmd_get --field` and `pool::cmd_next --field` each carried
+/// their own copy of this list, and the copy is what went stale: `totp_secret`
+/// was added here and nowhere else, so `envv get X --field totp_secret` printed
+/// an authenticator seed in clear while `envv get X` masked the same value.
+pub const SECRET_FIELDS: [&str; 5] = [
+    "api_key",
+    "api_secret",
+    "certificate_data",
+    "cert_key_data",
+    "totp_secret",
+];
 
 /// Redact a single vault entry for JSON output. Returns it unchanged when
 /// `--reveal` is in force.

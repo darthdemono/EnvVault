@@ -697,6 +697,171 @@ mod commands {
         vault_core::users::totp_disable(&conn, &user_id)
     }
 
+    // ── Stored TOTP seeds (Phase 22) ─────────────────────────────────────────
+    //
+    // The *other* TOTP: a seed a third-party service issued, held on an entry,
+    // from which we generate the code the user types into that service. Above is
+    // the second factor on EnvVault's own login; the two never meet.
+
+    /// The code an entry's stored seed produces right now, with its countdown.
+    ///
+    /// The seed travels in rather than being looked up here: the frontend
+    /// already holds the decrypted vault, and re-reading the entry over the
+    /// vault path would mean this command needed an entry id, an ambiguity rule
+    /// and a second definition of which field the seed lives in.
+    ///
+    /// It still refuses while the vault is locked. Nothing in the app can call
+    /// it with a seed at that point — but a command that generates live codes
+    /// from any string handed to it, whatever the vault's state, is a capability
+    /// that outlives the reason it was safe.
+    ///
+    /// Generation happens here and only here. The TypeScript side parses seeds
+    /// (`src/ts/totp.ts`) and asks for codes; it does not own an HMAC.
+    #[tauri::command]
+    pub fn entry_totp_code(
+        state: State<VaultState>,
+        secret: String,
+        algorithm: Option<String>,
+        digits: Option<u32>,
+        period: Option<u64>,
+    ) -> Result<vault_core::totp::LiveCode, String> {
+        let g = state.0.lock().map_err(|_| "State lock poisoned")?;
+        g.as_ref().ok_or("Vault is locked")?;
+        // `Params::from_fields` is the only reader of these three values in the
+        // project — the CLI's `params_of` and the form's `totpParamsOf` are the
+        // other two callers of that one rule. Reading them here instead meant
+        // this command answered an out-of-range `digits` with an error where the
+        // CLI answered with a code, so the same entry showed a blank card and a
+        // working `envv totp code`.
+        let params = vault_core::totp::Params::from_fields(
+            algorithm.as_deref(),
+            digits.map(u64::from),
+            period,
+        );
+        vault_core::totp::live_code(&secret, &params)
+    }
+
+    /// Splits a pasted `otpauth://` URI, or normalises a bare base32 seed.
+    ///
+    /// Exists so the CLI, the desktop app and this command cannot disagree about
+    /// what a pasted URI meant. `src/ts/totp.ts` has the same parser, because the
+    /// form has to split a URI as it is typed and a round trip per keystroke is
+    /// not a form; the two are pinned by `tests/fixtures/parity/totp-seeds.json`.
+    #[tauri::command]
+    pub fn parse_totp_seed(seed: String) -> Result<vault_core::totp::Stored, String> {
+        vault_core::totp::parse_seed(&seed)
+    }
+
+    /// Read another authenticator app's export.
+    ///
+    /// Ente Auth, Aegis, 2FAS, andOTP, Bitwarden and Google Authenticator, with
+    /// the format detected from the bytes. Encrypted exports are refused by
+    /// name; this never tries to decrypt another app's vault.
+    ///
+    /// Parsing is `vault_core::totp_import` and nothing else — six formats
+    /// parsed twice is six chances for the app and the CLI to disagree about
+    /// what a file meant, and a disagreement here is a seed that imports with
+    /// the wrong period and produces codes the issuer rejects.
+    ///
+    /// It returns parsed seeds to the frontend, which is where they were headed
+    /// anyway: the caller holds the decrypted vault and is about to write them
+    /// into it. Refused while locked all the same.
+    #[tauri::command]
+    pub fn totp_import_parse(
+        state: State<VaultState>,
+        text: String,
+    ) -> Result<vault_core::totp_import::ParseReport, String> {
+        let g = state.0.lock().map_err(|_| "State lock poisoned")?;
+        g.as_ref().ok_or("Vault is locked")?;
+        vault_core::totp_import::parse(&text)
+    }
+
+    /// Merge an authenticator export into the entries the frontend holds.
+    ///
+    /// Parse, plan and apply in one call, returning the new entry array and a
+    /// report. One round trip rather than three, and — the reason it exists at
+    /// all — the merge rules stay in `vault_core::totp_import`, where
+    /// `envv totp import` also reads them. Whether a working second factor
+    /// survives an import must not be able to differ between the app and the
+    /// terminal.
+    ///
+    /// `entries` goes in and comes back rather than being read from the vault
+    /// here: the frontend is the thing holding the decrypted vault, and having
+    /// this command load and save independently would put two writers on one
+    /// file with no compare-and-swap between them.
+    #[tauri::command]
+    pub fn totp_import_merge(
+        state: State<VaultState>,
+        entries: Vec<serde_json::Value>,
+        text: String,
+        force: bool,
+        project: Option<String>,
+        category: Option<String>,
+    ) -> Result<serde_json::Value, String> {
+        use vault_core::totp_import::{self as imp, Plan};
+        let g = state.0.lock().map_err(|_| "State lock poisoned")?;
+        g.as_ref().ok_or("Vault is locked")?;
+
+        let report = imp::parse(&text)?;
+        let plans = imp::plan(&entries, &report.items, force);
+        let mut entries = entries;
+        let (mut created, mut updated, mut unchanged, mut conflicts) =
+            (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+
+        for (item, plan) in report.items.iter().zip(plans.iter()) {
+            let label = serde_json::json!({
+                "provider": item.suggested_provider(),
+                "account": item.account.clone().unwrap_or_default(),
+            });
+            match plan {
+                Plan::Unchanged { .. } => unchanged.push(label),
+                Plan::Conflict { .. } => conflicts.push(label),
+                Plan::Update { index } => {
+                    imp::write_fields(&mut entries[*index], &item.stored);
+                    updated.push(label);
+                }
+                Plan::Create => {
+                    entries.push(imp::new_entry(
+                        item,
+                        &vault_core::new_uuid(),
+                        &vault_core::iso_now(),
+                        project.as_deref(),
+                        category.as_deref(),
+                    ));
+                    created.push(label);
+                }
+            }
+        }
+
+        Ok(serde_json::json!({
+            "entries": entries,
+            "format": report.format.as_str(),
+            "created": created,
+            "updated": updated,
+            "unchanged": unchanged,
+            "conflicts": conflicts,
+            "skipped": report.skipped,
+        }))
+    }
+
+    /// Write seeds in a format another authenticator reads.
+    ///
+    /// **The returned string is nothing but secret material.** The frontend hands
+    /// it straight to a save dialog; it never reaches a log, a toast or the
+    /// clipboard by default. Same rule as `envv totp export --out`.
+    #[tauri::command]
+    pub fn totp_export_build(
+        state: State<VaultState>,
+        items: Vec<vault_core::totp_import::Imported>,
+        format: String,
+    ) -> Result<String, String> {
+        let g = state.0.lock().map_err(|_| "State lock poisoned")?;
+        g.as_ref().ok_or("Vault is locked")?;
+        let fmt = vault_core::totp_import::Format::parse(&format)
+            .ok_or_else(|| format!("Unknown format '{format}'"))?;
+        vault_core::totp_import::build(&items, fmt)
+    }
+
     #[tauri::command]
     pub fn rename_user(
         app: AppHandle,
@@ -1145,6 +1310,11 @@ pub fn run() {
             commands::totp_enroll,
             commands::totp_confirm,
             commands::totp_disable,
+            commands::entry_totp_code,
+            commands::parse_totp_seed,
+            commands::totp_import_parse,
+            commands::totp_import_merge,
+            commands::totp_export_build,
             commands::rename_user,
             commands::delete_user,
             commands::list_user_classes,

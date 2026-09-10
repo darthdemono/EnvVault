@@ -1,0 +1,130 @@
+/* Stored authenticator seeds (Phase 22).
+   Three surfaces: the sidebar's Authenticator section, the 2FA row on an
+   expanded card, and the seed field in the add/edit form. */
+
+/* ── The seed field in the form ─────────────────────────────────────────── */
+
+.totp-input-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.totp-input-row .form-input {
+  flex: 1;
+  min-width: 0;
+}
+
+/* A refused seed reads as an error rather than as information. The status line
+   never carries the seed itself — only what was read out of it. */
+.form-hint.err {
+  color: var(--danger, #e5484d);
+  opacity: 1;
+}
+
+/* ── The countdown ───────────────────────────────────────────────────────── */
+
+.totp-countdown {
+  display: inline-block;
+  width: 34px;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--border);
+  overflow: hidden;
+  flex: none;
+}
+.totp-countdown-fill {
+  display: block;
+  height: 100%;
+  width: 100%;
+  border-radius: 2px;
+  background: var(--accent, #6ee7b7);
+  /* Matches the tick, so the bar slides instead of stepping. Kept just under a
+     second so a late tick shortens the animation rather than stalling it. */
+  transition: width 0.9s linear;
+}
+/* Under ten seconds. A class rather than an inline colour, so the theme decides
+   which colour "about to expire" is. */
+.totp-countdown-fill.expiring {
+  background: var(--warn, #f5a524);
+  transition:
+    width 0.9s linear,
+    background 0.2s ease;
+}
+.totp-secs {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 9.5px;
+  color: var(--text2);
+  min-width: 14px;
+  text-align: right;
+  flex: none;
+}
+
+/* ── The sidebar section ─────────────────────────────────────────────────── */
+
+.sidebar-item.totp-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.totp-row-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.totp-row .totp-code {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.5px;
+  color: var(--text);
+  flex: none;
+  /* Reserve the width of the widest code so the row does not jump every thirty
+     seconds as the digits change. */
+  min-width: 60px;
+  text-align: right;
+}
+
+/* ── The card row ────────────────────────────────────────────────────────── */
+
+.key-row.totp-key-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.key-row.totp-key-row .totp-code {
+  font-family: "JetBrains Mono", monospace;
+  letter-spacing: 1px;
+  cursor: pointer;
+  flex: 1;
+  min-width: 0;
+}
+
+/* ── Import / export, in the Authenticator section ───────────────────────── */
+
+.totp-io-row {
+  display: flex;
+  gap: 6px;
+  margin-top: 6px;
+}
+.totp-io-row .btn {
+  flex: 1;
+  font-size: 10.5px;
+}
+.totp-io-row .btn[disabled] {
+  opacity: 0.45;
+  cursor: default;
+}
+
+/* Shown in place of the rows when nothing carries a seed yet. The section stays
+   visible in that state because it holds the Import button, which is the one
+   control somebody with no seeds is looking for. */
+.sidebar-empty-note {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 10px;
+  line-height: 1.6;
+  color: var(--text2);
+  opacity: 0.8;
+  padding: 4px 2px;
+}

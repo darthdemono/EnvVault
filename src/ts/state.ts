@@ -688,7 +688,17 @@ const DEFAULT_SETTINGS: AppSettings = {
   showExpiryWarning: true,
   expiryWarningDays: 30,
   customCss: '',
-  sidebarSections: ['all', 'price', 'env', 'category', 'project', 'tags', 'pools', 'prefixes'],
+  sidebarSections: [
+    'all',
+    'price',
+    'env',
+    'category',
+    'project',
+    'tags',
+    'pools',
+    'authenticator',
+    'prefixes',
+  ],
   groupByType: false,
   activityBarPosition: 'left' as const,
   activityBarStyle: 'icon' as const,
@@ -757,6 +767,21 @@ export const Settings = {
         if (!secs.includes('prefixes' as any)) secs.push('prefixes' as any);
         this._data.sidebarSections = secs as any;
         localStorage.setItem('envvault-sb-migrated', '1');
+        this._persist();
+      }
+      // Phase 22's Authenticator section, merged in the same way and under its
+      // own flag. Reusing the flag above would mean an install that has already
+      // run that migration never sees this one — which is how a section ends up
+      // present in the markup, listed in the settings editor, and invisible.
+      if (!localStorage.getItem('envvault-sb-migrated-totp')) {
+        const secs = [...(this._data.sidebarSections || [])];
+        if (!secs.includes('authenticator' as any)) {
+          const at = secs.indexOf('prefixes' as any);
+          if (at >= 0) secs.splice(at, 0, 'authenticator' as any);
+          else secs.push('authenticator' as any);
+        }
+        this._data.sidebarSections = secs as any;
+        localStorage.setItem('envvault-sb-migrated-totp', '1');
         this._persist();
       }
     } catch {}
@@ -838,9 +863,14 @@ export const ALL_SIDEBAR_SECTIONS = [
   'project',
   'tags',
   'pools',
+  'authenticator',
   'prefixes',
 ] as const;
 /** Sections whose visibility is also gated on having data (handled by render). */
+// `authenticator` is deliberately absent: it carries an action (Import), so
+// hiding it when the vault holds no seeds hides the one control a user without
+// seeds is looking for. Tags, pools and prefixes are pure filters and have
+// nothing to offer when empty.
 const DATA_GATED_SECTIONS = ['tags', 'pools', 'prefixes'];
 
 export function isSidebarSectionEnabled(key: string): boolean {
@@ -869,11 +899,22 @@ export function applySidebarOrder() {
     }
   });
   const collapsed = Settings.get('collapsedSections') || [];
-  (['all', 'price', 'env', 'category', 'project', 'tags', 'pools', 'prefixes'] as const).forEach(
-    (key) =>
-      document
-        .getElementById(`sidebar-section-${key}`)
-        ?.classList.toggle('collapsed', collapsed.includes(key)),
+  (
+    [
+      'all',
+      'price',
+      'env',
+      'category',
+      'project',
+      'tags',
+      'pools',
+      'authenticator',
+      'prefixes',
+    ] as const
+  ).forEach((key) =>
+    document
+      .getElementById(`sidebar-section-${key}`)
+      ?.classList.toggle('collapsed', collapsed.includes(key)),
   );
 }
 

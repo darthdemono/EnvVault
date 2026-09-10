@@ -45,6 +45,10 @@ hmac       = "0.12"
 # assumes it; the newer variants exist in the spec and are read by almost
 # nothing, so using one would produce codes that are correct and rejected.
 sha1       = "0.10"
+# Google Authenticator's migration payload is base64 inside a URI. The CLI
+# already depended on this for embedded icons; it lives here now because the
+# desktop app reads the same payload through `totp_import`.
+base64     = "0.22"
 serde      = { version = "1", features = ["derive"] }
 serde_json = "1"
 # Locating the per-user state directory for pools.json ($XDG_STATE_HOME on Unix,

@@ -42,6 +42,12 @@ pub mod users;
 // "no item named `verify` in module `vault_core`" and `-D warnings` turns that
 // into a failed docs build.
 pub mod totp;
+
+// Reading and writing the export files other authenticator apps produce.
+// Documented inside the module: an outer `///` here would merge with its own
+// `//!` block and resolve every intra-doc link in *this* file's scope, which is
+// how `entropy` and `totp` have each broken the docs build before.
+pub mod totp_import;
 pub use users::{
     assign_user_class, authority_tier, class_authority_tier, create_user, create_user_class,
     create_user_token, delete_user, delete_user_class, effective_permission_expr,
@@ -368,6 +374,14 @@ pub fn vault_version(conn: &Connection) -> Result<Option<String>, String> {
     .map_err(|e| e.to_string())
 }
 
+/// Entry fields whose change is worth a `version_history` snapshot.
+///
+/// The pair is (JSON field, the word the audit row uses). `api_key` is first and
+/// is the one that writes no `field` discriminator into the record — see
+/// `save_vault_with_actor`.
+const HISTORIED_SECRET_FIELDS: [(&str, &str); 2] =
+    [("api_key", "api_key"), ("totp_secret", "totp_secret")];
+
 /// Serialises `data` to the vault, updating `version_history` on key changes
 /// and appending to the `vault_audit` hash chain. Returns the new version.
 ///
@@ -473,9 +487,20 @@ fn save_vault_txn(
             let ck = entry_ck(entry);
 
             if let Some(old_e) = old_map.get(&ck) {
-                let new_val = entry.get("api_key").and_then(|v| v.as_str()).unwrap_or("");
-                let old_val = old_e.get("api_key").and_then(|v| v.as_str()).unwrap_or("");
-                if new_val != old_val && !old_val.is_empty() {
+                // Every secret-carrying value the entry holds, snapshot into one
+                // history. `api_key` writes no `field` discriminator so a vault
+                // stays readable to a build that predates the others — an
+                // absent `field` means `api_key`, and always has.
+                //
+                // `totp_secret` is here because a re-enrolled authenticator seed
+                // is exactly as unrecoverable as a replaced API key, and losing
+                // it silently is how a user finds out at the login screen.
+                for (field, label) in HISTORIED_SECRET_FIELDS {
+                    let new_val = entry.get(field).and_then(|v| v.as_str()).unwrap_or("");
+                    let old_val = old_e.get(field).and_then(|v| v.as_str()).unwrap_or("");
+                    if new_val == old_val || old_val.is_empty() {
+                        continue;
+                    }
                     let mut history: Vec<serde_json::Value> = entry
                         .get("version_history")
                         .and_then(|v| v.as_array())
@@ -487,10 +512,14 @@ fn save_vault_txn(
                                 .cloned()
                                 .unwrap_or_default()
                         });
-                    history.insert(
-                        0,
-                        serde_json::json!({ "value": old_val, "saved_at": now_str }),
-                    );
+                    let mut record = serde_json::json!({ "value": old_val, "saved_at": now_str });
+                    if field != "api_key" {
+                        record["field"] = serde_json::json!(field);
+                    }
+                    history.insert(0, record);
+                    // The cap is per entry, not per field, so a chatty seed
+                    // cannot evict an API key's history — which is why the two
+                    // share one list rather than getting one each.
                     history.truncate(50);
                     if let Some(obj) = entry.as_object_mut() {
                         obj.insert(
@@ -503,7 +532,7 @@ fn save_vault_txn(
                         "update",
                         &provider,
                         &now_str,
-                        Some("api_key rotated"),
+                        Some(&format!("{label} rotated")),
                         actor,
                     )?;
                 }
@@ -762,6 +791,29 @@ pub fn migrate_legacy_json(conn: &Connection, raw_json: &str) -> Result<(), Stri
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
 /// Returns the current UTC time as an ISO-8601 string (`YYYY-MM-DDTHH:MM:SSZ`).
+/// A random UUID v4, with the version and variant bits set.
+///
+/// Hand-rolled rather than pulled in as a crate for the same reason base32 is:
+/// it is eleven lines, and `rand` is already here. `users.rs` and the TOTP
+/// importer both call it, so an entry created by the desktop app's import gets
+/// an id shaped exactly like one created anywhere else — which matters because
+/// `entry_ck` falls back to a legacy tuple for entries that have none.
+pub fn new_uuid() -> String {
+    use rand::RngCore;
+    let mut b = [0u8; 16];
+    rand::thread_rng().fill_bytes(&mut b);
+    b[6] = (b[6] & 0x0f) | 0x40;
+    b[8] = (b[8] & 0x3f) | 0x80;
+    format!(
+        "{}-{}-{}-{}-{}",
+        hex::encode(&b[0..4]),
+        hex::encode(&b[4..6]),
+        hex::encode(&b[6..8]),
+        hex::encode(&b[8..10]),
+        hex::encode(&b[10..16]),
+    )
+}
+
 pub fn iso_now() -> String {
     let t = time::OffsetDateTime::now_utc();
     format!(
@@ -991,6 +1043,67 @@ mod tests {
             "one rotation should append one history entry"
         );
         assert_eq!(history[0]["value"], "old_value");
+    }
+
+    #[test]
+    fn a_replaced_totp_seed_is_versioned_and_labelled() {
+        // A re-enrolled authenticator seed is as unrecoverable as a replaced API
+        // key. Before Phase 22 only `api_key` was snapshot, so swapping a seed
+        // left no record at all — and the user would find out at a login screen.
+        let (conn, _dir) = open_scratch("totp-history");
+        save_vault(
+            &conn,
+            json!({
+                "api_keys": [{
+                    "id": "1", "provider": "GitHub",
+                    "api_key": "k1", "totp_secret": "JBSWY3DPEHPK3PXP",
+                }]
+            }),
+            SaveCtx::default(),
+        )
+        .unwrap();
+        save_vault(
+            &conn,
+            json!({
+                "api_keys": [{
+                    "id": "1", "provider": "GitHub",
+                    "api_key": "k1", "totp_secret": "MZXW6YTBOI======",
+                }]
+            }),
+            SaveCtx::default(),
+        )
+        .unwrap();
+
+        let loaded = load_vault(&conn).unwrap().unwrap();
+        let history = loaded["api_keys"][0]["version_history"].as_array().unwrap();
+        assert_eq!(history.len(), 1, "the seed change is one revision");
+        assert_eq!(history[0]["value"], "JBSWY3DPEHPK3PXP");
+        // The discriminator is what tells a restore which field it is restoring.
+        assert_eq!(history[0]["field"], "totp_secret");
+    }
+
+    #[test]
+    fn an_api_key_revision_still_carries_no_field_discriminator() {
+        // Absent `field` means `api_key`, and every vault written before Phase 22
+        // relies on that. Stamping it now would make an older build's history
+        // viewer show a field name it has never heard of.
+        let (conn, _dir) = open_scratch("legacy-history-shape");
+        save_vault(
+            &conn,
+            json!({ "api_keys": [{ "id": "1", "provider": "GitHub", "api_key": "v1" }] }),
+            SaveCtx::default(),
+        )
+        .unwrap();
+        save_vault(
+            &conn,
+            json!({ "api_keys": [{ "id": "1", "provider": "GitHub", "api_key": "v2" }] }),
+            SaveCtx::default(),
+        )
+        .unwrap();
+
+        let loaded = load_vault(&conn).unwrap().unwrap();
+        let history = loaded["api_keys"][0]["version_history"].as_array().unwrap();
+        assert!(history[0].get("field").is_none(), "{:?}", history[0]);
     }
 
     #[test]
