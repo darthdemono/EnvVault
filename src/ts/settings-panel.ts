@@ -58,6 +58,7 @@ const SIDEBAR_SECTION_DEFS = [
   { key: 'project', label: 'Projects' },
   { key: 'tags', label: 'Tags' },
   { key: 'pools', label: 'Key Pools' },
+  { key: 'authenticator', label: 'Authenticator' },
   { key: 'prefixes', label: 'Env Prefixes' },
 ];
 const DEFAULT_SIDEBAR_SECTIONS = [
@@ -68,6 +69,7 @@ const DEFAULT_SIDEBAR_SECTIONS = [
   'project',
   'tags',
   'pools',
+  'authenticator',
   'prefixes',
 ];
 

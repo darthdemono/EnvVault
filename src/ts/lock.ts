@@ -22,6 +22,7 @@ import {
   authUserInteractive,
 } from './remote-panel';
 import { showDropdown } from './modals';
+import { resetTotpCache, stopTotpTicker } from './totp';
 import {
   wireRevealButtons,
   resetReveal,
@@ -67,6 +68,12 @@ export async function lockVault(reason: 'auto' | 'manual' | 'visibility' = 'manu
   for (const u of st.undoStack) clearTimeout(u.t);
   st.undoStack = [];
   document.getElementById('undo-bar')?.classList.remove('visible');
+
+  // Same reasoning, for the authenticator: the cached codes are derived from
+  // the seeds this vault held, and the ticker is a timer that would keep asking
+  // Rust for more of them behind a lock screen.
+  stopTotpTicker();
+  resetTotpCache();
 
   // Covers expanded/revealed/filters/search plus bulk mode, which used to stay
   // switched on across a lock.

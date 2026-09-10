@@ -29,13 +29,48 @@ pub fn canonical_field(field: &str) -> &str {
         "URL" | "URI" | "ENDPOINT" | "API_URL" | "BASE_URL" => "api_url",
         "EMAIL" | "MAIL" => "email",
         "KEY_ID" | "KEYID" | "KID" => "key_id",
+        // The public half of an OAuth pair. It resolves to `key_id` and then,
+        // through `entry_field`'s fallback, to an `extra_vars` entry keyed `ID`
+        // — which is where a client id actually lives in vaults written today.
+        //
+        // Without this arm `ID` fell through `_ => field` and was looked up as
+        // the entry's `id`: a UUID, non-empty, silently written into a rendered
+        // config by the CLI while the app left `${Spotify/ID}` as literal text.
+        // The deny-list below is what stops that answer; this arm is what makes
+        // the reference mean something useful instead of nothing.
+        "ID" | "CLIENT_ID" | "APP_ID" | "ACCOUNT_ID" | "APPLICATION_ID" => "key_id",
         _ => field,
     }
+}
+
+/// Entry fields no `${…}` may ever resolve to.
+///
+/// These are the entry's *metadata*, not its values: `id` is a UUID that
+/// identifies the row, and the other three are lists that would stringify into
+/// something no config format wants. A reference naming one of them is a
+/// mistake, and the honest answer is "unresolved" — which every exporter already
+/// reports — rather than a plausible-looking wrong value.
+///
+/// Checked **before** the lookup, so an `extra_vars` entry keyed `id` is
+/// unreachable too. That is deliberate: the point is that `${X/id}` has one
+/// answer everywhere, and making it depend on whether the entry happens to carry
+/// such a var reintroduces exactly the silent divergence this closes.
+///
+/// The TypeScript twin is `REFERENCE_DENY` in `src/ts/chunk-ops.ts`; both are
+/// pinned by `tests/fixtures/parity/field-aliases.json`.
+pub const REFERENCE_DENY: [&str; 4] = ["id", "version_history", "projectIds", "categories"];
+
+/// True when a reference names entry metadata rather than a value.
+fn is_denied(field: &str, canonical: &str) -> bool {
+    REFERENCE_DENY.contains(&field) || REFERENCE_DENY.contains(&canonical)
 }
 
 /// Resolve a named field on a vault entry (built-in fields, aliases, then extra_vars).
 pub fn entry_field(entry: &Value, field: &str) -> Option<String> {
     let canonical = canonical_field(field);
+    if is_denied(field, canonical) {
+        return None;
+    }
     if let Some(s) = entry.get(canonical).and_then(|v| v.as_str()) {
         if !s.is_empty() {
             return Some(s.to_string());

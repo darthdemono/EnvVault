@@ -5467,6 +5467,7 @@ name = "vault-core"
 version = "0.22.0"
 dependencies = [
  "argon2",
+ "base64 0.22.1",
  "dirs 5.0.1",
  "hex",
  "hmac",

@@ -203,7 +203,8 @@ describe('exporter parity fixtures', () => {
   it('field aliases', () => {
     const doc = JSON.parse(readFileSync(join(FIXTURES, 'field-aliases.json'), 'utf8'));
     // Every field holds its own name, so a resolved reference reports which
-    // field it landed on.
+    // field it landed on. The metadata fields carry values too, so the
+    // deny-list below is exercised rather than satisfied by their absence.
     st.vault.api_keys = [
       {
         provider: 'E',
@@ -213,12 +214,34 @@ describe('exporter parity fixtures', () => {
         api_url: 'api_url',
         email: 'email',
         key_id: 'key_id',
+        id: 'b3f1c0de-0000-4000-8000-000000000001',
+        categories: ['categories'],
+        projectIds: ['Universal'],
+        version_history: [{ value: 'old', saved_at: '2026-01-01T00:00:00Z' }],
+      },
+      {
+        provider: doc.extra_var_fallback.provider,
+        api_key: 'api_key',
+        id: 'b3f1c0de-0000-4000-8000-000000000002',
+        categories: [],
+        projectIds: ['Universal'],
+        extra_vars: [{ key: doc.extra_var_fallback.var_key, value: doc.extra_var_fallback.value }],
       },
     ] as any;
     st.vault.projects = [];
     for (const [alias, expected] of Object.entries(doc.aliases as Record<string, string>)) {
       expect(resolveFieldRef(`\${E/${alias}}`, true).resolved, `\${E/${alias}}`).toBe(expected);
     }
+    // Phase 21: entry metadata is not addressable. Before the deny-list the CLI
+    // answered `${E/id}` with the entry's UUID and wrote it into a config.
+    for (const field of doc.unresolvable as string[]) {
+      const r = resolveFieldRef(`\${E/${field}}`, true);
+      expect(r.resolved, `\${E/${field}} must not resolve`).toBeNull();
+      expect(r.unresolved, `\${E/${field}} must report unresolved`).toBe(true);
+    }
+    // ...and an empty built-in falls through to extra_vars, as the CLI does.
+    const fb = doc.extra_var_fallback;
+    expect(resolveFieldRef(`\${${fb.provider}/${fb.field}}`, true).resolved).toBe(fb.value);
   });
 
   it('nginx_upstream chunk', () => {

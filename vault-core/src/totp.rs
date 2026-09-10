@@ -1,4 +1,20 @@
-//! RFC 6238 time-based one-time passwords, for sub-user login only.
+//! RFC 6238 time-based one-time passwords.
+//!
+//! # Two callers, one generator
+//!
+//! Phase 19 added this module for **sub-user login**: EnvVault checking a code
+//! its own user typed. Phase 22 added the mirror image — a TOTP seed the vault
+//! *stores on behalf of a third party*, the way Bitwarden and 1Password hold an
+//! authenticator entry, where EnvVault produces the code and a website checks
+//! it.
+//!
+//! They share every line of arithmetic and deliberately nothing else. The login
+//! path is fixed at SHA-1/6 digits/30 seconds because that is what this product
+//! mints and there is no interoperability question; the stored-seed path is
+//! parameterised ([`Params`]) because the issuer chose those numbers years ago
+//! and a generator that cannot follow is a generator that produces confidently
+//! wrong codes. Only the login path has an anti-replay mark — see [`verify`] —
+//! because only the login path is a verifier.
 //!
 //! # Why this exists twice
 //!
@@ -18,13 +34,18 @@
 //!
 //! # No new crates
 //!
-//! `hmac` is already a dependency (`entropy.rs` builds HKDF on it) and `sha1` is
-//! added for the one algorithm RFC 6238 pins for interoperability. Base32 is
+//! `hmac` is already a dependency (`entropy.rs` builds HKDF on it), `sha1` is
+//! added for the one algorithm RFC 6238 pins for interoperability, and `sha2`
+//! was already here for the KDF — which is the whole cost of supporting the
+//! SHA-256 and SHA-512 variants a stored third-party seed may name. Base32 is
 //! forty lines and lives here rather than behind a crate, for the same reason
 //! HKDF does: the encoding is part of what a reader has to check.
 
 use hmac::{Hmac, Mac};
+use serde::{Deserialize, Serialize};
 use sha1::Sha1;
+use sha2::{Sha256, Sha512};
+use zeroize::Zeroizing;
 
 /// Digits in a generated code. Six is what every authenticator app assumes when
 /// the `otpauth://` URI omits the parameter, and omitting it is what keeps the
@@ -46,6 +67,25 @@ pub const SKEW_STEPS: i64 = 1;
 pub const SECRET_BYTES: usize = 20;
 
 type HmacSha1 = Hmac<Sha1>;
+type HmacSha256 = Hmac<Sha256>;
+type HmacSha512 = Hmac<Sha512>;
+
+/// Fewest digits a code may carry. RFC 4226 sets six as the floor.
+pub const MIN_DIGITS: u32 = 6;
+
+/// Most digits a code may carry.
+///
+/// Ten is where `u32` runs out: dynamic truncation yields a 31-bit number, so
+/// `10^10` already exceeds it and an eleventh digit would be a constant zero
+/// that looks like part of the code.
+pub const MAX_DIGITS: u32 = 10;
+
+/// Longest step a stored seed may name, in seconds.
+///
+/// An hour. Nothing real uses more, and the cap is what stops a pasted URI with
+/// `period=0` or `period=4294967295` from producing a division by zero or a
+/// code that never changes.
+pub const MAX_PERIOD_SECS: u64 = 3600;
 
 // ── Base32 (RFC 4648, no padding) ─────────────────────────────────────────────
 
@@ -106,23 +146,55 @@ pub fn base32_decode(s: &str) -> Result<Vec<u8>, String> {
 
 // ── Code generation ───────────────────────────────────────────────────────────
 
-/// HOTP (RFC 4226) for one counter value.
+/// HOTP (RFC 4226) for one counter value, SHA-1 and six digits.
+///
+/// The login path's shape. A stored third-party seed goes through
+/// [`hotp_with`], which is the same function with the two constants unpinned;
+/// this one stays because every caller in `users.rs` means exactly these
+/// numbers and spelling them out at each call site invites one of them to
+/// drift.
 pub fn hotp(secret: &[u8], counter: u64) -> String {
-    // `new_from_slice` only fails for key lengths HMAC cannot take, and HMAC
-    // accepts any length, so this cannot fail in practice.
-    let mut mac = HmacSha1::new_from_slice(secret).expect("HMAC accepts any key length");
-    mac.update(&counter.to_be_bytes());
-    let digest = mac.finalize().into_bytes();
+    hotp_with(secret, counter, Algorithm::Sha1, DIGITS)
+}
 
-    // Dynamic truncation, RFC 4226 §5.3.
+/// HOTP (RFC 4226) for one counter value, with the algorithm and digit count
+/// the issuer chose.
+///
+/// `digits` is clamped to [`MIN_DIGITS`]..=[`MAX_DIGITS`] rather than rejected:
+/// this is the innermost function and it is reached only through validated
+/// constructors, so a panic here would be a crash in a card renderer for a
+/// number a user typed. [`Params::validate`] is where a bad value is refused.
+pub fn hotp_with(secret: &[u8], counter: u64, algorithm: Algorithm, digits: u32) -> String {
+    // Dynamic truncation, RFC 4226 §5.3, over whichever digest the issuer picked.
+    // `new_from_slice` only fails for key lengths HMAC cannot take, and HMAC
+    // accepts any length, so none of these can fail in practice.
+    let digest: Vec<u8> = match algorithm {
+        Algorithm::Sha1 => {
+            let mut mac = HmacSha1::new_from_slice(secret).expect("HMAC accepts any key length");
+            mac.update(&counter.to_be_bytes());
+            mac.finalize().into_bytes().to_vec()
+        }
+        Algorithm::Sha256 => {
+            let mut mac = HmacSha256::new_from_slice(secret).expect("HMAC accepts any key length");
+            mac.update(&counter.to_be_bytes());
+            mac.finalize().into_bytes().to_vec()
+        }
+        Algorithm::Sha512 => {
+            let mut mac = HmacSha512::new_from_slice(secret).expect("HMAC accepts any key length");
+            mac.update(&counter.to_be_bytes());
+            mac.finalize().into_bytes().to_vec()
+        }
+    };
+
     let offset = (digest[digest.len() - 1] & 0x0f) as usize;
     let binary = (u32::from(digest[offset]) & 0x7f) << 24
         | u32::from(digest[offset + 1]) << 16
         | u32::from(digest[offset + 2]) << 8
         | u32::from(digest[offset + 3]);
 
-    let modulus = 10u32.pow(DIGITS);
-    format!("{:0width$}", binary % modulus, width = DIGITS as usize)
+    let digits = digits.clamp(MIN_DIGITS, MAX_DIGITS);
+    let modulus = 10u32.pow(digits);
+    format!("{:0width$}", binary % modulus, width = digits as usize)
 }
 
 /// The counter step for a Unix timestamp.
@@ -276,6 +348,405 @@ pub fn grouped(secret_b32: &str) -> String {
         .map(|c| String::from_utf8_lossy(c).to_string())
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+// ── Stored third-party seeds (Phase 22) ───────────────────────────────────────
+//
+// Everything below serves the *other* caller: a seed the vault holds on behalf
+// of a website, from which EnvVault produces a code the user types into that
+// website. Nothing here verifies anything, so nothing here has — or wants — the
+// anti-replay mark that `verify` above carries.
+
+/// The HMAC a stored seed names.
+///
+/// SHA-1 is the only value a login seed ever takes and the overwhelming
+/// majority of what issuers hand out. The other two exist because `otpauth://`
+/// can name them and a handful of issuers do: reading `algorithm=SHA256` and
+/// then generating SHA-1 codes produces six digits that are correct-looking,
+/// wrong, and give the user no way to tell which of the two ends is at fault.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "UPPERCASE")]
+pub enum Algorithm {
+    #[default]
+    Sha1,
+    Sha256,
+    Sha512,
+}
+
+impl Algorithm {
+    /// The spelling `otpauth://` uses.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Algorithm::Sha1 => "SHA1",
+            Algorithm::Sha256 => "SHA256",
+            Algorithm::Sha512 => "SHA512",
+        }
+    }
+
+    /// Reads the spelling `otpauth://` uses, case- and dash-insensitively.
+    ///
+    /// `SHA-256` appears in real URIs even though the spec does not allow it.
+    /// Rejecting it would mean refusing a seed that every phone accepts.
+    pub fn parse(raw: &str) -> Option<Self> {
+        match raw.trim().to_ascii_uppercase().replace('-', "").as_str() {
+            "SHA1" => Some(Algorithm::Sha1),
+            "SHA256" => Some(Algorithm::Sha256),
+            "SHA512" => Some(Algorithm::Sha512),
+            _ => None,
+        }
+    }
+}
+
+/// The three numbers a stored seed is generated under.
+///
+/// Defaults are what an `otpauth://` URI means when it omits the parameter, and
+/// therefore what an entry that stores only a bare base32 seed means too.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Params {
+    pub algorithm: Algorithm,
+    pub digits: u32,
+    pub period: u64,
+}
+
+impl Default for Params {
+    fn default() -> Self {
+        Params {
+            algorithm: Algorithm::Sha1,
+            digits: DIGITS,
+            period: STEP_SECS,
+        }
+    }
+}
+
+impl Params {
+    /// The parameters an entry's four stored fields mean, with anything
+    /// unusable falling back to the `otpauth://` default.
+    ///
+    /// **This is the only place a vault's TOTP fields become `Params`.** They
+    /// were read three separate ways before — `envv totp code` clamped, `envv
+    /// totp ls` did not, and the IPC command did neither — so one entry
+    /// carrying `totp_digits: 99` listed as a 99-digit credential, produced six
+    /// digits when asked for a code, and returned an error rather than a code to
+    /// any caller of `entry_totp_code` that had not clamped first. Three
+    /// readings of one field is three answers.
+    ///
+    /// A vault is untrusted input (invariant 4): these fields arrive from an
+    /// imported backup or a remote server as readily as from this CLI, and the
+    /// unions are not enforced at rest. Falling back rather than refusing is
+    /// what an omitted `otpauth://` parameter already means, and it keeps a
+    /// single mistyped number from making the whole entry unreadable.
+    ///
+    /// The twin is `totpParamsOf` in `src/ts/totp.ts` — the form needs these
+    /// before anything is saved — and the two are pinned by the `params`
+    /// section of `tests/fixtures/parity/totp-seeds.json`.
+    pub fn from_fields(algorithm: Option<&str>, digits: Option<u64>, period: Option<u64>) -> Self {
+        let d = Params::default();
+        Params {
+            algorithm: algorithm.and_then(Algorithm::parse).unwrap_or(d.algorithm),
+            digits: digits
+                .filter(|n| (u64::from(MIN_DIGITS)..=u64::from(MAX_DIGITS)).contains(n))
+                .map(|n| n as u32)
+                .unwrap_or(d.digits),
+            period: period
+                .filter(|p| *p > 0 && *p <= MAX_PERIOD_SECS)
+                .unwrap_or(d.period),
+        }
+    }
+
+    /// Refuses a combination that cannot produce a code, naming the field.
+    ///
+    /// Called at every boundary a number can enter through — the URI parser, the
+    /// CLI flags, the IPC command — rather than at the generator, so that a
+    /// `period` of zero is a message about the value the user typed instead of a
+    /// division by zero three frames deeper.
+    pub fn validate(&self) -> Result<(), String> {
+        if !(MIN_DIGITS..=MAX_DIGITS).contains(&self.digits) {
+            return Err(format!(
+                "digits must be between {MIN_DIGITS} and {MAX_DIGITS}, got {}",
+                self.digits
+            ));
+        }
+        if self.period == 0 || self.period > MAX_PERIOD_SECS {
+            return Err(format!(
+                "period must be between 1 and {MAX_PERIOD_SECS} seconds, got {}",
+                self.period
+            ));
+        }
+        Ok(())
+    }
+
+    /// True when these are the values an `otpauth://` URI may omit.
+    ///
+    /// Used to keep the stored entry honest: writing `algorithm: "SHA1"` onto
+    /// every entry would make the field look chosen when it was defaulted, and
+    /// the UI would then have to distinguish "the issuer said SHA-1" from "we
+    /// wrote SHA-1 because nobody said anything". They are the same thing, so
+    /// the field is simply absent.
+    pub fn is_default(&self) -> bool {
+        *self == Params::default()
+    }
+}
+
+/// A parsed seed: the base32 secret plus everything the URI said about it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Stored {
+    /// Base32, uppercased, with the grouping spaces and any padding removed.
+    pub secret: String,
+    #[serde(flatten)]
+    pub params: Params,
+    /// The service, when the URI named one. Never overwrites an entry's
+    /// provider — see `envv-cli`'s `--totp` handling; it is offered, not applied.
+    pub issuer: Option<String>,
+    /// The account at that service, when the URI named one.
+    pub account: Option<String>,
+}
+
+impl Stored {
+    /// Rebuilds an `otpauth://` URI, for exporting the seed back to a phone.
+    ///
+    /// The URI **contains the secret**, so every caller of this is a
+    /// materialising path: it is refused to stdout without `--reveal`, exactly
+    /// as the seed itself is.
+    pub fn to_uri(&self, issuer_fallback: &str, account_fallback: &str) -> String {
+        let issuer = self.issuer.as_deref().unwrap_or(issuer_fallback);
+        let account = self.account.as_deref().unwrap_or(account_fallback);
+        let label = if issuer.is_empty() {
+            pct(account)
+        } else {
+            format!("{}:{}", pct(issuer), pct(account))
+        };
+        let mut uri = format!("otpauth://totp/{label}?secret={}", self.secret);
+        if !issuer.is_empty() {
+            uri.push_str(&format!("&issuer={}", pct(issuer)));
+        }
+        uri.push_str(&format!(
+            "&algorithm={}&digits={}&period={}",
+            self.params.algorithm.as_str(),
+            self.params.digits,
+            self.params.period
+        ));
+        uri
+    }
+}
+
+/// Percent-decodes, leaving anything malformed alone.
+///
+/// A label that ends in a bare `%` is a typo in someone's export, not an attack,
+/// and dropping the whole seed over it helps nobody.
+fn pct_decode(s: &str) -> String {
+    let bytes = s.as_bytes();
+    let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            let hex = std::str::from_utf8(&bytes[i + 1..i + 3]).ok();
+            if let Some(b) = hex.and_then(|h| u8::from_str_radix(h, 16).ok()) {
+                out.push(b);
+                i += 3;
+                continue;
+            }
+        }
+        // `+` is a form-encoding convention, not a URI one, but exports written
+        // by web tooling use it in the label and a literal plus in an account
+        // name is vanishingly rare next to a space that reads as one.
+        out.push(if bytes[i] == b'+' { b' ' } else { bytes[i] });
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// Normalises a base32 secret: uppercase, no spaces, dashes or padding.
+///
+/// The value that reaches the vault, so that two entries holding the same seed
+/// typed differently are byte-identical and their fingerprints match.
+pub fn normalize_b32(raw: &str) -> String {
+    raw.chars()
+        .filter(|c| !c.is_whitespace() && *c != '-' && *c != '=')
+        .flat_map(|c| c.to_uppercase())
+        .collect()
+}
+
+/// Reads either a bare base32 seed or a full `otpauth://` URI.
+///
+/// One entry point because the form field, the CLI flag and the paste handler
+/// all accept whichever the user has to hand, and a user who pastes a URI into a
+/// box labelled "secret" is doing the reasonable thing.
+pub fn parse_seed(input: &str) -> Result<Stored, String> {
+    let trimmed = input.trim();
+    if trimmed.is_empty() {
+        return Err("empty TOTP secret".into());
+    }
+    if trimmed.len() >= 8 && trimmed[..8].eq_ignore_ascii_case("otpauth:") {
+        return parse_otpauth(trimmed);
+    }
+    let secret = normalize_b32(trimmed);
+    validate_secret(&secret)?;
+    Ok(Stored {
+        secret,
+        params: Params::default(),
+        issuer: None,
+        account: None,
+    })
+}
+
+/// Rejects a secret that cannot produce a code, before it is stored.
+///
+/// Storing an unusable seed is worse than refusing it: the entry then shows a
+/// code field that is permanently blank, and the user has no way to tell a
+/// mistyped secret from a bug.
+fn validate_secret(secret: &str) -> Result<(), String> {
+    if secret.is_empty() {
+        return Err("empty TOTP secret".into());
+    }
+    let bytes = Zeroizing::new(base32_decode(secret)?);
+    if bytes.is_empty() {
+        return Err("TOTP secret decodes to no bytes".into());
+    }
+    Ok(())
+}
+
+/// Parses an `otpauth://totp/...` URI.
+///
+/// Deliberately strict about the scheme and the type, and forgiving about
+/// everything else: an unknown query parameter is ignored, an unreadable
+/// `digits` falls back to the default rather than failing, and only a missing or
+/// unusable `secret` is fatal. A URI is pasted from a third party's export and
+/// half of them are slightly wrong.
+pub fn parse_otpauth(uri: &str) -> Result<Stored, String> {
+    let rest = uri
+        .get(..10)
+        .filter(|p| p.eq_ignore_ascii_case("otpauth://"))
+        .and_then(|_| uri.get(10..))
+        .ok_or("not an otpauth:// URI")?;
+
+    let (path, query) = match rest.split_once('?') {
+        Some((p, q)) => (p, q),
+        None => (rest, ""),
+    };
+    let (kind, label) = match path.split_once('/') {
+        Some((k, l)) => (k, l),
+        None => (path, ""),
+    };
+    // `otpauth://hotp/` is counter-based: it has no clock, so a card cannot show
+    // "the current code" for it at all. Refusing names the reason; storing it
+    // would produce an entry whose code never changes.
+    if !kind.eq_ignore_ascii_case("totp") {
+        return Err(format!(
+            "only otpauth://totp/ is supported, got 'otpauth://{kind}/'"
+        ));
+    }
+
+    let mut secret = String::new();
+    let mut issuer_param: Option<String> = None;
+    let mut params = Params::default();
+    for pair in query.split('&').filter(|p| !p.is_empty()) {
+        let (k, v) = pair.split_once('=').unwrap_or((pair, ""));
+        match k.to_ascii_lowercase().as_str() {
+            "secret" => secret = normalize_b32(&pct_decode(v)),
+            "issuer" => {
+                let decoded = pct_decode(v);
+                if !decoded.trim().is_empty() {
+                    issuer_param = Some(decoded.trim().to_string());
+                }
+            }
+            "algorithm" => {
+                if let Some(a) = Algorithm::parse(&pct_decode(v)) {
+                    params.algorithm = a;
+                }
+            }
+            "digits" => {
+                if let Ok(d) = pct_decode(v).trim().parse::<u32>() {
+                    if (MIN_DIGITS..=MAX_DIGITS).contains(&d) {
+                        params.digits = d;
+                    }
+                }
+            }
+            "period" => {
+                if let Ok(p) = pct_decode(v).trim().parse::<u64>() {
+                    if p > 0 && p <= MAX_PERIOD_SECS {
+                        params.period = p;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    validate_secret(&secret)?;
+    params.validate()?;
+
+    // The label is `issuer:account`, and the `issuer` query parameter repeats
+    // it. Where the two disagree the parameter wins — it is the one an exporter
+    // writes deliberately, while the label half is often whatever the user typed
+    // into their phone years ago.
+    let label = pct_decode(label);
+    let (label_issuer, account) = match label.split_once(':') {
+        Some((i, a)) => (
+            Some(i.trim().to_string()).filter(|s| !s.is_empty()),
+            a.trim().to_string(),
+        ),
+        None => (None, label.trim().to_string()),
+    };
+
+    Ok(Stored {
+        secret,
+        params,
+        issuer: issuer_param.or(label_issuer),
+        account: Some(account).filter(|a| !a.is_empty()),
+    })
+}
+
+/// The code a stored seed produces at a given time.
+pub fn code_at(secret_b32: &str, params: &Params, unix_secs: u64) -> Result<String, String> {
+    params.validate()?;
+    // Zeroized on drop: this is the decoded seed, and it is the one value in
+    // this function that would still be readable in a heap dump afterwards.
+    let secret = Zeroizing::new(base32_decode(secret_b32)?);
+    if secret.is_empty() {
+        return Err("empty TOTP secret".into());
+    }
+    Ok(hotp_with(
+        &secret,
+        unix_secs / params.period,
+        params.algorithm,
+        params.digits,
+    ))
+}
+
+/// Seconds until the current code is replaced.
+///
+/// Zero is never returned: at the instant of a step boundary the *new* code has
+/// a full period ahead of it, and a countdown that reads 0 for one second in
+/// every period is a countdown users report as a bug.
+pub fn remaining_secs(period: u64, unix_secs: u64) -> u64 {
+    let period = period.clamp(1, MAX_PERIOD_SECS);
+    period - (unix_secs % period)
+}
+
+/// A code and how long it has left — the shape the desktop app and the CLI both
+/// render.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LiveCode {
+    pub code: String,
+    /// Seconds until `code` is replaced.
+    pub remaining_secs: u64,
+    /// Echoed back so a caller can draw a countdown without re-deriving it from
+    /// the entry, and so a stale response is recognisable as stale.
+    pub period: u64,
+    pub digits: u32,
+    pub algorithm: Algorithm,
+}
+
+/// The code a stored seed produces right now, with its countdown.
+pub fn live_code(secret_b32: &str, params: &Params) -> Result<LiveCode, String> {
+    let now = now_unix();
+    Ok(LiveCode {
+        code: code_at(secret_b32, params, now)?,
+        remaining_secs: remaining_secs(params.period, now),
+        period: params.period,
+        digits: params.digits,
+        algorithm: params.algorithm,
+    })
 }
 
 #[cfg(test)]
@@ -437,6 +908,229 @@ mod tests {
         assert_eq!(
             base32_decode(&grouped(&secret)).unwrap(),
             base32_decode(&secret).unwrap()
+        );
+    }
+
+    // ── Stored third-party seeds (Phase 22) ──────────────────────────────────
+
+    /// RFC 6238 Appendix B seeds. The three are different lengths on purpose:
+    /// the spec's SHA-256 and SHA-512 vectors use 32- and 64-byte keys, and a
+    /// generator that quietly truncated or padded would still match the SHA-1
+    /// row and fail only for the users who have a SHA-512 seed.
+    fn rfc6238_seed(algorithm: Algorithm) -> String {
+        let ascii: &[u8] = match algorithm {
+            Algorithm::Sha1 => b"12345678901234567890",
+            Algorithm::Sha256 => b"12345678901234567890123456789012",
+            Algorithm::Sha512 => {
+                b"1234567890123456789012345678901234567890123456789012345678901234"
+            }
+        };
+        base32_encode(ascii)
+    }
+
+    #[test]
+    fn code_at_matches_rfc_6238_for_all_three_algorithms() {
+        // Without these the SHA-256 and SHA-512 arms could be self-consistently
+        // wrong: they would produce six plausible digits that the issuer
+        // rejects, and nothing in the app could tell the user which end was at
+        // fault. Eight digits because that is the width the RFC tabulates —
+        // which also exercises the non-default `digits`.
+        let rows: [(u64, &str, &str, &str); 6] = [
+            (59, "94287082", "46119246", "90693936"),
+            (1111111109, "07081804", "68084774", "25091201"),
+            (1111111111, "14050471", "67062674", "99943326"),
+            (1234567890, "89005924", "91819424", "93441116"),
+            (2000000000, "69279037", "90698825", "38618901"),
+            (20000000000, "65353130", "77737706", "47863826"),
+        ];
+        for (t, sha1, sha256, sha512) in rows {
+            for (algorithm, want) in [
+                (Algorithm::Sha1, sha1),
+                (Algorithm::Sha256, sha256),
+                (Algorithm::Sha512, sha512),
+            ] {
+                let params = Params {
+                    algorithm,
+                    digits: 8,
+                    period: 30,
+                };
+                assert_eq!(
+                    code_at(&rfc6238_seed(algorithm), &params, t).unwrap(),
+                    want,
+                    "{} at t={t}",
+                    algorithm.as_str()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_default_params_reproduce_the_login_paths_answer() {
+        // `hotp` delegates to `hotp_with`, so the two must agree for every
+        // secret or Phase 19's login would start failing the moment Phase 21
+        // touched the generator.
+        let secret = generate_secret();
+        let now = 1_700_000_000u64;
+        assert_eq!(
+            code_at(&secret, &Params::default(), now).unwrap(),
+            totp_at(&secret, now).unwrap()
+        );
+    }
+
+    #[test]
+    fn a_bare_base32_seed_parses_with_the_omitted_defaults() {
+        let stored = parse_seed("jbsw y3dp ehpk 3pxp").unwrap();
+        // Normalised: the vault holds one spelling, so two entries carrying the
+        // same seed typed differently fingerprint the same.
+        assert_eq!(stored.secret, "JBSWY3DPEHPK3PXP");
+        assert!(stored.params.is_default());
+        assert_eq!(stored.issuer, None);
+        assert_eq!(stored.account, None);
+    }
+
+    #[test]
+    fn an_otpauth_uri_parses_label_issuer_and_every_parameter() {
+        let stored = parse_seed(
+            "otpauth://totp/GitHub:darth%40example.com?secret=JBSWY3DPEHPK3PXP\
+             &issuer=GitHub&algorithm=SHA256&digits=8&period=60",
+        )
+        .unwrap();
+        assert_eq!(stored.secret, "JBSWY3DPEHPK3PXP");
+        assert_eq!(stored.params.algorithm, Algorithm::Sha256);
+        assert_eq!(stored.params.digits, 8);
+        assert_eq!(stored.params.period, 60);
+        assert_eq!(stored.issuer.as_deref(), Some("GitHub"));
+        assert_eq!(stored.account.as_deref(), Some("darth@example.com"));
+    }
+
+    #[test]
+    fn the_issuer_parameter_beats_the_label_when_they_disagree() {
+        // The label half is often years-old text a user typed into a phone; the
+        // parameter is what an exporter wrote deliberately.
+        let stored =
+            parse_seed("otpauth://totp/Stale:me?secret=JBSWY3DPEHPK3PXP&issuer=Current").unwrap();
+        assert_eq!(stored.issuer.as_deref(), Some("Current"));
+        assert_eq!(stored.account.as_deref(), Some("me"));
+    }
+
+    #[test]
+    fn a_uri_with_no_secret_is_refused_rather_than_stored_unusable() {
+        // Storing it would give the entry a code field that is permanently
+        // blank, with nothing on screen distinguishing that from a bug.
+        assert!(parse_seed("otpauth://totp/Acme:me?issuer=Acme").is_err());
+        assert!(parse_seed("otpauth://totp/Acme:me?secret=").is_err());
+        assert!(parse_seed("otpauth://totp/Acme:me?secret=!!!!").is_err());
+    }
+
+    #[test]
+    fn counter_based_hotp_uris_are_refused_by_name() {
+        // An `otpauth://hotp/` seed has no clock, so "the current code" does not
+        // exist for it. Accepting it would produce a card whose code never
+        // changes and never works.
+        let err = parse_seed("otpauth://hotp/Acme:me?secret=JBSWY3DPEHPK3PXP&counter=1")
+            .expect_err("hotp must be refused");
+        assert!(err.contains("hotp"), "{err}");
+    }
+
+    #[test]
+    fn nonsense_parameters_fall_back_to_the_defaults_instead_of_failing() {
+        // Half of the URIs people paste come out of someone else's export and
+        // are slightly wrong. Losing the seed over an unreadable `digits` is a
+        // worse outcome than generating six digits.
+        let stored = parse_seed(
+            "otpauth://totp/Acme:me?secret=JBSWY3DPEHPK3PXP&digits=nine&period=0\
+             &algorithm=WHIRLPOOL&unknown=1",
+        )
+        .unwrap();
+        assert!(stored.params.is_default());
+    }
+
+    #[test]
+    fn a_lowercase_scheme_and_a_sha_dash_256_still_parse() {
+        let stored =
+            parse_seed("OTPAUTH://TOTP/Acme:me?secret=jbswy3dpehpk3pxp&algorithm=sha-256").unwrap();
+        assert_eq!(stored.secret, "JBSWY3DPEHPK3PXP");
+        assert_eq!(stored.params.algorithm, Algorithm::Sha256);
+    }
+
+    #[test]
+    fn to_uri_round_trips_through_the_parser() {
+        // The exported URI is what a user scans into a replacement phone. One
+        // that does not read back is a lockout discovered at the worst moment.
+        let original = parse_seed(
+            "otpauth://totp/Acme%20Corp:d%40e.com?secret=JBSWY3DPEHPK3PXP\
+             &issuer=Acme%20Corp&algorithm=SHA512&digits=7&period=45",
+        )
+        .unwrap();
+        let round = parse_seed(&original.to_uri("", "")).unwrap();
+        assert_eq!(round, original);
+    }
+
+    #[test]
+    fn to_uri_falls_back_to_the_entrys_own_names_and_escapes_them() {
+        // The fallbacks are the entry's provider and account, which are vault
+        // data and therefore untrusted (CLAUDE.md invariant 4). Unescaped,
+        // `a&issuer=Evil` would append a parameter of the writer's choosing.
+        let stored = parse_seed("JBSWY3DPEHPK3PXP").unwrap();
+        let uri = stored.to_uri("Acme", "a&issuer=Evil");
+        assert!(uri.contains("a%26issuer%3DEvil"), "{uri}");
+        assert_eq!(uri.matches("issuer=").count(), 1, "{uri}");
+        assert_eq!(parse_seed(&uri).unwrap().secret, stored.secret);
+    }
+
+    #[test]
+    fn remaining_secs_counts_down_a_full_period_and_never_reaches_zero() {
+        // A countdown that reads 0 for one second in every period gets reported
+        // as a bug; at a step boundary the *new* code has a full period ahead.
+        assert_eq!(remaining_secs(30, 0), 30);
+        assert_eq!(remaining_secs(30, 1), 29);
+        assert_eq!(remaining_secs(30, 29), 1);
+        assert_eq!(remaining_secs(30, 30), 30);
+        assert_eq!(remaining_secs(60, 119), 1);
+        // A period of zero cannot divide; the clamp is what stops a malformed
+        // stored entry from panicking a card renderer.
+        assert_eq!(remaining_secs(0, 12345), 1);
+    }
+
+    #[test]
+    fn params_refuse_the_values_that_cannot_produce_a_code() {
+        for bad in [
+            Params {
+                digits: 5,
+                ..Default::default()
+            },
+            Params {
+                digits: 11,
+                ..Default::default()
+            },
+            Params {
+                period: 0,
+                ..Default::default()
+            },
+            Params {
+                period: MAX_PERIOD_SECS + 1,
+                ..Default::default()
+            },
+        ] {
+            assert!(bad.validate().is_err(), "{bad:?} should be refused");
+            assert!(code_at("JBSWY3DPEHPK3PXP", &bad, 0).is_err());
+        }
+        assert!(Params::default().validate().is_ok());
+    }
+
+    #[test]
+    fn live_code_agrees_with_code_at_and_its_own_countdown() {
+        let stored = parse_seed("JBSWY3DPEHPK3PXP").unwrap();
+        let live = live_code(&stored.secret, &stored.params).unwrap();
+        assert_eq!(live.code.len(), stored.params.digits as usize);
+        assert!(live.remaining_secs >= 1 && live.remaining_secs <= live.period);
+        // The code is the one for the step the countdown belongs to. Deriving
+        // them from two different `now` readings is how a card shows a code that
+        // expires a second later.
+        let step_start = now_unix() + live.remaining_secs - live.period;
+        assert_eq!(
+            code_at(&stored.secret, &stored.params, step_start).unwrap(),
+            live.code
         );
     }
 }

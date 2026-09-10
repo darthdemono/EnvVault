@@ -10,6 +10,9 @@ import {
   buildCatChips,
   dynamicSecretFields,
   formToEntry,
+  saveModal,
+  refreshTotpStatus,
+  wireTotpField,
   fillForm,
   populateProjectSelect,
   openModal,
@@ -74,6 +77,13 @@ describe('form element contract with index.html', () => {
     'f-env-prefixes',
     'f-extra-vars-list',
     'f-envvar-subtype',
+    'f-totp',
+    'f-totp-reveal',
+    'f-totp-status',
+    'f-totp-params',
+    'f-totp-algorithm',
+    'f-totp-digits',
+    'f-totp-period',
     'modal-overlay',
     'modal-title',
     'modal-duplicate',
@@ -727,5 +737,106 @@ describe('injectIntoForm', () => {
     document.body.innerHTML = '<div id="toast"></div>';
     expect(() => injectIntoForm('x')).not.toThrow();
     expect($('toast').textContent).toMatch(/open the add\/edit form first/i);
+  });
+});
+
+describe('the two-factor seed field (Phase 22)', () => {
+  const $ = <T extends HTMLElement = HTMLInputElement>(id: string) =>
+    document.getElementById(id) as unknown as T;
+
+  it('splits a pasted otpauth:// URI into the seed and its parameters', () => {
+    // The field is labelled "seed" and people paste the whole URI into it,
+    // which is the reasonable thing to do. Storing the URI whole would mean a
+    // second field that also holds the secret and has to be masked everywhere.
+    $('f-totp').value =
+      'otpauth://totp/GitHub:me%40example.com?secret=JBSWY3DPEHPK3PXP&issuer=GitHub&algorithm=SHA256&digits=8&period=60';
+    refreshTotpStatus();
+    expect($('f-totp').value).toBe('JBSWY3DPEHPK3PXP');
+    expect($<HTMLSelectElement>('f-totp-algorithm').value).toBe('SHA256');
+    expect($('f-totp-digits').value).toBe('8');
+    expect($('f-totp-period').value).toBe('60');
+    // The parameter row is revealed, because these are not the defaults and a
+    // user who cannot see them cannot tell whether the URI was read correctly.
+    expect($('f-totp-params').hidden).toBe(false);
+    expect($('f-totp-status').textContent).toContain('GitHub');
+  });
+
+  it('writes only the parameters that differ from the defaults', () => {
+    // A totp_algorithm of "SHA1" on every entry cannot be told apart from a
+    // defaulted one, and nothing downstream could then say whether the issuer
+    // chose it or we did.
+    $('f-provider').value = 'GitHub';
+    $('f-key').value = 'k';
+    $('f-totp').value = 'jbsw y3dp ehpk 3pxp';
+    refreshTotpStatus();
+    const entry = formToEntry();
+    expect(entry.totp_secret).toBe('JBSWY3DPEHPK3PXP');
+    expect(entry.totp_algorithm).toBeUndefined();
+    expect(entry.totp_digits).toBeUndefined();
+    expect(entry.totp_period).toBeUndefined();
+  });
+
+  it('keeps an unusable seed in the field instead of silently dropping it', () => {
+    // Dropping it leaves the user looking at an empty box with no sign the form
+    // rejected anything. saveModal is what refuses the save.
+    $('f-totp').value = 'not base32 at all!';
+    refreshTotpStatus();
+    expect(formToEntry().totp_secret).toBe('not base32 at all!');
+    expect($('f-totp-status').textContent).toContain('Not a usable seed');
+    expect($('f-totp-status').classList.contains('err')).toBe(true);
+  });
+
+  it('an empty field writes no seed and no parameters', () => {
+    $('f-totp').value = '';
+    $('f-totp-digits').value = '8';
+    const entry = formToEntry();
+    expect(entry.totp_secret).toBeUndefined();
+    expect(entry.totp_digits).toBeUndefined();
+  });
+
+  it('re-masks the field on every open', () => {
+    // A reveal toggle left on shows the seed on every later visit to the form,
+    // and the form is opened from a card the user may be showing somebody.
+    $('f-totp').type = 'text';
+    $('f-totp-reveal').setAttribute('aria-pressed', 'true');
+    fillForm({ provider: 'X', api_key: 'k' } as never);
+    expect($('f-totp').type).toBe('password');
+    expect($('f-totp-reveal').getAttribute('aria-pressed')).toBe('false');
+  });
+
+  it('an entry carrying only a seed can be saved, because that is what an import makes', () => {
+    // An import from Ente or Aegis produces an entry with a second factor and
+    // no password: the password may never be stored here at all. Demanding a
+    // primary value would make every imported entry unsaveable the first time
+    // somebody opened it to correct its name.
+    $('f-provider').value = 'Imported';
+    $('f-key').value = '';
+    $('f-totp').value = 'JBSWY3DPEHPK3PXP';
+    ($('edit-index') as HTMLInputElement).value = '-1';
+    const before = st.vault.api_keys.length;
+    saveModal();
+    expect(st.vault.api_keys.length).toBe(before + 1);
+    expect(st.vault.api_keys[before].totp_secret).toBe('JBSWY3DPEHPK3PXP');
+  });
+
+  it('an entry with neither a value nor a seed is still refused', () => {
+    // The carve-out above is for seeds, not a general relaxation.
+    $('f-provider').value = 'Empty';
+    $('f-key').value = '';
+    $('f-totp').value = '';
+    ($('edit-index') as HTMLInputElement).value = '-1';
+    const before = st.vault.api_keys.length;
+    saveModal();
+    expect(st.vault.api_keys.length).toBe(before);
+  });
+
+  it('the reveal button is bound by assignment, so opening twice does not stack it', () => {
+    // Invariant 9. Two stacked handlers flip the type twice per click, which
+    // looks exactly like a button that does nothing.
+    wireTotpField();
+    wireTotpField();
+    $('f-totp').type = 'password';
+    $('f-totp-reveal').click();
+    expect($('f-totp').type).toBe('text');
   });
 });

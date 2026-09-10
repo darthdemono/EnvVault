@@ -516,19 +516,12 @@ fn seed_default_classes(conn: &Connection) -> Result<(), String> {
 
 // ── Internal helpers ──────────────────────────────────────────────────────────
 
+/// Kept as a local name because this module reaches for it constantly; the one
+/// implementation is [`crate::new_uuid`], which the desktop app's TOTP import
+/// also calls. A second generator would be a second thing to get the version
+/// and variant bits wrong in.
 fn new_uuid() -> String {
-    let mut b = [0u8; 16];
-    rand::thread_rng().fill_bytes(&mut b);
-    b[6] = (b[6] & 0x0f) | 0x40;
-    b[8] = (b[8] & 0x3f) | 0x80;
-    format!(
-        "{}-{}-{}-{}-{}",
-        hex::encode(&b[0..4]),
-        hex::encode(&b[4..6]),
-        hex::encode(&b[6..8]),
-        hex::encode(&b[8..10]),
-        hex::encode(&b[10..16]),
-    )
+    crate::new_uuid()
 }
 
 /// Hashes `password` with Argon2id (m=32768, t=2, p=1) and returns a

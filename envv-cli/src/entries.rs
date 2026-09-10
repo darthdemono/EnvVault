@@ -133,6 +133,33 @@ pub struct EntryFields {
     #[arg(long)]
     pub env_prefixes: Option<String>,
 
+    /// Authenticator seed for this credential's service: base32, or a whole
+    /// `otpauth://totp/...` URI.
+    ///
+    /// This is the seed a *third party* issued, from which `envv totp code`
+    /// produces the six digits you type into that service. It is not EnvVault's
+    /// own second factor — that is `envv user totp`.
+    ///
+    /// A URI is split: its algorithm, digits and period are stored alongside the
+    /// seed, so pasting one is all that is ever needed. Pass an empty string to
+    /// remove the seed. Prefer --totp-stdin to keep it out of `ps` and shell
+    /// history — it is a credential, and one that grants a login by itself.
+    #[arg(long)]
+    pub totp: Option<String>,
+    /// Read the authenticator seed from stdin (never appears in `ps`).
+    #[arg(long, conflicts_with = "totp")]
+    pub totp_stdin: bool,
+    /// HMAC the issuer uses. Only needed for a bare seed whose issuer is unusual;
+    /// an `otpauth://` URI carries it.
+    #[arg(long, value_parser = ["SHA1", "SHA256", "SHA512"])]
+    pub totp_algorithm: Option<String>,
+    /// Digits in the generated code (6–10). Default 6.
+    #[arg(long)]
+    pub totp_digits: Option<u32>,
+    /// Seconds a code is valid for. Default 30.
+    #[arg(long)]
+    pub totp_period: Option<u64>,
+
     /// Generate the secret instead of supplying one.
     ///
     /// The value is written straight into the vault and never printed — the
@@ -265,6 +292,103 @@ impl EntryFields {
         }
     }
 
+    /// Apply `--totp` and its three parameter flags as one unit.
+    ///
+    /// Parsing lives in `vault_core::totp` — the same parser the desktop app's
+    /// form calls over IPC and the same one `src/ts/totp.ts` is pinned against —
+    /// so a URI pasted into the CLI and one pasted into the app cannot be read
+    /// two different ways.
+    ///
+    /// The parameters an `otpauth://` URI names win over the entry's previous
+    /// ones and lose to flags passed alongside, which is the order of
+    /// specificity a caller means: the URI describes the seed it carries, and an
+    /// explicit flag describes what the caller knows that the URI got wrong.
+    ///
+    /// A URI's issuer and account are **not** written onto the entry. They are
+    /// frequently stale, and silently renaming an entry — the thing every
+    /// `${ref}` addresses it by — because a pasted URI disagreed is invariant 2
+    /// with no cascade behind it.
+    fn apply_totp(&self, entry: &mut Value) -> CliResult {
+        let raw = if self.totp_stdin {
+            Some(read_stdin()?)
+        } else {
+            self.totp.clone()
+        };
+
+        // Clearing: `--totp ''` removes the seed and every parameter with it, so
+        // an entry with no seed cannot carry a period that describes nothing.
+        if raw.as_deref().map(str::trim) == Some("") {
+            if let Some(o) = entry.as_object_mut() {
+                o.remove("totp_secret");
+                o.remove("totp_algorithm");
+                o.remove("totp_digits");
+                o.remove("totp_period");
+            }
+            return Ok(());
+        }
+
+        let mut params = vault_core::totp::Params {
+            algorithm: entry
+                .get("totp_algorithm")
+                .and_then(|v| v.as_str())
+                .and_then(vault_core::totp::Algorithm::parse)
+                .unwrap_or_default(),
+            digits: entry
+                .get("totp_digits")
+                .and_then(|v| v.as_u64())
+                .map(|d| d as u32)
+                .unwrap_or(vault_core::totp::DIGITS),
+            period: entry
+                .get("totp_period")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(vault_core::totp::STEP_SECS),
+        };
+
+        if let Some(raw) = raw {
+            let parsed = vault_core::totp::parse_seed(&raw).map_err(CliError::invalid)?;
+            entry["totp_secret"] = json!(parsed.secret);
+            params = parsed.params;
+        } else if entry.get("totp_secret").and_then(|v| v.as_str()).is_none() {
+            return Err(CliError::invalid(
+                "--totp-algorithm/--totp-digits/--totp-period describe a seed;                  pass --totp or --totp-stdin as well",
+            ));
+        }
+
+        if let Some(a) = &self.totp_algorithm {
+            params.algorithm = vault_core::totp::Algorithm::parse(a).unwrap_or(params.algorithm);
+        }
+        if let Some(d) = self.totp_digits {
+            params.digits = d;
+        }
+        if let Some(p) = self.totp_period {
+            params.period = p;
+        }
+        params.validate().map_err(CliError::invalid)?;
+
+        // Only non-default parameters are written. A `totp_algorithm: "SHA1"` on
+        // every entry cannot be told apart from a defaulted one, and the UI
+        // would have to guess whether the issuer said it or we did.
+        let defaults = vault_core::totp::Params::default();
+        if let Some(o) = entry.as_object_mut() {
+            if params.algorithm == defaults.algorithm {
+                o.remove("totp_algorithm");
+            } else {
+                o.insert("totp_algorithm".into(), json!(params.algorithm.as_str()));
+            }
+            if params.digits == defaults.digits {
+                o.remove("totp_digits");
+            } else {
+                o.insert("totp_digits".into(), json!(params.digits));
+            }
+            if params.period == defaults.period {
+                o.remove("totp_period");
+            } else {
+                o.insert("totp_period".into(), json!(params.period));
+            }
+        }
+        Ok(())
+    }
+
     /// Apply every flag the caller actually passed onto `entry`.
     pub fn apply(&self, entry: &mut Value, vault_projects: &[Value]) -> CliResult {
         if self.generate {
@@ -395,6 +519,18 @@ impl EntryFields {
         }
         if let Some(v) = &self.env_subtype {
             set_str(entry, "env_var_subtype", v);
+        }
+        // The seed is applied as a unit with its three parameters: a URI
+        // carries all four, and applying them field by field would let a
+        // `--totp-digits 8` from a previous command survive onto a seed pasted
+        // from an issuer that uses six.
+        if self.totp.is_some()
+            || self.totp_stdin
+            || self.totp_algorithm.is_some()
+            || self.totp_digits.is_some()
+            || self.totp_period.is_some()
+        {
+            self.apply_totp(entry)?;
         }
         if let Some(v) = &self.env_prefixes {
             let parts: Vec<String> = split_list(v)
@@ -1011,7 +1147,7 @@ pub fn cmd_get(access: &Access, query: &str, field: Option<&str>) -> CliResult {
             .ok_or_else(|| CliError::not_found(format!("Entry has no field '{f}'")))?;
         // A named field is very often the secret itself, so the same rule
         // applies: fingerprint unless the caller asked to reveal.
-        let secret_field = SECRET_FIELD_NAMES.contains(&crate::refs::canonical_field(f));
+        let secret_field = out::SECRET_FIELDS.contains(&crate::refs::canonical_field(f));
         let shown = if secret_field && !out::revealing() {
             out::masked(&val)
         } else {
@@ -1048,14 +1184,6 @@ pub fn cmd_get(access: &Access, query: &str, field: Option<&str>) -> CliResult {
     );
     Ok(())
 }
-
-/// Entry fields whose contents are secret material.
-///
-/// Public because `pool::cmd_next` applies the same redaction rule: any path
-/// that can print one of these must mask it unless `--reveal` was given, and a
-/// second private copy of the list is a second thing to forget to update.
-pub const SECRET_FIELD_NAMES: [&str; 4] =
-    ["api_key", "api_secret", "certificate_data", "cert_key_data"];
 
 /// Every tag in the vault with its entry count — the sidebar's tag section.
 pub fn cmd_tags(access: &Access) -> CliResult {

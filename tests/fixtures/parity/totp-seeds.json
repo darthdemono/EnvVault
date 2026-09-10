@@ -1,0 +1,423 @@
+{
+  "_comment": [
+    "Golden table for the stored-TOTP seed parser, which exists twice:",
+    "src/ts/totp.ts (parseTotpSeed, for the add/edit form, which has to split a",
+    "pasted otpauth:// URI as it is typed) and vault-core/src/totp.rs",
+    "(parse_seed, for the CLI, the desktop IPC command and the server).",
+    "",
+    "tests/totp.test.ts pins the TypeScript side; envv-cli/tests/totp.rs pins the",
+    "Rust side against the identical cases. Reviewing two parsers for agreement",
+    "does not work — the same arrangement, and the same reason, as",
+    "rate-limit.json and field-aliases.json.",
+    "",
+    "Code GENERATION is deliberately not duplicated: there is one HMAC in this",
+    "project and it is the Rust one. The app asks for codes over IPC.",
+    "",
+    "`parse` cases: input -> the normalised seed and its parameters, or null when",
+    "the input must be refused. `uri` cases go the other way: a stored seed plus",
+    "the entry's own provider/account, rendered back to an otpauth:// URI.",
+    "`params` is the third table: what an entry's four stored fields mean, read by vault_core::totp::Params::from_fields and by totpParamsOf in src/ts/totp.ts. It exists because those fields were read three different ways in Rust alone."
+  ],
+  "parse": [
+    {
+      "_why": "A bare seed, as typed out of a grouped display. Spaces and case are normalised so one seed is one string with one fingerprint.",
+      "in": "jbsw y3dp ehpk 3pxp",
+      "out": {
+        "secret": "JBSWY3DPEHPK3PXP",
+        "algorithm": "SHA1",
+        "digits": 6,
+        "period": 30,
+        "issuer": null,
+        "account": null
+      }
+    },
+    {
+      "_why": "Padding and dashes are accepted: a user pasting an export should not have to know the difference.",
+      "in": "MZXW6YTBOI======",
+      "out": {
+        "secret": "MZXW6YTBOI",
+        "algorithm": "SHA1",
+        "digits": 6,
+        "period": 30,
+        "issuer": null,
+        "account": null
+      }
+    },
+    {
+      "_why": "A full URI: every parameter read, the label split, the account percent-decoded.",
+      "in": "otpauth://totp/GitHub:darth%40example.com?secret=JBSWY3DPEHPK3PXP&issuer=GitHub&algorithm=SHA256&digits=8&period=60",
+      "out": {
+        "secret": "JBSWY3DPEHPK3PXP",
+        "algorithm": "SHA256",
+        "digits": 8,
+        "period": 60,
+        "issuer": "GitHub",
+        "account": "darth@example.com"
+      }
+    },
+    {
+      "_why": "Omitted parameters mean the defaults, which is exactly what a bare seed means.",
+      "in": "otpauth://totp/Acme:me?secret=JBSWY3DPEHPK3PXP",
+      "out": {
+        "secret": "JBSWY3DPEHPK3PXP",
+        "algorithm": "SHA1",
+        "digits": 6,
+        "period": 30,
+        "issuer": "Acme",
+        "account": "me"
+      }
+    },
+    {
+      "_why": "The issuer parameter beats the label half: the label is often years-old text a user typed into a phone.",
+      "in": "otpauth://totp/Stale:me?secret=JBSWY3DPEHPK3PXP&issuer=Current",
+      "out": {
+        "secret": "JBSWY3DPEHPK3PXP",
+        "algorithm": "SHA1",
+        "digits": 6,
+        "period": 30,
+        "issuer": "Current",
+        "account": "me"
+      }
+    },
+    {
+      "_why": "A label with no colon is the account alone.",
+      "in": "otpauth://totp/just-an-account?secret=JBSWY3DPEHPK3PXP",
+      "out": {
+        "secret": "JBSWY3DPEHPK3PXP",
+        "algorithm": "SHA1",
+        "digits": 6,
+        "period": 30,
+        "issuer": null,
+        "account": "just-an-account"
+      }
+    },
+    {
+      "_why": "A percent-encoded space in both halves. Exports written by web tooling also use +.",
+      "in": "otpauth://totp/Acme%20Corp:a+b%40c.com?secret=JBSWY3DPEHPK3PXP&issuer=Acme%20Corp",
+      "out": {
+        "secret": "JBSWY3DPEHPK3PXP",
+        "algorithm": "SHA1",
+        "digits": 6,
+        "period": 30,
+        "issuer": "Acme Corp",
+        "account": "a b@c.com"
+      }
+    },
+    {
+      "_why": "Nonsense parameters fall back to the defaults rather than losing the seed. Half the URIs people paste are slightly wrong.",
+      "in": "otpauth://totp/Acme:me?secret=JBSWY3DPEHPK3PXP&digits=nine&period=0&algorithm=WHIRLPOOL&unknown=1",
+      "out": {
+        "secret": "JBSWY3DPEHPK3PXP",
+        "algorithm": "SHA1",
+        "digits": 6,
+        "period": 30,
+        "issuer": "Acme",
+        "account": "me"
+      }
+    },
+    {
+      "_why": "digits=11 exceeds what a 31-bit truncation can express; digits=5 is below RFC 4226's floor. Both fall back.",
+      "in": "otpauth://totp/Acme:me?secret=JBSWY3DPEHPK3PXP&digits=11",
+      "out": {
+        "secret": "JBSWY3DPEHPK3PXP",
+        "algorithm": "SHA1",
+        "digits": 6,
+        "period": 30,
+        "issuer": "Acme",
+        "account": "me"
+      }
+    },
+    {
+      "_why": "Lowercase scheme, lowercase secret, and the SHA-256 spelling that is not in the spec but is in real URIs.",
+      "in": "OTPAUTH://TOTP/Acme:me?secret=jbswy3dpehpk3pxp&algorithm=sha-256",
+      "out": {
+        "secret": "JBSWY3DPEHPK3PXP",
+        "algorithm": "SHA256",
+        "digits": 6,
+        "period": 30,
+        "issuer": "Acme",
+        "account": "me"
+      }
+    },
+    {
+      "_why": "Nothing to store.",
+      "in": "",
+      "out": null
+    },
+    {
+      "_why": "Nothing to store.",
+      "in": "    ",
+      "out": null
+    },
+    {
+      "_why": "Not base32. Storing it would give the entry a permanently blank code field with nothing saying why.",
+      "in": "not base32 at all!",
+      "out": null
+    },
+    {
+      "_why": "Base32 alphabet, but under one whole byte.",
+      "in": "A",
+      "out": null
+    },
+    {
+      "_why": "A URI carrying no secret= parameter.",
+      "in": "otpauth://totp/Acme:me?issuer=Acme",
+      "out": null
+    },
+    {
+      "_why": "An empty secret= parameter.",
+      "in": "otpauth://totp/Acme:me?secret=",
+      "out": null
+    },
+    {
+      "_why": "otpauth://hotp/ is counter-based: it has no clock, so 'the current code' does not exist for it. Accepting it produces a card whose code never changes.",
+      "in": "otpauth://hotp/Acme:me?secret=JBSWY3DPEHPK3PXP&counter=1",
+      "out": null
+    }
+  ],
+  "uri": [
+    {
+      "_why": "The common case: a bare seed on an entry, exported to a new phone under the entry's own names.",
+      "stored": {
+        "secret": "JBSWY3DPEHPK3PXP",
+        "algorithm": "SHA1",
+        "digits": 6,
+        "period": 30
+      },
+      "issuer_fallback": "GitHub",
+      "account_fallback": "darth@example.com",
+      "out": "otpauth://totp/GitHub:darth%40example.com?secret=JBSWY3DPEHPK3PXP&issuer=GitHub&algorithm=SHA1&digits=6&period=30"
+    },
+    {
+      "_why": "The provider is vault data and therefore untrusted (invariant 4). Unescaped, this one would append a parameter of its own choosing.",
+      "stored": {
+        "secret": "JBSWY3DPEHPK3PXP",
+        "algorithm": "SHA512",
+        "digits": 8,
+        "period": 45
+      },
+      "issuer_fallback": "a&issuer=Evil",
+      "account_fallback": "me?x=1",
+      "out": "otpauth://totp/a%26issuer%3DEvil:me%3Fx%3D1?secret=JBSWY3DPEHPK3PXP&issuer=a%26issuer%3DEvil&algorithm=SHA512&digits=8&period=45"
+    },
+    {
+      "_why": "No provider to fall back on: the label is the account alone and no issuer parameter is written.",
+      "stored": {
+        "secret": "MZXW6YTBOI",
+        "algorithm": "SHA1",
+        "digits": 6,
+        "period": 30
+      },
+      "issuer_fallback": "",
+      "account_fallback": "solo",
+      "out": "otpauth://totp/solo?secret=MZXW6YTBOI&algorithm=SHA1&digits=6&period=30"
+    }
+  ],
+  "params": [
+    {
+      "_why": "Nothing stored. Absent means what an omitted otpauth:// parameter means, which is also what a bare base32 seed means.",
+      "entry": {},
+      "out": {
+        "algorithm": "SHA1",
+        "digits": 6,
+        "period": 30
+      }
+    },
+    {
+      "_why": "Explicitly the defaults. Indistinguishable from absent on purpose — that is why the writers do not write them.",
+      "entry": {
+        "totp_algorithm": "SHA1",
+        "totp_digits": 6,
+        "totp_period": 30
+      },
+      "out": {
+        "algorithm": "SHA1",
+        "digits": 6,
+        "period": 30
+      }
+    },
+    {
+      "_why": "Nulls are absent. A vault written by a build that cleared a field rather than dropping it must not read differently.",
+      "entry": {
+        "totp_algorithm": null,
+        "totp_digits": null,
+        "totp_period": null
+      },
+      "out": {
+        "algorithm": "SHA1",
+        "digits": 6,
+        "period": 30
+      }
+    },
+    {
+      "_why": "A real issuer's choice, kept.",
+      "entry": {
+        "totp_algorithm": "SHA256",
+        "totp_digits": 8,
+        "totp_period": 60
+      },
+      "out": {
+        "algorithm": "SHA256",
+        "digits": 8,
+        "period": 60
+      }
+    },
+    {
+      "_why": "SHA-256 with the dash real URIs contain.",
+      "entry": {
+        "totp_algorithm": "SHA-256"
+      },
+      "out": {
+        "algorithm": "SHA256",
+        "digits": 6,
+        "period": 30
+      }
+    },
+    {
+      "_why": "Case is not meaningful in an otpauth:// parameter.",
+      "entry": {
+        "totp_algorithm": "sha512"
+      },
+      "out": {
+        "algorithm": "SHA512",
+        "digits": 6,
+        "period": 30
+      }
+    },
+    {
+      "_why": "An algorithm this project has no HMAC for. Falling back beats refusing the whole entry over one field.",
+      "entry": {
+        "totp_algorithm": "MD5"
+      },
+      "out": {
+        "algorithm": "SHA1",
+        "digits": 6,
+        "period": 30
+      }
+    },
+    {
+      "_why": "Ten digits is the ceiling and is kept: the truncated value is 31 bits, so an eleventh digit is a constant zero.",
+      "entry": {
+        "totp_digits": 10
+      },
+      "out": {
+        "algorithm": "SHA1",
+        "digits": 10,
+        "period": 30
+      }
+    },
+    {
+      "_why": "Eleven is past the ceiling.",
+      "entry": {
+        "totp_digits": 11
+      },
+      "out": {
+        "algorithm": "SHA1",
+        "digits": 6,
+        "period": 30
+      }
+    },
+    {
+      "_why": "Five is below RFC 4226's floor.",
+      "entry": {
+        "totp_digits": 5
+      },
+      "out": {
+        "algorithm": "SHA1",
+        "digits": 6,
+        "period": 30
+      }
+    },
+    {
+      "_why": "Zero digits would format an empty code.",
+      "entry": {
+        "totp_digits": 0
+      },
+      "out": {
+        "algorithm": "SHA1",
+        "digits": 6,
+        "period": 30
+      }
+    },
+    {
+      "_why": "The divergence this fixture was added for: 99 listed as a 99-digit credential by `envv totp ls` while `envv totp code` produced six.",
+      "entry": {
+        "totp_digits": 99
+      },
+      "out": {
+        "algorithm": "SHA1",
+        "digits": 6,
+        "period": 30
+      }
+    },
+    {
+      "_why": "Not an integer. JSON's as_u64 refuses it and Number.isInteger refuses it; both must land on the default rather than truncating to something plausible.",
+      "entry": {
+        "totp_digits": 6.5
+      },
+      "out": {
+        "algorithm": "SHA1",
+        "digits": 6,
+        "period": 30
+      }
+    },
+    {
+      "_why": "An hour is the ceiling and is kept.",
+      "entry": {
+        "totp_period": 3600
+      },
+      "out": {
+        "algorithm": "SHA1",
+        "digits": 6,
+        "period": 3600
+      }
+    },
+    {
+      "_why": "Past the ceiling.",
+      "entry": {
+        "totp_period": 3601
+      },
+      "out": {
+        "algorithm": "SHA1",
+        "digits": 6,
+        "period": 30
+      }
+    },
+    {
+      "_why": "A period of zero is a division by zero three frames inside a card renderer.",
+      "entry": {
+        "totp_period": 0
+      },
+      "out": {
+        "algorithm": "SHA1",
+        "digits": 6,
+        "period": 30
+      }
+    },
+    {
+      "_why": "Negative values cannot round-trip through the unsigned field either.",
+      "entry": {
+        "totp_period": -30,
+        "totp_digits": -6
+      },
+      "out": {
+        "algorithm": "SHA1",
+        "digits": 6,
+        "period": 30
+      }
+    },
+    {
+      "_why": "One field wrong does not discard the other two.",
+      "entry": {
+        "totp_algorithm": "SHA512",
+        "totp_digits": 99,
+        "totp_period": 15
+      },
+      "out": {
+        "algorithm": "SHA512",
+        "digits": 6,
+        "period": 15
+      }
+    }
+  ]
+}

@@ -484,6 +484,16 @@ enum Commands {
         #[arg(long, default_value_t = 10)]
         timeout: u64,
     },
+    /// Authenticator codes from seeds this vault holds for other services.
+    ///
+    /// Not to be confused with `envv user totp`, which is EnvVault's *own*
+    /// second factor for a sub-user login. This one is the Bitwarden/1Password
+    /// shape: the vault stores a seed some website issued, and hands you the six
+    /// digits that website is about to ask for.
+    Totp {
+        #[command(subcommand)]
+        cmd: EntryTotpCmd,
+    },
     /// Print the machine-readable contract: commands, flags, exit codes, schemas.
     Describe,
     /// Authenticate once and cache the session (remote servers).
@@ -595,6 +605,88 @@ enum EntryCmd {
     History { provider: String },
     /// Restore a previous value by its position in `entry history`.
     Restore { provider: String, version: usize },
+}
+
+/// `envv totp …` — stored third-party authenticator seeds.
+///
+/// Named `EntryTotpCmd` because `TotpCmd` is taken by `envv user totp`, and the
+/// two must never be confused: that one enrolls a factor on an EnvVault login,
+/// this one reads a seed the vault holds for somebody else's login.
+#[derive(Subcommand)]
+enum EntryTotpCmd {
+    /// Print the current code for an entry.
+    ///
+    /// The code prints in the clear. It is derived rather than stored, it is six
+    /// digits, and it is dead in under thirty seconds — the seed it came from is
+    /// redacted like every other secret. See the module docs in
+    /// `envv-cli/src/totp_cmd.rs` for why this exemption is written down.
+    Code {
+        /// Provider name, or provider:key_id.
+        provider: String,
+    },
+    /// List the entries that carry a seed. Names and parameters, never codes.
+    Ls,
+    /// Write the otpauth:// URI, for enrolling a replacement phone.
+    ///
+    /// The URI contains the seed, so it is refused to stdout without --reveal
+    /// and written in full by --out — the same rule `envv export` follows.
+    Uri {
+        /// Provider name, or provider:key_id.
+        provider: String,
+        /// Write to this file (0600) instead of stdout.
+        #[arg(long, short = 'o')]
+        out: Option<PathBuf>,
+    },
+    /// Forget an entry's seed. The old value stays in `entry history`.
+    Rm {
+        /// Provider name, or provider:key_id.
+        provider: String,
+    },
+    /// Import seeds from another authenticator app's export.
+    ///
+    /// Reads Ente Auth (and any otpauth:// list), Aegis, 2FAS, andOTP,
+    /// Bitwarden and Google Authenticator's otpauth-migration:// payload. The
+    /// format is detected from the file; --format overrides the guess.
+    ///
+    /// An *encrypted* export is refused by name rather than decrypted — export
+    /// again without a password, import, then delete the plaintext file.
+    ///
+    /// An entry that already holds a different seed is reported and left alone.
+    /// A second factor is not recoverable once overwritten, and pointing a stale
+    /// export at a re-enrolled vault is exactly how that happens.
+    Import {
+        /// The export file.
+        file: PathBuf,
+        /// Skip detection: otpauth (also: ente), aegis, 2fas, andotp, bitwarden, google.
+        #[arg(long)]
+        format: Option<String>,
+        /// Put new entries in this project as well as Universal.
+        #[arg(long)]
+        project: Option<String>,
+        /// Tag new entries with this category.
+        #[arg(long)]
+        category: Option<String>,
+        /// Replace a seed that is already there and differs. The old value
+        /// still lands in `entry history`.
+        #[arg(long)]
+        force: bool,
+    },
+    /// Write every stored seed in a format another authenticator reads.
+    ///
+    /// The file is nothing but seeds, so it follows the same rule as
+    /// `envv backup export`: refused to stdout unless --reveal, written 0600
+    /// by --out.
+    Export {
+        /// otpauth (also: ente — its plain export is an otpauth list), aegis, 2fas.
+        #[arg(long, default_value = "otpauth")]
+        format: String,
+        /// Write to this file (0600) instead of stdout.
+        #[arg(long, short = 'o')]
+        out: Option<PathBuf>,
+        /// Only entries whose provider contains this text.
+        #[arg(long)]
+        only: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -1917,6 +2009,31 @@ fn dispatch(cli: &Cli, a: &Access) -> CliResult {
             strict,
         } => render::cmd_render(a, template.as_deref(), out.as_deref(), *strict),
 
+        Commands::Totp { cmd } => match cmd {
+            EntryTotpCmd::Code { provider } => envv_cli::totp_cmd::cmd_code(a, provider),
+            EntryTotpCmd::Ls => envv_cli::totp_cmd::cmd_ls(a),
+            EntryTotpCmd::Uri { provider, out } => {
+                envv_cli::totp_cmd::cmd_uri(a, provider, out.as_ref())
+            }
+            EntryTotpCmd::Rm { provider } => envv_cli::totp_cmd::cmd_rm(a, provider, yes),
+            EntryTotpCmd::Import {
+                file,
+                format,
+                project,
+                category,
+                force,
+            } => envv_cli::totp_cmd::cmd_import(
+                a,
+                file,
+                format.as_deref(),
+                project.as_deref(),
+                category.as_deref(),
+                *force,
+            ),
+            EntryTotpCmd::Export { format, out, only } => {
+                envv_cli::totp_cmd::cmd_export(a, format, out.as_ref(), only.as_deref())
+            }
+        },
         Commands::Pool { cmd } => match cmd {
             PoolCmd::Ls => pool::cmd_ls(a),
             PoolCmd::Show { pool: name } => pool::cmd_show(a, name),
