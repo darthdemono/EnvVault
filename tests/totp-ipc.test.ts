@@ -19,8 +19,17 @@ import type { VaultEntry } from '../src/ts/types';
 
 type Invoke = (cmd: string, args?: Record<string, unknown>) => unknown;
 
+/** The subset of `LiveCode` these tests assert on. */
+interface LiveShape {
+  code: string;
+  kind: string;
+  counter: number;
+  remaining_secs: number;
+  next_code?: string | null;
+}
+
 interface TotpModule {
-  liveCodeFor: (e: VaultEntry) => Promise<unknown>;
+  liveCodeFor: (e: VaultEntry, withNext?: boolean) => Promise<LiveShape | null>;
   tickTotp: () => Promise<void>;
   resetTotpCache: () => void;
   startTotpTicker: () => void;
@@ -72,7 +81,20 @@ function slotHtml(id: string): string {
 
 const LIVE = {
   code: '123456',
+  kind: 'totp',
+  counter: 0,
   remaining_secs: 22,
+  period: 30,
+  digits: 6,
+  algorithm: 'SHA1',
+};
+
+/** What the command hands back for a counter-based seed: a code and no clock. */
+const LIVE_HOTP = {
+  code: '755224',
+  kind: 'hotp',
+  counter: 3,
+  remaining_secs: 0,
   period: 30,
   digits: 6,
   algorithm: 'SHA1',
@@ -89,17 +111,33 @@ afterEach(() => {
 });
 
 describe('liveCodeFor — what crosses the IPC boundary', () => {
-  it('asks entry_totp_code by name, with the four arguments the command declares', async () => {
+  it('asks entry_totp_code by name, with exactly the arguments the command declares', async () => {
     const { totp } = await loadWithTauri(() => LIVE);
     await totp.liveCodeFor(entry());
 
     expect(calls).toHaveLength(1);
     expect(calls[0].cmd).toBe('entry_totp_code');
-    // Tauri 2 matches argument keys exactly: `entry_totp_code(secret, algorithm,
-    // digits, period)`. A misspelling here fails at runtime with "missing
-    // required key", which is how the whole users panel broke once.
-    expect(Object.keys(calls[0].args!).sort()).toEqual(['algorithm', 'digits', 'period', 'secret']);
-    expect(calls[0].args).toMatchObject({ algorithm: 'SHA1', digits: 6, period: 30 });
+    // Tauri 2 matches argument keys exactly. A misspelling here fails at runtime
+    // with "missing required key", which is how the whole users panel broke
+    // once. `withNext` is camelCase because Tauri converts the Rust `with_next`;
+    // the rest are single words and are spelled the same on both sides.
+    expect(Object.keys(calls[0].args!).sort()).toEqual([
+      'algorithm',
+      'counter',
+      'digits',
+      'kind',
+      'period',
+      'secret',
+      'withNext',
+    ]);
+    expect(calls[0].args).toMatchObject({
+      kind: 'totp',
+      algorithm: 'SHA1',
+      digits: 6,
+      period: 30,
+      counter: 0,
+      withNext: false,
+    });
   });
 
   it('normalises the seed on the way out, so one seed is one cache key and one fingerprint', async () => {
@@ -231,5 +269,103 @@ describe('tickTotp — the desktop repaint', () => {
     expect(vi.getTimerCount()).toBe(1);
     totp.stopTotpTicker();
     expect(vi.getTimerCount()).toBe(0);
+  });
+});
+
+describe('counter-based seeds — no clock, and a position instead', () => {
+  it('sends the stored counter and keys the cache on it', async () => {
+    // Advancing must show the new code at once rather than the cached one for
+    // the position it just left, so the counter is part of the key.
+    const { totp } = await loadWithTauri(() => LIVE_HOTP);
+    await totp.liveCodeFor(entry({ totp_kind: 'hotp', totp_counter: 3 }));
+    expect(calls[0].args).toMatchObject({ kind: 'hotp', counter: 3 });
+
+    await totp.liveCodeFor(entry({ totp_kind: 'hotp', totp_counter: 3 }));
+    expect(calls).toHaveLength(1);
+
+    await totp.liveCodeFor(entry({ totp_kind: 'hotp', totp_counter: 4 }));
+    expect(calls).toHaveLength(2);
+  });
+
+  it('drops a counter carried on a time-based entry', async () => {
+    // A number that looks like state and is never read is a number a later
+    // reader trusts.
+    const { totp } = await loadWithTauri(() => LIVE);
+    await totp.liveCodeFor(entry({ totp_counter: 9 }));
+    expect(calls[0].args).toMatchObject({ kind: 'totp', counter: 0 });
+  });
+
+  it('forces Steam its own shape whatever the entry says', async () => {
+    const { totp } = await loadWithTauri(() => LIVE);
+    await totp.liveCodeFor(
+      entry({ totp_kind: 'steam', totp_digits: 8, totp_algorithm: 'SHA512', totp_period: 60 }),
+    );
+    expect(calls[0].args).toMatchObject({
+      kind: 'steam',
+      digits: 5,
+      algorithm: 'SHA1',
+      period: 30,
+    });
+  });
+
+  it('paints a counter rather than a countdown', async () => {
+    const { totp, st } = await loadWithTauri(() => LIVE_HOTP);
+    const e = entry({ totp_kind: 'hotp', totp_counter: 3 });
+    st.vault = { api_keys: [e], user_categories: [], projects: [] };
+    document.body.innerHTML = `<div data-totp-for="e1">
+      <span class="totp-code">— — —</span>
+      <span class="totp-countdown"><i class="totp-countdown-fill"></i></span>
+      <span class="totp-secs">22</span>
+      <span class="totp-counter"></span>
+    </div>`;
+
+    await totp.tickTotp();
+
+    const slot = document.querySelector<HTMLElement>('[data-totp-for]')!;
+    expect(slot.querySelector('.totp-code')!.textContent).toBe('755 224');
+    expect(slot.querySelector('.totp-counter')!.textContent).toBe('#3');
+    // A ring whose number never moves reads as a frozen UI, so there is none:
+    // the seconds are blanked and the bar is left full.
+    expect(slot.querySelector('.totp-secs')!.textContent).toBe('');
+    expect(slot.dataset.totpKind).toBe('hotp');
+    expect(slot.getAttribute('aria-label')).toContain('counter 3');
+  });
+});
+
+describe('the next code', () => {
+  it('is not asked for unless a slot asks', async () => {
+    // It is a second working credential with a longer life than the one on
+    // screen, so a panel that always painted one would put two live codes in
+    // every screenshot.
+    const { totp } = await loadWithTauri(() => LIVE);
+    await totp.liveCodeFor(entry());
+    expect(calls[0].args).toMatchObject({ withNext: false });
+
+    await totp.liveCodeFor(entry(), true);
+    expect(calls).toHaveLength(2);
+    expect(calls[1].args).toMatchObject({ withNext: true });
+  });
+
+  it('is cached separately, so turning it on does not serve a cached answer without it', async () => {
+    const { totp } = await loadWithTauri(() => LIVE);
+    await totp.liveCodeFor(entry());
+    const withNext = await totp.liveCodeFor(entry(), true);
+    expect(calls).toHaveLength(2);
+    expect(withNext).not.toBeNull();
+  });
+
+  it('paints into a slot that marked itself, and nowhere else', async () => {
+    const { totp, st } = await loadWithTauri(() => ({ ...LIVE, next_code: '654321' }));
+    st.vault = { api_keys: [entry()], user_categories: [], projects: [] };
+    document.body.innerHTML = `<div data-totp-for="e1" data-totp-next="1">
+      <span class="totp-code">— — —</span>
+      <span class="totp-next" hidden></span>
+    </div>`;
+
+    await totp.tickTotp();
+
+    const next = document.querySelector<HTMLElement>('.totp-next')!;
+    expect(next.textContent).toBe('654 321');
+    expect(next.hidden).toBe(false);
   });
 });

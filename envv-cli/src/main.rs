@@ -623,9 +623,33 @@ enum EntryTotpCmd {
     Code {
         /// Provider name, or provider:key_id.
         provider: String,
+        /// Also print the code that replaces this one.
+        ///
+        /// Off by default: the next code is a second working credential with a
+        /// longer life than the one on screen, so printing both by default puts
+        /// two live codes in every transcript instead of one.
+        #[arg(long)]
+        next: bool,
     },
     /// List the entries that carry a seed. Names and parameters, never codes.
     Ls,
+    /// Advance a counter-based (HOTP) seed to its next position.
+    ///
+    /// Counter-based codes do not expire — each one stands until it is used, and
+    /// the service moves on only when it accepts one. Reading a code therefore
+    /// does *not* advance it: a copy that missed, or a second look at the same
+    /// card, would otherwise walk the counter past the service's and break the
+    /// factor. This is the explicit "I used it" action.
+    Advance {
+        /// Provider name, or provider:key_id.
+        provider: String,
+        /// How many positions to move. Negative values are refused; use
+        /// `entry set --totp-counter N` to resynchronise backwards.
+        #[arg(long, default_value_t = 1)]
+        by: u64,
+        #[arg(long, short = 'y')]
+        yes: bool,
+    },
     /// Write the otpauth:// URI, for enrolling a replacement phone.
     ///
     /// The URI contains the seed, so it is refused to stdout without --reveal
@@ -2010,8 +2034,15 @@ fn dispatch(cli: &Cli, a: &Access) -> CliResult {
         } => render::cmd_render(a, template.as_deref(), out.as_deref(), *strict),
 
         Commands::Totp { cmd } => match cmd {
-            EntryTotpCmd::Code { provider } => envv_cli::totp_cmd::cmd_code(a, provider),
+            EntryTotpCmd::Code { provider, next } => {
+                envv_cli::totp_cmd::cmd_code(a, provider, *next)
+            }
             EntryTotpCmd::Ls => envv_cli::totp_cmd::cmd_ls(a),
+            EntryTotpCmd::Advance {
+                provider,
+                by,
+                yes: cmd_yes,
+            } => envv_cli::totp_cmd::cmd_advance(a, provider, *by, yes || *cmd_yes),
             EntryTotpCmd::Uri { provider, out } => {
                 envv_cli::totp_cmd::cmd_uri(a, provider, out.as_ref())
             }

@@ -258,6 +258,19 @@ export interface VaultEntry {
   /** Seconds a code is valid for. Absent means 30. */
   totp_period?: number | null;
   /**
+   * What the seed is: `totp` (time-based, the default when absent), `hotp`
+   * (counter-based) or `steam` (Steam Guard's five characters). Phase 22.2.
+   */
+  totp_kind?: 'totp' | 'hotp' | 'steam' | null;
+  /**
+   * The next counter an `hotp` seed will use.
+   *
+   * Written whenever the seed is counter-based, zero included — zero is a real
+   * position, not an absent one — and removed for the other kinds. It is state
+   * rather than configuration, which is why advancing it is an explicit action.
+   */
+  totp_counter?: number | null;
+  /**
    * Env-var prefixes added by services that consume this credential.
    * For Key type: e.g. ["ND", "SPOTIFYD"] means Navidrome uses ND_LASTFM_APIKEY.
    * For Chunk type: the first prefix IS the chunk's env-namespace identifier (e.g. ["AM"] for AM_JWT_SECRET).
@@ -639,9 +652,17 @@ export interface AppSettings {
     | 'prefixes'
   )[];
   /** Currently active top-level panel. */
-  activePanel: 'secrets' | 'tools' | 'users' | 'remote';
+  activePanel: 'secrets' | 'tools' | 'users' | 'remote' | 'auth';
   /** ID of the currently active tool pane (e.g. `'secret-gen'`). */
   activeTool: string;
+  /**
+   * Whether the Authenticator screen also shows the code that comes next.
+   *
+   * Off by default: the next code is a second working credential with a longer
+   * life than the one on screen, so a panel that always painted one would put
+   * two live codes into every screenshot rather than one.
+   */
+  authShowNext: boolean;
   /** Remote vault server configuration (legacy single-remote). */
   remote?: RemoteConfig;
   /** Saved remote vault connections. */

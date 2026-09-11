@@ -88,6 +88,8 @@ import { lockVault, resetLock, showUnlockModal, setFinishInitFn } from './lock';
 import { initTools } from './tools';
 import { mountToolsPanes } from './tools-markup';
 import { initUsersPanel, renderUsersPanel } from './users';
+import { initAuthPanel } from './auth-panel';
+import { startVaultWatch } from './vault-watch';
 import {
   initRemotePanel,
   setRemoteFinishInitFn,
@@ -275,6 +277,10 @@ async function finishInit() {
 
       document.getElementById('load-banner')!.style.display = 'none';
       st.vaultOpen = true;
+      // From here the vault can also be written from outside this window — a
+      // terminal running `envv`, or a LAN peer. Idempotent by assignment, so
+      // re-unlocking leaves one timer.
+      startVaultWatch();
       showToast(`Loaded ${st.vault.api_keys.length} keys`, 'ok', 1800);
     } else {
       document.getElementById('load-banner')!.style.display = 'flex';
@@ -292,6 +298,7 @@ async function finishInit() {
   resetLock();
   initTools();
   initUsersPanel();
+  initAuthPanel();
   applyUsersPanelVisibility();
   initRemotePanel();
   initLanPanel();

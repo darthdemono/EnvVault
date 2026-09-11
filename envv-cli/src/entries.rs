@@ -156,9 +156,19 @@ pub struct EntryFields {
     /// Digits in the generated code (6–10). Default 6.
     #[arg(long)]
     pub totp_digits: Option<u32>,
-    /// Seconds a code is valid for. Default 30.
+    /// Seconds a code is valid for. Default 30. Ignored for a counter-based seed.
     #[arg(long)]
     pub totp_period: Option<u64>,
+    /// What the seed is: `totp` (time-based, the default), `hotp` (counter-based)
+    /// or `steam` (Steam Guard's five characters).
+    #[arg(long, value_parser = ["totp", "hotp", "steam"])]
+    pub totp_kind: Option<String>,
+    /// The next counter an `hotp` seed will use.
+    ///
+    /// Set it to resynchronise an account that has drifted; `envv totp advance`
+    /// is how it moves in normal use.
+    #[arg(long)]
+    pub totp_counter: Option<u64>,
 
     /// Generate the secret instead of supplying one.
     ///
@@ -308,6 +318,23 @@ impl EntryFields {
     /// frequently stale, and silently renaming an entry — the thing every
     /// `${ref}` addresses it by — because a pasted URI disagreed is invariant 2
     /// with no cascade behind it.
+    /// True when any seed flag was passed.
+    ///
+    /// **One list, named, beside the flags it mirrors.** It used to be written
+    /// out at the call site, and Phase 22.2's `--totp-kind` and `--totp-counter`
+    /// were not added to it — so `entry set X --totp-counter 5` reported success
+    /// and changed nothing, which is the worst shape a write can fail in. Adding
+    /// a seed flag means adding it here; there is nowhere else to forget.
+    fn touches_totp(&self) -> bool {
+        self.totp.is_some()
+            || self.totp_stdin
+            || self.totp_algorithm.is_some()
+            || self.totp_digits.is_some()
+            || self.totp_period.is_some()
+            || self.totp_kind.is_some()
+            || self.totp_counter.is_some()
+    }
+
     fn apply_totp(&self, entry: &mut Value) -> CliResult {
         let raw = if self.totp_stdin {
             Some(read_stdin()?)
@@ -323,26 +350,21 @@ impl EntryFields {
                 o.remove("totp_algorithm");
                 o.remove("totp_digits");
                 o.remove("totp_period");
+                o.remove("totp_kind");
+                o.remove("totp_counter");
             }
             return Ok(());
         }
 
-        let mut params = vault_core::totp::Params {
-            algorithm: entry
-                .get("totp_algorithm")
-                .and_then(|v| v.as_str())
-                .and_then(vault_core::totp::Algorithm::parse)
-                .unwrap_or_default(),
-            digits: entry
-                .get("totp_digits")
-                .and_then(|v| v.as_u64())
-                .map(|d| d as u32)
-                .unwrap_or(vault_core::totp::DIGITS),
-            period: entry
-                .get("totp_period")
-                .and_then(|v| v.as_u64())
-                .unwrap_or(vault_core::totp::STEP_SECS),
-        };
+        // One reader for all five fields, shared with `envv totp`, the desktop
+        // command and the importer.
+        let mut params = vault_core::totp::Params::from_fields(
+            entry.get("totp_kind").and_then(|v| v.as_str()),
+            entry.get("totp_algorithm").and_then(|v| v.as_str()),
+            entry.get("totp_digits").and_then(|v| v.as_u64()),
+            entry.get("totp_period").and_then(|v| v.as_u64()),
+            entry.get("totp_counter").and_then(|v| v.as_u64()),
+        );
 
         if let Some(raw) = raw {
             let parsed = vault_core::totp::parse_seed(&raw).map_err(CliError::invalid)?;
@@ -350,10 +372,19 @@ impl EntryFields {
             params = parsed.params;
         } else if entry.get("totp_secret").and_then(|v| v.as_str()).is_none() {
             return Err(CliError::invalid(
-                "--totp-algorithm/--totp-digits/--totp-period describe a seed;                  pass --totp or --totp-stdin as well",
+                "--totp-kind/--totp-algorithm/--totp-digits/--totp-period/--totp-counter \
+                 describe a seed; pass --totp or --totp-stdin as well",
             ));
         }
 
+        if let Some(k) = &self.totp_kind {
+            params.kind = vault_core::totp::Kind::parse(k).ok_or_else(|| {
+                CliError::invalid(format!("unknown OTP kind '{k}' — use totp, hotp or steam"))
+            })?;
+        }
+        if let Some(c) = self.totp_counter {
+            params.counter = c;
+        }
         if let Some(a) = &self.totp_algorithm {
             params.algorithm = vault_core::totp::Algorithm::parse(a).unwrap_or(params.algorithm);
         }
@@ -363,6 +394,15 @@ impl EntryFields {
         if let Some(p) = self.totp_period {
             params.period = p;
         }
+        // Steam fixes its own shape, so a `--totp-digits 6` alongside
+        // `--totp-kind steam` is corrected rather than stored and then refused.
+        let params = vault_core::totp::Params::from_fields(
+            Some(params.kind.as_str()),
+            Some(params.algorithm.as_str()),
+            Some(u64::from(params.digits)),
+            Some(params.period),
+            Some(params.counter),
+        );
         params.validate().map_err(CliError::invalid)?;
 
         // Only non-default parameters are written. A `totp_algorithm: "SHA1"` on
@@ -384,6 +424,19 @@ impl EntryFields {
                 o.remove("totp_period");
             } else {
                 o.insert("totp_period".into(), json!(params.period));
+            }
+            if params.kind == defaults.kind {
+                o.remove("totp_kind");
+            } else {
+                o.insert("totp_kind".into(), json!(params.kind.as_str()));
+            }
+            // The counter is state, not configuration: it is written whenever
+            // the seed is counter-based, zero included, because zero is a real
+            // position rather than an absent one.
+            if params.kind == vault_core::totp::Kind::Hotp {
+                o.insert("totp_counter".into(), json!(params.counter));
+            } else {
+                o.remove("totp_counter");
             }
         }
         Ok(())
@@ -524,12 +577,7 @@ impl EntryFields {
         // carries all four, and applying them field by field would let a
         // `--totp-digits 8` from a previous command survive onto a seed pasted
         // from an issuer that uses six.
-        if self.totp.is_some()
-            || self.totp_stdin
-            || self.totp_algorithm.is_some()
-            || self.totp_digits.is_some()
-            || self.totp_period.is_some()
-        {
+        if self.touches_totp() {
             self.apply_totp(entry)?;
         }
         if let Some(v) = &self.env_prefixes {

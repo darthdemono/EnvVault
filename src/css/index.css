@@ -27,6 +27,7 @@
 @import "./activity-tools.css";
 @import "./config-view.css";
 @import "./totp.css";
+@import "./auth-panel.css";
 /* Last: its focus ring has to win against the component stylesheets that set
    `outline: none`, and CSS cascade order is what decides that. */
 @import "./a11y.css";

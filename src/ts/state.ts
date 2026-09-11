@@ -703,7 +703,8 @@ const DEFAULT_SETTINGS: AppSettings = {
   activityBarPosition: 'left' as const,
   activityBarStyle: 'icon' as const,
   collapsedSections: [] as ('all' | 'price' | 'env' | 'category' | 'project')[],
-  activePanel: 'secrets' as 'secrets' | 'tools' | 'users' | 'remote',
+  activePanel: 'secrets' as 'secrets' | 'tools' | 'users' | 'remote' | 'auth',
+  authShowNext: false,
   activeTool: 'secret-gen',
   remoteSaved: [] as RemoteVaultConfig[],
   panelOrder: ['secrets', 'tools', 'remote', 'users'],
@@ -1084,13 +1085,15 @@ export function switchPanel(panel: string) {
     tools: ['tools-panel', 'tools-workspace'],
     users: ['users-panel', 'users-workspace'],
     remote: ['remote-panel', 'remote-workspace'],
+    auth: ['auth-panel', 'auth-workspace'],
   };
-  const allSidebars = ['secrets-panel', 'tools-panel', 'users-panel', 'remote-panel'];
+  const allSidebars = ['secrets-panel', 'tools-panel', 'users-panel', 'remote-panel', 'auth-panel'];
   const allWorkspaces = [
     'vault-workspace',
     'tools-workspace',
     'users-workspace',
     'remote-workspace',
+    'auth-workspace',
   ];
   allSidebars.forEach((id) => {
     const el = document.getElementById(id);
@@ -1119,6 +1122,10 @@ export function switchPanel(panel: string) {
   Settings.set('activePanel', panel as any);
 
   if (panel === 'users') import('./users').then((m) => m.renderUsersPanel()).catch(() => {});
+  // The authenticator screen paints its own list, and the ticker it starts is
+  // idempotent by assignment, so re-entering the panel costs one render and no
+  // second timer.
+  if (panel === 'auth') import('./auth-panel').then((m) => m.renderAuthPanel()).catch(() => {});
   if (panel === 'remote')
     import('./remote-panel').then((m) => m.renderRemotePanel()).catch(() => {});
 }

@@ -29,7 +29,9 @@ import {
   TOTP_DEFAULTS,
   type TotpStored,
 } from '../src/ts/totp';
+import { refreshTotpStatus } from '../src/ts/modals';
 import { st } from '../src/ts/state';
+import { loadRealIndexHtml } from './helpers';
 import type { VaultEntry } from '../src/ts/types';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -41,14 +43,21 @@ const TABLE = JSON.parse(
     out: Omit<TotpStored, never> | null;
   }[];
   uri: {
-    stored: { secret: string; algorithm: string; digits: number; period: number };
+    stored: {
+      secret: string;
+      algorithm: string;
+      digits: number;
+      period: number;
+      kind?: string;
+      counter?: number;
+    };
     issuer_fallback: string;
     account_fallback: string;
     out: string;
   }[];
   params: {
     entry: Record<string, unknown>;
-    out: { algorithm: string; digits: number; period: number };
+    out: { algorithm: string; digits: number; period: number; kind: string; counter: number };
   }[];
 };
 
@@ -69,9 +78,11 @@ describe('buildOtpauthUri — golden table', () => {
     it(`${c.stored.secret} as ${c.issuer_fallback || '(no issuer)'}`, () => {
       const stored: TotpStored = {
         secret: c.stored.secret,
+        kind: (c.stored.kind ?? 'totp') as TotpStored['kind'],
         algorithm: c.stored.algorithm as TotpStored['algorithm'],
         digits: c.stored.digits,
         period: c.stored.period,
+        counter: c.stored.counter ?? 0,
         issuer: null,
         account: null,
       };
@@ -120,6 +131,8 @@ describe('totpParamsOf — golden table', () => {
       expect(got.algorithm).toBe(c.out.algorithm);
       expect(got.digits).toBe(c.out.digits);
       expect(got.period).toBe(c.out.period);
+      expect(got.kind).toBe(c.out.kind);
+      expect(got.counter).toBe(c.out.counter);
     });
   }
 });
@@ -148,7 +161,7 @@ describe('totpParamsOf — a vault is untrusted input', () => {
   it('keeps parameters that are in range', () => {
     expect(
       totpParamsOf({ totp_algorithm: 'SHA512', totp_digits: 8, totp_period: 60 } as VaultEntry),
-    ).toEqual({ algorithm: 'SHA512', digits: 8, period: 60 });
+    ).toEqual({ kind: 'totp', algorithm: 'SHA512', digits: 8, period: 60, counter: 0 });
   });
 
   it('sha-256 with a dash is read, because real URIs contain it', () => {
@@ -265,5 +278,45 @@ describe('tickTotp — the repaint pass', () => {
     // The ticker runs once a second for the life of an unlocked vault; the
     // common case is a grid with no TOTP entry visible at all.
     await expect(tickTotp()).resolves.toBeUndefined();
+  });
+});
+
+describe('the add/edit form carries the kind and the counter', () => {
+  beforeEach(() => {
+    loadRealIndexHtml();
+  });
+
+  it('a pasted counter-based URI fills the kind and the counter, and shows both', () => {
+    // The counter is the half that has to survive a paste: a counter-based seed
+    // read back at zero is a second factor that fails until the account is
+    // resynced, and that failure looks exactly like a wrong seed.
+    const input = document.getElementById('f-totp') as HTMLInputElement;
+    input.value = 'otpauth://hotp/Acme:me?secret=JBSWY3DPEHPK3PXP&counter=7';
+    refreshTotpStatus();
+
+    expect(input.value).toBe('JBSWY3DPEHPK3PXP');
+    expect((document.getElementById('f-totp-kind') as HTMLSelectElement).value).toBe('hotp');
+    expect((document.getElementById('f-totp-counter') as HTMLInputElement).value).toBe('7');
+    expect(document.getElementById('f-totp-counter-wrap')!.hidden).toBe(false);
+    expect(document.getElementById('f-totp-status')!.textContent).toContain('#7');
+  });
+
+  it('hides the counter for a time-based seed', () => {
+    const input = document.getElementById('f-totp') as HTMLInputElement;
+    input.value = 'JBSWY3DPEHPK3PXP';
+    refreshTotpStatus();
+    expect(document.getElementById('f-totp-counter-wrap')!.hidden).toBe(true);
+    expect(document.getElementById('f-totp-status')!.textContent).toContain('every 30s');
+  });
+
+  it('hides the parameter boxes for Steam, which fixes its own shape', () => {
+    // Showing three boxes that change nothing invites the user to set them and
+    // then wonder why Steam rejects the codes.
+    const input = document.getElementById('f-totp') as HTMLInputElement;
+    input.value = 'otpauth://steam/Steam:me?secret=JBSWY3DPEHPK3PXP';
+    refreshTotpStatus();
+    expect((document.getElementById('f-totp-kind') as HTMLSelectElement).value).toBe('steam');
+    expect(document.getElementById('f-totp-params')!.hidden).toBe(true);
+    expect(document.getElementById('f-totp-status')!.textContent).toContain('5 characters');
   });
 });
