@@ -35,15 +35,24 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "category": "DeveloperTool",
-    "shortDescription": "Structured API key manager",
-    "longDescription": "Self-hosted, structured API credential vault with .env and YAML export.",
+    "category": "Utility",
+    "shortDescription": "Local-first encrypted secrets manager",
+    "longDescription": "EnvVault keeps API keys, passwords, certificates, SSH keys, connection strings and authenticator seeds in a single SQLCipher database encrypted with a key derived from your master password by Argon2id. The key is derived on your machine and never written to disk.\n\nIt stores credentials with the structure they actually have - provider, environment, scopes, rate limits, expiry, rotation cadence - and renders them into the config formats that consume them: .env files, Docker Compose, WireGuard, nginx, Kubernetes secrets, Terraform tfvars and more, with cross-references between entries resolved on the way out.\n\nBuilt-in TOTP authenticator with import and export for Ente Auth, Aegis, 2FAS, andOTP, Bitwarden and Google Authenticator. Optional self-hosted server with TLS and certificate pinning, sub-users, role-based access control and a hash-chained audit log. Ships with envv, a CLI designed so that automation can wire credentials into configuration without a secret ever passing through the calling process.",
     "linux": {
       "deb": {
-        "depends": ["libwebkit2gtk-4.1-0", "libgtk-3-0"]
+        "depends": ["libwebkit2gtk-4.1-0", "libgtk-3-0"],
+        "section": "utils",
+        "priority": "optional",
+        "recommends": ["libsecret-1-0", "xdg-utils"],
+        "provides": ["envvault"]
       },
       "rpm": {
-        "depends": ["webkit2gtk4.1", "gtk3"]
+        "depends": ["webkit2gtk4.1", "gtk3"],
+        "recommends": ["libsecret", "xdg-utils"],
+        "provides": ["envvault"]
+      },
+      "appimage": {
+        "bundleMediaFramework": false
       }
     },
     "windows": {
@@ -57,6 +66,11 @@
         "installMode": "perMachine",
         "languages": ["English"]
       }
-    }
+    },
+    "publisher": "Jubair Hasan",
+    "homepage": "https://github.com/darthdemono/EnvVault",
+    "license": "MIT",
+    "licenseFile": "../LICENSE",
+    "copyright": "Copyright (c) 2026 Jubair Hasan (DarthDemono)"
   }
 }

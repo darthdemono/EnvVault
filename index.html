@@ -137,6 +137,13 @@
           </svg>
           <span class="activity-label">Users</span>
         </button>
+        <button class="activity-btn" id="activity-tab-auth" data-panel="auth" role="tab" aria-selected="false" tabindex="-1" aria-controls="auth-panel auth-workspace" title="Authenticator" aria-label="Authenticator">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+            <circle cx="12" cy="12" r="9"></circle>
+            <path d="M12 7v5l3 2"></path>
+          </svg>
+          <span class="activity-label">2FA</span>
+        </button>
       </div>
     </div>
 
@@ -375,6 +382,27 @@
       </div>
 
       <!-- Users Panel — shown when Users activity is active -->
+      <div id="auth-panel" class="sidebar-panel" role="tabpanel" aria-labelledby="activity-tab-auth" style="display:none">
+        <div class="users-panel-header">
+          <span class="users-panel-title">Authenticator</span>
+          <div style="display:flex;gap:4px">
+            <button id="auth-import-btn" class="btn btn-xs accent" title="Import from Ente, Aegis, 2FAS, andOTP, Bitwarden or Google Authenticator">Import</button>
+            <button id="auth-export-btn" class="btn btn-xs" title="Write every seed in a format another authenticator reads">Export</button>
+          </div>
+        </div>
+        <div class="auth-side-search">
+          <label class="sr-only" for="auth-search">Search authenticator entries</label>
+          <input id="auth-search" class="form-input" type="search" autocomplete="off" placeholder="Search codes…">
+        </div>
+        <div class="auth-side-filters" role="group" aria-label="Filter by kind">
+          <button class="auth-kind-btn active" data-kind="all">All</button>
+          <button class="auth-kind-btn" data-kind="totp">Time</button>
+          <button class="auth-kind-btn" data-kind="hotp">Counter</button>
+          <button class="auth-kind-btn" data-kind="steam">Steam</button>
+        </div>
+        <div id="auth-side-list" class="auth-side-list"></div>
+      </div><!-- /#auth-panel -->
+
       <div id="users-panel" class="sidebar-panel" role="tabpanel" aria-labelledby="activity-tab-users" style="display:none">
         <div class="users-panel-header">
           <span class="users-panel-title">Users &amp; Classes</span>
@@ -489,6 +517,29 @@
       <div id="users-workspace" style="display:none">
         <div class="users-detail-empty">Select a user to manage, or create one.</div>
       </div><!-- /#users-workspace -->
+      <!-- Authenticator workspace -->
+      <div id="auth-workspace" style="display:none">
+        <div class="auth-head">
+          <div>
+            <h2 class="auth-title">Authenticator</h2>
+            <p class="auth-sub" id="auth-count"></p>
+          </div>
+          <div class="auth-head-actions">
+            <label class="auth-toggle">
+              <input type="checkbox" id="auth-show-next">
+              <span>Show next code</span>
+            </label>
+          </div>
+        </div>
+        <!-- The codes themselves are written by the ticker, never by a render
+             pass: a re-render must not bake a code into HTML. -->
+        <div id="auth-grid" class="auth-grid"></div>
+        <div id="auth-empty" class="auth-empty" hidden>
+          <p>No entry carries an authenticator seed yet.</p>
+          <p class="auth-empty-hint">Add one to any entry, or import from Ente Auth, Aegis, 2FAS, andOTP, Bitwarden or Google Authenticator.</p>
+        </div>
+      </div><!-- /#auth-workspace -->
+
     </main>
   </div>
 
@@ -712,6 +763,20 @@
             </button>
           </div>
           <div class="form-hint" id="f-totp-status" role="status" aria-live="polite"></div>
+          <div class="form-row-3" id="f-totp-kind-row" hidden>
+            <div>
+              <label for="f-totp-kind" class="form-label" title="Time-based is what almost every issuer hands out. Counter-based has no clock and advances only when you use a code. Steam renders the same arithmetic in its own five-character alphabet.">Kind</label>
+              <select class="form-input" id="f-totp-kind">
+                <option value="totp">Time-based (TOTP)</option>
+                <option value="hotp">Counter-based (HOTP)</option>
+                <option value="steam">Steam Guard</option>
+              </select>
+            </div>
+            <div id="f-totp-counter-wrap" hidden>
+              <label for="f-totp-counter" class="form-label" title="The next counter this seed will use. Set it to resynchronise an account that has drifted.">Counter</label>
+              <input class="form-input" id="f-totp-counter" type="number" min="0" step="1" placeholder="0">
+            </div>
+          </div>
           <div class="form-row-3" id="f-totp-params" hidden>
             <div class="form-group">
               <label for="f-totp-algorithm" class="form-label">Algorithm</label>

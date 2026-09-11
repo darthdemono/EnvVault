@@ -334,33 +334,21 @@ fn parse_uri_list(text: &str) -> (Vec<Imported>, Vec<Skipped>) {
 /// differently, defaulting whatever the file left out.
 fn stored_from(
     secret: &str,
+    kind: Option<&str>,
     algo: Option<&str>,
     digits: Option<u64>,
     period: Option<u64>,
+    counter: Option<u64>,
 ) -> Result<Stored, String> {
-    let defaults = Params::default();
-    let params = Params {
-        algorithm: algo
-            .and_then(totp::Algorithm::parse)
-            .unwrap_or(defaults.algorithm),
-        digits: digits
-            .map(|d| d as u32)
-            .filter(|d| (totp::MIN_DIGITS..=totp::MAX_DIGITS).contains(d))
-            .unwrap_or(defaults.digits),
-        period: period
-            .filter(|p| *p > 0 && *p <= totp::MAX_PERIOD_SECS)
-            .unwrap_or(defaults.period),
-    };
+    // One reader for the four parameter fields, shared with the CLI and the
+    // desktop command — see `Params::from_fields`, which clamps every one of
+    // them and forces the shape Steam fixes.
+    let params = Params::from_fields(kind, algo, digits, period, counter);
     // Goes through the same validator every other entry point uses, so a seed
     // an export mangled is refused here rather than stored unusable.
     let mut stored = totp::parse_seed(secret)?;
     stored.params = params;
     Ok(stored)
-}
-
-/// True when a format's type field names something counter-based.
-fn is_hotp(kind: &str) -> bool {
-    kind.trim().eq_ignore_ascii_case("hotp")
 }
 
 fn nonempty(v: Option<&str>) -> Option<String> {
@@ -384,23 +372,21 @@ fn parse_aegis(text: &str) -> Result<(Vec<Imported>, Vec<Skipped>), String> {
             .clone()
             .or_else(|| name.clone())
             .unwrap_or_else(|| "unnamed".into());
+        // Aegis names all three kinds in `type`, and writes a `steam` entry with
+        // `type: "steam"` rather than through the `encoder` parameter its URI
+        // export uses.
         let kind = e.get("type").and_then(|x| x.as_str()).unwrap_or("totp");
-        if is_hotp(kind) {
-            skipped.push(Skipped {
-                name: label,
-                reason: "counter-based (HOTP); EnvVault stores time-based seeds only".into(),
-            });
-            continue;
-        }
         let secret = e
             .pointer("/info/secret")
             .and_then(|x| x.as_str())
             .unwrap_or("");
         match stored_from(
             secret,
+            Some(kind),
             e.pointer("/info/algo").and_then(|x| x.as_str()),
             e.pointer("/info/digits").and_then(|x| x.as_u64()),
             e.pointer("/info/period").and_then(|x| x.as_u64()),
+            e.pointer("/info/counter").and_then(|x| x.as_u64()),
         ) {
             Ok(stored) => items.push(Imported {
                 issuer,
@@ -441,18 +427,13 @@ fn parse_2fas(text: &str) -> Result<(Vec<Imported>, Vec<Skipped>), String> {
             .pointer("/otp/tokenType")
             .and_then(|x| x.as_str())
             .unwrap_or("TOTP");
-        if is_hotp(kind) {
-            skipped.push(Skipped {
-                name: label,
-                reason: "counter-based (HOTP); EnvVault stores time-based seeds only".into(),
-            });
-            continue;
-        }
         match stored_from(
             s.get("secret").and_then(|x| x.as_str()).unwrap_or(""),
+            Some(kind),
             s.pointer("/otp/algorithm").and_then(|x| x.as_str()),
             s.pointer("/otp/digits").and_then(|x| x.as_u64()),
             s.pointer("/otp/period").and_then(|x| x.as_u64()),
+            s.pointer("/otp/counter").and_then(|x| x.as_u64()),
         ) {
             Ok(stored) => items.push(Imported {
                 issuer,
@@ -484,18 +465,13 @@ fn parse_andotp(text: &str) -> Result<(Vec<Imported>, Vec<Skipped>), String> {
             .or_else(|| account.clone())
             .unwrap_or_else(|| "unnamed".into());
         let kind = e.get("type").and_then(|x| x.as_str()).unwrap_or("TOTP");
-        if is_hotp(kind) {
-            skipped.push(Skipped {
-                name: label,
-                reason: "counter-based (HOTP); EnvVault stores time-based seeds only".into(),
-            });
-            continue;
-        }
         match stored_from(
             e.get("secret").and_then(|x| x.as_str()).unwrap_or(""),
+            Some(kind),
             e.get("algorithm").and_then(|x| x.as_str()),
             e.get("digits").and_then(|x| x.as_u64()),
             e.get("period").and_then(|x| x.as_u64()),
+            e.get("counter").and_then(|x| x.as_u64()),
         ) {
             Ok(stored) => items.push(Imported {
                 issuer,
@@ -755,6 +731,7 @@ fn decode_otp_parameters(bytes: &[u8]) -> Result<Option<Imported>, Skipped> {
     let mut algo = 1u64; // 1 = SHA1, and 0 (unspecified) means the same thing.
     let mut digits_enum = 1u64; // 1 = SIX
     let mut kind = 2u64; // 2 = TOTP
+    let mut counter = 0u64;
 
     let mut p = Pb::new(bytes);
     let named = |n: &str, i: &str| {
@@ -782,18 +759,15 @@ fn decode_otp_parameters(bytes: &[u8]) -> Result<Option<Imported>, Skipped> {
             (4, 0) => algo = p.varint().map_err(fail)?,
             (5, 0) => digits_enum = p.varint().map_err(fail)?,
             (6, 0) => kind = p.varint().map_err(fail)?,
+            // Field 7 is the counter, present only on a counter-based entry.
+            // Dropping it hands the next device a seed starting from zero — a
+            // second factor that fails until the account is resynced.
+            (7, 0) => counter = p.varint().map_err(fail)?,
             _ => p.skip(wire).map_err(fail)?,
         }
     }
 
     let label = named(&name, &issuer);
-    // 1 = HOTP. It has no clock, so there is no current code to show.
-    if kind == 1 {
-        return Err(Skipped {
-            name: label,
-            reason: "counter-based (HOTP); EnvVault stores time-based seeds only".into(),
-        });
-    }
     if secret_raw.is_empty() {
         return Err(Skipped {
             name: label,
@@ -817,6 +791,14 @@ fn decode_otp_parameters(bytes: &[u8]) -> Result<Option<Imported>, Skipped> {
         // The migration format has no period field at all: Google only ever
         // exports 30-second entries.
         period: totp::STEP_SECS,
+        // 1 = HOTP, 2 = TOTP, 0 = unspecified. Google Authenticator has no Steam
+        // support, so there is no third case to read.
+        kind: if kind == 1 {
+            totp::Kind::Hotp
+        } else {
+            totp::Kind::Totp
+        },
+        counter: if kind == 1 { counter } else { 0 },
     };
     let stored = Stored {
         secret,
@@ -875,8 +857,23 @@ fn build_aegis(items: &[Imported]) -> String {
     let entries: Vec<Value> = items
         .iter()
         .map(|it| {
+            // Aegis spells all three kinds in `type`, and reads `counter` only
+            // for the counter-based one. Writing a period onto an `hotp` entry
+            // is harmless there but says something untrue about the seed, so
+            // each kind writes only the field that governs it.
+            let mut info = serde_json::json!({
+                "secret": it.stored.secret,
+                "algo": it.stored.params.algorithm.as_str(),
+                "digits": it.stored.params.digits,
+            });
+            match it.stored.params.kind {
+                totp::Kind::Hotp => info["counter"] = Value::from(it.stored.params.counter),
+                totp::Kind::Totp | totp::Kind::Steam => {
+                    info["period"] = Value::from(it.stored.params.period)
+                }
+            }
             serde_json::json!({
-                "type": "totp",
+                "type": it.stored.params.kind.as_str(),
                 // Aegis keys its own entries by uuid; a stable one derived from
                 // the seed means re-importing the same file twice updates rather
                 // than duplicating.
@@ -886,12 +883,7 @@ fn build_aegis(items: &[Imported]) -> String {
                 "note": it.note.clone().unwrap_or_default(),
                 "favorite": false,
                 "icon": Value::Null,
-                "info": {
-                    "secret": it.stored.secret,
-                    "algo": it.stored.params.algorithm.as_str(),
-                    "digits": it.stored.params.digits,
-                    "period": it.stored.params.period,
-                }
+                "info": info
             })
         })
         .collect();
@@ -922,7 +914,13 @@ fn build_2fas(items: &[Imported]) -> String {
                     "digits": it.stored.params.digits,
                     "period": it.stored.params.period,
                     "algorithm": it.stored.params.algorithm.as_str(),
-                    "tokenType": "TOTP",
+                    // 2FAS spells them in upper case, and carries a counter only
+                    // for the counter-based one.
+                    "tokenType": it.stored.params.kind.as_str().to_uppercase(),
+                    "counter": match it.stored.params.kind {
+                        totp::Kind::Hotp => Value::from(it.stored.params.counter),
+                        _ => Value::Null,
+                    },
                     "source": "Manual",
                 },
                 "order": { "position": 0 },
@@ -1083,6 +1081,23 @@ pub fn write_fields(entry: &mut Value, stored: &Stored) {
     } else {
         o.insert("totp_period".into(), Value::from(stored.params.period));
     }
+    if stored.params.kind == defaults.kind {
+        o.remove("totp_kind");
+    } else {
+        o.insert(
+            "totp_kind".into(),
+            Value::String(stored.params.kind.as_str().into()),
+        );
+    }
+    // The counter is state rather than configuration, so it is written whenever
+    // the seed is counter-based — including at zero, which is a real position and
+    // not an absent one. Removing it for the other kinds is what stops a seed
+    // converted from HOTP to TOTP keeping a number nothing reads.
+    if stored.params.kind == totp::Kind::Hotp {
+        o.insert("totp_counter".into(), Value::from(stored.params.counter));
+    } else {
+        o.remove("totp_counter");
+    }
 }
 
 /// Build a fresh entry for a seed that matched nothing in the vault.
@@ -1136,6 +1151,12 @@ mod tests {
 
     fn one(items: &[Imported]) -> &Imported {
         assert_eq!(items.len(), 1, "expected exactly one item: {items:?}");
+        &items[0]
+    }
+
+    /// The first item, where a fixture deliberately carries several kinds.
+    fn first(items: &[Imported]) -> &Imported {
+        assert!(!items.is_empty(), "expected at least one item");
         &items[0]
     }
 
@@ -1230,13 +1251,16 @@ mod tests {
                     otpauth://totp/Bad?secret=NOTBASE32!!!\n\
                     otpauth://hotp/Counter?secret=JBSWY3DPEHPK3PXP&counter=1\n";
         let r = parse(text).unwrap();
-        assert_eq!(r.items.len(), 1);
-        assert_eq!(r.skipped.len(), 2);
+        // The counter-based line is imported now (Phase 22.2) rather than named
+        // and skipped; only the mangled secret is still a skip.
+        assert_eq!(r.items.len(), 2);
+        assert_eq!(r.items[1].stored.params.kind, totp::Kind::Hotp);
+        assert_eq!(r.items[1].stored.params.counter, 1);
+        assert_eq!(r.skipped.len(), 1);
         for s in &r.skipped {
             assert!(s.name.starts_with("line "), "{s:?}");
             assert!(!s.reason.contains("NOTBASE32"), "{s:?}");
         }
-        assert!(r.skipped[1].reason.contains("hotp"), "{:?}", r.skipped[1]);
     }
 
     // ── The JSON formats ────────────────────────────────────────────────────
@@ -1256,7 +1280,8 @@ mod tests {
         }"#;
         let r = parse(text).unwrap();
         assert_eq!(r.format, Format::Aegis);
-        let it = one(&r.items);
+        assert_eq!(r.items.len(), 2);
+        let it = first(&r.items);
         assert_eq!(it.stored.secret, SEED);
         assert_eq!(it.stored.params.algorithm, totp::Algorithm::Sha256);
         assert_eq!(it.stored.params.digits, 8);
@@ -1264,9 +1289,76 @@ mod tests {
         assert_eq!(it.issuer.as_deref(), Some("Acme"));
         assert_eq!(it.account.as_deref(), Some("me@example.com"));
         assert_eq!(it.note.as_deref(), Some("work laptop"));
-        // The HOTP entry is named in the report rather than vanishing.
-        assert_eq!(r.skipped.len(), 1);
-        assert_eq!(r.skipped[0].name, "Old");
+        // Aegis names all three kinds in `type`, and keeps the counter under
+        // `info` where the period would be for a time-based entry.
+        assert_eq!(r.items[1].stored.params.kind, totp::Kind::Hotp);
+        assert_eq!(r.items[1].stored.params.counter, 3);
+        assert!(r.skipped.is_empty(), "{:?}", r.skipped);
+    }
+
+    #[test]
+    fn an_aegis_steam_entry_keeps_steams_shape() {
+        // Aegis writes `type: "steam"` in its JSON and `encoder=steam` in its
+        // URI export. Reading only one of the two spellings imports the seed as
+        // an ordinary six-digit TOTP, which produces codes Steam rejects with no
+        // explanation.
+        let text = r#"{
+          "version": 1,
+          "header": { "slots": null, "params": null },
+          "db": { "version": 3, "entries": [
+            { "type": "steam", "uuid": "s", "name": "me", "issuer": "Steam",
+              "info": { "secret": "JBSWY3DPEHPK3PXP", "algo": "SHA1", "digits": 5, "period": 30 } }
+          ] }
+        }"#;
+        let r = parse(text).unwrap();
+        let it = one(&r.items);
+        assert_eq!(it.stored.params.kind, totp::Kind::Steam);
+        assert_eq!(it.stored.params.digits, totp::STEAM_DIGITS);
+
+        // And it survives a round trip back out through both writable formats.
+        for fmt in [Format::Aegis, Format::OtpauthList] {
+            let written = build(&r.items, fmt).expect("steam is exportable");
+            let back = parse(&written).expect("what we wrote, we read");
+            assert_eq!(
+                back.items[0].stored.params.kind,
+                totp::Kind::Steam,
+                "{fmt:?} lost the Steam encoder"
+            );
+        }
+    }
+
+    #[test]
+    fn a_counter_survives_a_round_trip_through_every_writable_format() {
+        // The counter is the one number in a seed that is *state*. An export
+        // that drops it hands the next device a second factor that fails until
+        // the account is resynced — and the failure looks exactly like a wrong
+        // seed, which is the wrong thing to be debugging.
+        let items = vec![Imported {
+            issuer: Some("Acme".into()),
+            account: Some("me".into()),
+            stored: Stored {
+                secret: SEED.into(),
+                params: Params {
+                    kind: totp::Kind::Hotp,
+                    counter: 41,
+                    ..Params::default()
+                },
+                issuer: Some("Acme".into()),
+                account: Some("me".into()),
+            },
+            note: None,
+        }];
+        for fmt in Format::EXPORTABLE {
+            let written = build(&items, fmt).expect("writable");
+            let back = parse(&written).unwrap_or_else(|e| panic!("{fmt:?}: {e}"));
+            assert_eq!(back.items.len(), 1, "{fmt:?}");
+            assert_eq!(
+                back.items[0].stored.params.kind,
+                totp::Kind::Hotp,
+                "{fmt:?}"
+            );
+            assert_eq!(back.items[0].stored.params.counter, 41, "{fmt:?}");
+        }
     }
 
     #[test]
@@ -1287,14 +1379,16 @@ mod tests {
         }"#;
         let r = parse(text).unwrap();
         assert_eq!(r.format, Format::TwoFas);
-        assert_eq!(r.items.len(), 2);
+        // Three now: the `HOTP` service is read rather than skipped.
+        assert_eq!(r.items.len(), 3);
         assert_eq!(r.items[0].issuer.as_deref(), Some("Acme"));
         // No `otp.issuer`: the top-level name stands in.
         assert_eq!(r.items[1].issuer.as_deref(), Some("Fallback"));
         assert_eq!(r.items[1].account.as_deref(), Some("lbl"));
         // Omitted parameters mean the defaults.
         assert!(r.items[1].stored.params.is_default());
-        assert_eq!(r.skipped.len(), 1);
+        assert_eq!(r.items[2].stored.params.kind, totp::Kind::Hotp);
+        assert!(r.skipped.is_empty(), "{:?}", r.skipped);
     }
 
     #[test]
@@ -1440,14 +1534,17 @@ mod tests {
     }
 
     #[test]
-    fn a_counter_based_migration_entry_is_named_rather_than_dropped() {
+    fn a_counter_based_migration_entry_is_imported_with_its_counter() {
+        // Phase 22 named and skipped these. Phase 22.2 reads them: the entry can
+        // hold a counter, and the counter is the half that has to survive —
+        // importing an HOTP seed at zero is a second factor that fails until the
+        // account is resynced, which looks exactly like a wrong seed.
         let raw = totp::base32_decode(SEED).unwrap();
         let uri = google_payload(&raw, "counter", "Old", 1, 1, 1); // kind 1 = HOTP
         let r = parse(&uri).unwrap();
-        assert!(r.items.is_empty());
-        assert_eq!(r.skipped.len(), 1);
-        assert_eq!(r.skipped[0].name, "Old");
-        assert!(r.skipped[0].reason.contains("HOTP"), "{:?}", r.skipped[0]);
+        assert_eq!(r.items.len(), 1);
+        assert!(r.skipped.is_empty(), "{:?}", r.skipped);
+        assert_eq!(r.items[0].stored.params.kind, totp::Kind::Hotp);
     }
 
     #[test]
@@ -1504,6 +1601,8 @@ mod tests {
                 stored: Stored {
                     secret: "MZXW6YTBOI".into(),
                     params: Params {
+                        kind: totp::Kind::Totp,
+                        counter: 0,
                         algorithm: totp::Algorithm::Sha512,
                         digits: 8,
                         period: 45,

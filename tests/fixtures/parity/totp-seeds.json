@@ -16,7 +16,8 @@
     "`parse` cases: input -> the normalised seed and its parameters, or null when",
     "the input must be refused. `uri` cases go the other way: a stored seed plus",
     "the entry's own provider/account, rendered back to an otpauth:// URI.",
-    "`params` is the third table: what an entry's four stored fields mean, read by vault_core::totp::Params::from_fields and by totpParamsOf in src/ts/totp.ts. It exists because those fields were read three different ways in Rust alone."
+    "`params` is the third table: what an entry's four stored fields mean, read by vault_core::totp::Params::from_fields and by totpParamsOf in src/ts/totp.ts. It exists because those fields were read three different ways in Rust alone.",
+    "Phase 22.2 added `kind` and `counter` to every table: a seed is time-based, counter-based or Steam, and only the counter-based one carries a position."
   ],
   "parse": [
     {
@@ -28,7 +29,9 @@
         "digits": 6,
         "period": 30,
         "issuer": null,
-        "account": null
+        "account": null,
+        "kind": "totp",
+        "counter": 0
       }
     },
     {
@@ -40,7 +43,9 @@
         "digits": 6,
         "period": 30,
         "issuer": null,
-        "account": null
+        "account": null,
+        "kind": "totp",
+        "counter": 0
       }
     },
     {
@@ -52,7 +57,9 @@
         "digits": 8,
         "period": 60,
         "issuer": "GitHub",
-        "account": "darth@example.com"
+        "account": "darth@example.com",
+        "kind": "totp",
+        "counter": 0
       }
     },
     {
@@ -64,7 +71,9 @@
         "digits": 6,
         "period": 30,
         "issuer": "Acme",
-        "account": "me"
+        "account": "me",
+        "kind": "totp",
+        "counter": 0
       }
     },
     {
@@ -76,7 +85,9 @@
         "digits": 6,
         "period": 30,
         "issuer": "Current",
-        "account": "me"
+        "account": "me",
+        "kind": "totp",
+        "counter": 0
       }
     },
     {
@@ -88,7 +99,9 @@
         "digits": 6,
         "period": 30,
         "issuer": null,
-        "account": "just-an-account"
+        "account": "just-an-account",
+        "kind": "totp",
+        "counter": 0
       }
     },
     {
@@ -100,7 +113,9 @@
         "digits": 6,
         "period": 30,
         "issuer": "Acme Corp",
-        "account": "a b@c.com"
+        "account": "a b@c.com",
+        "kind": "totp",
+        "counter": 0
       }
     },
     {
@@ -112,7 +127,9 @@
         "digits": 6,
         "period": 30,
         "issuer": "Acme",
-        "account": "me"
+        "account": "me",
+        "kind": "totp",
+        "counter": 0
       }
     },
     {
@@ -124,7 +141,9 @@
         "digits": 6,
         "period": 30,
         "issuer": "Acme",
-        "account": "me"
+        "account": "me",
+        "kind": "totp",
+        "counter": 0
       }
     },
     {
@@ -136,7 +155,9 @@
         "digits": 6,
         "period": 30,
         "issuer": "Acme",
-        "account": "me"
+        "account": "me",
+        "kind": "totp",
+        "counter": 0
       }
     },
     {
@@ -170,8 +191,50 @@
       "out": null
     },
     {
-      "_why": "otpauth://hotp/ is counter-based: it has no clock, so 'the current code' does not exist for it. Accepting it produces a card whose code never changes.",
-      "in": "otpauth://hotp/Acme:me?secret=JBSWY3DPEHPK3PXP&counter=1",
+      "_why": "Counter-based, refused by name in Phase 22 and read in 22.2. The counter is what an exporter writes and what the next device needs.",
+      "in": "otpauth://hotp/Acme:me?secret=JBSWY3DPEHPK3PXP&counter=7",
+      "out": {
+        "secret": "JBSWY3DPEHPK3PXP",
+        "algorithm": "SHA1",
+        "digits": 6,
+        "period": 30,
+        "kind": "hotp",
+        "counter": 7,
+        "issuer": "Acme",
+        "account": "me"
+      }
+    },
+    {
+      "_why": "Steam by path. Aegis writes this spelling in its URI export.",
+      "in": "otpauth://steam/Steam:me?secret=JBSWY3DPEHPK3PXP",
+      "out": {
+        "secret": "JBSWY3DPEHPK3PXP",
+        "algorithm": "SHA1",
+        "digits": 5,
+        "period": 30,
+        "kind": "steam",
+        "counter": 0,
+        "issuer": "Steam",
+        "account": "me"
+      }
+    },
+    {
+      "_why": "Steam by parameter, arriving after a digits the encoder overrides. Reading only one of the two spellings imports the seed as a six-digit TOTP that Steam rejects.",
+      "in": "otpauth://totp/Steam:me?secret=JBSWY3DPEHPK3PXP&digits=6&encoder=steam",
+      "out": {
+        "secret": "JBSWY3DPEHPK3PXP",
+        "algorithm": "SHA1",
+        "digits": 5,
+        "period": 30,
+        "kind": "steam",
+        "counter": 0,
+        "issuer": "Steam",
+        "account": "me"
+      }
+    },
+    {
+      "_why": "A scheme nothing here implements is still refused, and still by name.",
+      "in": "otpauth://yubico/Acme:me?secret=JBSWY3DPEHPK3PXP",
       "out": null
     }
   ],
@@ -219,7 +282,9 @@
       "entry": {},
       "out": {
         "algorithm": "SHA1",
+        "counter": 0,
         "digits": 6,
+        "kind": "totp",
         "period": 30
       }
     },
@@ -232,7 +297,9 @@
       },
       "out": {
         "algorithm": "SHA1",
+        "counter": 0,
         "digits": 6,
+        "kind": "totp",
         "period": 30
       }
     },
@@ -245,7 +312,9 @@
       },
       "out": {
         "algorithm": "SHA1",
+        "counter": 0,
         "digits": 6,
+        "kind": "totp",
         "period": 30
       }
     },
@@ -258,7 +327,9 @@
       },
       "out": {
         "algorithm": "SHA256",
+        "counter": 0,
         "digits": 8,
+        "kind": "totp",
         "period": 60
       }
     },
@@ -269,7 +340,9 @@
       },
       "out": {
         "algorithm": "SHA256",
+        "counter": 0,
         "digits": 6,
+        "kind": "totp",
         "period": 30
       }
     },
@@ -280,7 +353,9 @@
       },
       "out": {
         "algorithm": "SHA512",
+        "counter": 0,
         "digits": 6,
+        "kind": "totp",
         "period": 30
       }
     },
@@ -291,7 +366,9 @@
       },
       "out": {
         "algorithm": "SHA1",
+        "counter": 0,
         "digits": 6,
+        "kind": "totp",
         "period": 30
       }
     },
@@ -302,7 +379,9 @@
       },
       "out": {
         "algorithm": "SHA1",
+        "counter": 0,
         "digits": 10,
+        "kind": "totp",
         "period": 30
       }
     },
@@ -313,7 +392,9 @@
       },
       "out": {
         "algorithm": "SHA1",
+        "counter": 0,
         "digits": 6,
+        "kind": "totp",
         "period": 30
       }
     },
@@ -324,7 +405,9 @@
       },
       "out": {
         "algorithm": "SHA1",
+        "counter": 0,
         "digits": 6,
+        "kind": "totp",
         "period": 30
       }
     },
@@ -335,7 +418,9 @@
       },
       "out": {
         "algorithm": "SHA1",
+        "counter": 0,
         "digits": 6,
+        "kind": "totp",
         "period": 30
       }
     },
@@ -346,7 +431,9 @@
       },
       "out": {
         "algorithm": "SHA1",
+        "counter": 0,
         "digits": 6,
+        "kind": "totp",
         "period": 30
       }
     },
@@ -357,7 +444,9 @@
       },
       "out": {
         "algorithm": "SHA1",
+        "counter": 0,
         "digits": 6,
+        "kind": "totp",
         "period": 30
       }
     },
@@ -368,7 +457,9 @@
       },
       "out": {
         "algorithm": "SHA1",
+        "counter": 0,
         "digits": 6,
+        "kind": "totp",
         "period": 3600
       }
     },
@@ -379,7 +470,9 @@
       },
       "out": {
         "algorithm": "SHA1",
+        "counter": 0,
         "digits": 6,
+        "kind": "totp",
         "period": 30
       }
     },
@@ -390,7 +483,9 @@
       },
       "out": {
         "algorithm": "SHA1",
+        "counter": 0,
         "digits": 6,
+        "kind": "totp",
         "period": 30
       }
     },
@@ -402,7 +497,9 @@
       },
       "out": {
         "algorithm": "SHA1",
+        "counter": 0,
         "digits": 6,
+        "kind": "totp",
         "period": 30
       }
     },
@@ -415,8 +512,124 @@
       },
       "out": {
         "algorithm": "SHA512",
+        "counter": 0,
         "digits": 6,
+        "kind": "totp",
         "period": 15
+      }
+    },
+    {
+      "_why": "Counter-based. The counter is state, and it is the half that has to survive: an HOTP seed read back at zero is a second factor that fails until the account is resynced.",
+      "entry": {
+        "totp_kind": "hotp",
+        "totp_counter": 41
+      },
+      "out": {
+        "algorithm": "SHA1",
+        "counter": 41,
+        "digits": 6,
+        "kind": "hotp",
+        "period": 30
+      }
+    },
+    {
+      "_why": "A counter of zero is a real position, not an absent one.",
+      "entry": {
+        "totp_kind": "hotp",
+        "totp_counter": 0
+      },
+      "out": {
+        "algorithm": "SHA1",
+        "counter": 0,
+        "digits": 6,
+        "kind": "hotp",
+        "period": 30
+      }
+    },
+    {
+      "_why": "A counter on a time-based seed is dropped. A number that looks like state and is never read is a number a later reader trusts.",
+      "entry": {
+        "totp_counter": 9
+      },
+      "out": {
+        "algorithm": "SHA1",
+        "counter": 0,
+        "digits": 6,
+        "kind": "totp",
+        "period": 30
+      }
+    },
+    {
+      "_why": "Steam fixes its own shape: five characters, SHA-1, a 30-second step, whatever the file said.",
+      "entry": {
+        "totp_kind": "steam",
+        "totp_digits": 8,
+        "totp_algorithm": "SHA512",
+        "totp_period": 60
+      },
+      "out": {
+        "algorithm": "SHA1",
+        "counter": 0,
+        "digits": 5,
+        "kind": "steam",
+        "period": 30
+      }
+    },
+    {
+      "_why": "Steam carries no counter either.",
+      "entry": {
+        "totp_kind": "steam",
+        "totp_counter": 12
+      },
+      "out": {
+        "algorithm": "SHA1",
+        "counter": 0,
+        "digits": 5,
+        "kind": "steam",
+        "period": 30
+      }
+    },
+    {
+      "_why": "An unknown kind falls back to time-based rather than making the entry unreadable — same rule as an unknown algorithm.",
+      "entry": {
+        "totp_kind": "yubikey"
+      },
+      "out": {
+        "algorithm": "SHA1",
+        "counter": 0,
+        "digits": 6,
+        "kind": "totp",
+        "period": 30
+      }
+    },
+    {
+      "_why": "Case is not meaningful in the kind either.",
+      "entry": {
+        "totp_kind": "HOTP",
+        "totp_counter": 2
+      },
+      "out": {
+        "algorithm": "SHA1",
+        "counter": 2,
+        "digits": 6,
+        "kind": "hotp",
+        "period": 30
+      }
+    },
+    {
+      "_why": "A counter-based seed keeps its other parameters: 8 digits over SHA-256 is a shape real issuers hand out.",
+      "entry": {
+        "totp_kind": "hotp",
+        "totp_digits": 8,
+        "totp_algorithm": "SHA256",
+        "totp_counter": 5
+      },
+      "out": {
+        "algorithm": "SHA256",
+        "counter": 5,
+        "digits": 8,
+        "kind": "hotp",
+        "period": 30
       }
     }
   ]

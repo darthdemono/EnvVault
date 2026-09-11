@@ -301,29 +301,25 @@ export function formToEntry(): VaultEntry {
  */
 function readTotpFields(): Pick<
   VaultEntry,
-  'totp_secret' | 'totp_algorithm' | 'totp_digits' | 'totp_period'
+  'totp_secret' | 'totp_algorithm' | 'totp_digits' | 'totp_period' | 'totp_kind' | 'totp_counter'
 > {
   const raw = (document.getElementById('f-totp') as HTMLInputElement | null)?.value?.trim() ?? '';
-  if (!raw) {
-    return {
-      totp_secret: undefined,
-      totp_algorithm: undefined,
-      totp_digits: undefined,
-      totp_period: undefined,
-    };
-  }
+  const none = {
+    totp_secret: undefined,
+    totp_algorithm: undefined,
+    totp_digits: undefined,
+    totp_period: undefined,
+    totp_kind: undefined,
+    totp_counter: undefined,
+  };
+  if (!raw) return none;
   let parsed: ReturnType<typeof parseTotpSeed>;
   try {
     parsed = parseTotpSeed(raw);
   } catch {
     // Unusable: carry the text through so the user can fix it. saveModal stops
     // it reaching the vault.
-    return {
-      totp_secret: raw,
-      totp_algorithm: undefined,
-      totp_digits: undefined,
-      totp_period: undefined,
-    };
+    return { ...none, totp_secret: raw };
   }
   const num = (id: string) => {
     const v = (document.getElementById(id) as HTMLInputElement | null)?.value?.trim() ?? '';
@@ -335,11 +331,29 @@ function readTotpFields(): Pick<
       VaultEntry['totp_algorithm'] | undefined) || parsed.algorithm;
   const digits = num('f-totp-digits') ?? parsed.digits;
   const period = num('f-totp-period') ?? parsed.period;
+  const kind =
+    ((document.getElementById('f-totp-kind') as HTMLSelectElement | null)?.value as
+      VaultEntry['totp_kind'] | undefined) || parsed.kind;
+  const counter = num('f-totp-counter') ?? parsed.counter;
+  // Steam fixes its own shape, so the three parameter boxes describe nothing for
+  // it; writing what they happen to hold would store a seed that validates and
+  // produces characters Steam rejects.
+  if (kind === 'steam') {
+    return {
+      ...none,
+      totp_secret: parsed.secret,
+      totp_kind: 'steam',
+    };
+  }
   return {
     totp_secret: parsed.secret,
     totp_algorithm: algo === TOTP_DEFAULTS.algorithm ? undefined : algo,
     totp_digits: digits === TOTP_DEFAULTS.digits ? undefined : digits,
     totp_period: period === TOTP_DEFAULTS.period ? undefined : period,
+    totp_kind: kind === TOTP_DEFAULTS.kind ? undefined : kind,
+    // A counter is state and is written whenever the seed is counter-based,
+    // zero included — zero is a real position, not an absent one.
+    totp_counter: kind === 'hotp' ? Math.max(0, counter) : undefined,
   };
 }
 
@@ -356,12 +370,15 @@ export function refreshTotpStatus(): void {
   const input = document.getElementById('f-totp') as HTMLInputElement | null;
   const status = document.getElementById('f-totp-status');
   const params = document.getElementById('f-totp-params');
+  const kindRow = document.getElementById('f-totp-kind-row');
+  const counterWrap = document.getElementById('f-totp-counter-wrap');
   if (!input || !status) return;
   const raw = input.value.trim();
   status.classList.remove('err');
   if (!raw) {
     status.textContent = '';
     if (params) params.hidden = true;
+    if (kindRow) kindRow.hidden = true;
     return;
   }
   let parsed;
@@ -381,6 +398,26 @@ export function refreshTotpStatus(): void {
     setSelect('f-totp-algorithm', parsed.algorithm);
     setNumber('f-totp-digits', parsed.digits);
     setNumber('f-totp-period', parsed.period);
+    // A pasted `otpauth://hotp/` or `//steam/` URI names the kind, and its
+    // counter is the half that must survive: a counter-based seed read back at
+    // zero is a second factor that fails until the account is resynced.
+    setSelect('f-totp-kind', parsed.kind);
+    setNumber('f-totp-counter', parsed.counter);
+  }
+  const kind =
+    (document.getElementById('f-totp-kind') as HTMLSelectElement | null)?.value || parsed.kind;
+  // The kind row appears as soon as there is a seed to describe: it is how a
+  // user creates a counter-based or Steam entry from the app at all, and
+  // without it that capability would exist only in the CLI (invariant 10).
+  if (kindRow) kindRow.hidden = false;
+  if (counterWrap) counterWrap.hidden = kind !== 'hotp';
+  if (kind === 'steam') {
+    // Steam fixes SHA-1, five characters and a 30-second step. Showing three
+    // boxes that change nothing invites the user to set them and wonder why the
+    // codes are rejected.
+    status.textContent = `Steam Guard · 5 characters${parsed.issuer ? ` · from ${parsed.issuer}` : ''}`;
+    if (params) params.hidden = true;
+    return;
   }
   const algo =
     (document.getElementById('f-totp-algorithm') as HTMLSelectElement | null)?.value ||
@@ -390,7 +427,13 @@ export function refreshTotpStatus(): void {
   const period =
     (document.getElementById('f-totp-period') as HTMLInputElement | null)?.value || parsed.period;
   const from = parsed.issuer ? ` · from ${parsed.issuer}` : '';
-  status.textContent = `${digits} digits · ${algo} · every ${period}s${from}`;
+  const counter =
+    (document.getElementById('f-totp-counter') as HTMLInputElement | null)?.value ||
+    String(parsed.counter);
+  status.textContent =
+    kind === 'hotp'
+      ? `${digits} digits · ${algo} · counter-based, next #${counter}${from}`
+      : `${digits} digits · ${algo} · every ${period}s${from}`;
   const nonDefault =
     String(algo) !== TOTP_DEFAULTS.algorithm ||
     Number(digits) !== TOTP_DEFAULTS.digits ||
@@ -425,7 +468,13 @@ export function wireTotpField(): void {
     // A URI arrives by paste, and `paste` fires before the value lands.
     input.onpaste = () => setTimeout(() => refreshTotpStatus(), 0);
   }
-  for (const id of ['f-totp-algorithm', 'f-totp-digits', 'f-totp-period']) {
+  for (const id of [
+    'f-totp-algorithm',
+    'f-totp-digits',
+    'f-totp-period',
+    'f-totp-kind',
+    'f-totp-counter',
+  ]) {
     const el = document.getElementById(id) as HTMLInputElement | HTMLSelectElement | null;
     if (el) el.onchange = () => refreshTotpStatus();
   }
@@ -500,6 +549,8 @@ export function fillForm(entry: Partial<VaultEntry>) {
   }
   const fTotp = document.getElementById('f-totp') as HTMLInputElement | null;
   if (fTotp) fTotp.value = entry.totp_secret || '';
+  setSelect('f-totp-kind', entry.totp_kind || TOTP_DEFAULTS.kind);
+  setNumber('f-totp-counter', entry.totp_counter ?? TOTP_DEFAULTS.counter);
   setSelect('f-totp-algorithm', entry.totp_algorithm || TOTP_DEFAULTS.algorithm);
   setNumber('f-totp-digits', entry.totp_digits || TOTP_DEFAULTS.digits);
   setNumber('f-totp-period', entry.totp_period || TOTP_DEFAULTS.period);

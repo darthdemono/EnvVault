@@ -199,6 +199,11 @@ function renderSidebar() {
   renderTagSection(all);
   renderPoolSection(all);
   renderAuthenticatorSection(all);
+  // The Authenticator screen shows the same seeds, so it repaints with them —
+  // a vault edited anywhere must not leave a stale card behind (invariant 1).
+  if (Settings.get('activePanel') === 'auth') {
+    void import('./auth-panel').then((m) => m.renderAuthPanel());
+  }
   renderPrefixSection(all);
 }
 
@@ -353,6 +358,11 @@ function renderAuthenticatorSection(all: VaultEntry[]) {
           <span class="totp-code" aria-live="off">— — —</span>
           <span class="totp-countdown"><i class="totp-countdown-fill"></i></span>
           <span class="totp-secs" aria-hidden="true"></span>
+          <!-- A counter-based seed has no clock; the ticker writes its position
+               here instead of a countdown. Present on every row because the
+               ticker looks the element up rather than being told which kind a
+               row is, and an absent element is simply skipped. -->
+          <span class="totp-counter" aria-hidden="true"></span>
         </button>
       </div>`;
     })

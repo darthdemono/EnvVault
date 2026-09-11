@@ -23,6 +23,7 @@ import {
 } from './remote-panel';
 import { showDropdown } from './modals';
 import { resetTotpCache, stopTotpTicker } from './totp';
+import { stopVaultWatch } from './vault-watch';
 import {
   wireRevealButtons,
   resetReveal,
@@ -74,6 +75,10 @@ export async function lockVault(reason: 'auto' | 'manual' | 'visibility' = 'manu
   // Rust for more of them behind a lock screen.
   stopTotpTicker();
   resetTotpCache();
+
+  // And the watcher: a locked vault has nothing to reload into, and its poll
+  // would ask a locked database for a version once every three seconds.
+  stopVaultWatch();
 
   // Covers expanded/revealed/filters/search plus bulk mode, which used to stay
   // switched on across a lock.

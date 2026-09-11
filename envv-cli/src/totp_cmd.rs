@@ -52,9 +52,11 @@ use vault_core::totp;
 /// `totpParamsOf` are the other two callers of the same rule.
 fn params_of(entry: &Value) -> totp::Params {
     totp::Params::from_fields(
+        entry.get("totp_kind").and_then(|v| v.as_str()),
         entry.get("totp_algorithm").and_then(|v| v.as_str()),
         entry.get("totp_digits").and_then(|v| v.as_u64()),
         entry.get("totp_period").and_then(|v| v.as_u64()),
+        entry.get("totp_counter").and_then(|v| v.as_u64()),
     )
 }
 /// The seed stored on an entry, with the parameters it generates under.
@@ -96,12 +98,12 @@ fn require_seed(entry: &Value) -> CliResult<(String, totp::Params)> {
 }
 
 /// `envv totp code <entry>` — the current code and how long it has left.
-pub fn cmd_code(access: &Access, query: &str) -> CliResult {
+pub fn cmd_code(access: &Access, query: &str, next: bool) -> CliResult {
     let vault = access.load_vault_or_empty()?;
     let idx = find_entry_index(&vault, query)?;
     let entry = &data::entries(&vault)[idx];
     let (secret, params) = require_seed(entry)?;
-    let live = totp::live_code(&secret, &params).map_err(CliError::invalid)?;
+    let live = totp::live_code_with(&secret, &params, next).map_err(CliError::invalid)?;
     let provider = data::provider_of(entry).to_string();
 
     out::ok(
@@ -109,18 +111,86 @@ pub fn cmd_code(access: &Access, query: &str) -> CliResult {
         json!({
             "provider": provider,
             "code": live.code,
+            "next_code": live.next_code,
+            "kind": live.kind.as_str(),
+            "counter": live.counter,
             "remaining_secs": live.remaining_secs,
             "period": live.period,
             "digits": live.digits,
             "algorithm": live.algorithm.as_str(),
         }),
         || {
-            println!(
-                "{}  ({}s left)",
-                grouped_code(&live.code),
-                live.remaining_secs
-            );
+            // A counter-based code has no clock, so there is no countdown to
+            // print — its position is the useful number, and it is what
+            // `envv totp advance` moves.
+            if live.kind == totp::Kind::Hotp {
+                println!("{}  (counter {})", grouped_code(&live.code), live.counter);
+            } else {
+                println!(
+                    "{}  ({}s left)",
+                    grouped_code(&live.code),
+                    live.remaining_secs
+                );
+            }
+            if let Some(n) = &live.next_code {
+                println!("next: {}", grouped_code(n));
+            }
         },
+    );
+    Ok(())
+}
+
+/// `envv totp advance` — move a counter-based seed to its next position.
+///
+/// Reading a code deliberately does **not** advance it. A counter-based code
+/// stands until it is used, and the service moves on only when it accepts one;
+/// advancing on every read would walk the vault's counter past the service's the
+/// first time somebody looked at a card twice, and the failure — a second factor
+/// that stops working with no error anywhere — looks exactly like a wrong seed.
+pub fn cmd_advance(access: &Access, query: &str, by: u64, yes: bool) -> CliResult {
+    let mut vault = access.load_vault_or_empty()?;
+    let idx = find_entry_index(&vault, query)?;
+    let entry = &data::entries(&vault)[idx];
+    let provider = data::provider_of(entry).to_string();
+    let (_secret, params) = require_seed(entry)?;
+
+    if params.kind != totp::Kind::Hotp {
+        return Err(CliError::invalid(format!(
+            "'{provider}' holds a {} seed, which advances on its own — there is \
+             no counter to move",
+            params.kind.as_str()
+        )));
+    }
+    if by == 0 {
+        return Err(CliError::invalid("--by 0 would move nothing"));
+    }
+    let from = params.counter;
+    let to = from.checked_add(by).ok_or_else(|| {
+        CliError::invalid(
+            "the counter would overflow; resynchronise with `entry set --totp-counter`",
+        )
+    })?;
+
+    // Advancing past the service's position is what breaks the factor, and it
+    // cannot be undone from here — only resynchronised against the service.
+    if by > 1
+        && !crate::fmt::confirm(
+            &format!("Advance '{provider}' from {from} to {to} ({by} positions)?"),
+            yes,
+        )?
+    {
+        return Ok(());
+    }
+
+    if let Some(e) = data::entries_mut(&mut vault).get_mut(idx) {
+        e["totp_counter"] = json!(to);
+    }
+    access.save(&vault)?;
+
+    out::ok(
+        "totp.advance",
+        json!({ "provider": provider, "from": from, "counter": to }),
+        || println!("'{provider}' advanced from {from} to {to}."),
     );
     Ok(())
 }
@@ -159,9 +229,14 @@ pub fn cmd_ls(access: &Access) -> CliResult {
         rows.push(json!({
             "provider": data::provider_of(entry),
             "account": entry.get("account_name").and_then(|v| v.as_str()).unwrap_or(""),
+            "kind": params.kind.as_str(),
             "algorithm": params.algorithm.as_str(),
             "digits": params.digits,
-            "period": params.period,
+            // A counter-based seed has no meaningful period and a time-based one
+            // has no counter. Printing both for every row would make two of the
+            // four columns noise.
+            "period": if params.kind == totp::Kind::Hotp { Value::Null } else { json!(params.period) },
+            "counter": if params.kind == totp::Kind::Hotp { json!(params.counter) } else { Value::Null },
             "usable": ok,
             "problem": note,
         }));
@@ -174,8 +249,8 @@ pub fn cmd_ls(access: &Access) -> CliResult {
             return;
         }
         println!(
-            "{:<24} {:<22} {:<8} {:>6} {:>7}",
-            "PROVIDER", "ACCOUNT", "ALGO", "DIGITS", "PERIOD"
+            "{:<24} {:<22} {:<6} {:<8} {:>6} {:>8}",
+            "PROVIDER", "ACCOUNT", "KIND", "ALGO", "DIGITS", "STEP/CTR"
         );
         for r in &rows {
             let flag = if r["usable"].as_bool() == Some(true) {
@@ -187,13 +262,21 @@ pub fn cmd_ls(access: &Access) -> CliResult {
             // Display ignores width and alignment, so the columns under DIGITS
             // and PERIOD ran together as `6 30` under a header claiming two
             // right-aligned fields.
+            // One column for two things that are never both present: a period
+            // for a time-based seed, a counter position for a counter-based one.
+            // `#41` is what says which is being shown.
+            let step_or_counter = match r["counter"].as_u64() {
+                Some(c) => format!("#{c}"),
+                None => r["period"].as_u64().unwrap_or(0).to_string(),
+            };
             println!(
-                "{:<24} {:<22} {:<8} {:>6} {:>7}{flag}",
+                "{:<24} {:<22} {:<6} {:<8} {:>6} {:>8}{flag}",
                 r["provider"].as_str().unwrap_or(""),
                 r["account"].as_str().unwrap_or(""),
+                r["kind"].as_str().unwrap_or("totp"),
                 r["algorithm"].as_str().unwrap_or(""),
                 r["digits"].as_u64().unwrap_or(0),
-                r["period"].as_u64().unwrap_or(0),
+                step_or_counter,
             );
         }
     });

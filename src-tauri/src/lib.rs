@@ -216,6 +216,35 @@ mod commands {
         )
     }
 
+    /// The version marker of what is on disk right now.
+    ///
+    /// This is the `data_hash` `save_vault` writes, in the same transaction as
+    /// the data — so it is by construction the hash of exactly the bytes stored,
+    /// and it is already what the compare-and-swap compares. Reading it is one
+    /// indexed `SELECT` against a table with a handful of rows.
+    ///
+    /// It exists because the desktop app holds the vault in memory and had no
+    /// way to learn that something else had written to it: `envv entry set` from
+    /// a terminal, `envv totp advance`, or a LAN peer would change the database
+    /// under an app that went on showing — and saving — what it read at unlock.
+    /// The app polls this and reloads when it moves (`src/ts/vault-watch.ts`).
+    ///
+    /// Returns `None` rather than an error while the vault is locked: the poller
+    /// runs on a timer, and a locked vault is the ordinary state rather than a
+    /// failure worth reporting once a second.
+    #[tauri::command]
+    pub fn vault_version(
+        app: AppHandle,
+        state: State<VaultState>,
+    ) -> Result<Option<String>, String> {
+        let g = state.0.lock().map_err(|_| "State lock poisoned")?;
+        let Some(key) = g.as_ref() else {
+            return Ok(None);
+        };
+        let conn = vault_core::open_db(&db_path(&app)?, key)?;
+        vault_core::vault_version(&conn)
+    }
+
     #[tauri::command]
     pub fn get_vault_path(app: AppHandle) -> Result<String, String> {
         db_path(&app).map(|p| p.display().to_string())
@@ -718,12 +747,16 @@ mod commands {
     /// Generation happens here and only here. The TypeScript side parses seeds
     /// (`src/ts/totp.ts`) and asks for codes; it does not own an HMAC.
     #[tauri::command]
+    #[allow(clippy::too_many_arguments)]
     pub fn entry_totp_code(
         state: State<VaultState>,
         secret: String,
+        kind: Option<String>,
         algorithm: Option<String>,
         digits: Option<u32>,
         period: Option<u64>,
+        counter: Option<u64>,
+        with_next: Option<bool>,
     ) -> Result<vault_core::totp::LiveCode, String> {
         let g = state.0.lock().map_err(|_| "State lock poisoned")?;
         g.as_ref().ok_or("Vault is locked")?;
@@ -734,11 +767,13 @@ mod commands {
         // CLI answered with a code, so the same entry showed a blank card and a
         // working `envv totp code`.
         let params = vault_core::totp::Params::from_fields(
+            kind.as_deref(),
             algorithm.as_deref(),
             digits.map(u64::from),
             period,
+            counter,
         );
-        vault_core::totp::live_code(&secret, &params)
+        vault_core::totp::live_code_with(&secret, &params, with_next.unwrap_or(false))
     }
 
     /// Splits a pasted `otpauth://` URI, or normalises a bare base32 seed.
@@ -1310,6 +1345,7 @@ pub fn run() {
             commands::totp_enroll,
             commands::totp_confirm,
             commands::totp_disable,
+            commands::vault_version,
             commands::entry_totp_code,
             commands::parse_totp_seed,
             commands::totp_import_parse,

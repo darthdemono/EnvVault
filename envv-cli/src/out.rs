@@ -124,6 +124,77 @@ pub const SECRET_FIELDS: [&str; 5] = [
     "totp_secret",
 ];
 
+/// Entry fields a build knows to be free of secret material.
+///
+/// **This list is what makes redaction fail closed.** Masking used to be an
+/// allow-list of fields to hide, so any field the running binary did not know
+/// about was printed verbatim — and a binary reading a vault written by a newer
+/// build is the ordinary case, not an edge one. A 0.20.0 `envv list --json`
+/// against a vault holding a Phase 22 seed printed `api_key` as a fingerprint
+/// and `totp_secret` in clear, because the field did not exist when that binary
+/// was compiled.
+///
+/// So the question is inverted: a field is printed because it is *known* to be
+/// safe, and anything else is masked. The cost is that an old binary masks a new
+/// *non-secret* field too — visible, recoverable with `--reveal`, and the right
+/// direction for the failure to go.
+///
+/// `key_id` is here deliberately: it is identity, it is what `provider:key_id`
+/// disambiguates with, and masking it would break the wiring an agent composes
+/// configs from. `custom_icon` is here because it is collapsed separately below.
+const PUBLIC_FIELDS: [&str; 39] = [
+    "id",
+    "provider",
+    "account_name",
+    "key_id",
+    "api_description",
+    "description",
+    "price_type",
+    "environment",
+    "categories",
+    "api_url",
+    "callback_url",
+    "expires_at",
+    "scopes",
+    "rate_limit",
+    "rate_limit_count",
+    "rate_limit_period",
+    "rate_limit_note",
+    "purpose",
+    "pool",
+    "version",
+    "custom_icon",
+    "details",
+    "version_history",
+    "projectIds",
+    "secretType",
+    "username",
+    "email",
+    "cert_issuer",
+    "blob_ref",
+    "env_var_subtype",
+    "created_at",
+    "last_rotated_at",
+    "rotation_days",
+    "compromised",
+    "tags",
+    "pinned",
+    "extra_vars",
+    "env_prefixes",
+    // Phase 22/22.2 parameters. Numbers and an enum, not secret material — the
+    // seed beside them is in `SECRET_FIELDS`.
+    "totp_algorithm",
+];
+
+/// Fields carrying a TOTP seed's non-secret parameters, listed separately only
+/// because [`PUBLIC_FIELDS`] is a fixed-size array and these arrived later.
+const PUBLIC_FIELDS_EXTRA: [&str; 4] = ["totp_digits", "totp_period", "totp_kind", "totp_counter"];
+
+/// True when a field is known not to hold secret material.
+fn is_public_field(name: &str) -> bool {
+    PUBLIC_FIELDS.contains(&name) || PUBLIC_FIELDS_EXTRA.contains(&name)
+}
+
 /// Redact a single vault entry for JSON output. Returns it unchanged when
 /// `--reveal` is in force.
 pub fn redact_entry(entry: &Value) -> Value {
@@ -135,6 +206,26 @@ pub fn redact_entry(entry: &Value) -> Value {
         if let Some(v) = e.get(f).and_then(|v| v.as_str()) {
             let masked = masked_json(v);
             e[f] = masked;
+        }
+    }
+    // Anything this build does not recognise is masked rather than printed. Only
+    // strings are touched: a number or a boolean is not a credential, and
+    // masking one would make a listing unreadable for no gain.
+    let unknown: Vec<String> = e
+        .as_object()
+        .map(|o| {
+            o.iter()
+                .filter(|(k, v)| {
+                    v.is_string() && !is_public_field(k) && !SECRET_FIELDS.contains(&k.as_str())
+                })
+                .map(|(k, _)| k.clone())
+                .collect()
+        })
+        .unwrap_or_default();
+    for f in unknown {
+        if let Some(v) = e.get(&f).and_then(|v| v.as_str()) {
+            let masked = masked_json(v);
+            e[&f] = masked;
         }
     }
     // An embedded icon is not a secret, but it is 20–90 KB of base64 that would

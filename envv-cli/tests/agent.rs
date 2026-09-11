@@ -429,3 +429,56 @@ fn a_short_fingerprint_is_rejected_as_input_not_as_a_network_error() {
     // `unavailable` would loop forever on a typo.
     assert_eq!(err.code, envv_cli::error::Code::Invalid);
 }
+
+/// A field this build has never heard of is masked, not printed.
+///
+/// Redaction used to be an allow-list of field *names to hide*, so anything not
+/// on it went to stdout verbatim — and a binary reading a vault written by a
+/// newer build is the ordinary case here, not an edge one. A 0.20.0 `envv list
+/// --json` against a vault holding a Phase 22 seed printed `api_key` as a
+/// fingerprint and `totp_secret` in clear, because the field did not exist when
+/// that binary was compiled. Nothing warned; the seed simply appeared.
+///
+/// The question is now inverted — printed because known safe, masked otherwise —
+/// so the same situation costs visibility of a new metadata field instead of a
+/// credential.
+#[test]
+fn an_unknown_string_field_is_masked_rather_than_printed() {
+    let entry = json!({
+        "provider": "GitHub",
+        "api_key": "secret-value",
+        // Stand-ins for whatever a later phase adds. Neither name exists in this
+        // build, which is the whole point.
+        "recovery_codes": "aaaa-bbbb-cccc",
+        "totp_backup_seed": "JBSWY3DPEHPK3PXP",
+        // Known-safe fields must survive, or a listing stops being readable.
+        "key_id": "prod",
+        "secretType": "api_key",
+        "rotation_days": 90,
+        "pinned": true,
+    });
+
+    let safe = out::redact_entry(&entry);
+
+    for unknown in ["recovery_codes", "totp_backup_seed"] {
+        let v = &safe[unknown];
+        assert!(
+            v.get("redacted").and_then(|r| r.as_bool()) == Some(true),
+            "{unknown} reached stdout in clear: {v}"
+        );
+        assert!(
+            !v.to_string().contains("aaaa") && !v.to_string().contains("JBSWY3DP"),
+            "{unknown}'s mask carries its value: {v}"
+        );
+    }
+
+    // Identity and metadata stay readable: `provider:key_id` is how the CLI
+    // disambiguates, and masking it would break the wiring an agent composes
+    // configs from.
+    assert_eq!(safe["provider"], "GitHub");
+    assert_eq!(safe["key_id"], "prod");
+    assert_eq!(safe["secretType"], "api_key");
+    // Numbers and booleans are not credentials and are left alone.
+    assert_eq!(safe["rotation_days"], 90);
+    assert_eq!(safe["pinned"], true);
+}

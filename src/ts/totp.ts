@@ -34,11 +34,33 @@ import type { VaultEntry } from './types';
 /** HMAC an `otpauth://` URI may name. */
 export type TotpAlgorithm = 'SHA1' | 'SHA256' | 'SHA512';
 
+/**
+ * What a stored seed *is*, which decides what "the current code" means for it.
+ *
+ * The three differ in where the counter comes from, not in the arithmetic:
+ * `totp` divides the clock by the period, `steam` does the same and renders the
+ * result in Steam's five-character alphabet, and `hotp` has no clock at all and
+ * uses a number the vault stores and the user advances.
+ *
+ * Phase 22 refused the last two. That was right while nothing could store a
+ * counter — an `hotp` entry with nowhere to keep its position shows a code that
+ * never changes — and Phase 22.2 gives it somewhere.
+ */
+export type TotpKind = 'totp' | 'hotp' | 'steam';
+
+/** Characters a Steam code is drawn from. Here only to validate what Rust made. */
+export const STEAM_ALPHABET = '23456789BCDFGHJKMNPQRTVWXY';
+
+/** How many characters a Steam code carries. Steam fixes it; it is not a setting. */
+export const STEAM_DIGITS = 5;
+
 /** What a URI means when it omits the parameter — and so what a bare seed means. */
 export const TOTP_DEFAULTS = {
+  kind: 'totp' as TotpKind,
   algorithm: 'SHA1' as TotpAlgorithm,
   digits: 6,
   period: 30,
+  counter: 0,
 } as const;
 
 /** Fewest digits a code may carry (RFC 4226's floor). */
@@ -53,11 +75,20 @@ export const MAX_DIGITS = 10;
 /** Longest step a stored seed may name. An hour; nothing real uses more. */
 export const MAX_PERIOD_SECS = 3600;
 
-/** The three numbers a seed is generated under. */
+/** What a seed is, and the numbers it is generated under. */
 export interface TotpParams {
+  kind: TotpKind;
   algorithm: TotpAlgorithm;
   digits: number;
   period: number;
+  /**
+   * The next counter an `hotp` seed will use. Zero for the other two kinds.
+   *
+   * State, not configuration — the only number here a correct implementation
+   * writes back, which is why advancing it is an explicit action rather than a
+   * side effect of reading a code.
+   */
+  counter: number;
 }
 
 /** A parsed seed: the secret plus everything the URI said about it. */
@@ -119,6 +150,24 @@ function pctDecode(s: string): string {
   });
 }
 
+/** Read the kind an `otpauth://` path or a stored field names. */
+export function parseTotpKind(raw: string): TotpKind | null {
+  const low = raw.trim().toLowerCase();
+  return low === 'totp' || low === 'hotp' || low === 'steam' ? low : null;
+}
+
+/**
+ * Force the shape Steam fixes, whatever the file said.
+ *
+ * Steam issues one shape — SHA-1, five characters, a 30-second step — and a
+ * generic exporter that wrote `digits: 6` beside a Steam seed would otherwise
+ * produce six characters no Steam login accepts.
+ */
+function steamNormalised(p: TotpParams): TotpParams {
+  if (p.kind !== 'steam') return p;
+  return { kind: 'steam', algorithm: 'SHA1', digits: STEAM_DIGITS, period: 30, counter: 0 };
+}
+
 /** Read the spelling `otpauth://` uses, case- and dash-insensitively. */
 function parseAlgorithm(raw: string): TotpAlgorithm | null {
   const up = raw.trim().toUpperCase().replace(/-/g, '');
@@ -145,16 +194,22 @@ export function parseOtpauth(uri: string): TotpStored {
   const kind = slash < 0 ? path : path.slice(0, slash);
   const rawLabel = slash < 0 ? '' : path.slice(slash + 1);
 
-  // `otpauth://hotp/` is counter-based: it has no clock, so "the current code"
-  // does not exist for it. Storing one produces a card whose code never changes.
-  if (kind.toLowerCase() !== 'totp')
-    throw new Error(`only otpauth://totp/ is supported, got 'otpauth://${kind}/'`);
+  // Phase 22 refused everything but `totp` here, because an `hotp` seed with
+  // nowhere to keep its counter shows a code that never changes. The entry can
+  // hold one now; anything that is still not one of the three is refused by name.
+  const parsedKind = parseTotpKind(kind);
+  if (!parsedKind)
+    throw new Error(
+      `only otpauth://totp/, //hotp/ and //steam/ are supported, got 'otpauth://${kind}/'`,
+    );
 
+  let seedKind: TotpKind = parsedKind;
   let secret = '';
   let issuerParam: string | null = null;
   let algorithm: TotpAlgorithm = TOTP_DEFAULTS.algorithm;
   let digits: number = TOTP_DEFAULTS.digits;
   let period: number = TOTP_DEFAULTS.period;
+  let counter = 0;
 
   for (const pair of query.split('&').filter(Boolean)) {
     const eq = pair.indexOf('=');
@@ -173,6 +228,18 @@ export function parseOtpauth(uri: string): TotpStored {
     } else if (k === 'period') {
       const p = Number(pctDecode(v).trim());
       if (Number.isInteger(p) && p > 0 && p <= MAX_PERIOD_SECS) period = p;
+    } else if (k === 'counter') {
+      // RFC 4226 calls it the initial counter value; every exporter writes the
+      // *next* value to use, which is what the entry stores.
+      const c = Number(pctDecode(v).trim());
+      if (Number.isInteger(c) && c >= 0) counter = c;
+    } else if (k === 'encoder') {
+      // Aegis writes `encoder=steam` on an `otpauth://totp/` URI rather than
+      // using the `steam` path. Reading only one of the two spellings imports
+      // the seed as an ordinary six-digit TOTP, which Steam rejects with no
+      // explanation. Never inferred from the issuer *name*, which is text a user
+      // can edit into anything.
+      if (pctDecode(v).trim().toLowerCase() === 'steam') seedKind = 'steam';
     }
   }
 
@@ -187,11 +254,20 @@ export function parseOtpauth(uri: string): TotpStored {
   const labelIssuer = colon >= 0 ? label.slice(0, colon).trim() : '';
   const account = (colon >= 0 ? label.slice(colon + 1) : label).trim();
 
-  return {
-    secret,
+  // `encoder=steam` can arrive after `digits=6`, and the `steam` path arrives
+  // before any parameter at all, so the shape Steam fixes is forced once the
+  // whole query has been read rather than in whichever arm saw it first.
+  const params = steamNormalised({
+    kind: seedKind,
     algorithm,
     digits,
     period,
+    counter: seedKind === 'hotp' ? counter : 0,
+  });
+
+  return {
+    secret,
+    ...params,
     issuer: issuerParam || labelIssuer || null,
     account: account || null,
   };
@@ -243,9 +319,23 @@ export function buildOtpauthUri(
   const issuer = stored.issuer ?? issuerFallback;
   const account = stored.account ?? accountFallback;
   const label = issuer ? `${pct(issuer)}:${pct(account)}` : pct(account);
-  let uri = `otpauth://totp/${label}?secret=${stored.secret}`;
+  // Steam is written as `otpauth://totp/…&encoder=steam` rather than as
+  // `otpauth://steam/`: both spellings exist, Aegis reads either, and the `totp`
+  // path is the one every *other* authenticator will at least import as a
+  // working — if wrongly rendered — seed instead of rejecting the line outright.
+  const path = stored.kind === 'hotp' ? 'hotp' : 'totp';
+  let uri = `otpauth://${path}/${label}?secret=${stored.secret}`;
   if (issuer) uri += `&issuer=${pct(issuer)}`;
-  uri += `&algorithm=${stored.algorithm}&digits=${stored.digits}&period=${stored.period}`;
+  uri += `&algorithm=${stored.algorithm}&digits=${stored.digits}`;
+  if (stored.kind === 'hotp') {
+    // A counter-based URI carries its position instead of a period. Dropping it
+    // hands the next phone a seed starting from zero, which is a second factor
+    // that fails until the account is resynced.
+    uri += `&counter=${stored.counter}`;
+  } else {
+    uri += `&period=${stored.period}`;
+    if (stored.kind === 'steam') uri += '&encoder=steam';
+  }
   return uri;
 }
 
@@ -265,10 +355,13 @@ export function hasTotp(entry: Pick<VaultEntry, 'totp_secret'>): boolean {
  * the default rather than reaching the divider.
  */
 export function totpParamsOf(entry: VaultEntry): TotpParams {
+  const kind = parseTotpKind(String(entry.totp_kind ?? '')) ?? TOTP_DEFAULTS.kind;
   const algorithm = parseAlgorithm(String(entry.totp_algorithm ?? '')) ?? TOTP_DEFAULTS.algorithm;
   const rawDigits = Number(entry.totp_digits);
   const rawPeriod = Number(entry.totp_period);
-  return {
+  const rawCounter = Number(entry.totp_counter);
+  return steamNormalised({
+    kind,
     algorithm,
     digits:
       Number.isInteger(rawDigits) && rawDigits >= MIN_DIGITS && rawDigits <= MAX_DIGITS
@@ -278,7 +371,11 @@ export function totpParamsOf(entry: VaultEntry): TotpParams {
       Number.isInteger(rawPeriod) && rawPeriod > 0 && rawPeriod <= MAX_PERIOD_SECS
         ? rawPeriod
         : TOTP_DEFAULTS.period,
-  };
+    // A counter is only ever read for an `hotp` seed. Carrying one on a
+    // time-based entry would be a number that looks like state and is never
+    // used, which is the kind of field a later reader trusts.
+    counter: kind === 'hotp' && Number.isInteger(rawCounter) && rawCounter >= 0 ? rawCounter : 0,
+  });
 }
 
 /** The stored seed of an entry, as the parser's shape. */
@@ -320,6 +417,18 @@ const invoke = (cmd: string, args?: Record<string, unknown>) =>
 /** What `entry_totp_code` hands back. */
 export interface LiveCode {
   code: string;
+  /**
+   * The code that replaces `code`, when it was asked for.
+   *
+   * Absent unless requested: it is a second working credential with a longer
+   * life than the one on screen, so a panel that always painted one would put
+   * two live codes in every screenshot.
+   */
+  next_code?: string | null;
+  kind: TotpKind;
+  /** The counter this code came from — an `hotp` entry's stored position. */
+  counter: number;
+  /** Seconds until `code` is replaced, or **0 for `hotp`**, which has no clock. */
   remaining_secs: number;
   period: number;
   digits: number;
@@ -335,12 +444,28 @@ export interface LiveCode {
  * stamp, so a tick that arrives after the step boundary refetches rather than
  * repainting a dead code.
  */
-const codeCache = new Map<string, { code: string; expiresAt: number; period: number }>();
+const codeCache = new Map<
+  string,
+  { code: string; next: string | null; expiresAt: number; period: number }
+>();
+
+/**
+ * How long a counter-based code stays cached.
+ *
+ * It has no expiry of its own — it stands until the counter moves, and moving
+ * the counter changes the cache key — so this is only a ceiling on how long a
+ * stale entry survives a vault edited elsewhere. Five minutes rather than
+ * forever, and rather than one second, which would ask Rust for an unchanged
+ * answer sixty times a minute per card.
+ */
+const HOTP_CACHE_MS = 5 * 60 * 1000;
 /** Seeds a request is already outstanding for, so a slow IPC call is not queued once a second. */
 const inFlight = new Set<string>();
 
-function cacheKey(secret: string, p: TotpParams): string {
-  return `${secret}|${p.algorithm}|${p.digits}|${p.period}`;
+function cacheKey(secret: string, p: TotpParams, withNext: boolean): string {
+  // The counter is part of the key: advancing an `hotp` entry must show the new
+  // code immediately rather than the cached one for the position it just left.
+  return `${secret}|${p.kind}|${p.algorithm}|${p.digits}|${p.period}|${p.counter}|${withNext ? 'n' : ''}`;
 }
 
 /** Drops every cached code. Called on lock and on vault switch — see invariant 3. */
@@ -355,16 +480,23 @@ export function resetTotpCache(): void {
  * Never throws: this is called from a one-second timer, and a rejected promise
  * per tick per card is a console nobody can read.
  */
-export async function liveCodeFor(entry: VaultEntry): Promise<LiveCode | null> {
+export async function liveCodeFor(entry: VaultEntry, withNext = false): Promise<LiveCode | null> {
   if (!hasTotp(entry) || !inTauri) return null;
   const params = totpParamsOf(entry);
   const secret = normalizeB32(entry.totp_secret || '');
-  const key = cacheKey(secret, params);
+  const key = cacheKey(secret, params, withNext);
   const hit = codeCache.get(key);
   if (hit && hit.expiresAt > Date.now()) {
     return {
       code: hit.code,
-      remaining_secs: Math.max(1, Math.ceil((hit.expiresAt - Date.now()) / 1000)),
+      next_code: hit.next,
+      kind: params.kind,
+      counter: params.counter,
+      // A counter-based code is not replaced by the passage of time, so there is
+      // no countdown to recompute — and a ring whose number never moves reads as
+      // a frozen UI.
+      remaining_secs:
+        params.kind === 'hotp' ? 0 : Math.max(1, Math.ceil((hit.expiresAt - Date.now()) / 1000)),
       period: hit.period,
       digits: params.digits,
       algorithm: params.algorithm,
@@ -375,14 +507,23 @@ export async function liveCodeFor(entry: VaultEntry): Promise<LiveCode | null> {
   try {
     const res = (await invoke('entry_totp_code', {
       secret,
+      kind: params.kind,
       algorithm: params.algorithm,
       digits: params.digits,
       period: params.period,
+      counter: params.counter,
+      withNext,
     })) as LiveCode | undefined;
     if (!res) return null;
     codeCache.set(key, {
       code: res.code,
-      expiresAt: Date.now() + res.remaining_secs * 1000,
+      next: res.next_code ?? null,
+      // An `hotp` code has no expiry: it stands until somebody advances the
+      // counter, and advancing changes the cache key. Holding it for one period
+      // anyway would mean re-asking Rust once a minute for an answer that cannot
+      // have changed.
+      expiresAt:
+        res.kind === 'hotp' ? Date.now() + HOTP_CACHE_MS : Date.now() + res.remaining_secs * 1000,
       period: res.period,
     });
     return res;
@@ -455,9 +596,31 @@ export async function tickTotp(): Promise<void> {
       slot.dataset.totpCode = '';
       continue;
     }
-    const live = await liveCodeFor(entry);
+    // The panel asks for the next code by marking its slots; a card does not.
+    const wantNext = slot.dataset.totpNext === '1';
+    const live = await liveCodeFor(entry, wantNext);
     if (!live) continue;
     if (codeEl) codeEl.textContent = groupCode(live.code);
+    const nextEl = slot.querySelector<HTMLElement>('.totp-next');
+    if (nextEl) {
+      nextEl.textContent = live.next_code ? groupCode(live.next_code) : '';
+      nextEl.hidden = !live.next_code;
+    }
+    // A counter-based entry has no clock: no ring, no seconds, and its position
+    // shown instead so the user can see what they are about to advance past.
+    slot.dataset.totpKind = live.kind;
+    if (live.kind === 'hotp') {
+      const counterEl = slot.querySelector<HTMLElement>('.totp-counter');
+      if (counterEl) counterEl.textContent = `#${live.counter}`;
+      if (secsEl) secsEl.textContent = '';
+      if (barEl) barEl.style.width = '100%';
+      slot.dataset.totpCode = live.code;
+      slot.setAttribute(
+        'aria-label',
+        `Counter-based code for ${entry.provider}: ${live.code}, counter ${live.counter}`,
+      );
+      continue;
+    }
     // The copy action reads the code off the container, so it copies what is on
     // screen rather than re-deriving it a tick later.
     slot.dataset.totpCode = live.code;

@@ -197,6 +197,36 @@ pub fn hotp_with(secret: &[u8], counter: u64, algorithm: Algorithm, digits: u32)
     format!("{:0width$}", binary % modulus, width = digits as usize)
 }
 
+/// Steam Guard's five characters for one counter value.
+///
+/// The HMAC and the dynamic truncation are RFC 4226's, unchanged — see
+/// [`hotp_with`], whose first half this repeats. Only the rendering differs: the
+/// 31-bit value is written in base 26 over [`STEAM_ALPHABET`] instead of base 10.
+///
+/// Written out rather than folded into `hotp_with` because the two produce
+/// different *types* of answer from the same number, and a `digits`-shaped
+/// parameter that silently switched alphabets would be the kind of flag that
+/// gets passed wrongly once and then produces codes that look plausible.
+fn steam_with(secret: &[u8], counter: u64) -> String {
+    let mut mac = HmacSha1::new_from_slice(secret).expect("HMAC accepts any key length");
+    mac.update(&counter.to_be_bytes());
+    let digest = mac.finalize().into_bytes();
+
+    let offset = (digest[digest.len() - 1] & 0x0f) as usize;
+    let mut value = (u32::from(digest[offset]) & 0x7f) << 24
+        | u32::from(digest[offset + 1]) << 16
+        | u32::from(digest[offset + 2]) << 8
+        | u32::from(digest[offset + 3]);
+
+    let n = STEAM_ALPHABET.len() as u32;
+    let mut out = String::with_capacity(STEAM_DIGITS as usize);
+    for _ in 0..STEAM_DIGITS {
+        out.push(STEAM_ALPHABET[(value % n) as usize] as char);
+        value /= n;
+    }
+    out
+}
+
 /// The counter step for a Unix timestamp.
 pub fn step_at(unix_secs: u64) -> u64 {
     unix_secs / STEP_SECS
@@ -357,6 +387,70 @@ pub fn grouped(secret_b32: &str) -> String {
 // website. Nothing here verifies anything, so nothing here has — or wants — the
 // anti-replay mark that `verify` above carries.
 
+/// The alphabet Steam Guard draws its five characters from.
+///
+/// Steam runs ordinary RFC 6238 arithmetic — SHA-1, a 30-second step — and then
+/// encodes the truncated value in base 26 instead of base 10. Nothing else about
+/// it differs, which is why it is a [`Kind`] rather than an [`Algorithm`]: the
+/// HMAC is the same, the rendering is not.
+pub const STEAM_ALPHABET: &[u8; 26] = b"23456789BCDFGHJKMNPQRTVWXY";
+
+/// How many characters a Steam code carries. Not configurable; Steam fixes it.
+pub const STEAM_DIGITS: u32 = 5;
+
+/// What a stored seed *is*, which decides what "the current code" means for it.
+///
+/// The three differ in where the counter comes from, not in the arithmetic:
+/// `Totp` divides the clock by the period, `Steam` does the same and renders the
+/// result in base 26, and `Hotp` has no clock at all and uses a number the vault
+/// stores and the user advances.
+///
+/// Phase 22 refused the last two by name. That refusal was right while nothing
+/// could store a counter — an `Hotp` entry with nowhere to keep its position
+/// shows a code that never changes and never works. Phase 22.2 gives it
+/// somewhere, so the refusal became a limitation instead of a safeguard.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum Kind {
+    /// Time-based, RFC 6238. What an entry with no stored kind means.
+    #[default]
+    Totp,
+    /// Counter-based, RFC 4226. The counter lives on the entry.
+    Hotp,
+    /// Time-based like `Totp`, rendered in Steam's five-character alphabet.
+    Steam,
+}
+
+impl Kind {
+    /// The spelling stored on the entry and used in an `otpauth://` path.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Kind::Totp => "totp",
+            Kind::Hotp => "hotp",
+            Kind::Steam => "steam",
+        }
+    }
+
+    /// Reads that spelling, case-insensitively. `None` for anything else.
+    pub fn parse(raw: &str) -> Option<Self> {
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "totp" => Some(Kind::Totp),
+            "hotp" => Some(Kind::Hotp),
+            "steam" => Some(Kind::Steam),
+            _ => None,
+        }
+    }
+
+    /// True when the code advances on its own, so a countdown means something.
+    ///
+    /// The UI asks this rather than comparing against `Kind::Hotp`: a card with
+    /// no clock must draw no countdown ring, and a card that draws one whose
+    /// number never moves is worse than one that draws none.
+    pub fn is_time_based(self) -> bool {
+        !matches!(self, Kind::Hotp)
+    }
+}
+
 /// The HMAC a stored seed names.
 ///
 /// SHA-1 is the only value a login seed ever takes and the overwhelming
@@ -403,17 +497,32 @@ impl Algorithm {
 /// therefore what an entry that stores only a bare base32 seed means too.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Params {
+    /// Time-based, counter-based or Steam. `#[serde(default)]` because every
+    /// entry written before Phase 22.2 has no such field and means `Totp`.
+    #[serde(default)]
+    pub kind: Kind,
     pub algorithm: Algorithm,
     pub digits: u32,
     pub period: u64,
+    /// The next counter value an `Hotp` seed will use. Meaningless for the other
+    /// two kinds, and zero for them.
+    ///
+    /// It is *state*, not configuration — the only number in this struct that a
+    /// correct implementation writes back — which is why advancing it is an
+    /// explicit action rather than a side effect of reading a code. See
+    /// `advance` in `envv-cli/src/totp_cmd.rs`.
+    #[serde(default)]
+    pub counter: u64,
 }
 
 impl Default for Params {
     fn default() -> Self {
         Params {
+            kind: Kind::Totp,
             algorithm: Algorithm::Sha1,
             digits: DIGITS,
             period: STEP_SECS,
+            counter: 0,
         }
     }
 }
@@ -439,9 +548,17 @@ impl Params {
     /// The twin is `totpParamsOf` in `src/ts/totp.ts` — the form needs these
     /// before anything is saved — and the two are pinned by the `params`
     /// section of `tests/fixtures/parity/totp-seeds.json`.
-    pub fn from_fields(algorithm: Option<&str>, digits: Option<u64>, period: Option<u64>) -> Self {
+    pub fn from_fields(
+        kind: Option<&str>,
+        algorithm: Option<&str>,
+        digits: Option<u64>,
+        period: Option<u64>,
+        counter: Option<u64>,
+    ) -> Self {
         let d = Params::default();
+        let kind = kind.and_then(Kind::parse).unwrap_or(d.kind);
         Params {
+            kind,
             algorithm: algorithm.and_then(Algorithm::parse).unwrap_or(d.algorithm),
             digits: digits
                 .filter(|n| (u64::from(MIN_DIGITS)..=u64::from(MAX_DIGITS)).contains(n))
@@ -450,7 +567,32 @@ impl Params {
             period: period
                 .filter(|p| *p > 0 && *p <= MAX_PERIOD_SECS)
                 .unwrap_or(d.period),
+            // A counter is only ever read for an `Hotp` seed. Carrying one on a
+            // time-based entry would be a number that looks like state and is
+            // never used, which is the kind of field a later reader trusts.
+            counter: if kind == Kind::Hotp {
+                counter.unwrap_or(0)
+            } else {
+                0
+            },
         }
+        .steam_normalised()
+    }
+
+    /// Forces the values Steam fixes, so nothing downstream has to special-case
+    /// them.
+    ///
+    /// Steam issues one shape — SHA-1, five characters, a 30-second step — and an
+    /// import that carried `digits: 6` from a generic exporter would otherwise
+    /// produce six characters no Steam login accepts.
+    fn steam_normalised(mut self) -> Self {
+        if self.kind == Kind::Steam {
+            self.algorithm = Algorithm::Sha1;
+            self.digits = STEAM_DIGITS;
+            self.period = STEP_SECS;
+            self.counter = 0;
+        }
+        self
     }
 
     /// Refuses a combination that cannot produce a code, naming the field.
@@ -460,12 +602,28 @@ impl Params {
     /// `period` of zero is a message about the value the user typed instead of a
     /// division by zero three frames deeper.
     pub fn validate(&self) -> Result<(), String> {
+        // Steam fixes its own shape, so there is nothing here for a user to get
+        // wrong — and its five characters are below `MIN_DIGITS`, which the
+        // check below would otherwise refuse.
+        if self.kind == Kind::Steam {
+            return if self.digits == STEAM_DIGITS {
+                Ok(())
+            } else {
+                Err(format!(
+                    "a Steam code is always {STEAM_DIGITS} characters, got {}",
+                    self.digits
+                ))
+            };
+        }
         if !(MIN_DIGITS..=MAX_DIGITS).contains(&self.digits) {
             return Err(format!(
                 "digits must be between {MIN_DIGITS} and {MAX_DIGITS}, got {}",
                 self.digits
             ));
         }
+        // An `Hotp` seed has no clock, so its period is meaningless rather than
+        // wrong. It is still range-checked, because a stored zero would divide
+        // by zero the moment somebody converted the entry to time-based.
         if self.period == 0 || self.period > MAX_PERIOD_SECS {
             return Err(format!(
                 "period must be between 1 and {MAX_PERIOD_SECS} seconds, got {}",
@@ -515,16 +673,32 @@ impl Stored {
         } else {
             format!("{}:{}", pct(issuer), pct(account))
         };
-        let mut uri = format!("otpauth://totp/{label}?secret={}", self.secret);
+        // Steam is written as `otpauth://totp/…&encoder=steam` rather than as
+        // `otpauth://steam/`: both spellings exist, Aegis reads either, and the
+        // `totp` path is the one every *other* authenticator will at least
+        // import as a working — if wrongly rendered — seed instead of rejecting
+        // the line outright.
+        let path = match self.params.kind {
+            Kind::Hotp => "hotp",
+            Kind::Totp | Kind::Steam => "totp",
+        };
+        let mut uri = format!("otpauth://{path}/{label}?secret={}", self.secret);
         if !issuer.is_empty() {
             uri.push_str(&format!("&issuer={}", pct(issuer)));
         }
         uri.push_str(&format!(
-            "&algorithm={}&digits={}&period={}",
+            "&algorithm={}&digits={}",
             self.params.algorithm.as_str(),
             self.params.digits,
-            self.params.period
         ));
+        match self.params.kind {
+            // A counter-based URI carries its position instead of a period. An
+            // exporter that dropped it would hand the next phone a seed starting
+            // from zero, which is a second factor that fails until it is resynced.
+            Kind::Hotp => uri.push_str(&format!("&counter={}", self.params.counter)),
+            Kind::Totp => uri.push_str(&format!("&period={}", self.params.period)),
+            Kind::Steam => uri.push_str(&format!("&period={}&encoder=steam", self.params.period)),
+        }
         uri
     }
 }
@@ -627,18 +801,20 @@ pub fn parse_otpauth(uri: &str) -> Result<Stored, String> {
         Some((k, l)) => (k, l),
         None => (path, ""),
     };
-    // `otpauth://hotp/` is counter-based: it has no clock, so a card cannot show
-    // "the current code" for it at all. Refusing names the reason; storing it
-    // would produce an entry whose code never changes.
-    if !kind.eq_ignore_ascii_case("totp") {
-        return Err(format!(
-            "only otpauth://totp/ is supported, got 'otpauth://{kind}/'"
-        ));
-    }
+    // Phase 22 refused everything but `totp` here, because an `hotp` seed with
+    // nowhere to keep its counter shows a code that never changes. The entry can
+    // hold a counter now, so the three kinds are read and anything else is still
+    // refused by name.
+    let kind = Kind::parse(kind).ok_or_else(|| {
+        format!("only otpauth://totp/, //hotp/ and //steam/ are supported, got 'otpauth://{kind}/'")
+    })?;
 
     let mut secret = String::new();
     let mut issuer_param: Option<String> = None;
-    let mut params = Params::default();
+    let mut params = Params {
+        kind,
+        ..Params::default()
+    };
     for pair in query.split('&').filter(|p| !p.is_empty()) {
         let (k, v) = pair.split_once('=').unwrap_or((pair, ""));
         match k.to_ascii_lowercase().as_str() {
@@ -661,6 +837,21 @@ pub fn parse_otpauth(uri: &str) -> Result<Stored, String> {
                     }
                 }
             }
+            // RFC 4226 calls this the "initial counter value"; every exporter
+            // writes the *next* value to use, which is what the entry stores.
+            "counter" => {
+                if let Ok(c) = pct_decode(v).trim().parse::<u64>() {
+                    params.counter = c;
+                }
+            }
+            // Aegis writes `encoder=steam` on an `otpauth://totp/` URI rather
+            // than using the `steam` path, so a seed exported from it would
+            // otherwise import as an ordinary six-digit TOTP and produce codes
+            // Steam rejects. Recognised by this parameter and by the path — never
+            // by the issuer *name*, which is text a user can edit into anything.
+            "encoder" if pct_decode(v).trim().eq_ignore_ascii_case("steam") => {
+                params.kind = Kind::Steam;
+            }
             "period" => {
                 if let Ok(p) = pct_decode(v).trim().parse::<u64>() {
                     if p > 0 && p <= MAX_PERIOD_SECS {
@@ -673,6 +864,10 @@ pub fn parse_otpauth(uri: &str) -> Result<Stored, String> {
     }
 
     validate_secret(&secret)?;
+    // `encoder=steam` can arrive after `digits=6`, and the `steam` path arrives
+    // before any parameter at all, so the shape Steam fixes is forced once the
+    // whole query has been read rather than in whichever arm saw it first.
+    params = params.steam_normalised();
     params.validate()?;
 
     // The label is `issuer:account`, and the `issuer` query parameter repeats
@@ -696,8 +891,32 @@ pub fn parse_otpauth(uri: &str) -> Result<Stored, String> {
     })
 }
 
+/// The counter a seed uses at a given moment.
+///
+/// The one place the three kinds differ before the arithmetic starts: two divide
+/// the clock, one ignores it entirely and reads the number the vault stored.
+fn counter_at(params: &Params, unix_secs: u64) -> u64 {
+    match params.kind {
+        Kind::Hotp => params.counter,
+        Kind::Totp | Kind::Steam => unix_secs / params.period.max(1),
+    }
+}
+
 /// The code a stored seed produces at a given time.
+///
+/// For an `Hotp` seed the time is ignored and `params.counter` is used, so this
+/// is still the single entry point for every kind and no caller has to know
+/// which it holds.
 pub fn code_at(secret_b32: &str, params: &Params, unix_secs: u64) -> Result<String, String> {
+    code_for_counter(secret_b32, params, counter_at(params, unix_secs))
+}
+
+/// The code for one explicit counter value.
+///
+/// Exposed because "the next code" is this function at `counter + 1`, and
+/// deriving it that way keeps one arithmetic path rather than two that must
+/// agree.
+pub fn code_for_counter(secret_b32: &str, params: &Params, counter: u64) -> Result<String, String> {
     params.validate()?;
     // Zeroized on drop: this is the decoded seed, and it is the one value in
     // this function that would still be readable in a heap dump afterwards.
@@ -705,12 +924,19 @@ pub fn code_at(secret_b32: &str, params: &Params, unix_secs: u64) -> Result<Stri
     if secret.is_empty() {
         return Err("empty TOTP secret".into());
     }
-    Ok(hotp_with(
-        &secret,
-        unix_secs / params.period,
-        params.algorithm,
-        params.digits,
-    ))
+    Ok(match params.kind {
+        Kind::Steam => steam_with(&secret, counter),
+        Kind::Totp | Kind::Hotp => hotp_with(&secret, counter, params.algorithm, params.digits),
+    })
+}
+
+/// The code that replaces the current one.
+///
+/// For a time-based seed that is the next step; for an `Hotp` seed it is the
+/// next counter, which is the value the *service* will expect after this one is
+/// spent. Both are the same operation, which is the point.
+pub fn next_code_at(secret_b32: &str, params: &Params, unix_secs: u64) -> Result<String, String> {
+    code_for_counter(secret_b32, params, counter_at(params, unix_secs) + 1)
 }
 
 /// Seconds until the current code is replaced.
@@ -728,7 +954,20 @@ pub fn remaining_secs(period: u64, unix_secs: u64) -> u64 {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LiveCode {
     pub code: String,
-    /// Seconds until `code` is replaced.
+    /// The code that replaces `code`, when the caller asked for it.
+    ///
+    /// Absent unless requested: it is a second live credential, and a panel that
+    /// always painted one would put two working codes in every screenshot.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next_code: Option<String>,
+    /// What produced it, so a renderer knows whether a countdown means anything.
+    pub kind: Kind,
+    /// The counter this code was generated at. For an `Hotp` seed it is the
+    /// entry's stored position, which is what the user is deciding whether to
+    /// advance.
+    pub counter: u64,
+    /// Seconds until `code` is replaced, or **0 for an `Hotp` seed**, which has
+    /// no clock and whose code is replaced only when somebody advances it.
     pub remaining_secs: u64,
     /// Echoed back so a caller can draw a countdown without re-deriving it from
     /// the entry, and so a stale response is recognisable as stale.
@@ -739,10 +978,39 @@ pub struct LiveCode {
 
 /// The code a stored seed produces right now, with its countdown.
 pub fn live_code(secret_b32: &str, params: &Params) -> Result<LiveCode, String> {
+    live_code_with(secret_b32, params, false)
+}
+
+/// The same, optionally carrying the code that comes next.
+///
+/// `with_next` is a parameter rather than always-on because the next code is a
+/// second working credential with a longer life than the one on screen: a
+/// screenshot of a panel showing both is good for up to two periods rather than
+/// one. The authenticator screen puts it behind a toggle and the CLI behind
+/// `--next`.
+pub fn live_code_with(
+    secret_b32: &str,
+    params: &Params,
+    with_next: bool,
+) -> Result<LiveCode, String> {
     let now = now_unix();
     Ok(LiveCode {
         code: code_at(secret_b32, params, now)?,
-        remaining_secs: remaining_secs(params.period, now),
+        next_code: if with_next {
+            Some(next_code_at(secret_b32, params, now)?)
+        } else {
+            None
+        },
+        kind: params.kind,
+        counter: counter_at(params, now),
+        // An `Hotp` code is not replaced by the passage of time, and a countdown
+        // that never moves reads as a frozen UI. Zero says "no clock" and the
+        // renderer draws no ring.
+        remaining_secs: if params.kind.is_time_based() {
+            remaining_secs(params.period, now)
+        } else {
+            0
+        },
         period: params.period,
         digits: params.digits,
         algorithm: params.algorithm,
@@ -950,6 +1218,8 @@ mod tests {
                 (Algorithm::Sha512, sha512),
             ] {
                 let params = Params {
+                    kind: Kind::Totp,
+                    counter: 0,
                     algorithm,
                     digits: 8,
                     period: 30,
@@ -1023,13 +1293,138 @@ mod tests {
     }
 
     #[test]
-    fn counter_based_hotp_uris_are_refused_by_name() {
-        // An `otpauth://hotp/` seed has no clock, so "the current code" does not
-        // exist for it. Accepting it would produce a card whose code never
-        // changes and never works.
-        let err = parse_seed("otpauth://hotp/Acme:me?secret=JBSWY3DPEHPK3PXP&counter=1")
-            .expect_err("hotp must be refused");
-        assert!(err.contains("hotp"), "{err}");
+    fn a_counter_based_uri_keeps_its_counter() {
+        // Phase 22 refused this by name, because an `hotp` seed with nowhere to
+        // keep its position produces a card whose code never changes. The entry
+        // holds a counter now (Phase 22.2), so the URI is read — and the counter
+        // is the half that must survive: an `hotp` seed imported at zero is a
+        // second factor that fails until the account is resynced.
+        let stored = parse_seed("otpauth://hotp/Acme:me?secret=JBSWY3DPEHPK3PXP&counter=7")
+            .expect("hotp is read");
+        assert_eq!(stored.params.kind, Kind::Hotp);
+        assert_eq!(stored.params.counter, 7);
+        assert!(!stored.params.kind.is_time_based());
+
+        // A scheme nothing here implements is still refused, and still by name.
+        let err = parse_seed("otpauth://yubico/Acme:me?secret=JBSWY3DPEHPK3PXP")
+            .expect_err("an unknown type must be refused");
+        assert!(err.contains("yubico"), "{err}");
+    }
+
+    #[test]
+    fn a_counter_based_code_ignores_the_clock_and_advances_only_with_its_counter() {
+        // The whole difference between the two kinds, asserted directly: time
+        // moves and the code does not; the counter moves and it does.
+        let p = Params {
+            kind: Kind::Hotp,
+            counter: 3,
+            ..Params::default()
+        };
+        let at_zero = code_at("JBSWY3DPEHPK3PXP", &p, 0).unwrap();
+        let much_later = code_at("JBSWY3DPEHPK3PXP", &p, 5_000_000).unwrap();
+        assert_eq!(at_zero, much_later, "an hotp code must not move with time");
+
+        let next = Params { counter: 4, ..p };
+        assert_ne!(at_zero, code_at("JBSWY3DPEHPK3PXP", &next, 0).unwrap());
+        // And "the next code" is exactly the next counter, not the next step.
+        assert_eq!(
+            next_code_at("JBSWY3DPEHPK3PXP", &p, 0).unwrap(),
+            code_at("JBSWY3DPEHPK3PXP", &next, 0).unwrap()
+        );
+        // No clock means no countdown; a ring that never moves reads as a
+        // frozen UI, so the renderer is told there is nothing to draw.
+        assert_eq!(live_code("JBSWY3DPEHPK3PXP", &p).unwrap().remaining_secs, 0);
+    }
+
+    #[test]
+    fn steam_matches_an_independent_implementation() {
+        // Steam publishes no test vectors, so these were computed by a separate
+        // implementation written from the algorithm description and checked
+        // against this one at a pinned step — not by running this code twice.
+        // Without fixed vectors the only check available is "the two agree
+        // right now", which passes for two identical mistakes.
+        let p = Params {
+            kind: Kind::Steam,
+            ..Params::default()
+        }
+        .steam_normalised();
+        for (counter, want) in [(0u64, "VH8YJ"), (1, "2YXGV"), (59_636_971, "5TC5V")] {
+            assert_eq!(
+                code_for_counter("JBSWY3DPEHPK3PXP", &p, counter).unwrap(),
+                want,
+                "steam code at counter {counter}"
+            );
+        }
+        // The same seed at the same counter under the ordinary renderer is a
+        // different answer, which is the whole reason `Kind` exists.
+        assert_ne!(
+            code_for_counter("JBSWY3DPEHPK3PXP", &Params::default(), 0).unwrap(),
+            "VH8YJ"
+        );
+    }
+
+    #[test]
+    fn a_steam_seed_produces_five_characters_from_steams_alphabet() {
+        let p = Params {
+            kind: Kind::Steam,
+            ..Params::default()
+        }
+        .steam_normalised();
+        let code = code_at("JBSWY3DPEHPK3PXP", &p, 0).unwrap();
+        assert_eq!(code.len(), STEAM_DIGITS as usize, "{code}");
+        for c in code.chars() {
+            assert!(
+                STEAM_ALPHABET.contains(&(c as u8)),
+                "{c} is not in Steam's alphabet"
+            );
+        }
+        // Same HMAC underneath: it is the rendering that differs, which is why
+        // this is a `Kind` and not an `Algorithm`.
+        assert_ne!(code, hotp(&base32_decode("JBSWY3DPEHPK3PXP").unwrap(), 0));
+        // It moves with the clock like any time-based seed.
+        assert_ne!(code, code_at("JBSWY3DPEHPK3PXP", &p, 30).unwrap());
+    }
+
+    #[test]
+    fn steam_forces_its_own_shape_whatever_the_file_said() {
+        // A generic exporter writes `digits: 6` beside a Steam seed. Six
+        // characters is not something Steam accepts, and `MIN_DIGITS` would
+        // otherwise refuse the five it does.
+        let p = Params::from_fields(Some("steam"), Some("SHA512"), Some(8), Some(60), Some(9));
+        assert_eq!(p.digits, STEAM_DIGITS);
+        assert_eq!(p.algorithm, Algorithm::Sha1);
+        assert_eq!(p.period, STEP_SECS);
+        assert_eq!(p.counter, 0, "a time-based seed carries no counter");
+        p.validate().expect("steam's own shape must validate");
+
+        // Aegis writes the encoder as a parameter on a `totp` URI rather than
+        // using the `steam` path, and the parameter can arrive after `digits`.
+        let stored =
+            parse_seed("otpauth://totp/Steam:me?secret=JBSWY3DPEHPK3PXP&digits=6&encoder=steam")
+                .expect("aegis's spelling is read");
+        assert_eq!(stored.params.kind, Kind::Steam);
+        assert_eq!(stored.params.digits, STEAM_DIGITS);
+    }
+
+    #[test]
+    fn every_kind_round_trips_through_its_uri() {
+        for (kind, counter) in [(Kind::Totp, 0), (Kind::Hotp, 42), (Kind::Steam, 0)] {
+            let stored = Stored {
+                secret: "JBSWY3DPEHPK3PXP".into(),
+                params: Params {
+                    kind,
+                    counter,
+                    ..Params::default()
+                }
+                .steam_normalised(),
+                issuer: Some("Acme".into()),
+                account: Some("me".into()),
+            };
+            let back = parse_seed(&stored.to_uri("", "")).expect("its own URI parses");
+            assert_eq!(back.params.kind, kind, "kind for {kind:?}");
+            assert_eq!(back.params.counter, counter, "counter for {kind:?}");
+            assert_eq!(back.secret, stored.secret);
+        }
     }
 
     #[test]

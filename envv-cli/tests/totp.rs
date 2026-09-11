@@ -13,7 +13,7 @@
 
 use envv_cli::out;
 use serde_json::{json, Value};
-use vault_core::totp::{self, Algorithm, Params, Stored};
+use vault_core::totp::{self, Params, Stored};
 
 fn table() -> Value {
     // CARGO_MANIFEST_DIR is envv-cli/; the fixture is shared with the frontend
@@ -69,6 +69,16 @@ fn parse_matches_the_golden_table() {
             "period for {input:?}"
         );
         assert_eq!(
+            stored.params.kind.as_str(),
+            want["kind"].as_str().expect("kind"),
+            "kind for {input:?}"
+        );
+        assert_eq!(
+            stored.params.counter,
+            want["counter"].as_u64().expect("counter"),
+            "counter for {input:?}"
+        );
+        assert_eq!(
             stored.issuer.as_deref(),
             want["issuer"].as_str(),
             "issuer for {input:?}"
@@ -88,12 +98,13 @@ fn uri_matches_the_golden_table() {
         let st = &c["stored"];
         let stored = Stored {
             secret: st["secret"].as_str().expect("secret").to_string(),
-            params: Params {
-                algorithm: Algorithm::parse(st["algorithm"].as_str().expect("algorithm"))
-                    .expect("fixture names a real algorithm"),
-                digits: st["digits"].as_u64().expect("digits") as u32,
-                period: st["period"].as_u64().expect("period"),
-            },
+            params: Params::from_fields(
+                st.get("kind").and_then(|v| v.as_str()),
+                st["algorithm"].as_str(),
+                st["digits"].as_u64(),
+                st["period"].as_u64(),
+                st.get("counter").and_then(|v| v.as_u64()),
+            ),
             issuer: None,
             account: None,
         };
@@ -205,9 +216,11 @@ fn params_from_fields_matches_the_golden_table() {
     for c in cases {
         let e = &c["entry"];
         let got = Params::from_fields(
+            e.get("totp_kind").and_then(|v| v.as_str()),
             e.get("totp_algorithm").and_then(|v| v.as_str()),
             e.get("totp_digits").and_then(|v| v.as_u64()),
             e.get("totp_period").and_then(|v| v.as_u64()),
+            e.get("totp_counter").and_then(|v| v.as_u64()),
         );
         let want = &c["out"];
         assert_eq!(
@@ -224,6 +237,16 @@ fn params_from_fields_matches_the_golden_table() {
             got.period,
             want["period"].as_u64().expect("period"),
             "period for {e}"
+        );
+        assert_eq!(
+            got.kind.as_str(),
+            want["kind"].as_str().expect("kind"),
+            "kind for {e}"
+        );
+        assert_eq!(
+            got.counter,
+            want["counter"].as_u64().expect("counter"),
+            "counter for {e}"
         );
         // Whatever it read, it must be usable: the point of falling back rather
         // than refusing is that a card never goes permanently blank over one
