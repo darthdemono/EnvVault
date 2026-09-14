@@ -4,22 +4,52 @@
  */
 
 import type { VaultEntry, SecretType } from './types';
-import { st, triggerRender, Exporter, persist, resetViewState } from './state';
+import {
+  st,
+  Settings,
+  triggerRender,
+  Exporter,
+  persist,
+  resetViewState,
+  primaryEnvName,
+  unquoteEnvValue,
+} from './state';
 import { showToast, clipboardWrite } from './utils';
 import { getFiltered, sorted } from './filters';
+import { buildCopyTextAll, type CopyProfile, type MetadataStyle } from './copy-profile';
 import * as yaml from 'js-yaml';
 
 // ── Copy All / Export As ──────────────────────────────────────────────────
 
 export function copyAll(fmt: string) {
   const keys = sorted(getFiltered());
+  // `full` is **refused** vault-wide, the same way the CLI refuses a vault-wide
+  // export to stdout (Phase 14). One entry's metadata on the clipboard is a
+  // convenience; every entry's — purposes, projects, tags, rotation dates — is a
+  // map of what matters in the vault, and it lands in whatever the user pastes
+  // into next. The per-card caret still offers it for one entry.
+  const profile = (Settings.get('copyProfile') || 'basic') as CopyProfile;
+  const effective: CopyProfile = profile === 'full' ? 'extended' : profile;
   const text =
     fmt === 'yaml'
       ? Exporter.yaml(keys)
       : fmt === 'json'
         ? Exporter.json(keys)
-        : Exporter.dotenv(keys);
-  clipboardWrite(text).then(() => showToast(`${keys.length} keys copied`, 'ok'));
+        : buildCopyTextAll(keys, {
+            profile: effective,
+            metadataStyle: (Settings.get('metadataStyle') || 'comment') as MetadataStyle,
+            case: Settings.get('envCopyCase'),
+            includePrefix: !!Settings.get('envIncludePrefix'),
+          });
+  clipboardWrite(text).then(() =>
+    showToast(
+      profile === 'full' && fmt !== 'yaml' && fmt !== 'json'
+        ? `${keys.length} keys copied — "full" is per-entry only, copied as extended`
+        : `${keys.length} keys copied`,
+      'ok',
+      profile === 'full' ? 4000 : undefined,
+    ),
+  );
 }
 
 export function exportAs(fmt: string) {
@@ -44,10 +74,6 @@ export function exportAs(fmt: string) {
 }
 
 // ── Infra-as-code export formats ───────────────────────────────────────────
-
-function envKey(provider: string): string {
-  return provider.toUpperCase().replace(/[^A-Z0-9]/g, '_');
-}
 
 /**
  * Writes `content` to the user's downloads as `filename`.
@@ -77,7 +103,7 @@ export function exportK8sSecret(name = 'envvault') {
     `  name: ${name}`,
     'type: Opaque',
     'stringData:',
-    ...keys.map((e) => `  ${envKey(e.provider)}: ${JSON.stringify(e.api_key)}`),
+    ...keys.map((e) => `  ${primaryEnvName(e)}: ${JSON.stringify(e.api_key)}`),
   ];
   downloadText(lines.join('\n'), `${name}-secret.yaml`, 'Exported k8s Secret ✓');
 }
@@ -86,7 +112,7 @@ export function exportK8sSecret(name = 'envvault') {
 export function exportTfvars() {
   const keys = st.vault.api_keys;
   const lines = keys.map(
-    (e) => `${envKey(e.provider).toLowerCase()} = ${JSON.stringify(e.api_key)}`,
+    (e) => `${primaryEnvName(e, { case: 'lower' })} = ${JSON.stringify(e.api_key)}`,
   );
   downloadText(lines.join('\n'), 'envvault.tfvars', 'Exported .tfvars ✓');
 }
@@ -232,14 +258,11 @@ export function parseEnvFile(text: string): EnvVar[] {
     if (eqIdx < 0) continue;
     let name = trimmed.slice(0, eqIdx).trim();
     if (name.toUpperCase().startsWith('EXPORT ')) name = name.slice(7).trim();
-    let value = trimmed.slice(eqIdx + 1).trim();
-    if (
-      value.length >= 2 &&
-      ((value.startsWith('"') && value.endsWith('"')) ||
-        (value.startsWith("'") && value.endsWith("'")))
-    ) {
-      value = value.slice(1, -1);
-    }
+    // `unquoteEnvValue` strips the quotes *and* unescapes what the writer
+    // escaped (E1). Stripping without unescaping is what this did before, so a
+    // value round-tripped through an export came back with its backslashes and
+    // its `\n` intact as literal text.
+    const value = unquoteEnvValue(trimmed.slice(eqIdx + 1).trim());
     if (name) result.push({ name, value });
   }
   return result;

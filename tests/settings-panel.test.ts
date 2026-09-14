@@ -4,13 +4,14 @@
  * each has to land the preview somewhere definite.
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { Settings } from '../src/ts/state';
+import { Settings, DEFAULT_SETTINGS } from '../src/ts/state';
 import {
   openSettings,
   saveSettings,
   cancelSettings,
   closeSettings,
   applyPanelOrder,
+  buildPanelOrderEditor,
 } from '../src/ts/settings-panel';
 import { loadRealIndexHtml } from './helpers';
 
@@ -167,6 +168,24 @@ describe('applyPanelOrder', () => {
     const secrets = document.querySelector<HTMLElement>('.activity-btn[data-panel="secrets"]')!;
     expect(tools.style.order).toBe('0');
     expect(secrets.style.order).toBe('1');
+  });
+
+  // Regression: every activity-bar button whose panel is missing from
+  // `panelOrder` is hidden, and Phase 22.2 added the Authenticator panel without
+  // adding it to the list. The 2FA tab was in the markup, wired, and
+  // `display: none` — for every install, with nothing saying so.
+  it('shows the Authenticator tab under the default order', () => {
+    Settings.set('panelOrder', DEFAULT_SETTINGS.panelOrder as any);
+    applyPanelOrder();
+    const authBtn = document.querySelector<HTMLElement>('.activity-btn[data-panel="auth"]')!;
+    expect(authBtn.style.display).not.toBe('none');
+  });
+
+  it('offers the Authenticator panel in the order editor', () => {
+    openSettings();
+    Settings.set('panelOrder', DEFAULT_SETTINGS.panelOrder as any);
+    buildPanelOrderEditor();
+    expect(document.querySelector('#s-panel-order [data-key="auth"]')).toBeTruthy();
   });
 
   it('keeps Users hidden on a local vault even when it is in the order', () => {

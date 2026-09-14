@@ -818,7 +818,31 @@ pub fn cmd_enrich(access: &Access, opts: &EnrichOpts<'_>) -> CliResult {
         }
         let mut plan = plan_entry(entry, force);
 
-        if opts.online {
+        // **A session cookie is never probed** (Phase 23, E11).
+        //
+        // `--online` exists to ask an *issuer* about its own credential, which
+        // is a defensible thing to do with an API key. Replaying a session
+        // cookie from a desktop app is a different act with different risk: it
+        // is indistinguishable, at the far end, from the session hijack the
+        // cookie exists to prevent, and it can trip fraud detection on an
+        // account the user still needs.
+        //
+        // Skipped with a **named reason** rather than silently, so the report's
+        // counts add up and nobody discovers six months later that a whole class
+        // of entry was never touched.
+        //
+        // (The signature table is matched with `starts_with`, never a substring,
+        // so an `sk-…` embedded inside a jar could not misfire even if this
+        // check were removed — see `plan_entry`. Both halves of E11, and the
+        // second one holds for every type.)
+        if opts.online && data::secret_type_of(entry) == "cookie" {
+            live_rows.push(json!({
+                "provider": plan.provider,
+                "issuer": "",
+                "status": "skipped",
+                "detail": "a session cookie is not sent anywhere by enrich —                            replaying one is a different act from asking an issuer about a key",
+            }));
+        } else if opts.online {
             if let Some(live) = probe_entry(entry, opts.timeout_secs, force) {
                 live_rows.push(json!({
                     "provider": plan.provider,

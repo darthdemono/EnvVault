@@ -4,6 +4,15 @@
 
 /* ── Sidebar half ───────────────────────────────────────────────────────── */
 
+/* The sidebar is user-resizable and defaults to about 205px, which is narrower
+   than "Authenticator" plus Import plus Export — Export was clipped by the panel
+   edge, so the only way into the exporter from this screen was off-screen.
+   Wrapping keeps both buttons reachable at every width the resizer allows. */
+#auth-panel .users-panel-header {
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
 .auth-side-search {
   padding: 8px 10px 4px;
 }
@@ -112,6 +121,13 @@
   flex-direction: column;
   gap: 8px;
 }
+/* Clicking a row in the sidebar list flashes the card it names. A border
+   colour rather than a transform: the grid is a scroll container, and a scaling
+   card at the edge of one nudges the scroll position it was just brought into. */
+.auth-card.flash {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 35%, transparent);
+}
 .auth-card-head {
   display: flex;
   justify-content: space-between;
@@ -187,6 +203,13 @@
   display: flex;
   align-items: baseline;
   gap: 8px;
+}
+/* `display: flex` on a class outranks the user agent's `[hidden] { display:
+   none }`, so the "next" row painted its label on every card whether or not the
+   next code had been asked for — which is exactly the opt-in the feature is.
+   The class has to turn itself off. */
+.auth-next-row[hidden] {
+  display: none;
 }
 .auth-next-label {
   font-family: var(--font-mono);

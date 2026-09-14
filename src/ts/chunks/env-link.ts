@@ -6,7 +6,7 @@
  */
 
 import type { SecretChunk, VaultEntry, SecretType } from '../types';
-import { st } from '../state';
+import { st, envName, primaryEnvName, secretEnvName } from '../state';
 // ── ENV chunk ↔ vault linking ──────────────────────────────────────────────
 
 export interface EnvLinkMatch {
@@ -23,6 +23,8 @@ function _findBestVaultMatch(
   value: string,
 ): { entry: VaultEntry; ref: string; field: string; confidence: number } | null {
   let best: { entry: VaultEntry; ref: string; field: string; confidence: number } | null = null;
+  /** A second entry with the same score as `best`. Its presence refuses the link. */
+  let tiedWith: VaultEntry | null = null;
 
   const _providerRef = (e: VaultEntry) => (e.key_id ? `${e.provider}_${e.key_id}` : e.provider);
 
@@ -83,6 +85,36 @@ function _findBestVaultMatch(
       }
     }
 
+    // Tier 1b (95): the **generated-name template** (Phase 23, E10).
+    //
+    // `SPOTIFY_V2_GAME_ID` is a name this app generates and nothing below could
+    // recognise: it fell through to the tier-3 suffix-strip, which happily
+    // linked it to whichever entry shared the last segment. The parsed role is
+    // carried into `field`, so the link resolves to the *value* the name names
+    // rather than defaulting to the primary one.
+    //
+    // Scored **95, the same as the `PROVIDER_KEYID` arm above, deliberately**:
+    // the two make the same claim about the same syntax — "this suffix says
+    // which of the provider's entries you mean" — so when they fire on two
+    // different entries they tie, and a tie is reported as ambiguous rather than
+    // resolved by array position. That is E9's refusal wearing the other hat.
+    if (score < 95) {
+      const want = key.toUpperCase();
+      const candidates: [string, string][] = [
+        [primaryEnvName(e), e.secretType === 'password' ? 'password' : 'key'],
+        [secretEnvName(e), 'secret'],
+        [envName(e, { role: 'URL' }), 'url'],
+      ];
+      for (const xv of e.extra_vars ?? []) candidates.push([envName(e, { role: xv.key }), xv.key]);
+      for (const [name, f] of candidates) {
+        if (name.toUpperCase() === want) {
+          score = 95;
+          field = f;
+          break;
+        }
+      }
+    }
+
     // Tier 2 (88-76): value match against all fields.
     if (score === 0 && value.length >= 6) {
       const candidates: [string, string | null | undefined, number][] = [
@@ -121,16 +153,28 @@ function _findBestVaultMatch(
       }
     }
 
+    if (score === 0) continue;
+    const provRef = _providerRef(e);
+    // For a password entry the primary secret is conceptually its password, so
+    // surface it as ${name/password} rather than ${name/key} (both resolve to api_key).
+    const fieldOut = e.secretType === 'password' && field === 'key' ? 'password' : field;
     if (score > (best?.confidence ?? 0)) {
-      const provRef = _providerRef(e);
-      // For a password entry the primary secret is conceptually its password, so
-      // surface it as ${name/password} rather than ${name/key} (both resolve to api_key).
-      const fieldOut = e.secretType === 'password' && field === 'key' ? 'password' : field;
       // Build ref as ${PROVIDER_LABEL/field} — key_id disambiguates multiple keys from same provider.
       best = { entry: e, ref: `${provRef}/${fieldOut}`, field: fieldOut, confidence: score };
+      tiedWith = null;
+    } else if (best && score === best.confidence && e !== best.entry) {
+      tiedWith = e;
     }
   }
 
+  // A tie is **not** broken by array position (invariant 1, and the tier-1
+  // comment above argues it at length: `AWS=` linked to whichever of `AWS` and
+  // `AWS_PROD` happened to come first, silently rewriting a working .env to
+  // point at a different secret). Two entries with an equally good claim on one
+  // variable is a question for the user, so the field is left unlinked and the
+  // "create a new entry" suggestion takes over — which is visible, unlike a
+  // wrong link.
+  if (tiedWith) return null;
   return best && best.confidence >= 63 ? best : null;
 }
 

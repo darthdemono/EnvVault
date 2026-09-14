@@ -675,7 +675,7 @@ export function triggerRender(): void {
 
 // ── Settings ───────────────────────────────────────────────────────────────
 
-const DEFAULT_SETTINGS: AppSettings = {
+export const DEFAULT_SETTINGS: AppSettings = {
   theme: 'dark',
   accentColor: '#7364c9',
   cardSize: 'medium',
@@ -707,8 +707,12 @@ const DEFAULT_SETTINGS: AppSettings = {
   authShowNext: false,
   activeTool: 'secret-gen',
   remoteSaved: [] as RemoteVaultConfig[],
-  panelOrder: ['secrets', 'tools', 'remote', 'users'],
+  panelOrder: ['secrets', 'tools', 'remote', 'users', 'auth'],
   envCopyField: 'api_key' as const,
+  envCopyCase: 'upper' as const,
+  envIncludePrefix: false,
+  copyProfile: 'basic' as const,
+  metadataStyle: 'comment' as const,
   sidebarWidth: 0,
   sidebarCollapsed: false,
   lastSortBy: 'provider',
@@ -774,6 +778,19 @@ export const Settings = {
       // own flag. Reusing the flag above would mean an install that has already
       // run that migration never sees this one — which is how a section ends up
       // present in the markup, listed in the settings editor, and invisible.
+      // Phase 22.2's Authenticator *panel*, same shape and its own flag.
+      // `applyPanelOrder()` hides any activity-bar button whose panel is not in
+      // this list, so an install that predates the panel — which is every
+      // install, since the list has been persisted since Phase 12 — had the 2FA
+      // tab in the markup, wired, and `display: none`. The panel was
+      // unreachable for everyone and nothing said so.
+      if (!localStorage.getItem('envvault-panel-migrated-auth')) {
+        const panels = [...(this._data.panelOrder || [])];
+        if (!panels.includes('auth')) panels.push('auth');
+        this._data.panelOrder = panels;
+        localStorage.setItem('envvault-panel-migrated-auth', '1');
+        this._persist();
+      }
       if (!localStorage.getItem('envvault-sb-migrated-totp')) {
         const secs = [...(this._data.sidebarSections || [])];
         if (!secs.includes('authenticator' as any)) {
@@ -1146,23 +1163,401 @@ export function switchTool(toolId: string) {
   Settings.set('activeTool', toolId);
 }
 
+// ── The environment-variable name template ─────────────────────────────────
+//
+// Phase 23, step 1. **Every generated environment-variable name is built here,
+// in one order, and nothing else may construct one.** Before this there were
+// three builders that disagreed: `dotenvKey` (provider + key_id) fed the
+// `.env` and YAML exports, `envKey` in `import-export.ts` (provider only) fed
+// the k8s and tfvars exports, and `data::env_key` in the CLI (provider only)
+// fed all four of its. The same entry therefore exported under two different
+// names depending on which button you pressed.
+//
+// The template:
+//
+//     [PREFIX_] PROVIDER [_KEYID] [_VERSION] [_LABEL] [_ROLE]
+//
+// **`KEYID` is a deviation from the Phase 23 design, which lists six segments
+// and not this one**, on the grounds that `key_id` is identity rather than a
+// value. That is true of what it *means* and false of what it already *does*:
+// `dotenvKey` has put it in the name since Phase 3, `chunks/env-link.ts` scores
+// `PROVIDER_KEYID` as a tier-1 match, and `find_entry` in the CLI parses a bare
+// `${NAME}` by splitting on the last underscore into exactly that pair.
+// Dropping it would silently rename every variable generated for a keyed entry
+// — which is the failure the design's own "the one thing this must not break"
+// section is about — in exchange for nothing. Written down because an
+// undocumented deviation is indistinguishable from having missed the design.
+//
+// The twin is `env_name()` in `envv-cli/src/envfile.rs`, pinned by
+// `tests/fixtures/parity/env-names.json` and asserted from both sides. It has
+// to exist twice because the add/edit form previews the name as it is typed and
+// an IPC round trip per keystroke is not a form — the same reason the TOTP seed
+// parser exists twice.
+
+/** How the finished name is cased. `upper` is the shell convention and the default. */
+export type EnvNameCase = 'upper' | 'preserve' | 'lower';
+
+/** Everything `envName` needs that does not come from the entry. */
+export interface EnvNameOpts {
+  /** The value's role — `ID`, `SECRET`, an `extra_vars` key. Absent or `value` omits the segment. */
+  role?: string | null;
+  /** Defaults to the `envCopyCase` setting. */
+  case?: EnvNameCase;
+  /** Prepend `env_prefixes[0]`. Defaults to the `envIncludePrefix` setting, which is off. */
+  includePrefix?: boolean;
+}
+
+/** What a legal POSIX-ish environment-variable name looks like. */
+export const ENV_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+/**
+ * One segment, normalised.
+ *
+ * Anything outside `[A-Za-z0-9]` collapses to `_`, runs of `_` collapse to one,
+ * and leading/trailing `_` are trimmed — which is what stops `SPOTIFY__ID` when
+ * a segment ends in punctuation as well as when it is empty.
+ */
+function envSegment(raw: string | null | undefined, fold: boolean): string {
+  let seg = raw ?? '';
+  if (fold) seg = seg.toUpperCase();
+  return seg
+    .replace(/[^A-Za-z0-9]/g, '_')
+    .replace(/_+/g, '_')
+    .replace(/^_+|_+$/g, '');
+}
+
+/**
+ * The version segment: `2`, `v2`, `V2` → `V2`; `2.0` → `V2_0`;
+ * `2026-08-01` → `V2026_08_01`.
+ *
+ * The leading `v` is stripped **only when a digit follows it**, so the `V` is
+ * added once and never doubled, and a word-shaped version (`beta`, `vault`)
+ * keeps its first letter instead of being silently decapitated.
+ */
+export function envVersionSegment(raw: string | null | undefined, fold: boolean): string {
+  const trimmed = (raw ?? '').trim();
+  const body = /^[vV][0-9]/.test(trimmed) ? trimmed.slice(1) : trimmed;
+  const seg = envSegment(body, fold);
+  if (!seg) return '';
+  return /^[0-9]/.test(seg) ? `V${seg}` : seg;
+}
+
+/**
+ * Strip a cookie's `__Host-` / `__Secure-` prefix.
+ *
+ * They are **stripped, not transliterated**: `__HOST_SID` is not a name anyone
+ * asked for, and the two prefixes are a browser-side attribute of where a cookie
+ * may be set rather than part of its name. That three cookies can collapse into
+ * one name is exactly the case E2's collision check has to warn about (step 6),
+ * which is why this happens before the segment is normalised rather than inside
+ * the normaliser.
+ */
+export function stripCookiePrefix(name: string): string {
+  return name.replace(/^__(?:Host|Secure)-/i, '');
+}
+
+/**
+ * The environment-variable name this entry generates for `opts.role`.
+ *
+ * Always returns a legal identifier: a leading digit gains a `_` (no shell will
+ * export a name that starts with one), and an entry that normalises away to
+ * nothing at all comes back as `UNKNOWN` rather than as the empty string, which
+ * would write a nameless `=value` line.
+ */
+export function envName(entry: VaultEntry, opts: EnvNameOpts = {}): string {
+  const mode: EnvNameCase = opts.case ?? (Settings.get('envCopyCase') as EnvNameCase) ?? 'upper';
+  const withPrefix = opts.includePrefix ?? !!Settings.get('envIncludePrefix');
+  const fold = mode !== 'preserve';
+
+  const role = opts.role && opts.role.toLowerCase() !== 'value' ? stripCookiePrefix(opts.role) : '';
+
+  const parts = [
+    withPrefix ? envSegment(entry.env_prefixes?.[0], fold) : '',
+    envSegment(entry.provider || 'UNKNOWN', fold),
+    envSegment(entry.key_id, fold),
+    envVersionSegment(entry.version, fold),
+    envSegment(entry.label, fold),
+    envSegment(role, fold),
+  ].filter(Boolean);
+
+  let name = parts.join('_') || 'UNKNOWN';
+  if (/^[0-9]/.test(name)) name = `_${name}`;
+  if (mode === 'lower') name = name.toLowerCase();
+  return name;
+}
+
+// ── Name collisions ────────────────────────────────────────────────────────
+//
+// Phase 23, E2. Two entries generating the same variable name is a **silent
+// overwrite** in whatever loads the file: the dotenv writers emit duplicate
+// lines and every parser takes the last, and `Exporter.yaml` writes
+// `doc[name] = …`, so the second entry simply wins.
+//
+// Two entirely routine setups hit it. A **key pool** is by definition several
+// entries for one provider, so "Copy All" over a pool emits N identical names.
+// And one entry with `primary_role: 'id'` plus an `extra_vars` entry keyed `ID`
+// emits `SPOTIFY_ID` twice all by itself.
+//
+// Compared **case-insensitively**, because Windows environment variables are
+// case-insensitive: `envCopyCase: 'preserve'` can produce a pair that collides
+// there and not on Linux, which is the worst possible place to find out.
+
+/** One generated name and where it came from. */
+export interface GeneratedName {
+  name: string;
+  entry: VaultEntry;
+  /** The role segment — a value role, an `extra_vars` key, or `''` for the primary. */
+  role: string;
+}
+
+/** Every name one entry generates, in the order a copy emits them. */
+export function namesGeneratedBy(entry: VaultEntry, opts: EnvNameOpts = {}): GeneratedName[] {
+  const out: GeneratedName[] = [];
+  if (entry.api_key) out.push({ name: primaryEnvName(entry, opts), entry, role: '' });
+  if (entry.api_secret)
+    out.push({ name: secretEnvName(entry, opts), entry, role: entry.secret_role || 'SECRET' });
+  if (entry.api_url)
+    out.push({ name: envName(entry, { ...opts, role: 'URL' }), entry, role: 'URL' });
+  for (const xv of entry.extra_vars ?? []) {
+    if (!xv.key) continue;
+    out.push({ name: envName(entry, { ...opts, role: xv.key }), entry, role: xv.key });
+  }
+  return out;
+}
+
+/** A name two or more values want. */
+export interface NameCollision {
+  name: string;
+  sources: GeneratedName[];
+}
+
+/**
+ * Every collision across a selection, including within a single entry.
+ *
+ * Returns the *groups*, not a boolean: naming both sides is the difference
+ * between a warning somebody can act on and one they have to go hunting for.
+ */
+export function findNameCollisions(entries: VaultEntry[], opts: EnvNameOpts = {}): NameCollision[] {
+  const byName = new Map<string, GeneratedName[]>();
+  for (const entry of entries) {
+    for (const g of namesGeneratedBy(entry, opts)) {
+      const key = g.name.toUpperCase();
+      const list = byName.get(key);
+      if (list) list.push(g);
+      else byName.set(key, [g]);
+    }
+  }
+  return [...byName.values()]
+    .filter((list) => list.length > 1)
+    .map((list) => ({ name: list[0].name, sources: list }));
+}
+
+/**
+ * Make every name in a list unique, **appending rather than dropping**.
+ *
+ * A copy that silently emitted one line where the user expected two is the
+ * failure this exists to prevent; a name with a suffix is visibly odd and
+ * recoverable, a missing variable is neither.
+ *
+ * Pool members are disambiguated by their position in the pool, everything else
+ * by its `key_id` — and by an ordinal when even that is not enough, because the
+ * function must terminate with a unique name whatever the data says.
+ */
+export function disambiguateNames(names: GeneratedName[]): string[] {
+  const counts = new Map<string, number>();
+  for (const g of names) {
+    const k = g.name.toUpperCase();
+    counts.set(k, (counts.get(k) ?? 0) + 1);
+  }
+  // Everything already emitted, so a suffix can never collide with a name that
+  // was fine on its own — appending `_2` to one line and hitting an entry that
+  // genuinely generates `X_2` would trade one silent overwrite for another.
+  const used = new Set<string>(names.map((g) => g.name.toUpperCase()));
+
+  // The **first** occurrence keeps the name it generated. Renaming both halves
+  // of a collision would change a variable that was never ambiguous for the
+  // consumer that reads it first, which is the rename this phase's "one thing
+  // this must not break" section is about.
+  const taken = new Set<string>();
+
+  return names.map((g) => {
+    const key = g.name.toUpperCase();
+    if ((counts.get(key) ?? 0) < 2) return g.name;
+    if (!taken.has(key)) {
+      taken.add(key);
+      return g.name;
+    }
+    // An **ordinal**, not the `key_id`.
+    //
+    // The design says pool members get `_1`/`_2` and everything else gets the
+    // `key_id` — written when `key_id` was not expected to be part of the
+    // generated name. In this implementation it always is (it is a segment of
+    // the template), so appending it again can never disambiguate anything: the
+    // two colliding names already contain it. Ordinals it is, and they are
+    // stable for a given entry because the emission order is.
+    for (let n = 2; n <= names.length + 2; n++) {
+      const c = `${g.name}_${n}`;
+      if (!used.has(c.toUpperCase())) {
+        used.add(c.toUpperCase());
+        return c;
+      }
+    }
+    return g.name;
+  });
+}
+
+// ── Quoting on the way into a `.env` ───────────────────────────────────────
+//
+// Phase 23, E1. Nothing quoted a value before this: a cookie string
+// (`sid=x; csrf=y`), a User-Agent, a password containing `#` and any value with
+// a trailing space all produced a file that parsed back as something else. The
+// round-trip test exercised the parser only, and the parser stripped exactly one
+// layer of surrounding quotes with no escape handling at all.
+//
+// The property that matters is `parse(write(v)) === v`, not the bytes in
+// between — `tests/fixtures/parity/env-names.json` asserts the round trip from
+// both sides.
+
+/** Values safe to write bare. Deliberately narrow: anything else gets quoted. */
+const ENV_BARE_RE = /^[A-Za-z0-9_./:@-]+$/;
+
+/**
+ * A value as it must appear after the `=`.
+ *
+ * The empty string quotes to `""` rather than to nothing, because a bare `KEY=`
+ * is how "unset" is spelled and a deliberately empty value must not read as one.
+ * A newline is escaped rather than emitted, so the parser's backslash
+ * line-continuation can never see one.
+ */
+export function quoteEnvValue(value: string): string {
+  const v = value ?? '';
+  if (v !== '' && ENV_BARE_RE.test(v)) return v;
+  return `"${v
+    .replace(/[\\"$`]/g, (c) => `\\${c}`)
+    .replace(/\n/g, '\\n')
+    .replace(/\r/g, '\\r')
+    .replace(/\t/g, '\\t')}"`;
+}
+
+/**
+ * The inverse, applied by the `.env` parsers.
+ *
+ * Double quotes unescape, single quotes do not — which is what the shells these
+ * files are read by do, and what the apps that read them (`dotenv`, `python-dotenv`,
+ * `compose`) do too.
+ */
+export function unquoteEnvValue(raw: string): string {
+  const v = raw ?? '';
+  if (v.length >= 2 && v.startsWith("'") && v.endsWith("'")) return v.slice(1, -1);
+  if (v.length >= 2 && v.startsWith('"') && v.endsWith('"')) {
+    return v.slice(1, -1).replace(/\\(.)/g, (_m, c: string) => {
+      if (c === 'n') return '\n';
+      if (c === 'r') return '\r';
+      if (c === 't') return '\t';
+      return c;
+    });
+  }
+  return v;
+}
+
+/**
+ * Everything this entry actually holds, as far as "is it empty?" is concerned.
+ *
+ * Phase 23, step 4 relaxed the rule that an entry must carry a primary value.
+ * Three shapes legitimately have none:
+ *
+ * - an `env_var` entry whose payload is N named variables in `extra_vars`;
+ * - an entry carrying only an authenticator seed (Phase 22 — what an import
+ *   from Ente or Aegis produces, when the password lives elsewhere);
+ * - a `certificate` or `file_blob`, whose payload is its own field.
+ *
+ * "The primary value is never empty" was assumed in more places than it was
+ * stated, so this is the single predicate every one of those places now asks,
+ * rather than each re-deriving it and drifting.
+ */
+export function entryHasPayload(entry: VaultEntry): boolean {
+  if (entry.api_key) return true;
+  if (entry.api_secret) return true;
+  if (entry.totp_secret) return true;
+  if (entry.certificate_data || entry.cert_key_data) return true;
+  if (entry.blob_ref) return true;
+  return (entry.extra_vars ?? []).some((v) => v.key);
+}
+
+/**
+ * True when this entry is allowed to have no primary value.
+ *
+ * Distinct from {@link entryHasPayload}: that asks whether anything is stored at
+ * all, this asks whether the *form* should insist on the primary slot.
+ */
+export function primaryIsOptional(entry: VaultEntry): boolean {
+  const t = entry.secretType || 'api_key';
+  if (t === 'certificate' || t === 'file_blob') return true;
+  if (t === 'env_var') return (entry.extra_vars ?? []).some((v) => v.key);
+  return !!entry.totp_secret;
+}
+
 // ── Exporter + dotenvKey ───────────────────────────────────────────────────
 
+/**
+ * The name of an entry's **primary** value.
+ *
+ * Role-aware: an entry marked `primary_role: 'id'` generates `SPOTIFY_ID`
+ * rather than `SPOTIFY`, which is the reported bug this phase exists to fix —
+ * an OAuth client id exported as though it were the key.
+ *
+ * An entry with no `primary_role` keeps the bare name. That is deliberate and
+ * it is the whole reason the field is opt-in: every `.env` already deployed
+ * from this app names the primary value `PROVIDER=`.
+ */
+export function primaryEnvName(entry: VaultEntry, opts: EnvNameOpts = {}): string {
+  return envName(entry, { ...opts, role: entry.primary_role ?? null });
+}
+
+/**
+ * The name of an entry's `api_secret`.
+ *
+ * `SECRET` unless the entry says otherwise — `secret_role` exists for the
+ * issuers whose second half is not called a secret (`AUTH_TOKEN`, `API_SECRET`,
+ * `PRIVATE_KEY`).
+ */
+export function secretEnvName(entry: VaultEntry, opts: EnvNameOpts = {}): string {
+  return envName(entry, { ...opts, role: entry.secret_role || 'SECRET' });
+}
+
+/**
+ * The `.env` name for an entry's primary value.
+ *
+ * Kept as the name every caller already uses; it is now one line rather than a
+ * second implementation of the template.
+ */
 export function dotenvKey(entry: VaultEntry): string {
-  const p = (entry.provider || 'UNKNOWN').toUpperCase().replace(/[^A-Z0-9]/g, '_');
-  const k = entry.key_id ? '_' + entry.key_id.toUpperCase().replace(/[^A-Z0-9]/g, '_') : '';
-  return `${p}${k}`;
+  return primaryEnvName(entry);
 }
 
 export const Exporter = {
   dotenv(keys: VaultEntry[]): string {
     return keys
       .map((k) => {
-        const b = dotenvKey(k);
-        let out = `# ${k.provider}${k.account_name ? ' — ' + k.account_name : ''}\n${b}=${k.api_key}`;
-        if (k.api_secret) out += `\n${b}_SECRET=${k.api_secret}`;
-        if (k.api_url) out += `\n${b}_URL=${k.api_url}`;
-        return out;
+        // Quoted on the way out (E1). A cookie string, a User-Agent, a
+        // password containing `#` and any value with a trailing space all
+        // produced a file that parsed back as something else.
+        const lines = [`# ${k.provider}${k.account_name ? ' — ' + k.account_name : ''}`];
+        // An empty primary is **omitted**, not written as `NAME=` (Phase 23,
+        // step 4). `env_var` entries carry their payload in `extra_vars` and an
+        // authenticator-only entry has no primary at all, so emitting the bare
+        // name writes a variable that reads as "set to the empty string" into a
+        // file about to be loaded — which is a different claim from saying
+        // nothing, and the one thing `out.rs` deliberately keeps `empty`
+        // distinguishable for.
+        if (k.api_key) lines.push(`${primaryEnvName(k)}=${quoteEnvValue(k.api_key)}`);
+        if (k.api_secret) lines.push(`${secretEnvName(k)}=${quoteEnvValue(k.api_secret)}`);
+        if (k.api_url) lines.push(`${envName(k, { role: 'URL' })}=${quoteEnvValue(k.api_url)}`);
+        for (const xv of k.extra_vars ?? []) {
+          if (!xv.key) continue;
+          lines.push(`${envName(k, { role: xv.key })}=${quoteEnvValue(xv.value ?? '')}`);
+        }
+        return lines.join('\n');
       })
       .join('\n\n');
   },
@@ -1177,10 +1572,12 @@ export const Exporter = {
   yaml(keys: VaultEntry[]): string {
     const doc: Record<string, string> = {};
     keys.forEach((k) => {
-      const b = dotenvKey(k);
-      doc[b] = k.api_key;
-      if (k.api_secret) doc[`${b}_SECRET`] = k.api_secret;
-      if (k.api_url) doc[`${b}_URL`] = k.api_url;
+      if (k.api_key) doc[primaryEnvName(k)] = k.api_key;
+      if (k.api_secret) doc[secretEnvName(k)] = k.api_secret;
+      if (k.api_url) doc[envName(k, { role: 'URL' })] = k.api_url;
+      for (const xv of k.extra_vars ?? []) {
+        if (xv.key) doc[envName(k, { role: xv.key })] = xv.value ?? '';
+      }
     });
     const header = `# EnvVault Export\n# Generated: ${new Date().toISOString()}\n\n`;
     return header + yamlDump(doc, { indent: 2, lineWidth: -1, noRefs: true });

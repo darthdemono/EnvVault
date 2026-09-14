@@ -1,0 +1,124 @@
+{
+  "_comment": [
+    "How a credential is sent (Phase 23, E16), asserted from both",
+    "src/ts/auth-request.ts and envv-cli/src/authreq.rs.",
+    "",
+    "A seventh twin pair. It exists twice because the app's \"Copy as request",
+    "header\" builds the header with no Rust in the loop, and `envv curl` builds",
+    "the same one from the terminal — and a header that differs between them is",
+    "a request that works from one half of the product and 401s from the other,",
+    "with the API explaining neither.",
+    "",
+    "Shell quoting is pinned here too. Every interpolated value is vault data",
+    "(invariant 4) and one of them is routinely a cookie jar full of semicolons;",
+    "a value that can end the quoted string can start a command."
+  ],
+
+  "cases": [
+    {
+      "why": "absent scheme means bearer — most issuers want it, and it fails loudly",
+      "entry": { "provider": "GitHub", "api_key": "ghp_example" },
+      "header": ["Authorization", "Bearer ghp_example"],
+      "query": null,
+      "url_in": "https://api.github.com/user",
+      "url_out": "https://api.github.com/user",
+      "curl": "curl -H 'Authorization: Bearer ghp_example' 'https://api.github.com/user'"
+    },
+    {
+      "why": "an explicit header name",
+      "entry": { "provider": "Svc", "api_key": "k1", "auth_scheme": "header", "auth_param": "X-Custom-Key" },
+      "header": ["X-Custom-Key", "k1"],
+      "query": null,
+      "url_in": "https://svc.example/v1",
+      "url_out": "https://svc.example/v1",
+      "curl": "curl -H 'X-Custom-Key: k1' 'https://svc.example/v1'"
+    },
+    {
+      "why": "header with no name falls back to the one almost everybody uses",
+      "entry": { "provider": "Svc", "api_key": "k1", "auth_scheme": "header" },
+      "header": ["X-Api-Key", "k1"],
+      "query": null,
+      "url_in": "https://svc.example/v1",
+      "url_out": "https://svc.example/v1",
+      "curl": "curl -H 'X-Api-Key: k1' 'https://svc.example/v1'"
+    },
+    {
+      "why": "basic is username:key, which is what every issuer asking for it means",
+      "entry": { "provider": "Twilio", "username": "AC123", "api_key": "tok", "auth_scheme": "basic" },
+      "header": ["Authorization", "Basic QUMxMjM6dG9r"],
+      "query": null,
+      "url_in": "https://api.twilio.com/2010-04-01/Accounts",
+      "url_out": "https://api.twilio.com/2010-04-01/Accounts",
+      "curl": "curl -H 'Authorization: Basic QUMxMjM6dG9r' 'https://api.twilio.com/2010-04-01/Accounts'"
+    },
+    {
+      "why": "query attaches to the URL and contributes no header",
+      "entry": { "provider": "Tmdb", "api_key": "abc123", "auth_scheme": "query" },
+      "header": null,
+      "query": "api_key=abc123",
+      "url_in": "https://api.themoviedb.org/3/movie/1",
+      "url_out": "https://api.themoviedb.org/3/movie/1?api_key=abc123",
+      "curl": "curl 'https://api.themoviedb.org/3/movie/1?api_key=abc123'"
+    },
+    {
+      "why": "a URL that already has a query gets an & rather than a second ?",
+      "entry": { "provider": "Tmdb", "api_key": "abc123", "auth_scheme": "query" },
+      "header": null,
+      "query": "api_key=abc123",
+      "url_in": "https://api.themoviedb.org/3/search?q=x",
+      "url_out": "https://api.themoviedb.org/3/search?q=x&api_key=abc123",
+      "curl": "curl 'https://api.themoviedb.org/3/search?q=x&api_key=abc123'"
+    },
+    {
+      "why": "a key needing percent-encoding survives the query string",
+      "entry": { "provider": "Svc", "api_key": "a+b/c=d", "auth_scheme": "query", "auth_param": "api key" },
+      "header": null,
+      "query": "api%20key=a%2Bb%2Fc%3Dd",
+      "url_in": "https://svc.example/v1",
+      "url_out": "https://svc.example/v1?api%20key=a%2Bb%2Fc%3Dd",
+      "curl": "curl 'https://svc.example/v1?api%20key=a%2Bb%2Fc%3Dd'"
+    },
+    {
+      "why": "a cookie jar goes in the Cookie header, semicolons and all",
+      "entry": {
+        "provider": "Spotify",
+        "api_key": "sp_dc=AQB123; sp_key=8f3",
+        "auth_scheme": "cookie",
+        "user_agent": "Mozilla/5.0 (X11; Linux x86_64)",
+        "api_url": "https://open.spotify.com/"
+      },
+      "header": ["Cookie", "sp_dc=AQB123; sp_key=8f3"],
+      "query": null,
+      "url_in": "",
+      "url_out": "",
+      "curl": "curl -H 'Cookie: sp_dc=AQB123; sp_key=8f3' -H 'User-Agent: Mozilla/5.0 (X11; Linux x86_64)' 'https://open.spotify.com/'"
+    },
+    {
+      "why": "a single quote in the value cannot end the quoted string",
+      "entry": { "provider": "Svc", "api_key": "it's a 'key'", "auth_scheme": "header" },
+      "header": ["X-Api-Key", "it's a 'key'"],
+      "query": null,
+      "url_in": "https://svc.example/",
+      "url_out": "https://svc.example/",
+      "curl": "curl -H 'X-Api-Key: it'\\''s a '\\''key'\\''' 'https://svc.example/'"
+    },
+    {
+      "why": "an entry with no value contributes no header at all",
+      "entry": { "provider": "Empty", "auth_scheme": "header" },
+      "header": null,
+      "query": null,
+      "url_in": "https://svc.example/",
+      "url_out": "https://svc.example/",
+      "curl": "curl 'https://svc.example/'"
+    }
+  ],
+
+  "shell_quote": [
+    { "why": "a plain value is still quoted", "value": "abc", "expect": "'abc'" },
+    { "why": "a dollar is literal inside single quotes", "value": "$(rm -rf /)", "expect": "'$(rm -rf /)'" },
+    { "why": "a backtick too", "value": "a`b`c", "expect": "'a`b`c'" },
+    { "why": "a semicolon cannot start a command", "value": "a; echo pwned", "expect": "'a; echo pwned'" },
+    { "why": "a single quote closes, escapes and reopens", "value": "it's", "expect": "'it'\\''s'" },
+    { "why": "a newline is literal", "value": "a\nb", "expect": "'a\nb'" }
+  ]
+}

@@ -13,7 +13,7 @@
     "Keys are the alias as written in a reference; values are the vault-entry",
     "JSON field the reference must resolve to. Each side builds an entry whose",
     "every field holds its own name, resolves ${E/<alias>}, and asserts it got",
-    "the expected field back — so this tests the real resolution path rather",
+    "the expected field back \u2014 so this tests the real resolution path rather",
     "than the table's spelling."
   ],
   "aliases": {
@@ -49,12 +49,15 @@
     "CLIENT_ID": "key_id",
     "APP_ID": "key_id",
     "ACCOUNT_ID": "key_id",
-    "APPLICATION_ID": "key_id"
+    "APPLICATION_ID": "key_id",
+    "PATH": "mount_path",
+    "MOUNT": "mount_path",
+    "MOUNT_PATH": "mount_path",
+    "FILE": "mount_path"
   },
-
   "_unresolvable_comment": [
     "Phase 21. `ID` used to fall through to `_ => field` in canonical_field, so",
-    "entry_field looked up `entry.id` — the row's UUID — found it non-empty and",
+    "entry_field looked up `entry.id` \u2014 the row's UUID \u2014 found it non-empty and",
     "returned it. The CLI therefore wrote a vault UUID into a rendered config",
     "while the app, whose switch had no `id` case, left ${Spotify/ID} as literal",
     "text. One reference, two wrong answers, neither reported.",
@@ -63,12 +66,78 @@
     "harness builds carries all four with non-empty values, so removing the",
     "deny-list makes these cases fail rather than pass by absence."
   ],
-  "unresolvable": ["id", "version_history", "projectIds", "categories"],
-
+  "unresolvable": [
+    "id",
+    "version_history",
+    "projectIds",
+    "categories"
+  ],
+  "_role_aware_comment": [
+    "Phase 23, step 2: a role declared on the entry beats the alias table.",
+    "",
+    "`primary_role: \"id\"` says the primary value IS a client id, so",
+    "${X/ID} must answer with api_key \u2014 not with key_id, which is what the",
+    "Phase 21 alias arm resolves to for an entry that declares no role, and",
+    "what it still resolves to for every such entry.",
+    "",
+    "This is also what makes the shapes with no primary value usable:",
+    "Twilio's two halves are an Account SID and an Auth Token, and naming them",
+    "by the issuer's own words is the point.",
+    "",
+    "Each case builds the entry, resolves ${R/<field>} and expects the value."
+  ],
+  "role_aware": {
+    "entry": {
+      "provider": "R",
+      "api_key": "the-primary",
+      "api_secret": "the-secret",
+      "key_id": "the-key-id",
+      "primary_role": "account_sid",
+      "secret_role": "auth_token"
+    },
+    "cases": [
+      {
+        "why": "the declared primary role resolves to the primary value",
+        "field": "ACCOUNT_SID",
+        "expect": "the-primary"
+      },
+      {
+        "why": "case and punctuation do not matter",
+        "field": "account-sid",
+        "expect": "the-primary"
+      },
+      {
+        "why": "the declared secret role resolves to the secret",
+        "field": "AUTH_TOKEN",
+        "expect": "the-secret"
+      },
+      {
+        "why": "an undeclared alias still means what it always meant",
+        "field": "ID",
+        "expect": "the-key-id"
+      },
+      {
+        "why": "and the built-in fields are untouched",
+        "field": "KEY",
+        "expect": "the-primary"
+      }
+    ]
+  },
+  "role_aware_id": {
+    "_why": "primary_role `id` is the reported bug: ${Spotify/ID} must be the client id, not the key_id beside it",
+    "entry": {
+      "provider": "S",
+      "api_key": "the-client-id",
+      "key_id": "the-key-id",
+      "primary_role": "id"
+    },
+    "field": "ID",
+    "expect": "the-client-id"
+  },
   "_extra_var_fallback_comment": [
     "A client id lives in extra_vars in every vault written before Phase 22's",
     "value roles exist. Both sides fall through from an empty built-in field to",
-    "extra_vars, so ${F/ID} resolves there — and both must, or the alias arm",
+    "extra_vars, so ${F/ID} resolves there \u2014 and both must, or the alias arm",
     "above is useful in the CLI only."
   ],
   "extra_var_fallback": {

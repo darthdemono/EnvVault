@@ -210,3 +210,57 @@ describe('already-linked fields and creation suggestions', () => {
     expect(buildEnvLinkMatches(chunk([{ key: '', value: 'orphan' }]))).toHaveLength(0);
   });
 });
+
+/**
+ * Phase 23, E10 — the scorer learns the generated-name template.
+ *
+ * `SPOTIFY_V2_GAME_ID` is a name this app *generates*, and before this it was
+ * unrecognisable to every tier: it fell through to the tier-3 suffix-strip,
+ * which happily linked it to whichever entry shared the last segment. The
+ * parsed role is carried into `field` so the link resolves to the value the name
+ * names rather than defaulting to the primary one.
+ */
+describe('generated-name matching', () => {
+  it('links a templated name to the entry that generates it', () => {
+    st.vault.api_keys = [
+      entry({ provider: 'Spotify', version: '2', label: 'game', primary_role: 'id', api_key: 'x' }),
+    ];
+    const [m] = buildEnvLinkMatches(chunk([{ key: 'SPOTIFY_V2_GAME_ID', value: 'x' }]));
+    expect(m.match?.confidence).toBe(95);
+    expect(m.match?.field).toBe('key');
+  });
+
+  it('carries the role into the field, so _SECRET links to the secret', () => {
+    st.vault.api_keys = [entry({ provider: 'Spotify', api_key: 'x', api_secret: 'y' })];
+    const [m] = buildEnvLinkMatches(chunk([{ key: 'SPOTIFY_SECRET', value: 'nope' }]));
+    expect(m.match?.field).toBe('secret');
+    expect(m.match?.ref).toBe('Spotify/secret');
+  });
+
+  it('links a templated name to a named extra_var', () => {
+    st.vault.api_keys = [
+      entry({ provider: 'AWS', api_key: 'x', extra_vars: [{ key: 'REGION', value: 'eu-west-1' }] }),
+    ];
+    const [m] = buildEnvLinkMatches(chunk([{ key: 'AWS_REGION', value: 'eu-west-1' }]));
+    expect(m.match?.field).toBe('REGION');
+  });
+
+  /**
+   * The template arm and the `PROVIDER_KEYID` arm make the same claim about the
+   * same syntax, so they are scored the same *on purpose* and a tie between two
+   * different entries is refused. Breaking the tie by array position is
+   * invariant 1, and it silently repoints a working `.env` at another secret.
+   */
+  it('refuses rather than guessing when two entries have an equal claim', () => {
+    st.vault.api_keys = [
+      entry({ provider: 'Twitch', version: '3', api_key: 'by-version' }),
+      entry({ provider: 'Twitch', key_id: 'V3', api_key: 'by-keyid' }),
+    ];
+    const [m] = buildEnvLinkMatches(chunk([{ key: 'TWITCH_V3', value: 'zzz' }]));
+    expect(m.match, 'an ambiguous link is no link').toBeUndefined();
+    // ...and it must not depend on the order they appear in.
+    st.vault.api_keys.reverse();
+    const [m2] = buildEnvLinkMatches(chunk([{ key: 'TWITCH_V3', value: 'zzz' }]));
+    expect(m2.match).toBeUndefined();
+  });
+});

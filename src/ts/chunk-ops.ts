@@ -24,7 +24,15 @@ import type {
   ProjectType,
   VaultEntry,
 } from './types';
-import { st, Settings, triggerRender, persist } from './state';
+import {
+  st,
+  Settings,
+  triggerRender,
+  persist,
+  quoteEnvValue,
+  envName,
+  primaryEnvName,
+} from './state';
 import { esc, escAttr, copySVG, editSVG, delSVG, showToast } from './utils';
 
 // ── Re-exports (barrel) ────────────────────────────────────────────────────
@@ -241,6 +249,12 @@ const FIELD_ALIASES: Readonly<Record<string, string>> = {
   APP_ID: 'key_id',
   ACCOUNT_ID: 'key_id',
   APPLICATION_ID: 'key_id',
+  // E17: a file-shaped credential is consumed by pointing at it, so the useful
+  // thing to render into a config is the **path**, never the bytes.
+  PATH: 'mount_path',
+  MOUNT: 'mount_path',
+  MOUNT_PATH: 'mount_path',
+  FILE: 'mount_path',
 };
 
 /**
@@ -270,9 +284,37 @@ const REFERENCE_DENY: ReadonlySet<string> = new Set([
  * resolve in the CLI and come back empty here for the entry that keeps its
  * client id in a var.
  */
+/**
+ * Normalise a role or a reference field for comparison — `account_sid`,
+ * `ACCOUNT-SID` and `Account Sid` are one name. Twin: `role_key` in
+ * `envv-cli/src/refs.rs`.
+ */
+function roleKey(raw: string): string {
+  return raw.replace(/[^A-Za-z0-9]/g, '_').toUpperCase();
+}
+
 function getEntryFieldValue(entry: VaultEntry, field: string): string | null | undefined {
   const canonical = FIELD_ALIASES[field.toUpperCase()] ?? field;
   if (REFERENCE_DENY.has(field) || REFERENCE_DENY.has(canonical)) return undefined;
+
+  // A **declared role wins over the alias table** (Phase 23, step 2). An entry
+  // whose `primary_role` is `id` holds a client id in `api_key`, so
+  // `${Spotify/ID}` must answer with that rather than with `key_id` — which is
+  // what the Phase 21 alias arm resolves to when no role is declared, and what
+  // it still resolves to for every entry that declares none.
+  const want = roleKey(field);
+  if (want && want !== 'VALUE') {
+    for (const [roleField, valueField] of [
+      ['primary_role', 'api_key'],
+      ['secret_role', 'api_secret'],
+    ] as const) {
+      const declared = entry[roleField];
+      if (declared && roleKey(String(declared)) === want) {
+        const v = entry[valueField];
+        if (v != null && v !== '') return v;
+      }
+    }
+  }
   const builtin = (
     {
       api_key: entry.api_key,
@@ -281,10 +323,59 @@ function getEntryFieldValue(entry: VaultEntry, field: string): string | null | u
       api_url: entry.api_url,
       key_id: entry.key_id,
       email: entry.email,
+      mount_path: entry.mount_path,
     } as Record<string, string | null | undefined>
   )[canonical];
   if (builtin != null && builtin !== '') return builtin;
   return entry.extra_vars?.find((v) => v.key === field || v.key === canonical)?.value;
+}
+
+/**
+ * Find the entry a bare `${NAME}` or a `${NAME/field}` prefix addresses.
+ *
+ * Three attempts, in this order, and **ambiguity is refused rather than guessed**
+ * (E9):
+ *
+ * 1. An exact provider match, which is what a reference written by hand means.
+ * 2. A **generated-name** match — the Phase 23 template. `${SPOTIFY_V2}` names
+ *    the entry whose version is 2, which is the whole point of putting versions
+ *    and labels into the name.
+ * 3. The legacy `Provider_keyid` split on the last underscore.
+ *
+ * 2 and 3 occupy the same syntactic position, so a vault holding both a
+ * `SPOTIFY` entry with `key_id: V2` *and* a `SPOTIFY` entry with `version: 2`
+ * has two honest answers for `${SPOTIFY_V2}`. Returning either would be a
+ * silent wrong value written into a config — the defect class Phase 21 was
+ * about — so this returns nothing and every exporter reports it unresolved.
+ * The explicit `${Provider/field}` form is never ambiguous and is what the docs
+ * recommend.
+ *
+ * Twin: `find_entry` in `envv-cli/src/refs.rs`, pinned by the `reference_lookup`
+ * section of `tests/fixtures/parity/env-names.json`.
+ */
+export function findEntryByRef(name: string): VaultEntry | undefined {
+  const all = st.vault?.api_keys ?? [];
+  const exact = all.find((e) => e.provider === name);
+  if (exact) return exact;
+
+  const want = name.toUpperCase();
+  const byTemplate = all.filter(
+    (e) => envName(e).toUpperCase() === want || primaryEnvName(e).toUpperCase() === want,
+  );
+  if (byTemplate.length > 1) return undefined;
+
+  let legacy: VaultEntry | undefined;
+  const lastUs = name.lastIndexOf('_');
+  if (lastUs > 0) {
+    const prov = name.slice(0, lastUs);
+    const kid = name.slice(lastUs + 1);
+    legacy = all.find((e) => e.provider === prov && e.key_id === kid);
+  }
+
+  if (byTemplate.length === 1) {
+    return legacy && legacy !== byTemplate[0] ? undefined : byTemplate[0];
+  }
+  return legacy;
 }
 
 export function resolveFieldRef(
@@ -334,14 +425,7 @@ export function resolveFieldRef(
   if (slashIdx >= 0) {
     const provPart = refName.slice(0, slashIdx);
     const field = refName.slice(slashIdx + 1);
-    // Try exact provider match, then provider_keyid split (e.g. TMDB_v2 → provider=TMDB key_id=v2).
-    let entry = st.vault.api_keys.find((e) => e.provider === provPart);
-    if (!entry && provPart.includes('_')) {
-      const lastUs = provPart.lastIndexOf('_');
-      const prov = provPart.slice(0, lastUs);
-      const kid = provPart.slice(lastUs + 1);
-      entry = st.vault.api_keys.find((e) => e.provider === prov && e.key_id === kid);
-    }
+    const entry = findEntryByRef(provPart);
     if (entry) {
       const val = getEntryFieldValue(entry, field);
       const resolved = val != null && val !== '' ? String(val) : null;
@@ -350,15 +434,7 @@ export function resolveFieldRef(
     return { resolved: null, refName, unresolved: true, source: null };
   }
 
-  // Legacy: exact provider match, then compound PROVIDER_KEYID match.
-  let entry = st.vault.api_keys.find((e) => e.provider === refName);
-  if (!entry && refName.includes('_')) {
-    const lastUs = refName.lastIndexOf('_');
-    const provPart = refName.slice(0, lastUs);
-    const labelPart = refName.slice(lastUs + 1);
-    entry = st.vault.api_keys.find((e) => e.provider === provPart && e.key_id === labelPart);
-  }
-
+  const entry = findEntryByRef(refName);
   if (entry) {
     let resolved: string | null;
     if (useEnvCopyField) {
@@ -1468,7 +1544,7 @@ export function exportDockerCompose(project: Project): { yaml: string; envFile: 
             // reference shape wrote an empty value into the .env file and the
             // container started with a blank secret.
             const { resolved } = resolveFieldRef(f.value ?? '', true);
-            envLines.push(`${varName}=${resolved ?? ''}`);
+            envLines.push(`${varName}=${quoteEnvValue(resolved ?? '')}`);
           } else {
             out.push(`      - ${f.key}=${f.value ?? ''}`);
           }

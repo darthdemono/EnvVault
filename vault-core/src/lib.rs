@@ -379,8 +379,42 @@ pub fn vault_version(conn: &Connection) -> Result<Option<String>, String> {
 /// The pair is (JSON field, the word the audit row uses). `api_key` is first and
 /// is the one that writes no `field` discriminator into the record — see
 /// `save_vault_with_actor`.
-const HISTORIED_SECRET_FIELDS: [(&str, &str); 2] =
-    [("api_key", "api_key"), ("totp_secret", "totp_secret")];
+const HISTORIED_SECRET_FIELDS: [(&str, &str); 3] = [
+    ("api_key", "api_key"),
+    ("api_secret", "api_secret"),
+    ("totp_secret", "totp_secret"),
+];
+
+/// Previous values of an entry's `extra_vars`, keyed by var name.
+///
+/// Phase 23, E8. A named variable is where the real payload of an `env_var`
+/// entry lives, and for an AWS or Twilio credential it is where *all* of it
+/// lives — so before this, the only entries whose secrets were versioned were
+/// the ones that happened to use the primary slot. An `env_var` entry had **no
+/// history at all**, which E8 itself calls the one unacceptable option.
+///
+/// A var marked `public` is skipped: it is a region or a client id by
+/// declaration, and filling a 50-record history with them evicts the values
+/// that cannot be recovered any other way.
+fn historied_extra_vars(entry: &serde_json::Value) -> Vec<(String, String)> {
+    entry
+        .get("extra_vars")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter(|xv| !xv.get("public").and_then(|p| p.as_bool()).unwrap_or(false))
+                .filter_map(|xv| {
+                    let k = xv.get("key").and_then(|v| v.as_str())?;
+                    let v = xv.get("value").and_then(|v| v.as_str())?;
+                    if k.is_empty() {
+                        return None;
+                    }
+                    Some((k.to_string(), v.to_string()))
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
 
 /// Serialises `data` to the vault, updating `version_history` on key changes
 /// and appending to the `vault_audit` hash chain. Returns the new version.
@@ -518,7 +552,7 @@ fn save_vault_txn(
                     }
                     history.insert(0, record);
                     // The cap is per entry, not per field, so a chatty seed
-                    // cannot evict an API key's history — which is why the two
+                    // cannot evict an API key's history — which is why they all
                     // share one list rather than getting one each.
                     history.truncate(50);
                     if let Some(obj) = entry.as_object_mut() {
@@ -535,6 +569,60 @@ fn save_vault_txn(
                         Some(&format!("{label} rotated")),
                         actor,
                     )?;
+                }
+
+                // The same, for named variables (E8). Matched by **name**, not
+                // by position: `extra_vars` is an array the form rebuilds on
+                // every save, so an index captured across an edit points at
+                // whatever took its place — invariant 1, in the one place where
+                // getting it wrong writes the wrong secret into history.
+                //
+                // A var that is *removed* leaves its last value in history: the
+                // user deleting a row is exactly as unable to recover it as the
+                // user overwriting one, and the row's absence is not evidence
+                // that they meant to lose it.
+                let old_vars = historied_extra_vars(old_e);
+                if !old_vars.is_empty() {
+                    let new_vars: std::collections::HashMap<String, String> =
+                        historied_extra_vars(entry).into_iter().collect();
+                    for (key, old_val) in old_vars {
+                        if old_val.is_empty() {
+                            continue;
+                        }
+                        if new_vars.get(&key).map(String::as_str) == Some(old_val.as_str()) {
+                            continue;
+                        }
+                        let mut history: Vec<serde_json::Value> = entry
+                            .get("version_history")
+                            .and_then(|v| v.as_array())
+                            .cloned()
+                            .unwrap_or_default();
+                        history.insert(
+                            0,
+                            serde_json::json!({
+                                "value": old_val,
+                                "saved_at": now_str,
+                                // Namespaced so a restore can tell a var called
+                                // `api_key` from the field of that name.
+                                "field": format!("extra_vars/{key}"),
+                            }),
+                        );
+                        history.truncate(50);
+                        if let Some(obj) = entry.as_object_mut() {
+                            obj.insert(
+                                "version_history".to_string(),
+                                serde_json::Value::Array(history),
+                            );
+                        }
+                        append_audit(
+                            conn,
+                            "update",
+                            &provider,
+                            &now_str,
+                            Some(&format!("{key} rotated")),
+                            actor,
+                        )?;
+                    }
                 }
             } else {
                 append_audit(conn, "add", &provider, &now_str, None, actor)?;
@@ -851,6 +939,134 @@ mod tests {
         let conn = open_db(&dir.join("vault.db"), &key).unwrap();
         init_schema(&conn).unwrap();
         (conn, dir)
+    }
+
+    // ── version_history (Phase 23, E8) ─────────────────────────────────────────
+
+    fn history_of(conn: &Connection) -> Vec<serde_json::Value> {
+        let raw = load_vault(conn).unwrap().unwrap_or(json!({}));
+        raw["api_keys"][0]["version_history"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    /// Every secret-carrying value is versioned, not just `api_key`.
+    ///
+    /// Before Phase 23 a refresh-token swap, a replaced client secret and every
+    /// `extra_vars` edit left no history at all — and for an `env_var` entry,
+    /// whose entire payload lives in named variables, *nothing* was versioned.
+    /// E8 calls leaving a secret silently unversioned the one unacceptable
+    /// option.
+    #[test]
+    fn every_secret_carrying_value_is_versioned() {
+        let (conn, _d) = open_scratch("historyfields");
+        let base = json!({ "api_keys": [{
+            "id": "e1", "provider": "Aws",
+            "api_key": "key-v1", "api_secret": "secret-v1",
+            "extra_vars": [
+                { "key": "SESSION_TOKEN", "value": "tok-v1" },
+                { "key": "REGION", "value": "eu-west-1", "public": true },
+            ],
+        }]});
+        save_vault(&conn, base.clone(), SaveCtx::default()).unwrap();
+        assert!(history_of(&conn).is_empty(), "nothing changed yet");
+
+        let mut next = base.clone();
+        next["api_keys"][0]["api_key"] = json!("key-v2");
+        next["api_keys"][0]["api_secret"] = json!("secret-v2");
+        next["api_keys"][0]["extra_vars"][0]["value"] = json!("tok-v2");
+        next["api_keys"][0]["extra_vars"][1]["value"] = json!("us-east-1");
+        save_vault(&conn, next.clone(), SaveCtx::default()).unwrap();
+
+        let hist = history_of(&conn);
+        let found: Vec<(String, String)> = hist
+            .iter()
+            .map(|h| {
+                (
+                    h.get("field")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("api_key")
+                        .to_string(),
+                    h["value"].as_str().unwrap_or("").to_string(),
+                )
+            })
+            .collect();
+
+        assert!(
+            found.contains(&("api_key".into(), "key-v1".into())),
+            "api_key still writes no discriminator — every pre-Phase-22 vault relies on that: {found:?}"
+        );
+        assert!(
+            found.contains(&("api_secret".into(), "secret-v1".into())),
+            "a replaced client secret is as unrecoverable as a replaced key: {found:?}"
+        );
+        assert!(
+            found.contains(&("extra_vars/SESSION_TOKEN".into(), "tok-v1".into())),
+            "a named variable is where an env_var entry's whole payload lives: {found:?}"
+        );
+        assert!(
+            !found.iter().any(|(f, _)| f == "extra_vars/REGION"),
+            "a var marked public is a region by declaration; filling a 50-record \
+             history with them evicts the values that cannot be recovered: {found:?}"
+        );
+    }
+
+    /// A deleted variable leaves its last value behind.
+    ///
+    /// Deleting a row makes its value exactly as unrecoverable as overwriting
+    /// one, and the row's absence is not evidence that the user meant to lose it.
+    #[test]
+    fn deleting_a_variable_still_versions_it() {
+        let (conn, _d) = open_scratch("historydelete");
+        let base = json!({ "api_keys": [{
+            "id": "e1", "provider": "Aws", "api_key": "k",
+            "extra_vars": [{ "key": "SESSION_TOKEN", "value": "tok-v1" }],
+        }]});
+        save_vault(&conn, base.clone(), SaveCtx::default()).unwrap();
+
+        let mut next = base.clone();
+        next["api_keys"][0]["extra_vars"] = json!([]);
+        save_vault(&conn, next, SaveCtx::default()).unwrap();
+
+        let hist = history_of(&conn);
+        assert_eq!(hist.len(), 1, "{hist:?}");
+        assert_eq!(hist[0]["field"], json!("extra_vars/SESSION_TOKEN"));
+        assert_eq!(hist[0]["value"], json!("tok-v1"));
+    }
+
+    /// Variables are matched by **name**, never by position.
+    ///
+    /// `extra_vars` is an array the form rebuilds on every save, so an index
+    /// captured across an edit points at whatever took its place — invariant 1,
+    /// in the one place where getting it wrong writes the wrong secret into
+    /// history.
+    #[test]
+    fn variables_are_matched_by_name_not_position() {
+        let (conn, _d) = open_scratch("historyreorder");
+        let base = json!({ "api_keys": [{
+            "id": "e1", "provider": "Aws", "api_key": "k",
+            "extra_vars": [
+                { "key": "A", "value": "a1" },
+                { "key": "B", "value": "b1" },
+            ],
+        }]});
+        save_vault(&conn, base, SaveCtx::default()).unwrap();
+
+        // Reordered, and only B changed.
+        let next = json!({ "api_keys": [{
+            "id": "e1", "provider": "Aws", "api_key": "k",
+            "extra_vars": [
+                { "key": "B", "value": "b2" },
+                { "key": "A", "value": "a1" },
+            ],
+        }]});
+        save_vault(&conn, next, SaveCtx::default()).unwrap();
+
+        let hist = history_of(&conn);
+        assert_eq!(hist.len(), 1, "only B changed: {hist:?}");
+        assert_eq!(hist[0]["field"], json!("extra_vars/B"));
+        assert_eq!(hist[0]["value"], json!("b1"));
     }
 
     // ── Schema version ─────────────────────────────────────────────────────────

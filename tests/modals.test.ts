@@ -115,6 +115,10 @@ describe('TYPE_CONFIG', () => {
       'api_key',
       'certificate',
       'connection_string',
+      // Phase 23, step 5. A browser session is a credential the vault had no
+      // home for: the jar went in a free-text field and the User-Agent it was
+      // minted against went nowhere.
+      'cookie',
       'env_var',
       'file_blob',
       'password',
@@ -814,7 +818,7 @@ describe('the two-factor seed field (Phase 22)', () => {
     $('f-totp').value = 'JBSWY3DPEHPK3PXP';
     ($('edit-index') as HTMLInputElement).value = '-1';
     const before = st.vault.api_keys.length;
-    saveModal();
+    void saveModal();
     expect(st.vault.api_keys.length).toBe(before + 1);
     expect(st.vault.api_keys[before].totp_secret).toBe('JBSWY3DPEHPK3PXP');
   });
@@ -826,7 +830,7 @@ describe('the two-factor seed field (Phase 22)', () => {
     $('f-totp').value = '';
     ($('edit-index') as HTMLInputElement).value = '-1';
     const before = st.vault.api_keys.length;
-    saveModal();
+    void saveModal();
     expect(st.vault.api_keys.length).toBe(before);
   });
 

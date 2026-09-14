@@ -13,6 +13,12 @@ import {
   persist,
   entryId,
   newEntryId,
+  envName,
+  primaryEnvName,
+  secretEnvName,
+  namesGeneratedBy,
+  primaryIsOptional,
+  entryHasPayload,
 } from './state';
 import {
   esc,
@@ -30,6 +36,19 @@ import {
 import { iconHTML, openIconPicker, iconPicker, setIconField, readIconField } from './icons';
 import { renameProviderRefs } from './chunk-ops';
 import { normalizeRateLimit } from './ratelimit';
+import { buildCopyText, type CopyProfile, type MetadataStyle } from './copy-profile';
+import { authHeaderFor, curlFor } from './auth-request';
+import { isFileShaped, fileContentsOf, fileEnvLine } from './file-cred';
+import { downloadText } from './import-export';
+import {
+  cookiesOf,
+  cookiesToExtraVars,
+  missingTxtAttributes,
+  parseAnyCookies,
+  toCookieHeader,
+  toCookiesTxt,
+  toCookieJson,
+} from './cookies';
 import { parseTotpSeed, TOTP_DEFAULTS } from './totp';
 
 /**
@@ -133,6 +152,13 @@ export const TYPE_CONFIG: Record<SecretType, TypeConfig> = {
     keyLabel: 'File Reference',
     keyPlaceholder: '',
   },
+  cookie: {
+    providerLabel: 'Site',
+    providerPlaceholder: 'e.g. Spotify',
+    showAccount: true,
+    keyLabel: 'Cookie jar',
+    keyPlaceholder: 'sp_dc=…; sp_key=…  — or paste a cookies.txt / JSON export',
+  },
 };
 
 // ── Dynamic form fields ───────────────────────────────────────────────────
@@ -167,6 +193,25 @@ export function dynamicSecretFields() {
   if (blobGroup) blobGroup.style.display = type === 'file_blob' ? 'flex' : 'none';
   if (accountGroup) accountGroup.style.display = cfg.showAccount ? '' : 'none';
   if (envvarSubtypeGroup) envvarSubtypeGroup.style.display = type === 'env_var' ? 'flex' : 'none';
+  // The User-Agent is shown for every type but *labelled* as required in
+  // practice only on a cookie, where replay without the matching one 401s. It
+  // stays visible elsewhere because an API client can have one too and hiding a
+  // field is how a stored value becomes unreachable (invariant 7).
+  const uaGroup = document.getElementById('f-user-agent-group');
+  if (uaGroup) uaGroup.style.display = type === 'cookie' ? 'flex' : 'none';
+  // The mount path is the delivery half of a file-shaped credential (E17): the
+  // types whose payload is a file, plus `file_blob`, which held a path and never
+  // the file.
+  const mountGroup = document.getElementById('f-mount-path-group');
+  if (mountGroup)
+    mountGroup.style.display = type === 'certificate' || type === 'file_blob' ? 'flex' : 'none';
+  // Rotation is meaningless for a session, so the cadence input is hidden for a
+  // cookie (E13). Creation-only, like every other gate here: an existing
+  // `rotation_days` is carried through by `formToEntry`'s spread rather than
+  // being erased by a field the user cannot see.
+  const rotationGroup = document.getElementById('f-rotation-days')?.closest('.form-group');
+  if (rotationGroup instanceof HTMLElement)
+    rotationGroup.style.display = type === 'cookie' ? 'none' : '';
 
   if (providerLabel) providerLabel.innerHTML = `${cfg.providerLabel} <span class="req">*</span>`;
   if (providerInput) providerInput.placeholder = cfg.providerPlaceholder;
@@ -177,7 +222,21 @@ export function dynamicSecretFields() {
 
 // ── Form to entry & fill form ─────────────────────────────────────────────
 
-export function formToEntry(): VaultEntry {
+/**
+ * Read the add/edit form into an entry.
+ *
+ * **`base` is spread first and the form's values overwrite it** (Phase 23, E4).
+ * Before this the function returned a freshly constructed object literal with no
+ * spread at all, so every field the form has no input for survived only if the
+ * *save path* remembered to re-attach it by name — and it re-attached five.
+ * Editing an entry's description therefore erased its `pool`, and every field a
+ * later phase adds would be erased the same way, silently, on the first edit.
+ *
+ * A field the form *does* have an input for is present in the literal even when
+ * the input is empty, so clearing a box still clears the field: object spread
+ * copies a key whose value is `undefined`.
+ */
+export function formToEntry(base?: VaultEntry): VaultEntry {
   const getVal = (id: string, fallback = '') => {
     const el = document.getElementById(id) as HTMLInputElement | HTMLSelectElement | null;
     return el?.value?.trim?.() ?? fallback;
@@ -199,6 +258,7 @@ export function formToEntry(): VaultEntry {
     .filter(Boolean);
 
   return {
+    ...base,
     provider: getVal('f-provider'),
     account_name: getVal('f-account') || undefined,
     username: getVal('f-username') || undefined,
@@ -206,6 +266,13 @@ export function formToEntry(): VaultEntry {
     api_key: getVal('f-key'),
     api_secret: getVal('f-secret') || undefined,
     key_id: getVal('f-keyid') || undefined,
+    primary_role: getVal('f-role') || undefined,
+    secret_role: getVal('f-secret-role') || undefined,
+    label: getVal('f-label') || undefined,
+    auth_scheme: (getVal('f-auth-scheme') as VaultEntry['auth_scheme']) || undefined,
+    auth_param: getVal('f-auth-param') || undefined,
+    user_agent: getVal('f-user-agent') || undefined,
+    mount_path: getVal('f-mount-path') || undefined,
     price_type: getVal('f-price', 'free') as VaultEntry['price_type'],
     environment: (getVal('f-env') as VaultEntry['environment']) || undefined,
     projectIds: selectedProjectIds.includes('Universal')
@@ -272,6 +339,25 @@ export function formToEntry(): VaultEntry {
           key: row.querySelector<HTMLInputElement>('.extra-var-key')?.value.trim() || '',
           value: row.querySelector<HTMLInputElement>('.extra-var-value')?.value.trim() || '',
           secret: row.querySelector<HTMLInputElement>('.extra-var-secret')?.checked || false,
+          public: row.querySelector<HTMLInputElement>('.extra-var-public')?.checked || undefined,
+          // Cookie attributes have no input of their own — nobody hand-types an
+          // expiry in Unix seconds — so they ride on the row from the paste
+          // parser and are carried through here. Without this they would be lost
+          // on the first edit and `cookies.txt` would start refusing.
+          attrs: (() => {
+            try {
+              return row.dataset.cookieAttrs
+                ? (JSON.parse(row.dataset.cookieAttrs) as VaultEntry['extra_vars'] extends
+                    (infer R)[] | undefined
+                    ? R extends { attrs?: infer A }
+                      ? A
+                      : never
+                    : never)
+                : undefined;
+            } catch {
+              return undefined;
+            }
+          })(),
         }))
         .filter((v) => v.key);
       return result.length ? result : undefined;
@@ -530,6 +616,13 @@ export function fillForm(entry: Partial<VaultEntry>) {
   (document.getElementById('f-apiurl') as HTMLInputElement).value = entry.api_url || '';
   (document.getElementById('f-cburl') as HTMLInputElement).value = entry.callback_url || '';
   (document.getElementById('f-version') as HTMLInputElement).value = entry.version || '';
+  (document.getElementById('f-role') as HTMLInputElement).value = entry.primary_role || '';
+  (document.getElementById('f-secret-role') as HTMLInputElement).value = entry.secret_role || '';
+  (document.getElementById('f-label') as HTMLInputElement).value = entry.label || '';
+  (document.getElementById('f-auth-scheme') as HTMLSelectElement).value = entry.auth_scheme || '';
+  (document.getElementById('f-auth-param') as HTMLInputElement).value = entry.auth_param || '';
+  (document.getElementById('f-user-agent') as HTMLInputElement).value = entry.user_agent || '';
+  (document.getElementById('f-mount-path') as HTMLInputElement).value = entry.mount_path || '';
   // Normalised on read, not trusted: this entry may have been written by an
   // older build that only had the free-text field, by a remote server, or by an
   // imported backup. `normalizeRateLimit` is the one reader (CLAUDE.md
@@ -591,7 +684,9 @@ export function fillForm(entry: Partial<VaultEntry>) {
   if (extraList) {
     extraList.innerHTML = '';
     for (const xv of entry.extra_vars || []) {
-      extraList.appendChild(_makeExtraVarRow(xv.key, xv.value, xv.secret));
+      const row = _makeExtraVarRow(xv.key, xv.value, xv.secret, xv.public);
+      if (xv.attrs) row.dataset.cookieAttrs = JSON.stringify(xv.attrs);
+      extraList.appendChild(row);
     }
   }
   const pfxInput = document.getElementById('f-env-prefixes') as HTMLInputElement | null;
@@ -637,6 +732,165 @@ export function populateProjectSelect() {
   if (items[0]) items[0].tabIndex = 0;
 }
 
+// ── The generated-name preview ────────────────────────────────────────────
+
+/**
+ * What a `label` may be.
+ *
+ * Narrow on purpose: it is a *name segment*, so anything that would normalise
+ * away (spaces, punctuation, an empty leading character) is refused at the form
+ * rather than silently transliterated into something the user did not type.
+ */
+export const LABEL_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,23}$/;
+
+/**
+ * Paint the "Generated variable" line under the value field.
+ *
+ * The template has five inputs feeding it — provider, key id, version, label,
+ * role — and before this the only way to find out what they produced was to run
+ * a copy and read the file. The value is shown as dots: the point is the
+ * **name**, and a form that prints the secret next to it is a form that puts it
+ * in a screenshot.
+ */
+export function updateNamePreview(): void {
+  const out = document.getElementById('f-name-preview');
+  if (!out) return;
+  const get = (id: string) =>
+    (document.getElementById(id) as HTMLInputElement | null)?.value.trim() ?? '';
+
+  const draft = {
+    provider: get('f-provider'),
+    key_id: get('f-keyid') || undefined,
+    version: get('f-version') || undefined,
+    label: get('f-label') || undefined,
+    primary_role: get('f-role') || undefined,
+    secret_role: get('f-secret-role') || undefined,
+  } as VaultEntry;
+
+  const lines = [`${primaryEnvName(draft)}=••••••`];
+  if (get('f-secret')) lines.push(`${secretEnvName(draft)}=••••••`);
+  out.textContent = lines.join('\n');
+
+  // A label that cannot be a segment is refused at save, so say so as it is
+  // typed rather than at the moment the user presses the button.
+  const labelEl = document.getElementById('f-label') as HTMLInputElement | null;
+  const bad = !!labelEl?.value.trim() && !LABEL_RE.test(labelEl.value.trim());
+  labelEl?.classList.toggle('input-invalid', bad);
+  out.classList.toggle('env-name-preview-invalid', bad);
+
+  // E2 — collision, live. Two entries generating one variable name is a silent
+  // overwrite in whatever loads the file, and the only moment the user can
+  // cheaply avoid it is while they are choosing the name.
+  const note = document.getElementById('f-name-collision');
+  if (note) {
+    const editing = parseInt(
+      (document.getElementById('edit-index') as HTMLInputElement | null)?.value ?? '-1',
+    );
+    const others = (st.vault?.api_keys ?? []).filter((_, i) => i !== editing);
+    const mine = new Set(namesGeneratedBy(draft).map((g) => g.name.toUpperCase()));
+    const clashes = others.filter((e) =>
+      namesGeneratedBy(e).some((g) => mine.has(g.name.toUpperCase())),
+    );
+    note.textContent = clashes.length
+      ? `Also generated by ${clashes
+          .slice(0, 3)
+          .map((e) => e.provider)
+          .join(
+            ', ',
+          )}${clashes.length > 3 ? ` and ${clashes.length - 3} more` : ''} — a copy of both would overwrite one`
+      : '';
+    note.hidden = clashes.length === 0;
+  }
+}
+
+/**
+ * The cookie paste helper.
+ *
+ * Dropping a raw `document.cookie` string, a DevTools "Copy all as JSON" or a
+ * `cookies.txt` into the value field and pressing this splits it into one
+ * `extra_vars` row per cookie, attributes and all.
+ *
+ * Splitting is **offered, never automatic**. A jar in one field is a perfectly
+ * good way to store a session — it is what the `Cookie:` header wants — and
+ * rewriting the user's value the moment they paste is the kind of help that
+ * loses a character they had fixed by hand. The status line says what was found
+ * and, when the attributes are missing, what that costs.
+ */
+function refreshCookieSplit(): void {
+  const group = document.getElementById('f-cookie-split-group');
+  const status = document.getElementById('f-cookie-split-status');
+  if (!group || !status) return;
+  const isCookie =
+    (document.getElementById('f-secret-type') as HTMLSelectElement | null)?.value === 'cookie';
+  const raw = (document.getElementById('f-key') as HTMLInputElement | null)?.value ?? '';
+  const jar = isCookie ? parseAnyCookies(raw) : [];
+  group.style.display = isCookie && jar.length > 0 ? 'flex' : 'none';
+  if (!jar.length) return;
+  const missing = missingTxtAttributes(jar);
+  status.textContent = missing.length
+    ? `${jar.length} cookie${jar.length === 1 ? '' : 's'} — no ${missing.join(' or ')}, so cookies.txt cannot be written`
+    : `${jar.length} cookie${jar.length === 1 ? '' : 's'}, with domain and path`;
+}
+
+let _cookieSplitBound = false;
+
+/** Assignment-guarded (invariant 9): `openModal` runs on every open. */
+function wireCookieSplit(): void {
+  if (_cookieSplitBound) return;
+  _cookieSplitBound = true;
+  document.getElementById('f-key')?.addEventListener('input', refreshCookieSplit);
+  document.getElementById('f-secret-type')?.addEventListener('change', refreshCookieSplit);
+  const btn = document.getElementById('f-cookie-split-btn');
+  if (btn) {
+    btn.onclick = () => {
+      const raw = (document.getElementById('f-key') as HTMLInputElement).value;
+      const jar = parseAnyCookies(raw);
+      if (!jar.length) return;
+      const list = document.getElementById('f-extra-vars-list');
+      if (!list) return;
+      // Replaces the rows rather than appending: pressing this twice on one jar
+      // must not produce every cookie twice, and the rows it would duplicate are
+      // the ones it just wrote.
+      list.innerHTML = '';
+      for (const xv of cookiesToExtraVars(jar)) {
+        const row = _makeExtraVarRow(xv.key, xv.value, true, false);
+        // The attributes ride on the row so a later save carries them; they have
+        // no input of their own because nobody hand-types an expiry in Unix
+        // seconds, and `cookies.txt` is the only thing that reads them.
+        if (xv.attrs) row.dataset.cookieAttrs = JSON.stringify(xv.attrs);
+        list.appendChild(row);
+      }
+      showToast(`Split into ${jar.length} cookie${jar.length === 1 ? '' : 's'}`, 'ok');
+    };
+  }
+}
+
+let _previewBound = false;
+
+/**
+ * Bind the preview to the five inputs that feed it.
+ *
+ * Assignment on a permanent node, guarded (invariant 9): `openModal` runs on
+ * every open, and `addEventListener` here would repaint the preview N times per
+ * keystroke after N opens.
+ */
+function wireNamePreview(): void {
+  if (_previewBound) return;
+  _previewBound = true;
+  for (const id of [
+    'f-provider',
+    'f-keyid',
+    'f-version',
+    'f-label',
+    'f-role',
+    'f-secret-role',
+    'f-secret',
+  ]) {
+    const el = document.getElementById(id);
+    if (el) el.addEventListener('input', updateNamePreview);
+  }
+}
+
 // ── Modal open/close/save ─────────────────────────────────────────────────
 
 export function openModal(title: string, idx: number) {
@@ -646,6 +900,10 @@ export function openModal(title: string, idx: number) {
   applySchemaTooltips();
   // Assigned, not added — openModal runs on every open (invariant 9).
   wireTotpField();
+  wireNamePreview();
+  updateNamePreview();
+  wireCookieSplit();
+  refreshCookieSplit();
   document.getElementById('modal-overlay')!.classList.add('open');
   (document.getElementById('f-provider') as HTMLInputElement).focus();
   populateProjectSelect();
@@ -660,13 +918,17 @@ function _saveDraft() {
 }
 let _draftBound = false;
 
-function _makeExtraVarRow(key = '', value = '', secret = false): HTMLElement {
+function _makeExtraVarRow(key = '', value = '', secret = false, isPublic = false): HTMLElement {
   const row = document.createElement('div');
   row.className = 'extra-var-row';
+  // "public" is the opt-out from redaction, not a display toggle: `extra_vars`
+  // are masked by default everywhere (Phase 23, E5), and this is how a client
+  // id, a region or an account SID says it is safe to print.
   row.innerHTML = `
     <input class="form-input mono extra-var-key" placeholder="KEY" value="${escAttr(key)}">
     <input class="form-input mono extra-var-value" placeholder="value" value="${escAttr(value)}"${secret ? ' type="password"' : ''}>
     <label class="extra-var-secret-label" title="Mask value in UI"><input type="checkbox" class="extra-var-secret"${secret ? ' checked' : ''}> secret</label>
+    <label class="extra-var-secret-label" title="Safe to print — opts this value out of redaction in the CLI and in copies. Use it for client ids, regions and account SIDs, never for the secret beside them."><input type="checkbox" class="extra-var-public"${isPublic ? ' checked' : ''}> public</label>
     <button type="button" class="icon-btn sm extra-var-remove" title="Remove">×</button>
   `;
   const inp = row.querySelector<HTMLInputElement>('.extra-var-value')!;
@@ -727,9 +989,13 @@ export function closeModal() {
   clearDraft();
 }
 
-export function saveModal() {
+export async function saveModal() {
   try {
-    const entry = formToEntry();
+    const idx = parseInt((document.getElementById('edit-index') as HTMLInputElement).value);
+    // The entry being edited is the *base*: every field with no form input rides
+    // through by construction rather than by the save path remembering it (E4).
+    const old = idx >= 0 ? st.vault.api_keys[idx] : undefined;
+    const entry = formToEntry(old);
     const t = entry.secretType || 'api_key';
     if (!entry.provider) {
       showToast(`${TYPE_CONFIG[t]?.providerLabel || 'Provider'} is required`, 'err');
@@ -743,14 +1009,77 @@ export function saveModal() {
       showToast('File path/reference is required', 'err');
       return;
     }
-    // An entry that carries an authenticator seed and nothing else is a real
-    // thing: it is what an import from Ente, Aegis or 2FAS produces, and the
-    // password beside it may never be stored here at all. Demanding a primary
-    // value would make every imported entry unsaveable the first time somebody
-    // opened it to fix its name.
-    if (t !== 'certificate' && t !== 'file_blob' && !entry.api_key && !entry.totp_secret) {
-      showToast(`${TYPE_CONFIG[t]?.keyLabel || 'Value'} is required`, 'err');
+    // The primary value is required **unless the entry legitimately has none**
+    // (Phase 23, step 4). Three shapes do: an `env_var` entry whose payload is N
+    // named variables in `extra_vars`, an entry carrying only an authenticator
+    // seed (what an import from Ente or Aegis produces, when the password lives
+    // elsewhere), and the two types whose payload is their own field.
+    //
+    // `primaryIsOptional` is the single predicate — "the primary is never empty"
+    // was assumed in more places than it was stated, and each of them
+    // re-deriving the rule is how they drift.
+    if (!entry.api_key && !primaryIsOptional(entry)) {
+      showToast(
+        t === 'env_var'
+          ? 'Add a value, or at least one named variable below'
+          : `${TYPE_CONFIG[t]?.keyLabel || 'Value'} is required`,
+        'err',
+      );
       return;
+    }
+    // ...but an entry holding nothing at all is a mistake in every shape.
+    if (!entryHasPayload(entry)) {
+      showToast('This entry would hold nothing — add a value or a variable', 'err');
+      return;
+    }
+    // A label is a *name segment*, so anything that would normalise away is
+    // refused here rather than silently transliterated into a variable name the
+    // user never typed.
+    if (entry.label && !LABEL_RE.test(entry.label)) {
+      showToast(
+        'Name label: letters, digits, _ and - only, starting with a letter or digit, max 24',
+        'err',
+        4500,
+      );
+      return;
+    }
+    // E12. `entry_ck` falls back to `provider|account_name|key_id` for an entry
+    // with no `id`, so two entries differing only by `label` would collide there
+    // — and that tuple is what RBAC scoped writes and `envv entry rm` match on.
+    // Adding `label` to the tuple would silently re-target scoping on every
+    // pre-`id` vault, so the fix is to backfill the id instead. The app does
+    // that in `finishInit()`; an entry written by an older CLI may still lack
+    // one, and `envv doctor --fix` is the way to repair those.
+    if (entry.label && idx >= 0 && !old?.id) {
+      showToast(
+        'This entry predates stable ids — run `envv doctor --fix` before giving it a name label',
+        'err',
+        5000,
+      );
+      return;
+    }
+    // **The one thing this phase must not break** (step 6).
+    //
+    // Renaming a provider, version or label silently renames every environment
+    // variable this entry generates — and the `.env` already deployed on a
+    // server keeps the old name. That is `renameProviderRefs()`'s problem with a
+    // wider blast radius, because the stale reference is not in the vault at
+    // all: it is in a file on a machine nobody is looking at.
+    //
+    // So the before/after names are shown and confirmed, and only when this
+    // entry has actually been copied under the old one — `last_copied_name` is
+    // the evidence that something out there may be reading it. Asking on every
+    // rename of an entry nobody has ever deployed is the kind of confirmation
+    // people learn to click through.
+    if (old?.last_copied_name) {
+      const nowName = primaryEnvName(entry);
+      if (nowName !== old.last_copied_name) {
+        const ok = await showConfirm(
+          `This renames the variable it generates:\n\n    ${old.last_copied_name}  →  ${nowName}\n\n` +
+            `Anything already deployed with the old name keeps reading the old name. Rename it?`,
+        );
+        if (!ok) return;
+      }
     }
     // A seed that cannot produce a code must not reach the vault: the entry
     // would then show a permanently blank code with nothing saying why, which
@@ -763,23 +1092,16 @@ export function saveModal() {
         return;
       }
     }
-    const idx = parseInt((document.getElementById('edit-index') as HTMLInputElement).value);
-    if (idx >= 0) {
-      // Preserve fields not represented in the form.
-      // `id` above all: it is this entry's identity for audit attribution,
-      // version history and RBAC write scoping. Dropping it on every edit would
-      // make each save look like a delete-plus-create.
-      const old = st.vault.api_keys[idx];
+    if (idx >= 0 && old) {
+      // `id` is the one field that must exist even when the base had none: it is
+      // this entry's identity for audit attribution, version history and RBAC
+      // write scoping, and an entry written by an older build may predate it.
+      // Everything else the form does not offer — `created_at`,
+      // `last_rotated_at`, `version_history`, `pinned` and every field a later
+      // phase adds — now arrives through the spread in `formToEntry`.
       st.vault.api_keys[idx] = {
         ...entry,
         id: old.id ?? newEntryId(),
-        // A creation date that moves on edit is not a creation date. The form
-        // never offers it, so an edit must carry the old value through — the
-        // same reasoning as `id` above.
-        created_at: old.created_at,
-        last_rotated_at: old.last_rotated_at,
-        version_history: old.version_history,
-        pinned: old.pinned,
       };
       // Chunk references address entries by provider name, so a rename has to
       // carry them or every `${Provider/field}` pointing here goes stale.
@@ -1047,18 +1369,149 @@ export function copyField(e: Event, value: string, btn?: HTMLElement) {
     .catch(() => showToast('Copy failed', 'err'));
 }
 
-export function doCopyEnv(e: Event, idx: number) {
+/**
+ * Copy one entry at a profile.
+ *
+ * `profile` absent means "whatever the setting says" — the caret menu passes an
+ * explicit one for a single copy and **does not persist it** (Phase 23): a
+ * one-off "give me everything" must not silently change what the next fifty
+ * copies contain.
+ */
+export function doCopyEnv(e: Event, idx: number, profile?: CopyProfile | 'value') {
   e.stopPropagation();
   const entry = st.vault.api_keys[idx];
   if (!entry) return;
   const fmt = Settings.get('defaultExportFormat');
-  const text = fmt === 'yaml' ? Exporter.yaml([entry]) : Exporter.dotenv([entry]);
+
+  let text: string;
+  let label: string;
+  if (profile === 'value') {
+    // The escape hatch for "I am pasting this into a login box". No name, no
+    // header, no quoting — quoting is a `.env` concern and this is not one.
+    text = entry.api_key || '';
+    label = 'value';
+  } else if (fmt === 'yaml' && !profile) {
+    text = Exporter.yaml([entry]);
+    label = 'YAML';
+  } else {
+    const p = profile ?? ((Settings.get('copyProfile') || 'basic') as CopyProfile);
+    text = buildCopyText(entry, {
+      profile: p,
+      metadataStyle: (Settings.get('metadataStyle') || 'comment') as MetadataStyle,
+      case: Settings.get('envCopyCase'),
+      includePrefix: !!Settings.get('envIncludePrefix'),
+    });
+    label = `.env (${p})`;
+  }
+
   clipboardWrite(text).then(() => {
     const btn = document.getElementById(`env-btn-${idx}`);
     btn?.classList.add('env-copied');
     setTimeout(() => btn?.classList.remove('env-copied'), 1600);
-    showToast(`Copied as ${fmt === 'yaml' ? 'YAML' : '.env'} ✓`, 'ok');
+    showToast(`Copied as ${label} ✓`, 'ok');
+    // Stamp what name this went out under (step 6). Without it, "the generated
+    // name changed since you last copied" is a question nothing can answer —
+    // the stale `.env` is on a machine this app has never seen.
+    //
+    // Only for a real copy: "Value only" carries no name, so stamping there
+    // would claim a deployment that never happened.
+    if (profile !== 'value') {
+      const name = primaryEnvName(entry);
+      if (entry.last_copied_name !== name) {
+        entry.last_copied_name = name;
+        void persist();
+      }
+    }
   });
+}
+
+/** The caret beside the copy button: the three profiles, the raw value, and the request forms. */
+export function openCopyEnvMenu(e: Event, idx: number) {
+  e.stopPropagation();
+  const el = e.currentTarget as HTMLElement;
+  const entry = st.vault.api_keys[idx];
+  if (!entry) return;
+  const current = (Settings.get('copyProfile') || 'basic') as CopyProfile;
+  const mark = (p: CopyProfile) => (p === current ? ' ·' : '');
+
+  const copy = (text: string, what: string) => {
+    void clipboardWrite(text).then(() => showToast(`Copied ${what} ✓`, 'ok'));
+  };
+  const header = authHeaderFor(entry);
+
+  showDropdown(el, [
+    { label: `Basic${mark('basic')}`, fn: () => doCopyEnv(e, idx, 'basic') },
+    { label: `Extended${mark('extended')}`, fn: () => doCopyEnv(e, idx, 'extended') },
+    { label: `Full${mark('full')}`, fn: () => doCopyEnv(e, idx, 'full') },
+    '---',
+    { label: 'Value only', fn: () => doCopyEnv(e, idx, 'value') },
+    // E16: the vault now knows *how* this credential is sent, so it can hand
+    // over the thing the user was previously assembling from memory.
+    ...(header
+      ? [
+          {
+            label: `Request header (${header.name})`,
+            fn: () => copy(`${header.name}: ${header.value}`, 'request header'),
+          },
+        ]
+      : []),
+    { label: 'curl command', fn: () => copy(curlFor(entry), 'curl command') },
+    // A file-shaped credential is delivered by **writing it**, not by copying
+    // it (E17): pasting a 2 KB service-account JSON into a `.env` produces a
+    // variable the library tries to `open()` as a path. So the download is the
+    // action, and what goes on the clipboard is the line that names the file.
+    ...(isFileShaped(entry)
+      ? [
+          '---' as const,
+          {
+            label: 'Write to file…',
+            fn: () => {
+              const f = fileContentsOf(entry);
+              if (!f) return;
+              const base = envName(entry, { case: 'lower' });
+              downloadText(f.text, `${base}.${f.ext}`, 'File written ✓');
+            },
+          },
+          ...(entry.mount_path
+            ? [
+                {
+                  label: 'Copy the .env line (path, not contents)',
+                  fn: () => copy(fileEnvLine(entry, primaryEnvName(entry)) ?? '', 'the .env line'),
+                },
+              ]
+            : []),
+        ]
+      : []),
+    // The cookie forms, on a cookie entry only: five more rows on every card
+    // would bury the four that apply to everything.
+    ...(entry.secretType === 'cookie'
+      ? [
+          '---' as const,
+          {
+            label: 'Cookie header',
+            fn: () => copy(toCookieHeader(cookiesOf(entry)), 'cookie header'),
+          },
+          {
+            label: 'cookies.txt (curl -b, yt-dlp)',
+            fn: () => {
+              try {
+                copy(toCookiesTxt(cookiesOf(entry)), 'cookies.txt');
+              } catch (err) {
+                // Refused, with the reason. Writing a file `yt-dlp` silently
+                // ignores is worse than not writing one, and "it did not work"
+                // with no explanation is how that turns into a bug report about
+                // the download rather than about the jar.
+                showToast((err as Error).message, 'err', 7000);
+              }
+            },
+          },
+          {
+            label: 'Cookie JSON (back into a browser)',
+            fn: () => copy(toCookieJson(cookiesOf(entry)), 'cookie JSON'),
+          },
+        ]
+      : []),
+  ]);
 }
 
 export function onIconWrapClick(e: Event, idx: number) {

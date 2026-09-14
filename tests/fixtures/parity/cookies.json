@@ -1,0 +1,285 @@
+{
+  "_comment": [
+    "Session cookies (Phase 23, step 5), asserted from both src/ts/cookies.ts and",
+    "envv-cli/src/cookies.rs.",
+    "",
+    "An eighth twin pair. The form has to split a pasted document.cookie AS IT IS",
+    "TYPED, so an IPC round trip per keystroke is not an option \u2014 the same reason",
+    "the TOTP seed parser exists twice.",
+    "",
+    "cookies.txt is REFUSED rather than approximated when the attributes are not",
+    "there. A file yt-dlp reads and silently ignores is worse than no button: the",
+    "user discovers it as 'the download is not logged in', with nothing pointing",
+    "at the file."
+  ],
+  "parse_header": [
+    {
+      "why": "a plain document.cookie string",
+      "raw": "sp_dc=AQB123; sp_key=8f3",
+      "expect": [
+        {
+          "name": "sp_dc",
+          "value": "AQB123"
+        },
+        {
+          "name": "sp_key",
+          "value": "8f3"
+        }
+      ]
+    },
+    {
+      "why": "the Cookie: prefix is stripped \u2014 it is what devtools copies",
+      "raw": "Cookie: a=1; b=2",
+      "expect": [
+        {
+          "name": "a",
+          "value": "1"
+        },
+        {
+          "name": "b",
+          "value": "2"
+        }
+      ]
+    },
+    {
+      "why": "a trailing semicolon is not an empty cookie",
+      "raw": "a=1; b=2;",
+      "expect": [
+        {
+          "name": "a",
+          "value": "1"
+        },
+        {
+          "name": "b",
+          "value": "2"
+        }
+      ]
+    },
+    {
+      "why": "a value containing = keeps all of it \u2014 base64 pads with =",
+      "raw": "t=abc==; u=2",
+      "expect": [
+        {
+          "name": "t",
+          "value": "abc=="
+        },
+        {
+          "name": "u",
+          "value": "2"
+        }
+      ]
+    },
+    {
+      "why": "an empty value is a real cookie, not a parse failure",
+      "raw": "a=; b=2",
+      "expect": [
+        {
+          "name": "a",
+          "value": ""
+        },
+        {
+          "name": "b",
+          "value": "2"
+        }
+      ]
+    },
+    {
+      "why": "a piece with no = is dropped rather than losing the jar",
+      "raw": "a=1; garbage; b=2",
+      "expect": [
+        {
+          "name": "a",
+          "value": "1"
+        },
+        {
+          "name": "b",
+          "value": "2"
+        }
+      ]
+    },
+    {
+      "why": "newlines separate too \u2014 devtools panels paste one per line",
+      "raw": "a=1\nb=2",
+      "expect": [
+        {
+          "name": "a",
+          "value": "1"
+        },
+        {
+          "name": "b",
+          "value": "2"
+        }
+      ]
+    },
+    {
+      "why": "a cookie prefix stays in the name; only the generated variable strips it",
+      "raw": "__Host-sid=x",
+      "expect": [
+        {
+          "name": "__Host-sid",
+          "value": "x"
+        }
+      ]
+    },
+    {
+      "why": "nothing in, nothing out",
+      "raw": "   ",
+      "expect": []
+    }
+  ],
+  "parse_txt": [
+    {
+      "why": "the Netscape format, including curl's #HttpOnly_ line prefix",
+      "raw": "# Netscape HTTP Cookie File\n.example.com\tTRUE\t/\tTRUE\t1790000000\tsid\tabc\n#HttpOnly_.example.com\tTRUE\t/app\tFALSE\t0\tcsrf\tdef\n",
+      "expect": [
+        {
+          "name": "sid",
+          "value": "abc",
+          "domain": ".example.com",
+          "path": "/",
+          "secure": true,
+          "http_only": false,
+          "expires": 1790000000
+        },
+        {
+          "name": "csrf",
+          "value": "def",
+          "domain": ".example.com",
+          "path": "/app",
+          "secure": false,
+          "http_only": true,
+          "expires": 0
+        }
+      ]
+    },
+    {
+      "why": "a short line is skipped rather than throwing the file away",
+      "raw": "broken\tline\n.a.com\tTRUE\t/\tFALSE\t0\tk\tv\n",
+      "expect": [
+        {
+          "name": "k",
+          "value": "v",
+          "domain": ".a.com",
+          "path": "/",
+          "secure": false,
+          "http_only": false,
+          "expires": 0
+        }
+      ]
+    }
+  ],
+  "parse_json": [
+    {
+      "why": "the array shape every cookie-editor extension writes",
+      "raw": "[{\"name\":\"sid\",\"value\":\"abc\",\"domain\":\".example.com\",\"path\":\"/\",\"secure\":true,\"httpOnly\":true,\"expirationDate\":1790000000}]",
+      "expect": [
+        {
+          "name": "sid",
+          "value": "abc",
+          "domain": ".example.com",
+          "path": "/",
+          "secure": true,
+          "http_only": true,
+          "expires": 1790000000
+        }
+      ]
+    },
+    {
+      "why": "a {cookies:[\u2026]} wrapper is read too",
+      "raw": "{\"cookies\":[{\"name\":\"a\",\"value\":\"1\"}]}",
+      "expect": [
+        {
+          "name": "a",
+          "value": "1",
+          "domain": null,
+          "path": null,
+          "secure": false,
+          "http_only": false,
+          "expires": 0
+        }
+      ]
+    },
+    {
+      "why": "an entry with no name is not a cookie",
+      "raw": "[{\"value\":\"x\"}]",
+      "expect": []
+    },
+    {
+      "why": "unparseable JSON yields nothing rather than throwing",
+      "raw": "[{",
+      "expect": []
+    }
+  ],
+  "to_header": [
+    {
+      "why": "what a request actually sends",
+      "cookies": [
+        {
+          "name": "sp_dc",
+          "value": "AQB123"
+        },
+        {
+          "name": "sp_key",
+          "value": "8f3"
+        }
+      ],
+      "expect": "sp_dc=AQB123; sp_key=8f3"
+    }
+  ],
+  "to_txt": [
+    {
+      "why": "a full jar round-trips through the Netscape format",
+      "cookies": [
+        {
+          "name": "sid",
+          "value": "abc",
+          "domain": ".example.com",
+          "path": "/",
+          "secure": true,
+          "http_only": false,
+          "expires": 1790000000
+        },
+        {
+          "name": "csrf",
+          "value": "def",
+          "domain": ".example.com",
+          "path": "/app",
+          "secure": false,
+          "http_only": true,
+          "expires": 0
+        }
+      ],
+      "expect": "# Netscape HTTP Cookie File\n# Written by EnvVault. Move it somewhere safe and delete it when done.\n.example.com\tTRUE\t/\tTRUE\t1790000000\tsid\tabc\n#HttpOnly_.example.com\tTRUE\t/app\tFALSE\t0\tcsrf\tdef\n"
+    },
+    {
+      "why": "the include-subdomains column is the leading dot, restated",
+      "cookies": [
+        {
+          "name": "k",
+          "value": "v",
+          "domain": "example.com",
+          "path": "/",
+          "secure": false,
+          "http_only": false,
+          "expires": 0
+        }
+      ],
+      "expect": "# Netscape HTTP Cookie File\n# Written by EnvVault. Move it somewhere safe and delete it when done.\nexample.com\tFALSE\t/\tFALSE\t0\tk\tv\n"
+    }
+  ],
+  "to_txt_refused": [
+    {
+      "why": "a jar pasted as document.cookie has no domain and no path, and a file missing them is one yt-dlp silently ignores",
+      "cookies": [
+        {
+          "name": "a",
+          "value": "1"
+        }
+      ],
+      "missing": [
+        "domain",
+        "path"
+      ]
+    }
+  ]
+}

@@ -703,6 +703,7 @@
             <option value="connection_string">Connection String</option>
             <option value="ssh_key">SSH Key</option>
             <option value="file_blob">File / Config Blob</option>
+            <option value="cookie">Browser session (cookies)</option>
           </select>
         </div>
         <div class="form-row-3">
@@ -712,7 +713,7 @@
             <input class="form-input" id="f-provider" type="text" placeholder="e.g. GitHub">
           </div>
           <div class="form-group">
-            <label for="f-keyid" class="form-label" data-field="key_id">Label <span class="opt">optional</span></label>
+            <label for="f-keyid" class="form-label" data-field="key_id" title="Distinguishes two credentials from the same provider. Part of this entry's identity — it is what ${Provider_KeyId} addresses and what RBAC scoping matches.">Key ID <span class="opt">optional</span></label>
             <input class="form-input mono" id="f-keyid" type="text" placeholder="e.g. 1, prod, v2">
           </div>
           <div class="form-group" id="f-account-group">
@@ -731,6 +732,35 @@
               Generate
             </button>
           </div>
+        </div>
+        <div class="form-row-2" id="f-role-row">
+          <div class="form-group">
+            <label for="f-role" class="form-label" data-field="primary_role" title="What the value above actually is. It becomes the last segment of the generated variable name — a client id exports as SPOTIFY_ID rather than as SPOTIFY. Leave blank to keep the bare name every already-deployed .env uses.">
+              Value role <span class="opt">optional</span>
+            </label>
+            <input class="form-input mono" id="f-role" type="text" list="f-role-presets" autocomplete="off" placeholder="blank = SPOTIFY=  ·  id  ·  key  ·  token">
+            <datalist id="f-role-presets">
+              <option value="id"></option>
+              <option value="key"></option>
+              <option value="token"></option>
+              <option value="secret"></option>
+              <option value="password"></option>
+              <option value="value"></option>
+            </datalist>
+          </div>
+          <div class="form-group">
+            <label for="f-label" class="form-label" data-field="label" title="A short namespace token inserted into generated names after the version — SPOTIFY_V2_GAME_ID. Not the account name: account names are email addresses, and SPOTIFY_ME_GMAIL_COM_ID is not a variable anyone wants.">
+              Name label <span class="opt">optional</span>
+            </label>
+            <input class="form-input mono" id="f-label" type="text" autocomplete="off" maxlength="24" placeholder="e.g. game, web, mobile">
+          </div>
+        </div>
+        <!-- The template has five inputs feeding it; nobody should have to run a
+             copy to find out what it produced. Written by `updateNamePreview()`. -->
+        <div class="form-group" id="f-name-preview-group">
+          <span class="form-label">Generated variable</span>
+          <output class="env-name-preview mono" id="f-name-preview" for="f-provider f-keyid f-version f-label f-role"></output>
+          <p class="env-name-collision" id="f-name-collision" hidden></p>
         </div>
         <div class="form-group" id="f-envvar-subtype-group" style="display:none">
           <label for="f-envvar-subtype" class="form-label">Variable Sub-type <span class="opt">optional</span></label>
@@ -751,6 +781,50 @@
         <div class="form-group" id="f-secret-group">
           <label for="f-secret" class="form-label" data-field="api_secret">API Secret <span class="opt">optional</span></label>
           <input class="form-input mono" id="f-secret" type="text" placeholder="Client secret or shared secret">
+        </div>
+        <div class="form-row-2" id="f-auth-row">
+          <div class="form-group">
+            <label for="f-auth-scheme" class="form-label" data-field="auth_scheme" title="How this credential is sent. It is what turns a stored string into a working request, and it is the one thing about a credential the vault did not hold — two entries that look identical are used completely differently.">
+              Sent as <span class="opt">optional</span>
+            </label>
+            <select id="f-auth-scheme" class="form-input">
+              <option value="">Authorization: Bearer (default)</option>
+              <option value="header">A named header</option>
+              <option value="basic">HTTP basic (username:value)</option>
+              <option value="query">A query parameter</option>
+              <option value="cookie">Cookie header</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label for="f-auth-param" class="form-label" data-field="auth_param" title="The header or query-parameter name. Defaults to X-Api-Key for a named header and api_key for a query parameter; means nothing for bearer and basic, whose shapes are fixed.">
+              Header / parameter name <span class="opt">optional</span>
+            </label>
+            <input class="form-input mono" id="f-auth-param" type="text" autocomplete="off" placeholder="X-Api-Key">
+          </div>
+        </div>
+        <div class="form-group" id="f-cookie-split-group" style="display:none">
+          <div class="cookie-split-row">
+            <span class="form-label" id="f-cookie-split-status"></span>
+            <button type="button" class="btn btn-ghost btn-sm" id="f-cookie-split-btn">Split into named cookies</button>
+          </div>
+        </div>
+        <div class="form-group" id="f-mount-path-group" style="display:none">
+          <label for="f-mount-path" class="form-label" data-field="mount_path" title="Where the consumer expects to find this file. A GCP service-account JSON, an Apple .p8 and a kubeconfig are all consumed by pointing at them, so the variable names the path and never the contents.">
+            Mount path <span class="opt">where the consumer expects the file</span>
+          </label>
+          <input class="form-input mono" id="f-mount-path" type="text" autocomplete="off" placeholder="/etc/gcp/sa.json">
+        </div>
+        <div class="form-group" id="f-user-agent-group">
+          <label for="f-user-agent" class="form-label" data-field="user_agent" title="The User-Agent this credential was minted against. Not optional metadata for a session cookie: replay without the matching User-Agent usually 401s.">
+            User-Agent <span class="opt">optional — required in practice for a session cookie</span>
+          </label>
+          <input class="form-input mono" id="f-user-agent" type="text" autocomplete="off" placeholder="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36">
+        </div>
+        <div class="form-group" id="f-secret-role-group">
+          <label for="f-secret-role" class="form-label" data-field="secret_role" title="What the secret above is called, when SECRET is wrong — Twilio's second half is an Auth Token, Apple's is a private key.">
+            Secret role <span class="opt">optional — default SECRET</span>
+          </label>
+          <input class="form-input mono" id="f-secret-role" type="text" autocomplete="off" placeholder="blank = SPOTIFY_SECRET  ·  auth_token  ·  private_key">
         </div>
         <div class="form-group" id="f-totp-group">
           <label for="f-totp" class="form-label" data-field="totp_secret" title="The authenticator seed this service issued you. Paste the whole otpauth:// URI and the algorithm, digits and period are read from it.">
@@ -1175,6 +1249,43 @@
                 <option value="api_secret">API Secret (secondary)</option>
                 <option value="key_id">Label / Key ID</option>
               </select>
+            </div>
+            <div class="settings-row">
+              <div class="settings-label" id="s-copy-profile-label">Copy profile</div>
+              <select id="s-copy-profile" aria-labelledby="s-copy-profile-label" class="sort-select">
+                <option value="basic">Basic — values only</option>
+                <option value="extended">Extended — + version, expiry, limits, scopes</option>
+                <option value="full">Full — + description, tags, projects, dates</option>
+              </select>
+            </div>
+            <div class="settings-row">
+              <div class="settings-label" id="s-metadata-style-label">Profile metadata as</div>
+              <select id="s-metadata-style" aria-labelledby="s-metadata-style-label" class="sort-select">
+                <option value="comment"># comments</option>
+                <option value="var">Environment variables</option>
+              </select>
+            </div>
+            <div class="settings-row">
+              <div class="settings-label" id="s-env-copy-case-label">Variable name case</div>
+              <select id="s-env-copy-case" aria-labelledby="s-env-copy-case-label" class="sort-select">
+                <option value="upper">UPPER_CASE</option>
+                <option value="preserve">Preserve what was typed</option>
+                <option value="lower">lower_case</option>
+              </select>
+            </div>
+            <div class="settings-row">
+              <label class="settings-label" for="s-env-include-prefix">
+                <span id="s-env-include-prefix-title">Include the consumer prefix</span>
+                <p class="settings-hint">Prepends the entry's first env prefix — <code>ND_SPOTIFY_ID</code> rather than <code>SPOTIFY_ID</code>. Off by default: a prefix is a fact about one consumer, and turning it on renames every variable the vault generates.</p>
+              </label>
+              <input type="checkbox" id="s-env-include-prefix" aria-labelledby="s-env-include-prefix-title">
+            </div>
+            <!-- Five interacting switches. A list of five labels with no preview
+                 is how a settings panel becomes unreadable, so this re-renders
+                 as the options change. -->
+            <div class="settings-row settings-row-stacked">
+              <div class="settings-label" id="s-copy-preview-label">What a copy produces</div>
+              <output class="env-name-preview mono" id="s-copy-preview" aria-labelledby="s-copy-preview-label"></output>
             </div>
           </div>
           <div class="settings-section">

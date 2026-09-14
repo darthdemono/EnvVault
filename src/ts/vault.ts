@@ -53,6 +53,7 @@ import {
   toggleReveal,
   copyField,
   doCopyEnv,
+  openCopyEnvMenu,
   onIconWrapClick,
   openIconPickerFor,
   markAsRotated,
@@ -406,9 +407,16 @@ async function init() {
   // Assigned, not added (invariant 9): `init()` runs once today, but every other
   // wire-up in this file that was written as `addEventListener` has eventually
   // been called twice by something.
-  const totpImportBtn = document.getElementById('totp-import-btn');
-  if (totpImportBtn) {
-    totpImportBtn.onclick = () => {
+  //
+  // There are two pairs of these buttons and they must do the same thing: the
+  // sidebar section's (`#totp-*`) and the Authenticator panel's (`#auth-*`).
+  // The panel's pair shipped with markup, a title and no handler, so the only
+  // visible way into the importer from the screen built to manage seeds was
+  // inert — which reads as the feature being missing rather than unwired.
+  for (const id of ['totp-import-btn', 'auth-import-btn']) {
+    const btn = document.getElementById(id);
+    if (!btn) continue;
+    btn.onclick = () => {
       // Built and removed per use: WebKitGTK renders a native widget for any
       // `<input type="file">` in the DOM regardless of CSS (the Phase 3 ghost).
       openFilePicker(
@@ -417,11 +425,12 @@ async function init() {
       );
     };
   }
-  const totpExportBtn = document.getElementById('totp-export-btn');
-  if (totpExportBtn) {
-    totpExportBtn.onclick = () => {
+  for (const id of ['totp-export-btn', 'auth-export-btn']) {
+    const btn = document.getElementById(id);
+    if (!btn) continue;
+    btn.onclick = () => {
       showDropdown(
-        totpExportBtn,
+        btn,
         EXPORT_FORMATS.map((f) => ({ label: f.label, fn: () => void runTotpExport(f.value) })),
       );
     };
@@ -646,7 +655,7 @@ async function init() {
   // Entry modal buttons
   document.getElementById('modal-close')!.addEventListener('click', closeModal);
   document.getElementById('modal-cancel')!.addEventListener('click', closeModal);
-  document.getElementById('modal-save')!.addEventListener('click', saveModal);
+  document.getElementById('modal-save')!.addEventListener('click', () => void saveModal());
   document.getElementById('modal-duplicate')!.addEventListener('click', () => {
     const idx = parseInt((document.getElementById('edit-index') as HTMLInputElement).value);
     if (idx >= 0) duplicateKey(new Event('click'), idx);
@@ -995,9 +1004,25 @@ async function init() {
       case 'copy-env':
         doCopyEnv(e, idx);
         break;
+      case 'copy-env-menu':
+        openCopyEnvMenu(e, idx);
+        break;
       case 'rotate':
         markAsRotated(idx);
         break;
+      // The session equivalent (E13). Rotating a cookie means logging in again
+      // in a browser, which nothing here can do, so "never rotated" was a
+      // finding with no available fix; "never verified" has one.
+      case 'verify': {
+        const entry = st.vault.api_keys[idx];
+        if (entry) {
+          entry.last_verified_at = new Date().toISOString();
+          void persist();
+          triggerRender();
+          showToast('Session verified ✓', 'ok', 1800);
+        }
+        break;
+      }
       case 'pin': {
         const entry = st.vault.api_keys[idx];
         if (entry) {

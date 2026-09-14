@@ -1,0 +1,292 @@
+{
+  "_comment": [
+    "The environment-variable name template and .env value quoting (Phase 23,",
+    "step 1), asserted from both src/ts/state.ts (envName / quoteEnvValue /",
+    "unquoteEnvValue) and envv-cli/src/envfile.rs (env_name / quote_env_value /",
+    "unquote_env_value).",
+    "",
+    "This fixture exists because there were three name builders before it and",
+    "they disagreed: dotenvKey (provider + key_id) fed the .env and YAML",
+    "exports, envKey in import-export.ts (provider only) fed the k8s and tfvars",
+    "exports, and data::env_key in the CLI (provider only) fed all four of its.",
+    "The same entry exported under two different names depending on which button",
+    "you pressed, and nothing anywhere said so.",
+    "",
+    "The template is:",
+    "    [PREFIX_] PROVIDER [_KEYID] [_VERSION] [_LABEL] [_ROLE]",
+    "KEYID is a deliberate deviation from the Phase 23 design's six segments —",
+    "see the header comment in src/ts/state.ts for why.",
+    "",
+    "`quoting` asserts the round trip, not the bytes: parse(write(v)) == v is",
+    "the property that matters, and `written` is pinned alongside it only so a",
+    "change to the escaping shows up as a diff rather than passing silently."
+  ],
+
+  "names": [
+    {
+      "why": "the plain case",
+      "entry": { "provider": "Spotify" },
+      "expect": "SPOTIFY"
+    },
+    {
+      "why": "a role turns the bare name into a role-tagged one",
+      "entry": { "provider": "Spotify" },
+      "role": "ID",
+      "expect": "SPOTIFY_ID"
+    },
+    {
+      "why": "role `value` is the absent role, not a segment",
+      "entry": { "provider": "Spotify" },
+      "role": "value",
+      "expect": "SPOTIFY"
+    },
+    {
+      "why": "key_id keeps the place it has held since Phase 3",
+      "entry": { "provider": "Spotify", "key_id": "primary" },
+      "expect": "SPOTIFY_PRIMARY"
+    },
+    {
+      "why": "a bare version number gains its V",
+      "entry": { "provider": "Spotify", "version": "2" },
+      "role": "ID",
+      "expect": "SPOTIFY_V2_ID"
+    },
+    {
+      "why": "and a v-prefixed one does not double it",
+      "entry": { "provider": "Spotify", "version": "v2" },
+      "role": "ID",
+      "expect": "SPOTIFY_V2_ID"
+    },
+    {
+      "why": "a dotted version keeps both halves",
+      "entry": { "provider": "Spotify", "version": "2.0" },
+      "expect": "SPOTIFY_V2_0"
+    },
+    {
+      "why": "a dated version is a version",
+      "entry": { "provider": "Stripe", "version": "2026-08-01" },
+      "expect": "STRIPE_V2026_08_01"
+    },
+    {
+      "why": "a word-shaped version keeps its first letter — `beta`, not `ETA`",
+      "entry": { "provider": "Spotify", "version": "beta" },
+      "expect": "SPOTIFY_BETA"
+    },
+    {
+      "why": "a v-word is not a version number either",
+      "entry": { "provider": "Acme", "version": "vault" },
+      "expect": "ACME_VAULT"
+    },
+    {
+      "why": "the label sits after the version",
+      "entry": { "provider": "Spotify", "version": "2", "label": "game" },
+      "role": "ID",
+      "expect": "SPOTIFY_V2_GAME_ID"
+    },
+    {
+      "why": "a hyphenated label collapses to one underscore",
+      "entry": { "provider": "Spotify", "label": "web-app" },
+      "role": "ID",
+      "expect": "SPOTIFY_WEB_APP_ID"
+    },
+    {
+      "why": "a provider with a space",
+      "entry": { "provider": "Google Cloud" },
+      "expect": "GOOGLE_CLOUD"
+    },
+    {
+      "why": "runs of punctuation collapse and the edges are trimmed — never SPOTIFY__ID",
+      "entry": { "provider": "  spotify!!  " },
+      "role": "ID",
+      "expect": "SPOTIFY_ID"
+    },
+    {
+      "why": "a provider starting with a digit is not a legal identifier without help",
+      "entry": { "provider": "1Password" },
+      "expect": "_1PASSWORD"
+    },
+    {
+      "why": "an empty role adds no segment",
+      "entry": { "provider": "Spotify" },
+      "role": "",
+      "expect": "SPOTIFY"
+    },
+    {
+      "why": "the consumer prefix is opt-in",
+      "entry": { "provider": "Spotify", "version": "2", "label": "game", "env_prefixes": ["ND"] },
+      "role": "ID",
+      "includePrefix": true,
+      "expect": "ND_SPOTIFY_V2_GAME_ID"
+    },
+    {
+      "why": "and is absent when it is not opted into",
+      "entry": { "provider": "Spotify", "env_prefixes": ["ND"] },
+      "role": "ID",
+      "expect": "SPOTIFY_ID"
+    },
+    {
+      "why": "only the first prefix is used",
+      "entry": { "provider": "Lastfm", "env_prefixes": ["ND", "SPOTIFYD"] },
+      "includePrefix": true,
+      "expect": "ND_LASTFM"
+    },
+    {
+      "why": "lower case is offered, not assumed",
+      "entry": { "provider": "Spotify", "version": "2" },
+      "role": "ID",
+      "case": "lower",
+      "expect": "spotify_v2_id"
+    },
+    {
+      "why": "preserve keeps what was typed, still normalising illegal characters",
+      "entry": { "provider": "Spotify", "label": "web-app" },
+      "role": "Id",
+      "case": "preserve",
+      "expect": "Spotify_web_app_Id"
+    },
+    {
+      "why": "a cookie's __Host- prefix is stripped, not transliterated",
+      "entry": { "provider": "Spotify" },
+      "role": "__Host-sid",
+      "expect": "SPOTIFY_SID"
+    },
+    {
+      "why": "and so is __Secure-",
+      "entry": { "provider": "Spotify" },
+      "role": "__Secure-sid",
+      "expect": "SPOTIFY_SID"
+    },
+    {
+      "why": "an entry with nothing usable still generates a legal name",
+      "entry": { "provider": "!!!" },
+      "expect": "UNKNOWN"
+    },
+    {
+      "why": "a missing provider is UNKNOWN, as it has always been",
+      "entry": {},
+      "role": "SECRET",
+      "expect": "UNKNOWN_SECRET"
+    }
+  ],
+
+  "roles": [
+    {
+      "why": "no primary_role keeps the bare name — every deployed .env depends on this",
+      "entry": { "provider": "Spotify" },
+      "primary": "SPOTIFY",
+      "secret": "SPOTIFY_SECRET"
+    },
+    {
+      "why": "the reported bug: a client id must not export as though it were the key",
+      "entry": { "provider": "Spotify", "primary_role": "id" },
+      "primary": "SPOTIFY_ID",
+      "secret": "SPOTIFY_SECRET"
+    },
+    {
+      "why": "the worked example from the request, end to end",
+      "entry": { "provider": "Spotify", "version": "2", "label": "game", "primary_role": "id" },
+      "primary": "SPOTIFY_V2_GAME_ID",
+      "secret": "SPOTIFY_V2_GAME_SECRET"
+    },
+    {
+      "why": "an issuer whose second half is not called a secret",
+      "entry": { "provider": "Twilio", "primary_role": "account_sid", "secret_role": "auth_token" },
+      "primary": "TWILIO_ACCOUNT_SID",
+      "secret": "TWILIO_AUTH_TOKEN"
+    },
+    {
+      "why": "primary_role `value` is the absent role, not a VALUE segment",
+      "entry": { "provider": "Spotify", "primary_role": "value" },
+      "primary": "SPOTIFY",
+      "secret": "SPOTIFY_SECRET"
+    },
+    {
+      "why": "an empty secret_role falls back to SECRET rather than vanishing",
+      "entry": { "provider": "Spotify", "secret_role": "" },
+      "primary": "SPOTIFY",
+      "secret": "SPOTIFY_SECRET"
+    }
+  ],
+
+  "reference_lookup": {
+    "_comment": [
+      "E9: the reference grammar and the name template occupy the same",
+      "syntactic position. `${SPOTIFY_V2}` can mean provider SPOTIFY with",
+      "key_id V2 (the legacy split) or the SPOTIFY entry whose version is 2",
+      "(the template). Where both exist and disagree the reference is refused",
+      "rather than silently answered — a wrong value written into a config is",
+      "the Phase 21 defect class.",
+      "",
+      "Each case names an entry by its `provider` field; `expect` is the",
+      "`account_name` of the entry that must be found, or null for refused."
+    ],
+    "entries": [
+      { "provider": "Spotify", "account_name": "plain", "api_key": "k1" },
+      { "provider": "Spotify", "key_id": "V2", "account_name": "by-keyid", "api_key": "k2" },
+      { "provider": "Stripe", "version": "2", "account_name": "by-version", "api_key": "k3" },
+      { "provider": "Discord", "primary_role": "id", "account_name": "by-role", "api_key": "k4" },
+      { "provider": "Twitch", "version": "3", "account_name": "twitch-v3", "api_key": "k5" },
+      { "provider": "Twitch", "key_id": "V3", "account_name": "twitch-keyid", "api_key": "k6" }
+    ],
+    "cases": [
+      { "why": "an exact provider still wins before anything else", "ref": "Spotify", "expect": "plain" },
+      { "why": "the legacy Provider_keyid split still resolves", "ref": "Spotify_V2", "expect": "by-keyid" },
+      { "why": "the template resolves a version nobody could address before", "ref": "STRIPE_V2", "expect": "by-version" },
+      { "why": "and a role-tagged name", "ref": "DISCORD_ID", "expect": "by-role" },
+      { "why": "two honest answers is refused, not guessed", "ref": "TWITCH_V3", "expect": null },
+      { "why": "a name matching nothing is still nothing", "ref": "NOPE_AT_ALL", "expect": null }
+    ]
+  },
+
+  "quoting": [
+    { "why": "a plain token is written bare", "value": "abc123", "written": "abc123" },
+    {
+      "why": "so are the characters a URL, a path and a fingerprint need",
+      "value": "sha256:0a1b/c.d-e_f@g",
+      "written": "sha256:0a1b/c.d-e_f@g"
+    },
+    { "why": "a space forces quotes", "value": "hello world", "written": "\"hello world\"" },
+    {
+      "why": "a trailing space would otherwise be eaten by the parser's trim",
+      "value": "trailing ",
+      "written": "\"trailing \""
+    },
+    {
+      "why": "a comment character would otherwise truncate the value",
+      "value": "p#ss",
+      "written": "\"p#ss\""
+    },
+    { "why": "a double quote is escaped", "value": "say \"hi\"", "written": "\"say \\\"hi\\\"\"" },
+    { "why": "a single quote needs no escaping inside double quotes", "value": "it's", "written": "\"it's\"" },
+    { "why": "a backslash is escaped", "value": "C:\\\\path\\\\to", "written": "\"C:\\\\\\\\path\\\\\\\\to\"" },
+    { "why": "a dollar would otherwise be substituted by the shell", "value": "$VAR", "written": "\"\\$VAR\"" },
+    { "why": "so would a backtick", "value": "a`b", "written": "\"a\\`b\"" },
+    {
+      "why": "a newline is escaped rather than emitted — the parser's backslash continuation must never see one",
+      "value": "line1\nline2",
+      "written": "\"line1\\nline2\""
+    },
+    { "why": "a tab too", "value": "a\tb", "written": "\"a\\tb\"" },
+    {
+      "why": "a cookie jar is the shape that motivated this",
+      "value": "sp_dc=AQB123; sp_key=8f3",
+      "written": "\"sp_dc=AQB123; sp_key=8f3\""
+    },
+    {
+      "why": "and a User-Agent is the other one",
+      "value": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36",
+      "written": "\"Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36\""
+    },
+    {
+      "why": "the empty string quotes to \"\" — a bare KEY= is how unset is spelled",
+      "value": "",
+      "written": "\"\""
+    }
+  ],
+
+  "unquoting": [
+    { "why": "single quotes are literal, as every shell and dotenv library treats them", "raw": "'a\\nb'", "expect": "a\\nb" },
+    { "why": "an unquoted value is itself", "raw": "plain", "expect": "plain" },
+    { "why": "one stray quote is not a quoted value", "raw": "\"only-opening", "expect": "\"only-opening" }
+  ]
+}

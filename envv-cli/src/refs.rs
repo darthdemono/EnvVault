@@ -39,6 +39,11 @@ pub fn canonical_field(field: &str) -> &str {
         // The deny-list below is what stops that answer; this arm is what makes
         // the reference mean something useful instead of nothing.
         "ID" | "CLIENT_ID" | "APP_ID" | "ACCOUNT_ID" | "APPLICATION_ID" => "key_id",
+        // E17: a file-shaped credential is consumed by pointing at it, so the
+        // useful thing to render into a config is the **path**, never the bytes.
+        // `${GCP/path}` is what a rendered `.env` wants beside
+        // `GOOGLE_APPLICATION_CREDENTIALS`.
+        "PATH" | "MOUNT" | "MOUNT_PATH" | "FILE" => "mount_path",
         _ => field,
     }
 }
@@ -65,11 +70,50 @@ fn is_denied(field: &str, canonical: &str) -> bool {
     REFERENCE_DENY.contains(&field) || REFERENCE_DENY.contains(&canonical)
 }
 
-/// Resolve a named field on a vault entry (built-in fields, aliases, then extra_vars).
+/// Normalise a role or a reference field for comparison — `account_sid`,
+/// `ACCOUNT-SID` and `Account Sid` are one name.
+fn role_key(raw: &str) -> String {
+    raw.chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() {
+                c.to_ascii_uppercase()
+            } else {
+                '_'
+            }
+        })
+        .collect()
+}
+
+/// Resolve a named field on a vault entry (roles, built-in fields, aliases, then extra_vars).
 pub fn entry_field(entry: &Value, field: &str) -> Option<String> {
     let canonical = canonical_field(field);
     if is_denied(field, canonical) {
         return None;
+    }
+
+    // A **declared role wins over the alias table** (Phase 23, step 2). An entry
+    // whose `primary_role` is `id` holds a client id in `api_key`, so
+    // `${Spotify/ID}` must answer with that rather than with `key_id` — which is
+    // what the Phase 21 alias arm resolves to when no role is declared, and what
+    // it still resolves to for every entry that declares none.
+    //
+    // This is also what makes the shapes with no primary value work:
+    // `${Twilio/ACCOUNT_SID}` and `${Twilio/AUTH_TOKEN}` name the two halves of
+    // a Twilio credential by the issuer's own words.
+    let want = role_key(field);
+    if !want.is_empty() && want != "VALUE" {
+        for (role_field, value_field) in
+            [("primary_role", "api_key"), ("secret_role", "api_secret")]
+        {
+            let declared = entry.get(role_field).and_then(|v| v.as_str()).unwrap_or("");
+            if !declared.is_empty() && role_key(declared) == want {
+                if let Some(s) = entry.get(value_field).and_then(|v| v.as_str()) {
+                    if !s.is_empty() {
+                        return Some(s.to_string());
+                    }
+                }
+            }
+        }
     }
     if let Some(s) = entry.get(canonical).and_then(|v| v.as_str()) {
         if !s.is_empty() {
@@ -87,7 +131,26 @@ pub fn entry_field(entry: &Value, field: &str) -> Option<String> {
     None
 }
 
-/// Find a vault entry by exact provider, or by `Provider_keyid` compound split.
+/// Find the entry a bare `${NAME}` or a `${NAME/field}` prefix addresses.
+///
+/// Three attempts, in this order, and **ambiguity is refused rather than
+/// guessed** (Phase 23, E9):
+///
+/// 1. An exact provider match — what a hand-written reference means.
+/// 2. A **generated-name** match, i.e. the Phase 23 template. `${SPOTIFY_V2}`
+///    names the entry whose version is 2, which is the point of putting versions
+///    and labels into the name at all.
+/// 3. The legacy `Provider_keyid` split on the last underscore.
+///
+/// 2 and 3 occupy the same syntactic position, so a vault holding both a
+/// `SPOTIFY` entry with `key_id: V2` *and* a `SPOTIFY` entry with `version: 2`
+/// has two honest answers. Returning either would write a silent wrong value
+/// into a config — the defect class Phase 21 was about — so this returns nothing
+/// and every exporter reports the reference unresolved. The explicit
+/// `${Provider/field}` form is never ambiguous and is what the docs recommend.
+///
+/// Twin: `findEntryByRef` in `src/ts/chunk-ops.ts`, pinned by the
+/// `reference_lookup` section of `tests/fixtures/parity/env-names.json`.
 pub fn find_entry<'a>(entries: &'a [Value], prov: &str) -> Option<&'a Value> {
     if let Some(e) = entries
         .iter()
@@ -95,14 +158,34 @@ pub fn find_entry<'a>(entries: &'a [Value], prov: &str) -> Option<&'a Value> {
     {
         return Some(e);
     }
-    if let Some(us) = prov.rfind('_') {
+
+    let want = prov.to_uppercase();
+    let by_template: Vec<&Value> = entries
+        .iter()
+        .filter(|e| {
+            crate::envfile::env_name(e, &Default::default()) == want
+                || crate::envfile::primary_name(e, None, false) == want
+        })
+        .collect();
+    if by_template.len() > 1 {
+        return None;
+    }
+
+    let legacy = prov.rfind('_').and_then(|us| {
         let (p, k) = (&prov[..us], &prov[us + 1..]);
-        return entries.iter().find(|e| {
+        entries.iter().find(|e| {
             e.get("provider").and_then(|v| v.as_str()) == Some(p)
                 && e.get("key_id").and_then(|v| v.as_str()) == Some(k)
-        });
+        })
+    });
+
+    if let Some(t) = by_template.first() {
+        return match legacy {
+            Some(l) if !std::ptr::eq(*t, l) => None,
+            _ => Some(t),
+        };
     }
-    None
+    legacy
 }
 
 /// The vault-entry field used as the resolved value for a bare `${Provider}` ref.

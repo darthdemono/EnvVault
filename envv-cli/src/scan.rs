@@ -142,8 +142,15 @@ pub fn analyse(vault: &Value) -> Vec<Issue> {
                 });
             }
         }
+        // Rotation means nothing for a browser session: "rotate" is "log in
+        // again in a browser", which nothing here can do, so the entry would be
+        // flagged overdue forever with no available fix — and a nag with no fix
+        // is how a health scan trains people to ignore it (Phase 23, E13).
+        // Expiry above, and the never-verified check below, are what *is*
+        // actionable for a session.
+        let is_cookie = crate::data::secret_type_of(k) == "cookie";
         let rotation_days = k.get("rotation_days").and_then(|v| v.as_i64()).unwrap_or(0);
-        if rotation_days > 0 {
+        if !is_cookie && rotation_days > 0 {
             if let Some(last) = k.get("last_rotated_at").and_then(|v| v.as_str()) {
                 if let Ok(t) = time::OffsetDateTime::parse(
                     last,
@@ -172,11 +179,26 @@ pub fn analyse(vault: &Value) -> Vec<Issue> {
             && k.get("version_history")
                 .and_then(|v| v.as_array())
                 .is_none_or(|a| a.is_empty());
-        if never_rotated {
+        if never_rotated && !is_cookie {
             issues.push(Issue {
                 severity: Severity::Low,
                 subject: prov.clone(),
                 message: "Never rotated".into(),
+            });
+        }
+        // The session equivalent: a jar nobody has confirmed still works.
+        // Actionable — open the site — which "never rotated" was not.
+        if is_cookie
+            && k.get("last_verified_at")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .is_empty()
+        {
+            issues.push(Issue {
+                severity: Severity::Low,
+                subject: prov.clone(),
+                message: "Session never verified — open the site and confirm it is still signed in"
+                    .into(),
             });
         }
         let described = !k

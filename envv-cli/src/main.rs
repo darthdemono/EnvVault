@@ -213,6 +213,21 @@ enum Commands {
         /// keys. Skips members that `envv pool report --limited` put on cooldown.
         #[arg(long, conflicts_with = "provider")]
         pool: Option<String>,
+        /// Emit `.env` lines at this profile instead of the entry document.
+        ///
+        /// `basic` is the values; `extended` adds version, expiry, rate limit,
+        /// scopes, environment, account and pool; `full` adds the nine fields
+        /// that describe a credential rather than drive it. The text carries
+        /// real values, so it follows the same rule as `envv export`: refused to
+        /// stdout unless `--reveal`, written by `--out`.
+        #[arg(long, value_parser = ["basic", "extended", "full"])]
+        profile: Option<String>,
+        /// Where profile metadata goes: `#` comments (default) or variables.
+        #[arg(long, value_parser = ["comment", "var"], requires = "profile")]
+        metadata: Option<String>,
+        /// Write the profile text to a file, 0600, instead of stdout.
+        #[arg(long = "out", requires = "profile")]
+        out_file: Option<PathBuf>,
     },
     /// Export vault entries.
     Export {
@@ -228,6 +243,61 @@ enum Commands {
         /// Write to this file instead of stdout.
         #[arg(long, short = 'o')]
         out: Option<PathBuf>,
+        /// For `--format dotenv`: how much of each entry to emit.
+        ///
+        /// `full` is refused vault-wide the same way a plaintext export to
+        /// stdout is: every entry's purposes, projects, tags and rotation dates
+        /// in one file is a map of what matters in the vault. Name a project, or
+        /// use `envv get <entry> --profile full` for one entry.
+        #[arg(long, value_parser = ["basic", "extended", "full"])]
+        profile: Option<String>,
+        /// Where profile metadata goes: `#` comments (default) or variables.
+        #[arg(long, value_parser = ["comment", "var"], requires = "profile")]
+        metadata: Option<String>,
+    },
+    /// Build a `curl` command that sends one entry's credential.
+    ///
+    /// Reads `auth_scheme` / `auth_param`, so the header, the basic pair or the
+    /// query parameter is the one that service actually wants — which is the
+    /// thing the vault did not know before Phase 23 and the user had to
+    /// remember.
+    ///
+    /// The command contains the real credential, so it follows the same rule as
+    /// every other materialising path: redacted to stdout, written in full by
+    /// `--out`. `envv curl X -- https://…` names the URL; without one it uses the
+    /// entry's `api_url`.
+    Curl {
+        /// Provider name, or provider:key_id.
+        provider: String,
+        /// Write the command to a file (0600) instead of stdout.
+        #[arg(long, short = 'o')]
+        out: Option<PathBuf>,
+        /// The URL to call. Defaults to the entry's api_url.
+        #[arg(last = true)]
+        url: Vec<String>,
+    },
+    /// Write a file-shaped credential to disk, and print the variable that names it.
+    ///
+    /// A GCP service-account JSON, an Apple `.p8`, an mTLS bundle and a
+    /// `kubeconfig` are consumed by *pointing at them*, so materialising to a
+    /// path is the only correct verb — copying the contents produces something no
+    /// consumer wants, and pasting them into a `.env` produces a variable the
+    /// library tries to open as a path.
+    ///
+    /// The file is written 0600. Without `--out` it goes to the entry's
+    /// `mount_path`.
+    File {
+        #[command(subcommand)]
+        cmd: FileCmd,
+    },
+    /// Read a stored browser session out in the format the tool you are using wants.
+    ///
+    /// Every one of these is a **materialising** path — the output is a live
+    /// session — so the Phase 14 rule applies unchanged: redacted to stdout,
+    /// written in full by `--out`.
+    Cookie {
+        #[command(subcommand)]
+        cmd: CookieCmd,
     },
     /// Write an iCalendar (.ics) feed of every date the vault knows.
     ///
@@ -409,7 +479,18 @@ enum Commands {
     /// on it. There is deliberately no `--repair` for a missing salt: nothing
     /// can reconstruct 16 bytes of CSPRNG output, and a flag that appeared to
     /// offer it would be discovered as a lie during a restore.
-    Doctor,
+    Doctor {
+        /// Repair what can be repaired safely — currently: backfill missing
+        /// entry ids.
+        ///
+        /// An entry written before stable ids existed falls back to
+        /// `provider|account_name|key_id` for RBAC scoping and version history,
+        /// so two entries differing only by their Phase 23 `label` would collide
+        /// there. Adding `label` to that tuple would silently re-target scoping
+        /// on every pre-id vault; backfilling the id does not.
+        #[arg(long)]
+        fix: bool,
+    },
     /// Vault users.
     User {
         #[command(subcommand)]
@@ -514,6 +595,56 @@ enum Commands {
     Sessions,
 }
 
+/// File-shaped credentials — the ones where the variable names a path (E17).
+#[derive(Subcommand)]
+enum FileCmd {
+    /// Write the credential to disk and print the `.env` line that names it.
+    Write {
+        provider: String,
+        /// Where to write it. Defaults to the entry's `mount_path`.
+        #[arg(long, short = 'o')]
+        out: Option<std::path::PathBuf>,
+    },
+}
+
+/// The four shapes a stored browser session is consumed in.
+///
+/// All four are materialising paths: the output *is* the session, so each is
+/// redacted to stdout and written in full only by `--out` — the same rule
+/// `envv export` follows, for the same reason.
+#[derive(Subcommand)]
+enum CookieCmd {
+    /// The `Cookie:` header value — what a request actually sends.
+    Header {
+        provider: String,
+        #[arg(long, short = 'o')]
+        out: Option<std::path::PathBuf>,
+    },
+    /// A `curl` command carrying the jar and its User-Agent.
+    Curl {
+        provider: String,
+        #[arg(long, short = 'o')]
+        out: Option<std::path::PathBuf>,
+    },
+    /// Netscape `cookies.txt`, for `curl -b` and `yt-dlp --cookies`.
+    ///
+    /// **Refused when the jar has no domain and no path.** The format needs them
+    /// per cookie, and a file `yt-dlp` silently ignores is worse than no file —
+    /// the user discovers it as "the download is not logged in", with nothing
+    /// pointing at the file. Re-export from the browser as JSON or cookies.txt.
+    Txt {
+        provider: String,
+        #[arg(long, short = 'o')]
+        out: Option<std::path::PathBuf>,
+    },
+    /// The browser-extension array shape, so a jar round-trips back into a browser.
+    Json {
+        provider: String,
+        #[arg(long, short = 'o')]
+        out: Option<std::path::PathBuf>,
+    },
+}
+
 #[derive(Subcommand)]
 enum EntryCmd {
     /// List entries (same filters as `envv list`).
@@ -600,6 +731,20 @@ enum EntryCmd {
         /// rotation an orchestrator can perform without holding the secret.
         #[arg(long, conflicts_with_all = ["key", "stdin"])]
         generate: bool,
+    },
+    /// Record that a stored browser session still works.
+    ///
+    /// The session equivalent of `rotate`. Rotating a cookie means logging in
+    /// again in a browser, which nothing here can do — so a session flagged
+    /// never-rotated stays flagged forever, and a nag with no available fix is
+    /// how a health scan trains people to ignore it (Phase 23, E13). This is the
+    /// check that *is* actionable: open the site, confirm you are still signed
+    /// in, and stamp it.
+    Verify {
+        provider: String,
+        /// Clear the stamp instead — say the session is no longer known good.
+        #[arg(long)]
+        off: bool,
     },
     /// Show previous values of an entry's secret.
     History { provider: String },
@@ -1296,10 +1441,10 @@ fn run(cli: &Cli) -> CliResult {
         // problem the user is running it to solve.
         // `doctor` on a vault that will not open is the case it exists for, so it
         // must survive `open_access` failing rather than inheriting its error.
-        Commands::Doctor => {
+        Commands::Doctor { fix } => {
             return match open_access(&auth) {
-                Ok(a) => doctor::run(Some(&a), None),
-                Err(e) => doctor::run(None, Some(e.to_string())),
+                Ok(a) => doctor::run(Some(&a), None, *fix),
+                Err(e) => doctor::run(None, Some(e.to_string()), *fix),
             }
         }
         // Showing or clearing a context touches no vault, and the state it is
@@ -1906,8 +2051,18 @@ fn dispatch(cli: &Cli, a: &Access) -> CliResult {
             provider,
             field,
             pool: pool_name,
+            profile,
+            metadata,
+            out_file,
         } => match (provider, pool_name) {
             (_, Some(name)) => pool::cmd_next(a, name, field.as_deref()),
+            (Some(p), None) if profile.is_some() => entries::cmd_get_profile(
+                a,
+                p,
+                profile.as_deref().unwrap(),
+                metadata.as_deref(),
+                out_file.as_deref(),
+            ),
             (Some(p), None) => entries::cmd_get(a, p, field.as_deref()),
             // clap cannot express "exactly one of a positional and a flag", so
             // the check lives here. `invalid` rather than a usage error: the
@@ -1921,9 +2076,41 @@ fn dispatch(cli: &Cli, a: &Access) -> CliResult {
             project,
             name,
             out,
+            profile,
+            metadata,
         } => {
             let project = scoped_project(a, project.as_deref())?;
-            envfile::export_vault(a, format, project.as_deref(), name, out.as_deref())
+            envfile::export_vault(
+                a,
+                format,
+                project.as_deref(),
+                name,
+                out.as_deref(),
+                profile.as_deref(),
+                metadata.as_deref(),
+            )
+        }
+        Commands::File { cmd } => match cmd {
+            FileCmd::Write { provider, out } => {
+                entries::cmd_file_write(a, provider, out.as_deref())
+            }
+        },
+        Commands::Cookie { cmd } => match cmd {
+            CookieCmd::Header { provider, out } => {
+                entries::cmd_cookie(a, provider, "header", out.as_deref())
+            }
+            CookieCmd::Curl { provider, out } => {
+                entries::cmd_cookie(a, provider, "curl", out.as_deref())
+            }
+            CookieCmd::Txt { provider, out } => {
+                entries::cmd_cookie(a, provider, "txt", out.as_deref())
+            }
+            CookieCmd::Json { provider, out } => {
+                entries::cmd_cookie(a, provider, "json", out.as_deref())
+            }
+        },
+        Commands::Curl { provider, out, url } => {
+            entries::cmd_curl(a, provider, url.first().map(String::as_str), out.as_deref())
         }
         Commands::Calendar {
             kinds,
@@ -2133,6 +2320,7 @@ fn dispatch(cli: &Cli, a: &Access) -> CliResult {
             EntryCmd::Compromise { provider, off } => {
                 entries::cmd_flag(a, provider, "compromised", !*off)
             }
+            EntryCmd::Verify { provider, off } => entries::cmd_verify(a, provider, *off),
             EntryCmd::Rotate {
                 provider,
                 key,
@@ -2340,7 +2528,7 @@ fn dispatch(cli: &Cli, a: &Access) -> CliResult {
             clear,
         } => envv_cli::context::cmd_use(Some(a), project.as_deref(), env.as_deref(), *show, *clear),
         Commands::Status => scan::cmd_status(a),
-        Commands::Doctor => doctor::run(Some(a), None),
+        Commands::Doctor { fix } => doctor::run(Some(a), None, *fix),
 
         Commands::User { cmd } => match cmd {
             UserCmd::Ls { json } => users_cmd::user_ls(a, *json),

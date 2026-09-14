@@ -597,3 +597,12 @@
   display: flex;
   gap: 8px;
 }
+
+/* The Copy section's worked example stacks: a `.env` block is multi-line and a
+   two-column settings row would squeeze it into a strip nobody can read. */
+.settings-row-stacked {
+  display: block;
+}
+.settings-row-stacked .settings-label {
+  margin-bottom: 6px;
+}

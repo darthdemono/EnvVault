@@ -1,4 +1,14 @@
 //! `.env` parsing, import and watch — the file-drop path from the UI.
+//!
+//! Also home to **the environment-variable name template** and **`.env`
+//! quoting** (Phase 23, step 1). Both are twins of TypeScript in
+//! `src/ts/state.ts`, pinned by `tests/fixtures/parity/env-names.json` and
+//! asserted from both sides — see `envv-cli/tests/parity.rs` and
+//! `tests/cli-parity.test.ts`.
+//!
+//! They exist twice because the app's add/edit form previews the generated name
+//! as it is typed, and an IPC round trip per keystroke is not a form. Same
+//! reasoning as the TOTP seed parser.
 
 use crate::access::Access;
 use crate::data::{self, entries_mut, find_project_index, projects};
@@ -6,6 +16,384 @@ use crate::error::{CliError, CliResult};
 use crate::out;
 use serde_json::{json, Value};
 use std::path::PathBuf;
+
+/// How a generated name is cased. `Upper` is the shell convention and the default.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NameCase {
+    Upper,
+    Preserve,
+    Lower,
+}
+
+impl NameCase {
+    /// Parse the `envCopyCase` setting / `--case` flag. Anything unknown is `Upper`.
+    pub fn parse(raw: &str) -> Self {
+        match raw.to_ascii_lowercase().as_str() {
+            "preserve" => NameCase::Preserve,
+            "lower" => NameCase::Lower,
+            _ => NameCase::Upper,
+        }
+    }
+    fn folds(self) -> bool {
+        self != NameCase::Preserve
+    }
+}
+
+/// Everything `env_name` needs that does not come from the entry.
+#[derive(Debug, Clone, Default)]
+pub struct NameOpts<'a> {
+    /// The value's role — `ID`, `SECRET`, an `extra_vars` key. `None` or `value` omits it.
+    pub role: Option<&'a str>,
+    pub case: Option<NameCase>,
+    /// Prepend `env_prefixes[0]`. Off unless asked for.
+    pub include_prefix: bool,
+}
+
+/// One segment, normalised: non-alphanumerics become `_`, runs collapse, edges trim.
+fn segment(raw: &str, fold: bool) -> String {
+    let src = if fold {
+        raw.to_uppercase()
+    } else {
+        raw.to_string()
+    };
+    let mut out = String::with_capacity(src.len());
+    let mut last_us = true; // leading underscores are trimmed by never being written
+    for ch in src.chars() {
+        if ch.is_ascii_alphanumeric() {
+            out.push(ch);
+            last_us = false;
+        } else if !last_us {
+            out.push('_');
+            last_us = true;
+        }
+    }
+    while out.ends_with('_') {
+        out.pop();
+    }
+    out
+}
+
+/// The version segment: `2`, `v2`, `V2` → `V2`; `2.0` → `V2_0`.
+///
+/// The leading `v` is dropped **only when a digit follows**, so the `V` is added
+/// once and never doubled and a word-shaped version keeps its first letter.
+pub fn version_segment(raw: &str, fold: bool) -> String {
+    let trimmed = raw.trim();
+    let mut chars = trimmed.chars();
+    let body = match (chars.next(), chars.next()) {
+        (Some(v), Some(d)) if (v == 'v' || v == 'V') && d.is_ascii_digit() => &trimmed[1..],
+        _ => trimmed,
+    };
+    let seg = segment(body, fold);
+    if seg.is_empty() {
+        return seg;
+    }
+    if seg.starts_with(|c: char| c.is_ascii_digit()) {
+        format!("V{seg}")
+    } else {
+        seg
+    }
+}
+
+/// Strip a cookie's `__Host-` / `__Secure-` prefix. See the TypeScript twin for why.
+pub fn strip_cookie_prefix(name: &str) -> &str {
+    for p in ["__Host-", "__Secure-"] {
+        if name.len() >= p.len() && name[..p.len()].eq_ignore_ascii_case(p) {
+            return &name[p.len()..];
+        }
+    }
+    name
+}
+
+/// The environment-variable name an entry generates for `opts.role`.
+///
+/// Always a legal identifier: a leading digit gains a `_`, and an entry that
+/// normalises away to nothing comes back as `UNKNOWN` rather than as the empty
+/// string, which would write a nameless `=value` line.
+pub fn env_name(entry: &Value, opts: &NameOpts<'_>) -> String {
+    let case = opts.case.unwrap_or(NameCase::Upper);
+    let fold = case.folds();
+    let f = |k: &str| entry.get(k).and_then(|v| v.as_str()).unwrap_or("");
+
+    let role = match opts.role {
+        Some(r) if !r.eq_ignore_ascii_case("value") => strip_cookie_prefix(r),
+        _ => "",
+    };
+    let prefix = if opts.include_prefix {
+        entry
+            .get("env_prefixes")
+            .and_then(|v| v.as_array())
+            .and_then(|a| a.first())
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+    } else {
+        ""
+    };
+    let provider = if f("provider").is_empty() {
+        "UNKNOWN"
+    } else {
+        f("provider")
+    };
+
+    let parts: Vec<String> = vec![
+        segment(prefix, fold),
+        segment(provider, fold),
+        segment(f("key_id"), fold),
+        version_segment(f("version"), fold),
+        segment(f("label"), fold),
+        segment(role, fold),
+    ]
+    .into_iter()
+    .filter(|p| !p.is_empty())
+    .collect();
+
+    let mut name = parts.join("_");
+    if name.is_empty() {
+        name = "UNKNOWN".into();
+    }
+    if name.starts_with(|c: char| c.is_ascii_digit()) {
+        name.insert(0, '_');
+    }
+    if case == NameCase::Lower {
+        name = name.to_lowercase();
+    }
+    name
+}
+
+/// The name of an entry's **primary** value.
+///
+/// Role-aware: an entry marked `primary_role: "id"` generates `SPOTIFY_ID`
+/// rather than `SPOTIFY`, which is the reported bug Phase 23 exists to fix — an
+/// OAuth client id exported as though it were the key. An entry with no
+/// `primary_role` keeps the bare name, which is why the field is opt-in.
+pub fn primary_name(entry: &Value, case: Option<NameCase>, include_prefix: bool) -> String {
+    env_name(
+        entry,
+        &NameOpts {
+            role: entry.get("primary_role").and_then(|v| v.as_str()),
+            case,
+            include_prefix,
+        },
+    )
+}
+
+/// The name of an entry's `api_secret` — `SECRET` unless `secret_role` says otherwise.
+pub fn secret_name(entry: &Value, case: Option<NameCase>, include_prefix: bool) -> String {
+    let role = entry
+        .get("secret_role")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .unwrap_or("SECRET");
+    env_name(
+        entry,
+        &NameOpts {
+            role: Some(role),
+            case,
+            include_prefix,
+        },
+    )
+}
+
+/// A name derived from a bare string rather than from an entry — a pool name, a
+/// `--pool github-ci` with no explicit variable.
+///
+/// The same normaliser the template's segments use, so `envv exec --pool
+/// github-ci` and an export of a member of that pool agree about what is a legal
+/// character. It is deliberately *not* the template: a pool is not an entry and
+/// has no version, label or role.
+pub fn env_name_from_text(raw: &str) -> String {
+    let mut name = segment(raw, true);
+    if name.is_empty() {
+        name = "UNKNOWN".into();
+    }
+    if name.starts_with(|c: char| c.is_ascii_digit()) {
+        name.insert(0, '_');
+    }
+    name
+}
+
+/// Every name one entry generates, in the order a copy emits them.
+///
+/// Twin of `namesGeneratedBy` in `src/ts/state.ts`.
+pub fn names_generated_by(
+    entry: &Value,
+    case: Option<NameCase>,
+    include_prefix: bool,
+) -> Vec<(String, String)> {
+    let f = |k: &str| entry.get(k).and_then(|v| v.as_str()).unwrap_or("");
+    let mut out = Vec::new();
+    if !f("api_key").is_empty() {
+        out.push((
+            primary_name(entry, case, include_prefix),
+            f("api_key").to_string(),
+        ));
+    }
+    if !f("api_secret").is_empty() {
+        out.push((
+            secret_name(entry, case, include_prefix),
+            f("api_secret").to_string(),
+        ));
+    }
+    if !f("api_url").is_empty() {
+        out.push((
+            env_name(
+                entry,
+                &NameOpts {
+                    role: Some("URL"),
+                    case,
+                    include_prefix,
+                },
+            ),
+            f("api_url").to_string(),
+        ));
+    }
+    if let Some(vars) = entry.get("extra_vars").and_then(|v| v.as_array()) {
+        for xv in vars {
+            let k = xv.get("key").and_then(|v| v.as_str()).unwrap_or("");
+            if k.is_empty() {
+                continue;
+            }
+            out.push((
+                env_name(
+                    entry,
+                    &NameOpts {
+                        role: Some(k),
+                        case,
+                        include_prefix,
+                    },
+                ),
+                xv.get("value")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+            ));
+        }
+    }
+    out
+}
+
+/// Make every name unique, **appending rather than dropping** (Phase 23, E2).
+///
+/// Two values generating one name is a silent overwrite in whatever loads the
+/// file — every `.env` parser takes the last line, and the YAML writer keys a
+/// map. One entry with `primary_role: "id"` and an `extra_vars` entry keyed `ID`
+/// does it all by itself.
+///
+/// Compared **case-insensitively**, because Windows environment variables are
+/// case-insensitive: `preserve` casing can produce a pair that collides there
+/// and not on Linux, which is the worst possible place to find out.
+///
+/// Twin of `disambiguateNames` in `src/ts/state.ts`.
+pub fn disambiguate_names(names: &[String]) -> Vec<String> {
+    use std::collections::{HashMap, HashSet};
+    let mut counts: HashMap<String, usize> = HashMap::new();
+    for n in names {
+        *counts.entry(n.to_uppercase()).or_insert(0) += 1;
+    }
+    // Everything already emitted, so a suffix can never collide with a name that
+    // was fine on its own — appending `_2` and hitting an entry that genuinely
+    // generates `X_2` would trade one silent overwrite for another.
+    let mut used: HashSet<String> = names.iter().map(|n| n.to_uppercase()).collect();
+    // The **first** occurrence keeps the name it generated. Renaming both halves
+    // of a collision would change a variable that was never ambiguous for the
+    // consumer that reads it first, which is the rename this phase's "one thing
+    // this must not break" section is about.
+    let mut taken: HashSet<String> = HashSet::new();
+
+    names
+        .iter()
+        .map(|n| {
+            let key = n.to_uppercase();
+            if counts.get(&key).copied().unwrap_or(0) < 2 {
+                return n.clone();
+            }
+            if taken.insert(key) {
+                return n.clone();
+            }
+            // An **ordinal**, not the `key_id`. The design says pool members get
+            // `_1`/`_2` and everything else gets the `key_id` — written when
+            // `key_id` was not expected to be part of the generated name. Here it
+            // always is (it is a segment of the template), so appending it again
+            // can never disambiguate anything: the two colliding names already
+            // contain it. Ordinals are stable for a given entry because the
+            // emission order is.
+            for i in 2..=(names.len() + 2) {
+                let c = format!("{n}_{i}");
+                if !used.contains(&c.to_uppercase()) {
+                    used.insert(c.to_uppercase());
+                    return c;
+                }
+            }
+            n.clone()
+        })
+        .collect()
+}
+
+/// True for a value safe to write bare. Deliberately narrow.
+fn bare_ok(v: &str) -> bool {
+    !v.is_empty()
+        && v.chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '/' | ':' | '@' | '-'))
+}
+
+/// A value as it must appear after the `=` (E1).
+///
+/// The empty string quotes to `""` rather than to nothing, because a bare `KEY=`
+/// is how "unset" is spelled and a deliberately empty value must not read as
+/// one. A newline is escaped rather than emitted, so the parser's backslash
+/// line-continuation can never see one.
+pub fn quote_env_value(value: &str) -> String {
+    if bare_ok(value) {
+        return value.to_string();
+    }
+    let mut out = String::with_capacity(value.len() + 2);
+    out.push('"');
+    for ch in value.chars() {
+        match ch {
+            '\\' | '"' | '$' | '`' => {
+                out.push('\\');
+                out.push(ch);
+            }
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            _ => out.push(ch),
+        }
+    }
+    out.push('"');
+    out
+}
+
+/// The inverse, applied by the parser.
+///
+/// Double quotes unescape, single quotes do not — which is what the shells and
+/// the `dotenv` libraries these files are read by do.
+pub fn unquote_env_value(raw: &str) -> String {
+    let n = raw.chars().count();
+    if n >= 2 && raw.starts_with('\'') && raw.ends_with('\'') {
+        return raw[1..raw.len() - 1].to_string();
+    }
+    if n >= 2 && raw.starts_with('"') && raw.ends_with('"') {
+        let inner = &raw[1..raw.len() - 1];
+        let mut out = String::with_capacity(inner.len());
+        let mut chars = inner.chars();
+        while let Some(ch) = chars.next() {
+            if ch != '\\' {
+                out.push(ch);
+                continue;
+            }
+            match chars.next() {
+                Some('n') => out.push('\n'),
+                Some('r') => out.push('\r'),
+                Some('t') => out.push('\t'),
+                Some(other) => out.push(other),
+                None => out.push('\\'),
+            }
+        }
+        return out;
+    }
+    raw.to_string()
+}
 
 pub struct EnvVar {
     pub name: String,
@@ -38,13 +426,8 @@ pub fn parse_env_file(text: &str) -> Vec<EnvVar> {
         if name.to_uppercase().starts_with("EXPORT ") {
             name = name[7..].trim().to_string();
         }
-        let mut value = trimmed[eq + 1..].trim().to_string();
-        if value.chars().count() >= 2
-            && ((value.starts_with('"') && value.ends_with('"'))
-                || (value.starts_with('\'') && value.ends_with('\'')))
-        {
-            value = value[1..value.len() - 1].to_string();
-        }
+        // Strips the quotes *and* unescapes what the writer escaped (E1).
+        let value = unquote_env_value(trimmed[eq + 1..].trim());
         if !name.is_empty() {
             out.push(EnvVar { name, value });
         }
@@ -203,6 +586,8 @@ pub fn export_vault(
     project: Option<&str>,
     name: &str,
     out: Option<&std::path::Path>,
+    profile: Option<&str>,
+    metadata: Option<&str>,
 ) -> CliResult {
     let vault = access.load_vault()?;
     let mut list = data::entries(&vault);
@@ -236,7 +621,30 @@ pub fn export_vault(
         return Ok(());
     }
 
+    // `full` is refused **vault-wide**, the same way a plaintext export to
+    // stdout is. One entry's metadata is a convenience; every entry's —
+    // purposes, projects, tags, rotation dates — is a map of what matters in the
+    // vault, and it is exactly the document you would not want copied off the
+    // machine. Naming a project narrows it to something the user chose.
+    if profile == Some("full") && project.is_none() {
+        return Err(CliError::invalid(
+            "`--profile full` is per-entry or per-project: it writes every entry's purposes, \
+             projects, tags and rotation dates, which is a map of the vault. Pass --project, or \
+             use `envv get <entry> --profile full`.",
+        ));
+    }
+
     let content: String = match format {
+        "dotenv" if profile.is_some() => crate::profile::build_all(
+            &list,
+            &crate::profile::CopyOpts {
+                profile: crate::profile::Profile::parse(profile.unwrap()),
+                metadata: metadata
+                    .map(crate::profile::MetadataStyle::parse)
+                    .unwrap_or(crate::profile::MetadataStyle::Comment),
+                ..Default::default()
+            },
+        ),
         "yaml" => crate::exporters::yaml(&list),
         // `json` exports the whole vault document (projects and categories
         // included), matching the app's "Export as JSON" — that file is what

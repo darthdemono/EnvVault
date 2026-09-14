@@ -523,6 +523,39 @@ export function wireSearchHistory(onPick: (q: string) => void): void {
  *
  * @param iso ISO timestamp, or undefined/invalid for never-connected.
  */
+/**
+ * How long until `iso`, in words — the forward-facing twin of {@link relativeTime}.
+ *
+ * Phase 23, E7. `expires_at` used to be read as a date and compared in whole
+ * days, so an AWS STS token (one hour), an OAuth access token and a scraped
+ * cookie all read "expires today" for their entire life and the badge stopped
+ * meaning anything. Below a day this counts in hours and minutes; above it, in
+ * days, which is what a long-lived credential wants.
+ *
+ * Returns the empty string for an unparseable stamp rather than "NaN days",
+ * because `expires_at` is vault data and therefore untrusted (invariant 4).
+ */
+export function timeUntil(iso: string | undefined | null): string {
+  if (!iso) return '';
+  // A bare date means the *end* of that day: an entry expiring "2026-12-01" is
+  // valid throughout the 1st, and treating it as midnight expires it a day early
+  // for every long-lived credential in the vault.
+  const bareDate = /^\d{4}-\d{2}-\d{2}$/.test(iso.trim());
+  const then = Date.parse(bareDate ? `${iso.trim()}T23:59:59` : iso);
+  if (Number.isNaN(then)) return '';
+
+  const secs = Math.round((then - Date.now()) / 1000);
+  if (secs <= 0) {
+    const ago = Math.abs(secs);
+    if (ago < 3600) return `expired ${Math.max(1, Math.round(ago / 60))} min ago`;
+    if (ago < 86400) return `expired ${Math.round(ago / 3600)}h ago`;
+    return `expired ${Math.round(ago / 86400)}d ago`;
+  }
+  if (secs < 3600) return `expires in ${Math.max(1, Math.round(secs / 60))} min`;
+  if (secs < 86400) return `expires in ${Math.round(secs / 3600)}h`;
+  return `expires in ${Math.round(secs / 86400)}d`;
+}
+
 export function relativeTime(iso: string | undefined | null): string {
   if (!iso) return 'never connected';
   const then = Date.parse(iso);

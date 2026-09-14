@@ -27,7 +27,16 @@ export type SecretType =
   | 'env_var'
   | 'connection_string'
   | 'ssh_key'
-  | 'file_blob';
+  | 'file_blob'
+  /**
+   * A browser session (Phase 23, step 5).
+   *
+   * `api_key` holds the cookie string, `api_url` the origin it belongs to,
+   * `expires_at` the session expiry and `extra_vars` the individual cookies when
+   * the jar is split. `user_agent` is not optional metadata: replay without the
+   * matching one usually 401s.
+   */
+  | 'cookie';
 
 /**
  * A single stored secret entry.
@@ -154,6 +163,121 @@ export interface VaultEntry {
   pool?: string | null;
   /** API or SDK version this key was issued for. */
   version?: string | null;
+  /**
+   * What the primary value **is**, for naming purposes — the `ROLE` segment of
+   * the generated environment-variable name.
+   *
+   * Absent keeps the bare name. Every `.env` already deployed from this app
+   * names the primary value `PROVIDER=`, so defaulting this to `'key'` would
+   * rename that variable for every existing entry on the next copy, and the user
+   * would find out when a service came back up without its credentials.
+   *
+   * The vocabulary is **open**, not a closed union past the six presets:
+   * issuers invent names (`app_id`, `merchant_id`, `tenant`), and a closed union
+   * means the escape hatch is `extra_vars` — which is the fragmentation Phase 23
+   * exists to remove.
+   */
+  primary_role?: 'key' | 'id' | 'token' | 'secret' | 'password' | 'value' | (string & {}) | null;
+  /** Role of `api_secret`, when the default `SECRET` is wrong. */
+  secret_role?: string | null;
+  /**
+   * The primary value is safe to print — an OAuth client id, a Stripe `pk_`, an
+   * AWS access key id. Opts `api_key` out of redaction everywhere (E5).
+   */
+  primary_public?: boolean;
+  /** The same, for `api_secret`. Rare, but an issuer's "secret" is sometimes public. */
+  secret_public?: boolean;
+  /**
+   * **How** this credential is sent (Phase 23, E16).
+   *
+   * *How to send it* is part of the credential and was nowhere in the model: two
+   * entries that look identical are used completely differently, and the user
+   * had to remember which service wants `X-Api-Key`, which wants
+   * `Authorization: Bearer`, and which wants it in the query string.
+   *
+   * This is what turns a stored string into a working request, and it is what
+   * the curl and cookie exports need anyway.
+   */
+  auth_scheme?: 'bearer' | 'header' | 'basic' | 'query' | 'cookie' | null;
+  /**
+   * The header or query-parameter name `auth_scheme` puts the value in.
+   *
+   * Meaningless for `bearer` (the header is fixed) and for `basic` (the value is
+   * the password half). Defaults to `X-Api-Key` for `header` and `api_key` for
+   * `query`.
+   */
+  auth_param?: string | null;
+  /**
+   * The User-Agent this credential was minted against (Phase 23, step 5).
+   *
+   * A session cookie replayed without the matching User-Agent usually 401s, so
+   * this is not optional metadata — it is half of the credential.
+   *
+   * It is also a **fingerprint**, so it never appears in `basic` metadata
+   * comments or anywhere the redacting resolver writes.
+   */
+  user_agent?: string | null;
+  /**
+   * When the user last confirmed this session still works (Phase 23, E13).
+   *
+   * Rotation is meaningless for a session credential — "rotate" means "log in
+   * again in a browser", which this app cannot do — so a cookie flagged
+   * never-rotated and overdue forever is a nag with no available fix, and a nag
+   * with no available fix trains people to ignore the health scan, which costs
+   * more than it gains. This is the check that *is* actionable instead.
+   */
+  last_verified_at?: string | null;
+  /**
+   * The generated variable name this entry was last copied or exported under
+   * (Phase 23, step 6).
+   *
+   * The only new *persisted* state this phase adds, and it exists for one
+   * finding: renaming a provider, version or label silently renames every
+   * variable the entry generates, and the `.env` already sitting on a server
+   * keeps the old name. That is the `renameProviderRefs()` problem with a wider
+   * blast radius, because the stale reference is not in the vault at all — it is
+   * in a file on a machine nobody is looking at.
+   *
+   * Non-secret: a variable name is not a credential.
+   */
+  last_copied_name?: string | null;
+  /**
+   * The **contents** of a file-shaped credential (Phase 23, E17).
+   *
+   * A GCP service-account JSON, an Apple `.p8`, an mTLS bundle and a `kubeconfig`
+   * are consumed by *pointing at them*:
+   * `GOOGLE_APPLICATION_CREDENTIALS=/etc/gcp/sa.json`. Copying the contents to a
+   * clipboard produces something no consumer wants, and pasting a 2 KB JSON blob
+   * into a `.env` produces a variable the library tries to open as a path.
+   *
+   * `blob_ref` holds only a path, so a fresh machine has the reference and not
+   * the credential; `certificate_data` holds the PEM but has nowhere to write it.
+   * This is the storage half, and {@link mount_path} is the delivery half.
+   *
+   * Capped — see `BLOB_MAX_BYTES`. A service-account JSON is ~2.3 KB and an
+   * embedded icon is already allowed 96 KB, so storing content is fine; a
+   * `kubeconfig` with several clusters or a full chain bundle is not the same
+   * promise, and silently storing a truncated credential is worse than refusing.
+   */
+  blob_data?: string | null;
+  /**
+   * Where the consumer expects to find this credential on disk (E17).
+   *
+   * The delivery half of a file-shaped entry: `envv file write` materialises to
+   * it, `${Entry/path}` renders it, and `envv exec` writes a temp file and
+   * removes it afterwards. Non-secret — it is a path, not a credential.
+   */
+  mount_path?: string | null;
+  /**
+   * A short namespace token inserted into generated environment-variable names
+   * after the version — `SPOTIFY_V2_GAME_ID`.
+   *
+   * **Not `account_name`.** Account names in real vaults are email addresses,
+   * and `SPOTIFY_DARTHDEMONO_GMAIL_COM_ID` is not what anyone wants. Validated
+   * at the form to `^[A-Za-z0-9][A-Za-z0-9_-]{0,23}$` so it is always usable as
+   * a segment.
+   */
+  label?: string | null;
   /** Simple Icons slug for a custom provider icon, or `null` to use auto-detection. */
   custom_icon?: string | null;
   /** Additional metadata or usage notes. */
@@ -224,7 +348,37 @@ export interface VaultEntry {
   /** When true the entry floats to the top of all filtered views. */
   pinned?: boolean;
   /** Extra named fields beyond the fixed schema (e.g. db, port, host for database entries). */
-  extra_vars?: { key: string; value: string; secret?: boolean }[];
+  extra_vars?: {
+    key: string;
+    value: string;
+    secret?: boolean;
+    /**
+     * Opt this value **out** of redaction everywhere (Phase 23, E5).
+     *
+     * `extra_vars` are masked by default. `public` is per value and never per
+     * type: a client id, a region, an account SID and a publishable key are each
+     * safe to print and the secret beside them is not. Without it the `basic`
+     * copy profile is either useless (everything masked) or unsafe (nothing).
+     */
+    public?: boolean;
+    /**
+     * Per-cookie attributes, filled by the paste parser (Phase 23, E14).
+     *
+     * `cookies.txt` needs a domain, an include-subdomains flag, a path, a secure
+     * flag and an expiry for every cookie. A DevTools "Copy all as JSON" and a
+     * pasted `cookies.txt` both carry them; a bare `document.cookie` string does
+     * not, and the export is **refused** in that case rather than writing a file
+     * `yt-dlp` silently ignores.
+     */
+    attrs?: {
+      domain?: string;
+      path?: string;
+      secure?: boolean;
+      http_only?: boolean;
+      /** Unix seconds. `0` is a session cookie. */
+      expires?: number;
+    };
+  }[];
   /**
    * Base32 TOTP seed this credential's service issued — the authenticator
    * secret, from which EnvVault generates the six digits you type into that
@@ -671,6 +825,40 @@ export interface AppSettings {
   panelOrder: string[];
   /** VaultEntry field used as the resolved value when doing ".env copy". */
   envCopyField: 'api_key' | 'api_secret' | 'key_id';
+
+  // ── Copy (Phase 23) ──────────────────────────────────────────────────────
+  /**
+   * Case of a generated environment-variable name.
+   *
+   * `upper` is the shell convention and what every exporter here has always
+   * emitted, so lowercase is offered rather than assumed.
+   */
+  envCopyCase: 'upper' | 'preserve' | 'lower';
+  /**
+   * Prepend the entry's first consumer prefix (`env_prefixes[0]`) to generated
+   * names — `ND_SPOTIFY_ID` rather than `SPOTIFY_ID`.
+   *
+   * Off by default: a prefix is a fact about *one* consumer of a credential, and
+   * turning it on renames every variable the vault generates.
+   */
+  envIncludePrefix: boolean;
+  /**
+   * How much of an entry a copy emits — see `src/ts/copy-profile.ts`.
+   *
+   * A **default, not a wall**: the copy button's caret menu offers the other two
+   * plus "Value only" on every card, and the one-off choice made there is
+   * deliberately not persisted as the new default. A "give me everything" press
+   * must not silently change what the next fifty copies contain.
+   */
+  copyProfile: 'basic' | 'extended' | 'full';
+  /**
+   * Whether profile metadata is written as `#` comments or as variables.
+   *
+   * Comments by default: an `.env` is loaded into a process, and injecting six
+   * non-functional variables per credential into every container is a cost the
+   * user did not ask for by pressing Copy.
+   */
+  metadataStyle: 'comment' | 'var';
 
   // ── Layout persistence ───────────────────────────────────────────────────
   /**

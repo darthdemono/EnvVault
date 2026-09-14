@@ -3,15 +3,17 @@
  * Settings panel: themes, sidebar order, panel order, remote config, open/save/close.
  */
 
-import type { AppSettings } from './types';
+import type { AppSettings, VaultEntry } from './types';
 import {
   Settings,
   triggerRender,
   applySidebarOrder,
   applyActivityBar,
   applyUsersPanelVisibility,
+  type EnvNameCase,
 } from './state';
 import { showToast } from './utils';
+import { buildCopyText, type CopyProfile, type MetadataStyle } from './copy-profile';
 
 // ── Theme definitions ──────────────────────────────────────────────────────
 
@@ -194,6 +196,7 @@ export function buildPanelOrderEditor() {
     { key: 'tools', label: 'Tools', removable: true },
     { key: 'remote', label: 'Remote Vaults', removable: true },
     { key: 'users', label: 'Users (RBAC)', removable: true },
+    { key: 'auth', label: 'Authenticator (2FA)', removable: true },
   ];
 
   const order = [...(Settings.get('panelOrder') || ALL_PANELS.map((p) => p.key))];
@@ -248,8 +251,67 @@ export function buildPanelOrderEditor() {
   };
 }
 
+// ── The Copy section's worked example ──────────────────────────────────────
+
+/**
+ * A worked example that re-renders as the four copy options change.
+ *
+ * These are interacting switches — profile, metadata style, case, prefix — and
+ * a list of four labels with no preview is how a settings panel becomes
+ * unreadable. The example uses a fixed invented entry rather than one of the
+ * user's: the panel must show the same thing on an empty vault, and a real
+ * credential's name in a settings screenshot is a small leak for no gain.
+ */
+const COPY_PREVIEW_ENTRY = {
+  provider: 'Spotify',
+  label: 'game',
+  version: '2',
+  primary_role: 'id',
+  api_key: 'djjsdjdj',
+  api_secret: 'shhh',
+  env_prefixes: ['ND'],
+  environment: 'production',
+  expires_at: '2026-12-01',
+  rate_limit_count: 100,
+  rate_limit_period: 'minute',
+  scopes: ['playlist-read'],
+  tags: ['music'],
+  projectIds: ['Universal', 'jukebox'],
+  rotation_days: 90,
+} as unknown as VaultEntry;
+
+function renderCopyPreview(): void {
+  const out = document.getElementById('s-copy-preview');
+  if (!out) return;
+  const val = (id: string) =>
+    (document.getElementById(id) as HTMLSelectElement | null)?.value ?? '';
+  out.textContent = buildCopyText(COPY_PREVIEW_ENTRY, {
+    profile: (val('s-copy-profile') || 'basic') as CopyProfile,
+    metadataStyle: (val('s-metadata-style') || 'comment') as MetadataStyle,
+    case: (val('s-env-copy-case') || 'upper') as EnvNameCase,
+    includePrefix: !!(document.getElementById('s-env-include-prefix') as HTMLInputElement | null)
+      ?.checked,
+  });
+}
+
+let _copyPreviewBound = false;
+
+/** Assignment-guarded (invariant 9): `openSettings` runs on every open. */
+function wireCopyPreview(): void {
+  if (_copyPreviewBound) return;
+  _copyPreviewBound = true;
+  for (const id of [
+    's-copy-profile',
+    's-metadata-style',
+    's-env-copy-case',
+    's-env-include-prefix',
+  ]) {
+    document.getElementById(id)?.addEventListener('change', renderCopyPreview);
+  }
+}
+
 export function applyPanelOrder() {
-  const order = Settings.get('panelOrder') || ['secrets', 'tools', 'remote', 'users'];
+  const order = Settings.get('panelOrder') || ['secrets', 'tools', 'remote', 'users', 'auth'];
   document.querySelectorAll<HTMLButtonElement>('.activity-btn[data-panel]').forEach((btn) => {
     const panel = btn.dataset.panel!;
     const idx = order.indexOf(panel);
@@ -334,6 +396,15 @@ export function openSettings() {
   (document.getElementById('s-export-format') as HTMLSelectElement).value = s.defaultExportFormat;
   (document.getElementById('s-env-copy-field') as HTMLSelectElement).value =
     s.envCopyField || 'api_key';
+  (document.getElementById('s-copy-profile') as HTMLSelectElement).value = s.copyProfile || 'basic';
+  (document.getElementById('s-metadata-style') as HTMLSelectElement).value =
+    s.metadataStyle || 'comment';
+  (document.getElementById('s-env-copy-case') as HTMLSelectElement).value =
+    s.envCopyCase || 'upper';
+  (document.getElementById('s-env-include-prefix') as HTMLInputElement).checked =
+    !!s.envIncludePrefix;
+  wireCopyPreview();
+  renderCopyPreview();
   (document.getElementById('s-custom-css') as HTMLTextAreaElement).value = s.customCss || '';
   (document.getElementById('s-group-by-type') as HTMLInputElement).checked = s.groupByType;
   (document.getElementById('s-remember-filters') as HTMLInputElement).checked =
@@ -481,6 +552,13 @@ export function saveSettings() {
       .value as AppSettings['defaultExportFormat'],
     envCopyField: (document.getElementById('s-env-copy-field') as HTMLSelectElement)
       .value as AppSettings['envCopyField'],
+    copyProfile: (document.getElementById('s-copy-profile') as HTMLSelectElement)
+      .value as AppSettings['copyProfile'],
+    metadataStyle: (document.getElementById('s-metadata-style') as HTMLSelectElement)
+      .value as AppSettings['metadataStyle'],
+    envCopyCase: (document.getElementById('s-env-copy-case') as HTMLSelectElement)
+      .value as AppSettings['envCopyCase'],
+    envIncludePrefix: (document.getElementById('s-env-include-prefix') as HTMLInputElement).checked,
     customCss: (document.getElementById('s-custom-css') as HTMLTextAreaElement).value,
     groupByType: (document.getElementById('s-group-by-type') as HTMLInputElement).checked,
     rememberFilters: (document.getElementById('s-remember-filters') as HTMLInputElement).checked,

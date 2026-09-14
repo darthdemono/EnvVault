@@ -233,7 +233,7 @@ describe('saveModal provider rename', () => {
     fillForm(st.vault.api_keys[0]);
     (document.getElementById('f-provider') as HTMLInputElement).value = 'StripeLive';
     (document.getElementById('edit-index') as HTMLInputElement).value = '0';
-    saveModal();
+    void saveModal();
     expect(st.vault.api_keys[0].provider).toBe('StripeLive');
     expect(refValue()).toBe('${StripeLive/api_key}');
   });
@@ -242,7 +242,7 @@ describe('saveModal provider rename', () => {
     fillForm(st.vault.api_keys[0]);
     (document.getElementById('f-key') as HTMLInputElement).value = 'sk-rotated';
     (document.getElementById('edit-index') as HTMLInputElement).value = '0';
-    saveModal();
+    void saveModal();
     expect(refValue()).toBe('${Stripe/api_key}');
   });
 
@@ -250,7 +250,7 @@ describe('saveModal provider rename', () => {
     fillForm(st.vault.api_keys[0]);
     (document.getElementById('f-provider') as HTMLInputElement).value = 'Renamed';
     (document.getElementById('edit-index') as HTMLInputElement).value = '0';
-    saveModal();
+    void saveModal();
     expect(st.vault.api_keys[0].id).toBe('a');
   });
 });

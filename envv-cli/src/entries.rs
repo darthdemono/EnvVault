@@ -33,7 +33,7 @@ pub struct EntryFields {
     pub email: Option<String>,
     #[arg(long)]
     pub key_id: Option<String>,
-    /// api_key | password | certificate | env_var | connection_string | ssh_key | file_blob
+    /// api_key | password | certificate | env_var | connection_string | ssh_key | file_blob | cookie
     #[arg(long = "type", value_parser = SECRET_TYPES)]
     pub secret_type: Option<String>,
     /// free | local | paid | conditional
@@ -48,6 +48,72 @@ pub struct EntryFields {
     pub callback_url: Option<String>,
     #[arg(long)]
     pub version: Option<String>,
+    /// What the primary value *is* — the last segment of the generated variable
+    /// name. `--role id` makes an OAuth client id export as `SPOTIFY_ID` rather
+    /// than as `SPOTIFY`, which is what it did before.
+    ///
+    /// The vocabulary is open: `id`, `key`, `token`, `secret`, `password` and
+    /// `value` are presets, and an issuer that invents its own (`account_sid`,
+    /// `merchant_id`) is spelled out here rather than pushed into `extra_vars`.
+    /// Absent keeps the bare name — which is what every already-deployed `.env`
+    /// written by this tool uses.
+    #[arg(long)]
+    pub role: Option<String>,
+    /// What `--secret` is called, when `SECRET` is wrong (Twilio's is an auth token).
+    #[arg(long)]
+    pub secret_role: Option<String>,
+    /// Short namespace token inserted into generated names after the version —
+    /// `SPOTIFY_V2_GAME_ID`.
+    ///
+    /// Not the account name: account names are email addresses, and
+    /// `SPOTIFY_ME_GMAIL_COM_ID` is not a variable anyone wants. Letters, digits,
+    /// `_` and `-`, starting with a letter or digit, 24 characters at most.
+    #[arg(long)]
+    pub label: Option<String>,
+    /// The primary value is safe to print — an OAuth client id, a Stripe `pk_`,
+    /// an AWS access key id.
+    ///
+    /// Opts it out of redaction everywhere. Per value and never per type: the
+    /// secret beside a public client id stays masked. `--no-public` puts it back.
+    #[arg(long, overrides_with = "no_public")]
+    pub public: bool,
+    #[arg(long = "no-public", overrides_with = "public")]
+    pub no_public: bool,
+    /// The same, for `--secret`.
+    #[arg(long, overrides_with = "no_secret_public")]
+    pub secret_public: bool,
+    #[arg(long = "no-secret-public", overrides_with = "secret_public")]
+    pub no_secret_public: bool,
+    /// **How** this credential is sent: bearer | header | basic | query | cookie.
+    ///
+    /// This is what turns a stored string into a working request, and it is the
+    /// one thing about a credential the vault did not hold — so two entries that
+    /// look identical were used completely differently and the user had to
+    /// remember which. `envv curl` reads it.
+    #[arg(long, value_parser = ["bearer", "header", "basic", "query", "cookie", ""])]
+    pub auth_scheme: Option<String>,
+    /// The header or query-parameter name `--auth-scheme` puts the value in.
+    ///
+    /// Defaults to `X-Api-Key` for `header` and `api_key` for `query`; means
+    /// nothing for `bearer` and `basic`, whose shapes are fixed.
+    #[arg(long)]
+    pub auth_param: Option<String>,
+    /// The User-Agent this credential was minted against.
+    ///
+    /// Not optional metadata for a session cookie: replay without the matching
+    /// User-Agent usually 401s.
+    #[arg(long)]
+    pub user_agent: Option<String>,
+    /// Store the contents of a file in the vault (E17).
+    ///
+    /// `blob_ref` holds only a path, so a fresh machine has the reference and
+    /// not the credential. This holds the file itself; `--mount-path` says where
+    /// `envv file write` puts it back.
+    #[arg(long)]
+    pub blob_file: Option<PathBuf>,
+    /// Where the consumer expects to find this credential on disk.
+    #[arg(long)]
+    pub mount_path: Option<String>,
     /// Rate limit as free text, e.g. "100/min" or "5000 requests per hour".
     ///
     /// Parsed into the structured count/period pair where it can be; kept
@@ -185,7 +251,7 @@ pub struct EntryFields {
     pub generate_format: String,
 }
 
-pub const SECRET_TYPES: [&str; 7] = [
+pub const SECRET_TYPES: [&str; 8] = [
     "api_key",
     "password",
     "certificate",
@@ -193,6 +259,7 @@ pub const SECRET_TYPES: [&str; 7] = [
     "connection_string",
     "ssh_key",
     "file_blob",
+    "cookie",
 ];
 
 pub const ENV_SUBTYPES: [&str; 11] = [
@@ -269,6 +336,19 @@ fn split_list(raw: &str) -> Vec<String> {
 }
 
 /// Set a string field, or remove it when the caller passed an empty string.
+/// What a `label` may be — the twin of `LABEL_RE` in `src/ts/modals.ts`.
+///
+/// Hand-written rather than a `regex` dependency: the crate is not in the tree
+/// and this is one character class and a length.
+pub fn label_is_valid(v: &str) -> bool {
+    let mut chars = v.chars();
+    match chars.next() {
+        Some(c) if c.is_ascii_alphanumeric() => {}
+        _ => return false,
+    }
+    v.chars().count() <= 24 && chars.all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+}
+
 fn set_str(entry: &mut Value, field: &str, value: &str) {
     if value.is_empty() {
         entry.as_object_mut().map(|o| o.remove(field));
@@ -483,6 +563,72 @@ impl EntryFields {
         }
         if let Some(v) = &self.version {
             set_str(entry, "version", v);
+        }
+        if let Some(v) = &self.role {
+            set_str(entry, "primary_role", v);
+        }
+        // Absent means "leave unchanged", as every other flag here does, so the
+        // pair is read rather than the single bool: a bare `entry set` must not
+        // silently un-publish a value somebody marked public.
+        if self.public {
+            entry["primary_public"] = json!(true);
+        } else if self.no_public {
+            entry.as_object_mut().map(|o| o.remove("primary_public"));
+        }
+        if self.secret_public {
+            entry["secret_public"] = json!(true);
+        } else if self.no_secret_public {
+            entry.as_object_mut().map(|o| o.remove("secret_public"));
+        }
+        if let Some(v) = &self.auth_scheme {
+            set_str(entry, "auth_scheme", v);
+        }
+        if let Some(v) = &self.auth_param {
+            set_str(entry, "auth_param", v);
+        }
+        if let Some(v) = &self.user_agent {
+            set_str(entry, "user_agent", v);
+        }
+        if let Some(v) = &self.mount_path {
+            set_str(entry, "mount_path", v);
+        }
+        if let Some(path) = &self.blob_file {
+            let raw = std::fs::read(path)
+                .map_err(|e| CliError::from(format!("Cannot read {}: {e}", path.display())))?;
+            // Refused above the cap rather than truncated. A truncated credential
+            // fails at deploy time with an error about malformed JSON, which
+            // names the consumer and not the vault that broke it.
+            if raw.len() > crate::filecred::BLOB_MAX_BYTES {
+                return Err(CliError::invalid(format!(
+                    "{} is {} bytes; the cap is {}. Keep a bundle that large on disk and point \
+                     `--mount-path` at it instead.",
+                    path.display(),
+                    raw.len(),
+                    crate::filecred::BLOB_MAX_BYTES
+                )));
+            }
+            let text = String::from_utf8(raw).map_err(|_| {
+                CliError::invalid(
+                    "That file is not UTF-8 text. Credentials of this shape (JSON, PEM, \
+                     kubeconfig) always are; a binary one belongs on disk with --mount-path.",
+                )
+            })?;
+            entry["blob_data"] = json!(text);
+        }
+        if let Some(v) = &self.secret_role {
+            set_str(entry, "secret_role", v);
+        }
+        if let Some(v) = &self.label {
+            // Refused rather than transliterated: a label is a *name segment*,
+            // and quietly turning `my label!` into `MY_LABEL` produces a
+            // variable name the user never typed and cannot predict. Same rule
+            // and same expression as the form.
+            if !v.is_empty() && !label_is_valid(v) {
+                return Err(CliError::invalid(format!(
+                    "--label '{v}': letters, digits, _ and - only, starting with a letter or digit, 24 characters at most"
+                )));
+            }
+            set_str(entry, "label", v);
         }
         // The rate limit is three fields that must agree, so it is applied as a
         // unit rather than field by field. `--rate-limit` sets the free text and
@@ -938,6 +1084,44 @@ pub fn cmd_flag(access: &Access, query: &str, field: &str, on: bool) -> CliResul
 ///
 /// `save_vault` appends the previous value to `version_history` whenever the key
 /// changes, so passing `--key` here both rotates and records.
+/// `envv entry verify <entry>` — stamp a session as still working.
+///
+/// The session equivalent of `rotate`, and the reason the rotation nag is
+/// switched off for a cookie (Phase 23, E13): rotating one means logging in
+/// again in a browser, which nothing here can do, so "never rotated" was a
+/// finding with no available fix. "Never verified" has one, and it takes ten
+/// seconds.
+pub fn cmd_verify(access: &Access, query: &str, off: bool) -> CliResult {
+    let mut vault = access.load_vault()?;
+    let idx = find_entry_index(&vault, query)?;
+    let provider = data::provider_of(&data::entries(&vault)[idx]).to_string();
+    let stamp = vault_core::iso_now();
+    {
+        let entry = &mut entries_mut(&mut vault)[idx];
+        if off {
+            entry.as_object_mut().map(|o| o.remove("last_verified_at"));
+        } else {
+            entry["last_verified_at"] = json!(stamp);
+        }
+    }
+    access.save(&vault)?;
+    out::ok(
+        "entry.verify",
+        json!({
+            "provider": provider,
+            "last_verified_at": if off { Value::Null } else { json!(stamp) },
+        }),
+        || {
+            if off {
+                println!("Cleared the verification stamp on '{provider}'");
+            } else {
+                println!("'{provider}' verified at {stamp}");
+            }
+        },
+    );
+    Ok(())
+}
+
 pub fn cmd_rotate(
     access: &Access,
     query: &str,
@@ -1026,6 +1210,10 @@ pub fn cmd_history(access: &Access, query: &str) -> CliResult {
             json!({
                 "version": i + 1,
                 "saved_at": h.get("saved_at").and_then(|v| v.as_str()).unwrap_or(""),
+                // Absent has always meant `api_key` and every vault written
+                // before Phase 22 relies on it, so it is filled in here rather
+                // than being written into the record.
+                "field": history_field(h),
                 "value": if out::revealing() { json!(val) } else { out::masked_json(val) },
             })
         })
@@ -1047,11 +1235,242 @@ pub fn cmd_history(access: &Access, query: &str) -> CliResult {
                 } else {
                     out::masked(val)
                 };
-                println!("{:<4} {:<26} {}", i + 1, when, shown);
+                println!(
+                    "{:<4} {:<26} {:<22} {}",
+                    i + 1,
+                    when,
+                    history_field(h),
+                    shown
+                );
             }
         },
     );
     Ok(())
+}
+
+/// `envv curl <entry> [-- URL]` — the command that actually sends the credential.
+///
+/// A **materialising** path: the output contains the real value, so it follows
+/// the same rule as `envv export` and `envv render` — redacted to stdout unless
+/// `--reveal`, written in full by `--out`.
+///
+/// Redacted rather than *refused*, unlike a vault-wide export: the shape of the
+/// command is the useful part (which header, which parameter, which URL), and a
+/// redacted one is safe to paste into a transcript while still answering the
+/// question the user asked. A masked `.env` looks deployable and is not; a
+/// masked curl line obviously is not.
+pub fn cmd_curl(
+    access: &Access,
+    query: &str,
+    url: Option<&str>,
+    out_path: Option<&std::path::Path>,
+) -> CliResult {
+    let vault = access.load_vault()?;
+    let idx = find_entry_index(&vault, query)?;
+    let entry = data::entries(&vault)[idx].clone();
+    let provider = data::provider_of(&entry).to_string();
+
+    let real = crate::authreq::curl_for(&entry, url);
+    if out_path.is_none() && !out::revealing() {
+        // Build the same command from a redacted copy of the entry, so the
+        // structure survives and every value in it is a fingerprint.
+        let safe = out::redact_entry(&entry);
+        let preview = crate::authreq::curl_for(&safe, url);
+        out::ok(
+            "entry.curl",
+            json!({
+                "provider": provider,
+                "scheme": crate::authreq::scheme_of(&entry).as_str(),
+                "command": preview,
+                "redacted": true,
+            }),
+            || println!("{preview}"),
+        );
+        return Ok(());
+    }
+    crate::fmt::emit(&real, out_path)
+}
+
+/// Every cookie an entry holds, from wherever it keeps them.
+///
+/// The jar lives in `api_key` as a header string, and the individual cookies
+/// live in `extra_vars` once the user has split them — with `attrs` carrying the
+/// domain, path, secure flag and expiry that `cookies.txt` needs and a pasted
+/// `document.cookie` string does not have. Reading both and preferring the split
+/// form is what lets one entry serve `envv cookie header` (which needs neither)
+/// and `envv cookie txt` (which needs all of them).
+pub fn cookies_of(entry: &Value) -> Vec<crate::cookies::Cookie> {
+    let split: Vec<crate::cookies::Cookie> = entry
+        .get("extra_vars")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|xv| {
+                    let name = xv.get("key").and_then(|v| v.as_str())?;
+                    if name.is_empty() {
+                        return None;
+                    }
+                    let a = xv.get("attrs");
+                    let attr = |k: &str| {
+                        a.and_then(|o| o.get(k))
+                            .and_then(|v| v.as_str())
+                            .filter(|s| !s.is_empty())
+                            .map(str::to_string)
+                    };
+                    let flag = |k: &str| {
+                        a.and_then(|o| o.get(k))
+                            .and_then(|v| v.as_bool())
+                            .unwrap_or(false)
+                    };
+                    Some(crate::cookies::Cookie {
+                        name: name.to_string(),
+                        value: xv
+                            .get("value")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string(),
+                        domain: attr("domain"),
+                        path: attr("path"),
+                        secure: flag("secure"),
+                        http_only: flag("http_only"),
+                        expires: a
+                            .and_then(|o| o.get("expires"))
+                            .and_then(|v| v.as_i64())
+                            .unwrap_or(0),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    if !split.is_empty() {
+        return split;
+    }
+    crate::cookies::parse_cookie_header(entry.get("api_key").and_then(|v| v.as_str()).unwrap_or(""))
+}
+
+/// `envv file write <entry> [--out PATH]` — materialise a file-shaped credential.
+///
+/// **There is no stdout form and there deliberately never will be.** The whole
+/// point of E17 is that the consumer wants a *path*: printing the contents is
+/// the mistake, not a redaction question, so this is a materialising path by
+/// construction rather than one guarded by `--reveal`.
+///
+/// Written 0600, and the `.env` line naming it is printed so the caller can pipe
+/// it straight into a file — which is what makes this usable from a script
+/// without the secret ever entering the script's output.
+pub fn cmd_file_write(
+    access: &Access,
+    query: &str,
+    out_path: Option<&std::path::Path>,
+) -> CliResult {
+    let vault = access.load_vault()?;
+    let idx = find_entry_index(&vault, query)?;
+    let entry = data::entries(&vault)[idx].clone();
+    let provider = data::provider_of(&entry).to_string();
+
+    let Some((contents, _ext)) = crate::filecred::contents_of(&entry) else {
+        return Err(CliError::invalid(format!(
+            "'{provider}' holds no file contents. A `blob_ref` is only a path — put the file in \
+             the vault with `envv entry set {provider} --blob-file <path>`."
+        )));
+    };
+
+    let target = match out_path {
+        Some(p) => p.to_path_buf(),
+        None => {
+            let mount = entry
+                .get("mount_path")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            if mount.is_empty() {
+                return Err(CliError::invalid(format!(
+                    "'{provider}' has no mount path. Pass --out, or set one with \
+                     `envv entry set {provider} --mount-path /etc/…`."
+                )));
+            }
+            std::path::PathBuf::from(mount)
+        }
+    };
+
+    if let Some(dir) = target.parent() {
+        if !dir.as_os_str().is_empty() {
+            std::fs::create_dir_all(dir)
+                .map_err(|e| CliError::from(format!("Cannot create {}: {e}", dir.display())))?;
+        }
+    }
+    // `write_secret_file`, not `emit`: the file *is* the credential, so 0600 is
+    // not optional and there is no stdout branch to fall back to.
+    crate::fmt::write_secret_file(&target, &contents)?;
+
+    let name = crate::envfile::primary_name(&entry, None, false);
+    let line = format!("{name}={}", target.display());
+    out::ok(
+        "file.write",
+        json!({
+            "provider": provider,
+            "path": target.display().to_string(),
+            "bytes": contents.len(),
+            "env_line": line,
+        }),
+        || println!("{line}"),
+    );
+    Ok(())
+}
+
+/// `envv cookie header|curl|txt|json <entry>`.
+///
+/// Every form is a materialising path — the output *is* a live session — so each
+/// is redacted to stdout and written in full only by `--out`, the same rule
+/// `envv export` follows.
+pub fn cmd_cookie(
+    access: &Access,
+    query: &str,
+    form: &str,
+    out_path: Option<&std::path::Path>,
+) -> CliResult {
+    let vault = access.load_vault()?;
+    let idx = find_entry_index(&vault, query)?;
+    let entry = data::entries(&vault)[idx].clone();
+    let provider = data::provider_of(&entry).to_string();
+
+    let jar = cookies_of(&entry);
+    if jar.is_empty() {
+        return Err(CliError::not_found(format!(
+            "'{provider}' holds no cookies. Paste a jar into its value, or import a cookies.txt."
+        )));
+    }
+
+    // `txt` is refused for a jar with no attributes **before** the reveal check,
+    // because that refusal is about the data and is equally true with `--out`.
+    // Reporting "redacted" for a file that could never have been written would
+    // send the user looking for a `--reveal` that changes nothing.
+    let text = match form {
+        "header" => crate::cookies::to_cookie_header(&jar),
+        "json" => crate::cookies::to_cookie_json(&jar),
+        "curl" => crate::authreq::curl_for(&entry, None),
+        "txt" => crate::cookies::to_cookies_txt(&jar).map_err(CliError::invalid)?,
+        other => return Err(CliError::invalid(format!("Unknown cookie form '{other}'"))),
+    };
+
+    if out_path.is_none() && !out::revealing() {
+        return Err(out::refuse_reveal("A cookie jar"));
+    }
+    crate::fmt::emit(&text, out_path)
+}
+
+/// Which value a history record is a snapshot of.
+///
+/// An absent `field` means `api_key` and always has — every vault written before
+/// Phase 22 relies on that, which is why `api_key` still writes no discriminator.
+/// A named variable is recorded as `extra_vars/<key>`, namespaced so a restore
+/// can tell a var called `api_key` from the field of that name.
+fn history_field(record: &Value) -> String {
+    record
+        .get("field")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .unwrap_or("api_key")
+        .to_string()
 }
 
 /// Restore a previous value from `version_history` by its 1-based position.
@@ -1080,12 +1499,44 @@ pub fn cmd_restore(access: &Access, query: &str, version: usize, yes: bool) -> C
         println!("Cancelled.");
         return Ok(());
     }
-    entries_mut(&mut vault)[idx]["api_key"] = json!(value);
+    // Restore to the field the record names, not to `api_key` (Phase 23, E8).
+    // Every record used to be an `api_key` snapshot, so writing there was right;
+    // now a record can be a re-enrolled seed, a replaced secret or a named
+    // variable, and putting any of those back into the primary slot would
+    // overwrite a live credential with an unrelated one.
+    let field = history_field(item);
+    let entry = &mut entries_mut(&mut vault)[idx];
+    if let Some(var_key) = field.strip_prefix("extra_vars/") {
+        let arr = entry
+            .get_mut("extra_vars")
+            .and_then(|v| v.as_array_mut())
+            .map(std::mem::take)
+            .unwrap_or_default();
+        let mut arr: Vec<Value> = arr;
+        match arr
+            .iter_mut()
+            .find(|xv| xv.get("key").and_then(|k| k.as_str()) == Some(var_key))
+        {
+            Some(existing) => existing["value"] = json!(value),
+            // A variable deleted since the snapshot comes back. Deleting a row
+            // makes its value exactly as unrecoverable as overwriting one, so a
+            // restore that silently dropped it would be a restore that did not.
+            None => arr.push(json!({ "key": var_key, "value": value })),
+        }
+        entry["extra_vars"] = json!(arr);
+    } else {
+        entry[field.as_str()] = json!(value);
+    }
     access.save(&vault)?;
     out::ok(
         "entry.restore",
-        json!({ "provider": provider, "version": version, "fingerprint": out::fingerprint(&value) }),
-        || println!("Restored '{provider}' to version {version}"),
+        json!({
+            "provider": provider,
+            "version": version,
+            "field": field,
+            "fingerprint": out::fingerprint(&value),
+        }),
+        || println!("Restored '{provider}' {field} to version {version}"),
     );
     Ok(())
 }
@@ -1184,6 +1635,39 @@ pub fn cmd_list(
         println!("\n{} entries", list.len());
     }
     Ok(())
+}
+
+/// `envv get <entry> --profile <p>` — the terminal half of the app's Copy button.
+///
+/// The text carries **real values**, so it obeys the Phase 14 rule that governs
+/// every other artefact: refused to stdout unless `--reveal`, written by
+/// `--out`. Masking it instead would produce something that looks like a
+/// deployable `.env` and is not — the exact reason `envv export` refuses rather
+/// than masks.
+pub fn cmd_get_profile(
+    access: &Access,
+    query: &str,
+    profile: &str,
+    metadata: Option<&str>,
+    out_path: Option<&std::path::Path>,
+) -> CliResult {
+    let vault = access.load_vault()?;
+    let idx = find_entry_index(&vault, query)?;
+    let entry = data::entries(&vault)[idx].clone();
+
+    if out_path.is_none() && !out::revealing() {
+        return Err(out::refuse_reveal("A copy profile"));
+    }
+
+    let opts = crate::profile::CopyOpts {
+        profile: crate::profile::Profile::parse(profile),
+        metadata: metadata
+            .map(crate::profile::MetadataStyle::parse)
+            .unwrap_or(crate::profile::MetadataStyle::Comment),
+        ..Default::default()
+    };
+    let text = crate::profile::build(&entry, &opts);
+    crate::fmt::emit(&text, out_path)
 }
 
 pub fn cmd_get(access: &Access, query: &str, field: Option<&str>) -> CliResult {

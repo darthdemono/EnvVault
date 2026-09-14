@@ -251,7 +251,13 @@ pub fn export_docker_compose(project: &Value, r: &Resolver) -> Compose {
                         // material, so it is masked like any other value that
                         // came out of the vault.
                         let resolved = r.or_literal_secret(raw, true);
-                        env_lines.push(format!("{var_name}={resolved}"));
+                        // Quoted (E1): a resolved value is whatever the vault
+                        // holds, and a compose `.env` holding an unquoted
+                        // password with a `#` in it loads as a truncated one.
+                        env_lines.push(format!(
+                            "{var_name}={}",
+                            crate::envfile::quote_env_value(&resolved)
+                        ));
                     } else {
                         out.push(format!("      - {key}={raw}"));
                     }
@@ -397,13 +403,19 @@ pub fn export_project_env(project: &Value, r: &Resolver) -> EnvOut {
             let raw = s(&f, "value");
             // Every line of a .env is secret material by construction, so the
             // literal values are masked too, not only the resolved references.
-            let val = if r.resolve(raw).unresolved {
+            // An unresolved `${ref}` is written through raw and reported:
+            // quoting it would turn a recognisable broken placeholder into an
+            // escaped literal, and the caller is told about it either way.
+            let line = if r.resolve(raw).unresolved {
                 unresolved.push(raw.to_string());
-                raw.to_string()
+                format!("{key}={raw}")
             } else {
-                r.or_literal_secret(raw, true)
+                format!(
+                    "{key}={}",
+                    crate::envfile::quote_env_value(&r.or_literal_secret(raw, true))
+                )
             };
-            out.push(format!("{key}={val}"));
+            out.push(line);
         }
         out.push(String::new());
     }
@@ -1045,8 +1057,8 @@ pub fn dotenv(entries: &[Value]) -> String {
     entries
         .iter()
         .map(|e| {
-            let p = crate::data::env_key(s(e, "provider"));
-            format!("{p}={}", s(e, "api_key"))
+            let n = crate::envfile::primary_name(e, None, false);
+            format!("{n}={}", crate::envfile::quote_env_value(s(e, "api_key")))
         })
         .collect::<Vec<_>>()
         .join("\n")
@@ -1055,7 +1067,7 @@ pub fn dotenv(entries: &[Value]) -> String {
 pub fn yaml(entries: &[Value]) -> String {
     let mut out = String::from("# EnvVault Export\n");
     for e in entries {
-        let p = crate::data::env_key(s(e, "provider"));
+        let p = crate::envfile::primary_name(e, None, false);
         out.push_str(&format!(
             "{p}: {}\n",
             serde_json::to_string(s(e, "api_key")).unwrap_or_default()
@@ -1077,7 +1089,7 @@ pub fn k8s_secret(entries: &[Value], name: &str) -> String {
     for e in entries {
         lines.push(format!(
             "  {}: {}",
-            crate::data::env_key(s(e, "provider")),
+            crate::envfile::primary_name(e, None, false),
             serde_json::to_string(s(e, "api_key")).unwrap_or_default()
         ));
     }
@@ -1091,7 +1103,7 @@ pub fn tfvars(entries: &[Value]) -> String {
         .map(|e| {
             format!(
                 "{} = {}",
-                crate::data::env_key(s(e, "provider")).to_lowercase(),
+                crate::envfile::primary_name(e, Some(crate::envfile::NameCase::Lower), false),
                 serde_json::to_string(s(e, "api_key")).unwrap_or_default()
             )
         })

@@ -190,9 +190,41 @@ const PUBLIC_FIELDS: [&str; 39] = [
 /// because [`PUBLIC_FIELDS`] is a fixed-size array and these arrived later.
 const PUBLIC_FIELDS_EXTRA: [&str; 4] = ["totp_digits", "totp_period", "totp_kind", "totp_counter"];
 
+/// Phase 23 fields. Names, roles and flags — none of them hold secret material.
+///
+/// `primary_public` and `secret_public` are the E5 opt-out flags themselves, and
+/// they are booleans, so the unknown-string sweep would never have touched them;
+/// they are listed for the reader rather than for the code.
+const PUBLIC_FIELDS_P23: [&str; 10] = [
+    "primary_role",
+    "secret_role",
+    "label",
+    "primary_public",
+    "secret_public",
+    "last_copied_name",
+    // How a credential is sent is not the credential (E16). A scheme and a
+    // header name are in the issuer's public documentation, and hiding them
+    // would make the redacted view useless for the one question it is good at —
+    // "what is this and how would I use it" — while protecting nothing.
+    "auth_scheme",
+    "auth_param",
+    // A timestamp, and the whole point of E13's check is that a listing can say
+    // which sessions nobody has confirmed lately.
+    "last_verified_at",
+    "mount_path",
+];
+
+// `user_agent` is deliberately **not** in that list. It is a browser
+// fingerprint: it identifies the machine and build a session was minted in, and
+// a listing full of them says which of the user's machines holds which account.
+// It is masked like a secret even though it is not one — see the cookie branch
+// of `redact_entry`.
+
 /// True when a field is known not to hold secret material.
 fn is_public_field(name: &str) -> bool {
-    PUBLIC_FIELDS.contains(&name) || PUBLIC_FIELDS_EXTRA.contains(&name)
+    PUBLIC_FIELDS.contains(&name)
+        || PUBLIC_FIELDS_EXTRA.contains(&name)
+        || PUBLIC_FIELDS_P23.contains(&name)
 }
 
 /// Redact a single vault entry for JSON output. Returns it unchanged when
@@ -202,7 +234,26 @@ pub fn redact_entry(entry: &Value) -> Value {
         return entry.clone();
     }
     let mut e = entry.clone();
+    let is_cookie = entry.get("secretType").and_then(|v| v.as_str()) == Some("cookie");
+    // The two fixed value slots can each be marked public (Phase 23, E5). An
+    // OAuth client id lives in `api_key` and is printed in the issuer's own
+    // documentation; masking it protects nothing and stops an agent building an
+    // auth URL. The flag is per value and per entry — never per type.
+    let public_slot = |field: &str| -> bool {
+        if is_cookie {
+            return false;
+        }
+        let flag = match field {
+            "api_key" => "primary_public",
+            "api_secret" => "secret_public",
+            _ => return false,
+        };
+        entry.get(flag).and_then(|v| v.as_bool()).unwrap_or(false)
+    };
     for f in SECRET_FIELDS {
+        if public_slot(f) {
+            continue;
+        }
         if let Some(v) = e.get(f).and_then(|v| v.as_str()) {
             let masked = masked_json(v);
             e[f] = masked;
@@ -228,6 +279,35 @@ pub fn redact_entry(entry: &Value) -> Value {
             e[&f] = masked;
         }
     }
+    // A captured cookie jar is 2–8 KB and would otherwise dominate every listing
+    // an agent reads (E6) — the same shape the embedded-icon collapse below
+    // solves, so it gets the same treatment rather than a second one. The count
+    // and the fingerprint are what a caller actually needs: two jars can be told
+    // apart, and drift detected, without reading either. `--reveal` still
+    // returns it whole.
+    if is_cookie {
+        if let Some(raw) = entry.get("api_key").and_then(|v| v.as_str()) {
+            if !raw.is_empty() {
+                let jar = crate::cookies::parse_cookie_header(raw);
+                let names: Vec<&str> = jar.iter().map(|c| c.name.as_str()).collect();
+                e["api_key"] = json!({
+                    "cookies": jar.len(),
+                    "names": names,
+                    "bytes": raw.len(),
+                    "fingerprint": fingerprint(raw),
+                    "redacted": true,
+                });
+            }
+        }
+        // A User-Agent is a fingerprint, not a credential, and it identifies the
+        // browser the session was minted in. It must never appear anywhere the
+        // redacting resolver writes.
+        if let Some(ua) = e.get("user_agent").and_then(|v| v.as_str()) {
+            let masked = masked_json(ua);
+            e["user_agent"] = masked;
+        }
+    }
+
     // An embedded icon is not a secret, but it is 20–90 KB of base64 that would
     // otherwise dominate every listing an agent reads. Collapse it to a
     // description; `--reveal` still returns the data URI intact.
@@ -248,11 +328,32 @@ pub fn redact_entry(entry: &Value) -> Value {
         }
     }
 
-    // extra_vars carry their own secret flag.
+    // `extra_vars` are masked **by default**, with `public: true` as the opt-out
+    // (Phase 23, E5).
+    //
+    // They used to be masked only when `secret: true`, and that flag defaults to
+    // unset — so an entry whose real payload lives in named variables (an AWS
+    // key pair, a Twilio credential, a split cookie jar) printed every one of
+    // them in clear, and the first unflagged password was the one that leaked.
+    // This is the `env_file`-chunk trap wearing a different hat, and it is the
+    // same shape as the Phase 22 seed leak: a value printed because nobody
+    // marked it, rather than because somebody vouched for it.
+    //
+    // Opt-out **per value, never per type**: a client id, a region, an account
+    // SID and a publishable key are each safe to print, and the secret beside
+    // them is not. Without that, `--profile basic` output is either useless
+    // (everything masked) or unsafe (nothing masked).
     if let Some(arr) = e.get_mut("extra_vars").and_then(|v| v.as_array_mut()) {
         for xv in arr.iter_mut() {
-            let is_secret = xv.get("secret").and_then(|s| s.as_bool()).unwrap_or(false);
-            if is_secret {
+            // **A cookie entry's vars are masked whole, `public` ignored**
+            // (E5). A jar split one cookie per var is N session credentials,
+            // and any one of them is enough to be the account — so there is no
+            // "this half is the public half" here, unlike a client id beside a
+            // client secret. Same rule `env_file` chunks already follow, for the
+            // same reason.
+            let is_public =
+                !is_cookie && xv.get("public").and_then(|s| s.as_bool()).unwrap_or(false);
+            if !is_public {
                 if let Some(v) = xv.get("value").and_then(|v| v.as_str()) {
                     let masked = masked_json(v);
                     xv["value"] = masked;

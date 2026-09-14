@@ -333,6 +333,7 @@ fn field_aliases_match_the_app() {
         "api_url":          "api_url",
         "email":            "email",
         "key_id":           "key_id",
+        "mount_path":       "mount_path",
         "id":               "b3f1c0de-0000-4000-8000-000000000001",
         "categories":       ["categories"],
         "projectIds":       ["Universal"],
@@ -421,5 +422,350 @@ fn calendar_carries_no_secret_value() {
                 }
             }
         }
+    }
+}
+
+/// The env-name template and `.env` quoting — Phase 23, step 1.
+///
+/// A fifth twin pair, and the third in this project that existed as two
+/// implementations before anybody wrote a fixture for it. There were in fact
+/// *three* name builders before this — `dotenvKey` (provider + key_id), `envKey`
+/// in `import-export.ts` (provider only) and `data::env_key` here (provider
+/// only) — so one entry exported under two different names depending on which
+/// button you pressed.
+///
+/// The quoting half asserts the **round trip** rather than only the bytes:
+/// `parse(write(v)) == v` is the property a `.env` has to have, and it was false
+/// for every value containing a space, a `#`, a quote or a newline.
+#[test]
+fn env_names_and_quoting_match_the_app() {
+    use envv_cli::envfile::{env_name, quote_env_value, unquote_env_value, NameCase, NameOpts};
+
+    let doc: Value = serde_json::from_str(&golden("env-names.json")).expect("fixture parses");
+
+    for c in doc["names"].as_array().expect("names array") {
+        let why = c["why"].as_str().unwrap_or("");
+        let opts = NameOpts {
+            role: c.get("role").and_then(|r| r.as_str()),
+            case: c.get("case").and_then(|x| x.as_str()).map(NameCase::parse),
+            include_prefix: c
+                .get("includePrefix")
+                .and_then(|x| x.as_bool())
+                .unwrap_or(false),
+        };
+        assert_eq!(
+            env_name(&c["entry"], &opts),
+            c["expect"].as_str().unwrap(),
+            "{why}"
+        );
+    }
+
+    for c in doc["roles"].as_array().expect("roles array") {
+        let why = c["why"].as_str().unwrap_or("");
+        assert_eq!(
+            envv_cli::envfile::primary_name(&c["entry"], None, false),
+            c["primary"].as_str().unwrap(),
+            "primary: {why}"
+        );
+        assert_eq!(
+            envv_cli::envfile::secret_name(&c["entry"], None, false),
+            c["secret"].as_str().unwrap(),
+            "secret: {why}"
+        );
+    }
+
+    for c in doc["quoting"].as_array().expect("quoting array") {
+        let why = c["why"].as_str().unwrap_or("");
+        let value = c["value"].as_str().unwrap();
+        assert_eq!(
+            quote_env_value(value),
+            c["written"].as_str().unwrap(),
+            "write: {why}"
+        );
+        assert_eq!(
+            unquote_env_value(&quote_env_value(value)),
+            value,
+            "round trip: {why}"
+        );
+    }
+
+    for c in doc["unquoting"].as_array().expect("unquoting array") {
+        assert_eq!(
+            unquote_env_value(c["raw"].as_str().unwrap()),
+            c["expect"].as_str().unwrap(),
+            "{}",
+            c["why"].as_str().unwrap_or("")
+        );
+    }
+}
+
+/// E9 — the reference grammar and the name template share a syntactic position.
+///
+/// `${SPOTIFY_V2}` can mean provider `SPOTIFY` with `key_id` `V2` (the legacy
+/// split) or the `SPOTIFY` entry whose version is 2 (the template). Where both
+/// exist and disagree the reference is **refused**: a plausible-looking wrong
+/// value written into a rendered config is the Phase 21 defect class, and the
+/// honest answer is the one every exporter already reports.
+#[test]
+fn reference_lookup_matches_the_app() {
+    let doc: Value = serde_json::from_str(&golden("env-names.json")).expect("fixture parses");
+    let section = &doc["reference_lookup"];
+    let entries: Vec<Value> = section["entries"].as_array().expect("entries").clone();
+
+    for c in section["cases"].as_array().expect("cases") {
+        let why = c["why"].as_str().unwrap_or("");
+        let found = envv_cli::refs::find_entry(&entries, c["ref"].as_str().unwrap());
+        let got = found
+            .and_then(|e| e.get("account_name"))
+            .and_then(|v| v.as_str());
+        assert_eq!(got, c["expect"].as_str(), "{why}");
+    }
+}
+
+/// Phase 23, step 2: a role declared on the entry beats the alias table.
+///
+/// `primary_role: "id"` says the primary value *is* a client id, so `${X/ID}`
+/// must answer with `api_key` rather than with the `key_id` beside it — which is
+/// what the Phase 21 alias arm resolves to for an entry that declares no role,
+/// and what it still resolves to for every such entry. Roles also make the
+/// no-primary shapes addressable: Twilio's two halves are an Account SID and an
+/// Auth Token, and naming them by the issuer's own words is the point.
+#[test]
+fn declared_roles_beat_the_alias_table() {
+    let doc: Value = serde_json::from_str(&golden("field-aliases.json")).expect("fixture parses");
+
+    let ra = &doc["role_aware"];
+    for c in ra["cases"].as_array().expect("cases") {
+        let got = envv_cli::refs::entry_field(&ra["entry"], c["field"].as_str().unwrap());
+        assert_eq!(
+            got.as_deref(),
+            c["expect"].as_str(),
+            "{}",
+            c["why"].as_str().unwrap_or("")
+        );
+    }
+
+    let ri = &doc["role_aware_id"];
+    let got = envv_cli::refs::entry_field(&ri["entry"], ri["field"].as_str().unwrap());
+    assert_eq!(
+        got.as_deref(),
+        ri["expect"].as_str(),
+        "{}",
+        ri["_why"].as_str().unwrap_or("")
+    );
+}
+
+/// Copy profiles — Phase 23, step 3. A sixth twin pair.
+///
+/// It exists twice because the app's Copy button puts the text on the clipboard
+/// with no Rust in the loop, and `envv get --profile` writes the same text from
+/// the terminal. A copy that differs between the two is a `.env` whose contents
+/// depend on which half of the product the user reached for.
+#[test]
+fn copy_profiles_match_the_app() {
+    use envv_cli::profile::{build, CopyOpts, MetadataStyle, Profile};
+
+    let doc: Value = serde_json::from_str(&golden("copy-profiles.json")).expect("fixture parses");
+
+    let opts_of = |c: &Value| CopyOpts {
+        profile: Profile::parse(c["profile"].as_str().unwrap()),
+        metadata: MetadataStyle::parse(c["metadataStyle"].as_str().unwrap()),
+        ..Default::default()
+    };
+    let expect_of = |c: &Value| {
+        c["expect"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|l| l.as_str().unwrap())
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+
+    for c in doc["cases"].as_array().expect("cases") {
+        assert_eq!(
+            build(&doc["entry"], &opts_of(c)),
+            expect_of(c),
+            "{}",
+            c["why"].as_str().unwrap_or("")
+        );
+    }
+
+    let sp = &doc["sparse"];
+    assert_eq!(
+        build(&sp["entry"], &opts_of(sp)),
+        expect_of(sp),
+        "an entry with no primary value emits no empty primary line"
+    );
+}
+
+/// How a credential is sent — Phase 23, E16. A seventh twin pair.
+///
+/// The app's "Copy as request header" builds the header with no Rust in the
+/// loop and `envv curl` builds the same one from the terminal; a header that
+/// differs between them is a request that works from one half of the product and
+/// 401s from the other, with the API explaining neither.
+///
+/// Shell quoting is pinned here too: every interpolated value is vault data
+/// (invariant 4), and one of them is routinely a cookie jar full of semicolons.
+#[test]
+fn auth_schemes_match_the_app() {
+    use envv_cli::authreq::{curl_for, header_for, query_for, shell_quote, url_for};
+
+    let doc: Value = serde_json::from_str(&golden("auth-request.json")).expect("fixture parses");
+
+    for c in doc["cases"].as_array().expect("cases") {
+        let why = c["why"].as_str().unwrap_or("");
+        let e = &c["entry"];
+
+        let got = header_for(e).map(|(n, v)| serde_json::json!([n, v]));
+        assert_eq!(got.unwrap_or(Value::Null), c["header"], "header: {why}");
+        assert_eq!(
+            query_for(e).map(Value::String).unwrap_or(Value::Null),
+            c["query"],
+            "query: {why}"
+        );
+        let url_in = c["url_in"].as_str().unwrap_or("");
+        if !url_in.is_empty() {
+            assert_eq!(
+                url_for(e, url_in),
+                c["url_out"].as_str().unwrap(),
+                "url: {why}"
+            );
+        }
+        let target = if url_in.is_empty() {
+            None
+        } else {
+            Some(url_in)
+        };
+        assert_eq!(
+            curl_for(e, target),
+            c["curl"].as_str().unwrap(),
+            "curl: {why}"
+        );
+    }
+
+    for c in doc["shell_quote"].as_array().expect("shell_quote") {
+        assert_eq!(
+            shell_quote(c["value"].as_str().unwrap()),
+            c["expect"].as_str().unwrap(),
+            "{}",
+            c["why"].as_str().unwrap_or("")
+        );
+    }
+}
+
+/// Session cookies — Phase 23, step 5. An eighth twin pair.
+///
+/// The form splits a pasted `document.cookie` as it is typed, so an IPC round
+/// trip per keystroke is not an option — the same reason the TOTP seed parser
+/// exists twice.
+#[test]
+fn cookie_parsing_matches_the_app() {
+    use envv_cli::cookies::*;
+
+    let doc: Value = serde_json::from_str(&golden("cookies.json")).expect("fixture parses");
+
+    fn norm(c: &Cookie) -> Value {
+        serde_json::json!({
+            "name": c.name,
+            "value": c.value,
+            "domain": c.domain.clone().map(Value::String).unwrap_or(Value::Null),
+            "path": c.path.clone().map(Value::String).unwrap_or(Value::Null),
+            "secure": c.secure,
+            "http_only": c.http_only,
+            "expires": c.expires,
+        })
+    }
+    fn expected(list: &Value) -> Vec<Value> {
+        list.as_array()
+            .unwrap()
+            .iter()
+            .map(|e| {
+                serde_json::json!({
+                    "name": e["name"],
+                    "value": e["value"],
+                    "domain": e.get("domain").cloned().unwrap_or(Value::Null),
+                    "path": e.get("path").cloned().unwrap_or(Value::Null),
+                    "secure": e.get("secure").and_then(|v| v.as_bool()).unwrap_or(false),
+                    "http_only": e.get("http_only").and_then(|v| v.as_bool()).unwrap_or(false),
+                    "expires": e.get("expires").and_then(|v| v.as_i64()).unwrap_or(0),
+                })
+            })
+            .collect()
+    }
+    fn from_fixture(list: &Value) -> Vec<Cookie> {
+        list.as_array()
+            .unwrap()
+            .iter()
+            .map(|e| Cookie {
+                name: e["name"].as_str().unwrap_or("").to_string(),
+                value: e["value"].as_str().unwrap_or("").to_string(),
+                domain: e.get("domain").and_then(|v| v.as_str()).map(str::to_string),
+                path: e.get("path").and_then(|v| v.as_str()).map(str::to_string),
+                secure: e.get("secure").and_then(|v| v.as_bool()).unwrap_or(false),
+                http_only: e
+                    .get("http_only")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false),
+                expires: e.get("expires").and_then(|v| v.as_i64()).unwrap_or(0),
+            })
+            .collect()
+    }
+
+    for (key, parse) in [
+        (
+            "parse_header",
+            parse_cookie_header as fn(&str) -> Vec<Cookie>,
+        ),
+        ("parse_txt", parse_cookies_txt),
+        ("parse_json", parse_cookie_json),
+    ] {
+        for c in doc[key].as_array().expect("cases") {
+            let got: Vec<Value> = parse(c["raw"].as_str().unwrap()).iter().map(norm).collect();
+            assert_eq!(
+                got,
+                expected(&c["expect"]),
+                "{}",
+                c["why"].as_str().unwrap_or("")
+            );
+        }
+    }
+
+    for c in doc["to_header"].as_array().expect("to_header") {
+        assert_eq!(
+            to_cookie_header(&from_fixture(&c["cookies"])),
+            c["expect"].as_str().unwrap(),
+            "{}",
+            c["why"].as_str().unwrap_or("")
+        );
+    }
+    for c in doc["to_txt"].as_array().expect("to_txt") {
+        assert_eq!(
+            to_cookies_txt(&from_fixture(&c["cookies"])).expect("writable"),
+            c["expect"].as_str().unwrap(),
+            "{}",
+            c["why"].as_str().unwrap_or("")
+        );
+    }
+    for c in doc["to_txt_refused"].as_array().expect("to_txt_refused") {
+        let jar = from_fixture(&c["cookies"]);
+        let missing: Vec<String> = c["missing"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|m| m.as_str().unwrap().to_string())
+            .collect();
+        assert_eq!(
+            missing_txt_attributes(&jar),
+            missing,
+            "{}",
+            c["why"].as_str().unwrap_or("")
+        );
+        assert!(
+            to_cookies_txt(&jar).is_err(),
+            "{}",
+            c["why"].as_str().unwrap_or("")
+        );
     }
 }

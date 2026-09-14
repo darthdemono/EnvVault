@@ -8,10 +8,12 @@
 
 pub mod access;
 pub mod agentio;
+pub mod authreq;
 pub mod backup;
 pub mod calendar;
 pub mod chunks;
 pub mod context;
+pub mod cookies;
 pub mod data;
 pub mod doctor;
 pub mod enrich;
@@ -20,11 +22,13 @@ pub mod envfile;
 pub mod error;
 pub mod exec;
 pub mod exporters;
+pub mod filecred;
 pub mod fmt;
 pub mod gen;
 pub mod import_vaults;
 pub mod out;
 pub mod pool;
+pub mod profile;
 pub mod projects;
 pub mod ratelimit;
 pub mod refs;

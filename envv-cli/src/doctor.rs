@@ -341,6 +341,74 @@ fn check_schema(vault: &Value) -> Finding {
     }
 }
 
+/// Entries with no stable `id` (Phase 23, E12).
+///
+/// `entry_ck` falls back to `provider|account_name|key_id` for an entry without
+/// one, and that tuple is what RBAC scoped writes, `envv entry rm` and the
+/// merge path all match on. Two entries differing only by their `label` would
+/// collide there — so a scoped write meant for one would act on the other.
+///
+/// The fix is **not** to add `label` to the tuple: that would change every
+/// existing `entry_ck` and silently re-target scoping on every pre-id vault.
+/// It is to backfill the id, which the desktop app already does in
+/// `finishInit()`. This check exists for the entries an older CLI wrote.
+fn check_entry_ids(vault: &Value) -> Finding {
+    let n = count_idless(vault);
+    if n == 0 {
+        Finding::ok("entry-ids", "every entry has a stable id")
+    } else {
+        Finding::at(
+            "entry-ids",
+            Level::Warn,
+            format!(
+                "{n} entr{} no stable id",
+                if n == 1 { "y has" } else { "ies have" }
+            ),
+            "Such an entry is identified by provider|account|key_id, which two entries \
+             can share. Run `envv doctor --fix` to backfill; the app does it on unlock.",
+        )
+    }
+}
+
+fn count_idless(vault: &Value) -> usize {
+    crate::data::entries(vault)
+        .iter()
+        .filter(|e| {
+            e.get("id")
+                .and_then(|v| v.as_str())
+                .map(|s| s.trim().is_empty())
+                .unwrap_or(true)
+        })
+        .count()
+}
+
+/// Backfill the ids `check_entry_ids` reports.
+///
+/// Deliberately the *only* thing `--fix` does. Every other finding this command
+/// reports is either informational or needs a decision — there is no `--repair`
+/// for a missing salt, because nothing can reconstruct 16 bytes of CSPRNG output
+/// and a flag that appeared to offer it would be discovered as a lie during a
+/// restore.
+fn fix_entry_ids(access: &Access) -> CliResult<usize> {
+    let mut vault = access.load_vault_or_empty()?;
+    let mut fixed = 0usize;
+    for e in crate::data::entries_mut(&mut vault) {
+        let missing = e
+            .get("id")
+            .and_then(|v| v.as_str())
+            .map(|s| s.trim().is_empty())
+            .unwrap_or(true);
+        if missing {
+            e["id"] = json!(vault_core::new_uuid());
+            fixed += 1;
+        }
+    }
+    if fixed > 0 {
+        access.save(&vault)?;
+    }
+    Ok(fixed)
+}
+
 /// Run every check.
 ///
 /// `access` is `None` when the vault could not be opened — which is precisely
@@ -348,7 +416,7 @@ fn check_schema(vault: &Value) -> Finding {
 /// reason is reported as a finding. An earlier version took `&Access` and
 /// therefore failed with "no vault found" on a vault with a missing salt: the
 /// one condition it most needed to diagnose.
-pub fn run(access: Option<&Access>, open_error: Option<String>) -> CliResult {
+pub fn run(access: Option<&Access>, open_error: Option<String>, fix: bool) -> CliResult {
     let mut findings = Vec::new();
 
     // These need no key and no database — they are what is left to say when
@@ -374,8 +442,33 @@ pub fn run(access: Option<&Access>, open_error: Option<String>) -> CliResult {
         }
     };
 
+    // Repair before reporting, so the report describes the vault as it is when
+    // the command exits rather than as it was when it started — a `--fix` run
+    // that still printed the warning it had just repaired would be read as a
+    // failed repair.
+    if fix {
+        let fixed = fix_entry_ids(access)?;
+        findings.push(Finding::ok(
+            "fix",
+            if fixed == 0 {
+                "nothing to repair".to_string()
+            } else {
+                format!(
+                    "backfilled {fixed} entry id{}",
+                    if fixed == 1 { "" } else { "s" }
+                )
+            },
+        ));
+    }
+    let vault = if fix {
+        access.load_vault_or_empty()?
+    } else {
+        vault
+    };
+
     findings.insert(0, check_integrity(access));
     findings.push(check_schema(&vault));
+    findings.push(check_entry_ids(&vault));
     findings.push(check_pools(&vault));
     findings.push(check_audit(access));
     report(findings)

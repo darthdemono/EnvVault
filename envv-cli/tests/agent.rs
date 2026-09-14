@@ -136,8 +136,48 @@ fn entry_redaction_masks_every_secret_field() {
     // entry you are looking at.
     assert_eq!(safe["provider"], json!("GitHub"));
     assert_eq!(safe["api_url"], json!("https://api.github.com"));
-    // A non-secret extra_var is data, not a credential.
-    assert!(text.contains("eu-west-1"));
+    // Phase 23, E5: an `extra_var` is masked **by default** and `public: true`
+    // is the opt-out. The old rule was the reverse — masked only when
+    // `secret: true`, a flag that defaults to unset — so an entry whose real
+    // payload lives in named variables (an AWS key pair, a Twilio credential, a
+    // split cookie jar) printed every one of them in clear, and the first
+    // unflagged password was the one that leaked.
+    assert!(
+        !text.contains("eu-west-1"),
+        "an unflagged extra_var must be masked, not printed: {text}"
+    );
+    let public_entry = json!({
+        "provider": "Spotify",
+        "api_key": "the-client-secret",
+        "extra_vars": [
+            { "key": "REGION", "value": "eu-west-1", "public": true },
+            { "key": "TOKEN",  "value": "unflagged-but-secret" },
+        ],
+    });
+    let pub_text = serde_json::to_string(&out::redact_entry(&public_entry)).unwrap();
+    assert!(
+        pub_text.contains("eu-west-1"),
+        "a var marked public is printed: {pub_text}"
+    );
+    assert!(
+        !pub_text.contains("unflagged-but-secret"),
+        "and the one beside it is not: {pub_text}"
+    );
+    // The two fixed slots take the same flag. A client id lives in `api_key`
+    // and is printed in the issuer's own documentation; masking it protects
+    // nothing and stops an agent building an auth URL.
+    let public_primary = json!({
+        "provider": "Spotify",
+        "api_key": "the-client-id",
+        "api_secret": "the-real-secret",
+        "primary_public": true,
+    });
+    let pp = serde_json::to_string(&out::redact_entry(&public_primary)).unwrap();
+    assert!(pp.contains("the-client-id"), "public primary prints: {pp}");
+    assert!(
+        !pp.contains("the-real-secret"),
+        "the secret beside it does not: {pp}"
+    );
     assert_eq!(safe["api_key"]["redacted"], json!(true));
     assert_eq!(
         safe["api_key"]["length"],

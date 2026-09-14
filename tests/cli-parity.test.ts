@@ -18,7 +18,15 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { st } from '../src/ts/state';
+import {
+  st,
+  envName,
+  primaryEnvName,
+  secretEnvName,
+  quoteEnvValue,
+  unquoteEnvValue,
+  type EnvNameCase,
+} from '../src/ts/state';
 import {
   exportWireGuard,
   exportDockerCompose,
@@ -32,7 +40,24 @@ import {
   exportPostgres,
   chunkToString,
   resolveFieldRef,
+  findEntryByRef,
 } from '../src/ts/chunk-ops';
+import { buildCopyText } from '../src/ts/copy-profile';
+import {
+  parseCookieHeader,
+  parseCookiesTxt,
+  parseCookieJson,
+  toCookieHeader,
+  toCookiesTxt,
+  missingTxtAttributes,
+} from '../src/ts/cookies';
+import {
+  authHeaderFor,
+  authQueryFor,
+  authUrlFor,
+  curlFor,
+  shellQuote,
+} from '../src/ts/auth-request';
 import { buildIcs } from '../src/ts/calendar';
 import { loadRealIndexHtml, resetState } from './helpers';
 
@@ -214,6 +239,7 @@ describe('exporter parity fixtures', () => {
         api_url: 'api_url',
         email: 'email',
         key_id: 'key_id',
+        mount_path: 'mount_path',
         id: 'b3f1c0de-0000-4000-8000-000000000001',
         categories: ['categories'],
         projectIds: ['Universal'],
@@ -242,6 +268,168 @@ describe('exporter parity fixtures', () => {
     // ...and an empty built-in falls through to extra_vars, as the CLI does.
     const fb = doc.extra_var_fallback;
     expect(resolveFieldRef(`\${${fb.provider}/${fb.field}}`, true).resolved).toBe(fb.value);
+
+    // Phase 23: a role declared on the entry beats the alias table.
+    st.vault.api_keys = [
+      { ...doc.role_aware.entry, id: 'r-1', projectIds: ['Universal'] },
+      { ...doc.role_aware_id.entry, id: 'r-2', projectIds: ['Universal'] },
+    ] as any;
+    for (const c of doc.role_aware.cases as any[]) {
+      expect(resolveFieldRef(`\${R/${c.field}}`, true).resolved, c.why).toBe(c.expect);
+    }
+    const ri = doc.role_aware_id;
+    expect(resolveFieldRef(`\${S/${ri.field}}`, true).resolved, ri._why).toBe(ri.expect);
+  });
+
+  /**
+   * The env-name template and `.env` quoting — Phase 23, step 1.
+   *
+   * A fifth twin pair, and the third one in this project that existed as two
+   * implementations before anybody wrote a fixture for it. There were in fact
+   * *three* name builders before this: `dotenvKey` (provider + key_id),
+   * `envKey` in `import-export.ts` (provider only) and `data::env_key` in the
+   * CLI (provider only). The same entry exported under two different names
+   * depending on which button you pressed.
+   *
+   * The quoting half asserts the **round trip** rather than only the bytes:
+   * `parse(write(v)) === v` is the property a `.env` has to have, and it is the
+   * one that was false for every value containing a space, a `#`, a quote or a
+   * newline.
+   */
+  it('env names and .env quoting', () => {
+    const doc = JSON.parse(readFileSync(join(FIXTURES, 'env-names.json'), 'utf8'));
+
+    for (const c of doc.names as any[]) {
+      expect(
+        envName(c.entry, {
+          role: c.role,
+          case: c.case as EnvNameCase | undefined,
+          includePrefix: !!c.includePrefix,
+        }),
+        c.why,
+      ).toBe(c.expect);
+    }
+
+    for (const c of doc.roles as any[]) {
+      expect(primaryEnvName(c.entry), `primary: ${c.why}`).toBe(c.primary);
+      expect(secretEnvName(c.entry), `secret: ${c.why}`).toBe(c.secret);
+    }
+
+    // E9 — the reference grammar and the template share a syntactic position.
+    const savedKeys = st.vault.api_keys;
+    const savedProjects = st.vault.projects;
+    st.vault.api_keys = doc.reference_lookup.entries as any;
+    st.vault.projects = [];
+    for (const c of doc.reference_lookup.cases as any[]) {
+      const found = findEntryByRef(c.ref);
+      expect(found?.account_name ?? null, c.why).toBe(c.expect);
+    }
+    st.vault.api_keys = savedKeys;
+    st.vault.projects = savedProjects;
+
+    for (const c of doc.quoting as any[]) {
+      expect(quoteEnvValue(c.value), `write: ${c.why}`).toBe(c.written);
+      // The property, not the spelling: a value that survives a write and a
+      // parse is one a deploy can rely on.
+      expect(unquoteEnvValue(quoteEnvValue(c.value)), `round trip: ${c.why}`).toBe(c.value);
+    }
+
+    for (const c of doc.unquoting as any[]) {
+      expect(unquoteEnvValue(c.raw), c.why).toBe(c.expect);
+    }
+  });
+
+  /**
+   * Copy profiles — Phase 23, step 3. A sixth twin pair.
+   *
+   * It exists twice because the app's Copy button puts the text on the
+   * clipboard with no Rust in the loop, and `envv get --profile` writes the same
+   * text from the terminal. A copy that differs between the two is a `.env`
+   * whose contents depend on which half of the product the user reached for.
+   */
+  it('copy profiles', () => {
+    const doc = JSON.parse(readFileSync(join(FIXTURES, 'copy-profiles.json'), 'utf8'));
+    for (const c of doc.cases as any[]) {
+      expect(
+        buildCopyText(doc.entry, { profile: c.profile, metadataStyle: c.metadataStyle }),
+        c.why,
+      ).toBe((c.expect as string[]).join('\n'));
+    }
+    const col = doc.collision;
+    expect(
+      buildCopyText(col.entry, { profile: col.profile, metadataStyle: col.metadataStyle }),
+      'a name collision inside one entry is disambiguated, never dropped',
+    ).toBe((col.expect as string[]).join('\n'));
+
+    const sp = doc.sparse;
+    expect(
+      buildCopyText(sp.entry, { profile: sp.profile, metadataStyle: sp.metadataStyle }),
+      'an entry with no primary value emits no empty primary line',
+    ).toBe((sp.expect as string[]).join('\n'));
+  });
+
+  /**
+   * How a credential is sent — Phase 23, E16. A seventh twin pair.
+   *
+   * The app's "Copy as request header" builds the header with no Rust in the
+   * loop and `envv curl` builds the same one from the terminal; a header that
+   * differs between them is a request that works from one half of the product
+   * and 401s from the other, with the API explaining neither.
+   */
+  it('auth schemes and shell quoting', () => {
+    const doc = JSON.parse(readFileSync(join(FIXTURES, 'auth-request.json'), 'utf8'));
+    for (const c of doc.cases as any[]) {
+      const h = authHeaderFor(c.entry);
+      expect(h ? [h.name, h.value] : null, `header: ${c.why}`).toEqual(c.header);
+      expect(authQueryFor(c.entry), `query: ${c.why}`).toBe(c.query);
+      if (c.url_in) expect(authUrlFor(c.entry, c.url_in), `url: ${c.why}`).toBe(c.url_out);
+      expect(curlFor(c.entry, c.url_in || undefined), `curl: ${c.why}`).toBe(c.curl);
+    }
+    for (const c of doc.shell_quote as any[]) {
+      expect(shellQuote(c.value), c.why).toBe(c.expect);
+    }
+  });
+
+  /**
+   * Session cookies — Phase 23, step 5. An eighth twin pair.
+   *
+   * The form splits a pasted `document.cookie` as it is typed, so an IPC round
+   * trip per keystroke is not an option — the same reason the TOTP seed parser
+   * exists twice.
+   */
+  it('cookie parsing and writing', () => {
+    const doc = JSON.parse(readFileSync(join(FIXTURES, 'cookies.json'), 'utf8'));
+    const norm = (c: any) => ({
+      name: c.name,
+      value: c.value,
+      domain: c.domain ?? null,
+      path: c.path ?? null,
+      secure: !!c.secure,
+      http_only: !!c.http_only,
+      expires: c.expires ?? 0,
+    });
+
+    for (const c of doc.parse_header as any[]) {
+      expect(parseCookieHeader(c.raw).map(norm), c.why).toEqual(
+        (c.expect as any[]).map((e) => norm({ ...e })),
+      );
+    }
+    for (const c of doc.parse_txt as any[]) {
+      expect(parseCookiesTxt(c.raw).map(norm), c.why).toEqual((c.expect as any[]).map(norm));
+    }
+    for (const c of doc.parse_json as any[]) {
+      expect(parseCookieJson(c.raw).map(norm), c.why).toEqual((c.expect as any[]).map(norm));
+    }
+    for (const c of doc.to_header as any[]) {
+      expect(toCookieHeader(c.cookies), c.why).toBe(c.expect);
+    }
+    for (const c of doc.to_txt as any[]) {
+      expect(toCookiesTxt(c.cookies), c.why).toBe(c.expect);
+    }
+    for (const c of doc.to_txt_refused as any[]) {
+      expect(missingTxtAttributes(c.cookies), c.why).toEqual(c.missing);
+      expect(() => toCookiesTxt(c.cookies), c.why).toThrow();
+    }
   });
 
   it('nginx_upstream chunk', () => {

@@ -16,14 +16,16 @@ import {
   Settings,
   setRenderFn,
   applyGridSettings,
-  dotenvKey,
+  primaryEnvName,
   switchPanel,
   isSidebarSectionEnabled,
   persist,
   entryId,
   saveViewState,
+  quoteEnvValue,
 } from './state';
 import { getFiltered, sorted, buildProjectTree, getDescendantProjectIds } from './filters';
+import { timeUntil } from './ui-qol';
 import { iconHTML } from './icons';
 import { normalizeRateLimit } from './ratelimit';
 import { poolsOf } from './pools';
@@ -589,6 +591,10 @@ function buildCard(entry: VaultEntry, idx: number, animIdx: number): HTMLElement
     ? `<span class="badge badge-compromised" title="Marked compromised — rotate immediately">⚠ LEAKED</span>`
     : '';
   const rotBadge = (() => {
+    // A browser session shows no rotation badge (E13): rotating one means
+    // logging in again in a browser, so the badge would sit there forever
+    // pointing at something the user cannot do from here.
+    if (entry.secretType === 'cookie') return '';
     if (!entry.rotation_days || entry.rotation_days <= 0 || !entry.last_rotated_at) return '';
     const dueMs = new Date(entry.last_rotated_at).getTime() + entry.rotation_days * 86_400_000;
     if (dueMs >= Date.now()) return '';
@@ -598,15 +604,27 @@ function buildCard(entry: VaultEntry, idx: number, animIdx: number): HTMLElement
   // Per-field mask state: default from settings, overridden by any explicit
   // reveal the user has toggled. Previously this read the setting alone, so a
   // revealed secret silently re-masked itself on the next re-render.
-  const masked = (field: string) =>
-    st.revealed[`${field}-${eid}`] !== undefined
+  const masked = (field: string) => {
+    // A value marked public is never masked (Phase 23, E5). A client id, a
+    // publishable key and a region are printed in the issuer's own
+    // documentation; hiding them behind a reveal click protects nothing and
+    // makes the card unreadable for the half of a credential that is meant to be
+    // read. An explicit reveal toggle still wins, in both directions.
+    if (field === 'key' && entry.primary_public) return false;
+    if (field === 'secret' && entry.secret_public) return false;
+    return st.revealed[`${field}-${eid}`] !== undefined
       ? !st.revealed[`${field}-${eid}`]
       : Settings.get('maskKeysByDefault');
+  };
   const hasMask = masked('key');
   const secretMasked = masked('secret');
   const envFmt = Settings.get('defaultExportFormat');
   const envLabel = envFmt === 'yaml' ? 'YAML' : '.env';
 
+  // The caret beside the copy button is what keeps `copyProfile` a *default*
+  // rather than a wall: the other two profiles and "Value only" are one click
+  // away on every card, and the one-off choice made there is deliberately not
+  // persisted as the new default (Phase 23).
   const card = document.createElement('div');
   const expiryBorderCls = getExpiryBorderClass(entry);
   const pinnedCls = entry.pinned ? ' pinned' : '';
@@ -740,8 +758,16 @@ function buildCard(entry: VaultEntry, idx: number, animIdx: number): HTMLElement
     </div>
     ${entry.tags?.length ? `<div class="card-tags">${entry.tags.map((t) => `<span class="tag-chip-card" style="${tagColor(t)}">${esc(t)}</span>`).join('')}</div>` : ''}
     <div class="card-foot">
-      <button class="env-copy-btn" id="env-btn-${idx}" data-action="copy-env" data-idx="${idx}" aria-label="${escAttr('Copy ' + entry.provider + ' as ' + envLabel)}">${copySVG}<span class="env-format-badge">${envLabel}</span><span id="env-label-${idx}">${dotenvKey(entry)}</span></button>
-      <button class="icon-btn sm" data-action="rotate" data-idx="${idx}" title="Mark as rotated" aria-label="${escAttr('Mark ' + entry.provider + ' as rotated')}" style="font-size:11px;gap:3px;">↺</button>
+      <button class="env-copy-btn" id="env-btn-${idx}" data-action="copy-env" data-idx="${idx}" aria-label="${escAttr('Copy ' + entry.provider + ' as ' + envLabel)}">${copySVG}<span class="env-format-badge">${envLabel}</span><span id="env-label-${idx}">${primaryEnvName(entry)}</span></button>
+      <button class="icon-btn sm env-copy-caret" data-action="copy-env-menu" data-idx="${idx}" title="Copy as…" aria-label="${escAttr('Copy ' + entry.provider + ' as…')}" aria-haspopup="true">▾</button>
+      ${
+        // A session has no rotation to record — rotating one means logging in
+        // again in a browser (E13) — so the button is the one that *is*
+        // actionable for it.
+        entry.secretType === 'cookie'
+          ? `<button class="icon-btn sm" data-action="verify" data-idx="${idx}" title="${escAttr(entry.last_verified_at ? 'Last verified ' + entry.last_verified_at : 'Never verified — open the site and confirm you are still signed in')}" aria-label="${escAttr('Mark ' + entry.provider + ' as still signed in')}" style="font-size:11px;gap:3px;">✓</button>`
+          : `<button class="icon-btn sm" data-action="rotate" data-idx="${idx}" title="Mark as rotated" aria-label="${escAttr('Mark ' + entry.provider + ' as rotated')}" style="font-size:11px;gap:3px;">↺</button>`
+      }
       <button class="icon-btn sm${entry.pinned ? ' pin-btn active' : ' pin-btn'}" data-action="pin" data-idx="${idx}" title="${entry.pinned ? 'Unpin' : 'Pin to top'}" aria-pressed="${!!entry.pinned}" aria-label="${escAttr((entry.pinned ? 'Unpin ' : 'Pin ') + entry.provider)}"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="17" x2="12" y2="22"/><path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24Z"/></svg></button>
       <button class="icon-btn sm" data-action="duplicate" data-idx="${idx}" title="Duplicate" aria-label="${escAttr('Duplicate ' + entry.provider)}">${dupSVG}</button>
       <button class="icon-btn sm" data-action="edit" data-idx="${idx}" title="Edit" aria-label="${escAttr('Edit ' + entry.provider)}">${editSVG}</button>
@@ -781,16 +807,30 @@ function tagColor(tag: string): string {
   return TAG_COLORS[h % TAG_COLORS.length];
 }
 
+/**
+ * The expiry badge.
+ *
+ * Phase 23, E7: rendered by `timeUntil`, which counts in minutes and hours below
+ * a day. `expires_at` already holds an ISO-8601 string, so a full timestamp
+ * needs no schema change — the work was entirely in the readers, which compared
+ * whole days and therefore showed "expires today" for the whole life of an AWS
+ * STS token, an OAuth access token and every scraped cookie.
+ *
+ * **Below one day the warning is unconditional**, whatever `expiryWarningDays`
+ * says. That setting exists to tune how far ahead a *long-lived* credential
+ * warns; a credential dying within the hour is not a matter of taste.
+ */
 function expiryBadge(entry: VaultEntry): string {
   if (!Settings.get('showExpiryWarning') || !entry.expires_at) return '';
-  const exp = new Date(entry.expires_at);
-  const now = new Date();
-  exp.setHours(23, 59, 59);
-  const days = Math.round((exp.getTime() - now.getTime()) / 86400000);
-  if (days < 0)
-    return `<span class="badge badge-expiry-expired" title="${escAttr(entry.expires_at)}">Expired ${Math.abs(days)}d ago</span>`;
-  if (days <= Settings.get('expiryWarningDays'))
-    return `<span class="badge badge-expiry-warn" title="${escAttr(entry.expires_at)}">Expires in ${days}d</span>`;
+  const words = timeUntil(entry.expires_at);
+  if (!words) return '';
+  const bareDate = /^\d{4}-\d{2}-\d{2}$/.test(entry.expires_at.trim());
+  const then = Date.parse(bareDate ? `${entry.expires_at.trim()}T23:59:59` : entry.expires_at);
+  const secs = (then - Date.now()) / 1000;
+  if (secs <= 0)
+    return `<span class="badge badge-expiry-expired" title="${escAttr(entry.expires_at)}">${esc(words)}</span>`;
+  if (secs < 86400 || secs / 86400 <= Settings.get('expiryWarningDays'))
+    return `<span class="badge badge-expiry-warn" title="${escAttr(entry.expires_at)}">${esc(words)}</span>`;
   return '';
 }
 
@@ -1491,7 +1531,14 @@ function renderConfigView(project: Project) {
       if (!chunk) return;
       const dotenv = chunk.fields
         .filter((f) => f.key && f.value !== undefined)
-        .map((f) => `${f.key}=${resolveFieldRef(f.value, true).resolved ?? f.value}`)
+        // Quoted (E1). An unresolved reference is left raw rather than escaped
+        // into an unrecognisable literal — see `export_project_env` in the CLI.
+        .map((f) => {
+          const r = resolveFieldRef(f.value, true);
+          return r.resolved === null || r.unresolved
+            ? `${f.key}=${f.value}`
+            : `${f.key}=${quoteEnvValue(r.resolved)}`;
+        })
         .join('\n');
       showDropdown(el, [
         {

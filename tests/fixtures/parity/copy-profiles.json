@@ -1,0 +1,184 @@
+{
+  "_comment": [
+    "Copy profiles (Phase 23, step 3), asserted from both src/ts/copy-profile.ts",
+    "and envv-cli/src/profile.rs.",
+    "",
+    "A sixth twin pair. It exists twice because the app's Copy button puts the",
+    "text on the clipboard with no Rust in the loop, and `envv get --profile`",
+    "writes the same text from the terminal — and a copy that differs between",
+    "the two is a `.env` whose contents depend on which half of the product the",
+    "user reached for.",
+    "",
+    "Both halves emit REAL values. Redaction is the caller's job and is decided",
+    "by the Phase 14 rule that governs every other artefact: refuse to stdout",
+    "unless --reveal, write the real thing with --out. A second redaction policy",
+    "inside the builder is the shape that produced the Phase 22 seed leak.",
+    "",
+    "`expect` is the exact text, line by line, so a change to the layout shows",
+    "up as a diff rather than passing silently."
+  ],
+
+  "entry": {
+    "provider": "Spotify",
+    "label": "game",
+    "version": "2",
+    "primary_role": "id",
+    "account_name": "dev@example.com",
+    "api_key": "djjsdjdj",
+    "api_secret": "s3cr3t value",
+    "api_url": "https://api.spotify.com/v1",
+    "environment": "production",
+    "pool": "spotify-pool",
+    "expires_at": "2026-12-01",
+    "rate_limit_count": 100,
+    "rate_limit_period": "minute",
+    "scopes": ["playlist-read", "user-top-read"],
+    "extra_vars": [{ "key": "REGION", "value": "eu-west-1" }],
+    "description": "Playback + library",
+    "purpose": "Reading the user's own playlists",
+    "tags": ["music", "oauth"],
+    "categories": ["Media"],
+    "projectIds": ["Universal", "jukebox"],
+    "created_at": "2026-01-02T03:04:05Z",
+    "last_rotated_at": "2026-06-01T00:00:00Z",
+    "rotation_days": 90,
+    "compromised": true
+  },
+
+  "cases": [
+    {
+      "why": "basic emits values and the identity header, nothing else",
+      "profile": "basic",
+      "metadataStyle": "comment",
+      "expect": [
+        "# Spotify — game — dev@example.com (2)",
+        "SPOTIFY_V2_GAME_ID=djjsdjdj",
+        "SPOTIFY_V2_GAME_SECRET=\"s3cr3t value\"",
+        "SPOTIFY_V2_GAME_URL=https://api.spotify.com/v1",
+        "SPOTIFY_V2_GAME_REGION=eu-west-1"
+      ]
+    },
+    {
+      "why": "extended adds the seven facts you need to use the credential, as comments",
+      "profile": "extended",
+      "metadataStyle": "comment",
+      "expect": [
+        "# Spotify — game — dev@example.com (2)",
+        "# version: 2",
+        "# expires_at: 2026-12-01",
+        "# rate_limit: 100/minute",
+        "# scopes: playlist-read,user-top-read",
+        "# environment: production",
+        "# account: dev@example.com",
+        "# pool: spotify-pool",
+        "SPOTIFY_V2_GAME_ID=djjsdjdj",
+        "SPOTIFY_V2_GAME_SECRET=\"s3cr3t value\"",
+        "SPOTIFY_V2_GAME_URL=https://api.spotify.com/v1",
+        "SPOTIFY_V2_GAME_REGION=eu-west-1"
+      ]
+    },
+    {
+      "why": "var style puts the same facts in the environment, after the values",
+      "profile": "extended",
+      "metadataStyle": "var",
+      "expect": [
+        "# Spotify — game — dev@example.com (2)",
+        "SPOTIFY_V2_GAME_ID=djjsdjdj",
+        "SPOTIFY_V2_GAME_SECRET=\"s3cr3t value\"",
+        "SPOTIFY_V2_GAME_URL=https://api.spotify.com/v1",
+        "SPOTIFY_V2_GAME_REGION=eu-west-1",
+        "SPOTIFY_V2_GAME_VERSION=2",
+        "SPOTIFY_V2_GAME_EXPIRES_AT=2026-12-01",
+        "SPOTIFY_V2_GAME_RATE_LIMIT=100/minute",
+        "SPOTIFY_V2_GAME_SCOPES=\"playlist-read,user-top-read\"",
+        "SPOTIFY_V2_GAME_ENVIRONMENT=production",
+        "SPOTIFY_V2_GAME_ACCOUNT=dev@example.com",
+        "SPOTIFY_V2_GAME_POOL=spotify-pool"
+      ]
+    },
+    {
+      "why": "full adds the nine that describe the credential rather than drive it",
+      "profile": "full",
+      "metadataStyle": "comment",
+      "expect": [
+        "# Spotify — game — dev@example.com (2)",
+        "# version: 2",
+        "# expires_at: 2026-12-01",
+        "# rate_limit: 100/minute",
+        "# scopes: playlist-read,user-top-read",
+        "# environment: production",
+        "# account: dev@example.com",
+        "# pool: spotify-pool",
+        "# description: Playback + library",
+        "# purpose: Reading the user's own playlists",
+        "# tags: music,oauth",
+        "# categories: Media",
+        "# projects: jukebox",
+        "# created_at: 2026-01-02T03:04:05Z",
+        "# last_rotated_at: 2026-06-01T00:00:00Z",
+        "# rotation_days: 90",
+        "# compromised: true",
+        "SPOTIFY_V2_GAME_ID=djjsdjdj",
+        "SPOTIFY_V2_GAME_SECRET=\"s3cr3t value\"",
+        "SPOTIFY_V2_GAME_URL=https://api.spotify.com/v1",
+        "SPOTIFY_V2_GAME_REGION=eu-west-1"
+      ]
+    }
+  ],
+
+  "collision": {
+    "_why": [
+      "E2. One entry with primary_role `id` and an extra_vars entry keyed ID",
+      "emits SPOTIFY_ID twice all by itself, and every .env parser takes the",
+      "last line — so the user loses a variable and is told nothing.",
+      "",
+      "The duplicate is disambiguated by appending, never by dropping: a name",
+      "with a suffix is visibly odd and recoverable, a missing variable is",
+      "neither. The key_id is the suffix where there is one; an ordinal is the",
+      "backstop, because two pool members can share a key_id."
+    ],
+    "entry": {
+      "provider": "Spotify",
+      "key_id": "prod",
+      "primary_role": "id",
+      "api_key": "the-client-id",
+      "extra_vars": [{ "key": "ID", "value": "a-different-id" }]
+    },
+    "profile": "basic",
+    "metadataStyle": "comment",
+    "expect": [
+      "# Spotify",
+      "SPOTIFY_PROD_ID=the-client-id",
+      "SPOTIFY_PROD_ID_2=a-different-id"
+    ]
+  },
+
+  "sparse": {
+    "_why": [
+      "An entry with no primary value is a real thing: an authenticator seed on",
+      "its own is one (Phase 22), and an `env_var` entry's payload is entirely",
+      "named variables. Emitting `X=` for those writes a variable meaning",
+      "'unset' into a file that is about to be loaded, so the line is omitted.",
+      "",
+      "Absent metadata is omitted rather than emitted empty, for the same",
+      "reason: `X_POOL=` is not the same claim as saying nothing about a pool."
+    ],
+    "entry": {
+      "provider": "Aws",
+      "api_key": "",
+      "extra_vars": [
+        { "key": "ACCESS_KEY_ID", "value": "EXAMPLE_AKIA_0000000000" },
+        { "key": "SECRET_ACCESS_KEY", "value": "EXAMPLE_SECRET_00000000000000000000000" },
+        { "key": "REGION", "value": "eu-west-1" }
+      ]
+    },
+    "profile": "extended",
+    "metadataStyle": "comment",
+    "expect": [
+      "# Aws",
+      "AWS_ACCESS_KEY_ID=EXAMPLE_AKIA_0000000000",
+      "AWS_SECRET_ACCESS_KEY=EXAMPLE_SECRET_00000000000000000000000",
+      "AWS_REGION=eu-west-1"
+    ]
+  }
+}

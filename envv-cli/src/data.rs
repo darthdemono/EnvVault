@@ -373,15 +373,17 @@ pub const ALL_PROJECT_TYPES: [&str; 11] = [
     "postgres",
 ];
 
-pub fn is_experimental_project_type(t: &str) -> bool {
-    !STABLE_PROJECT_TYPES.contains(&t)
+/// An entry's `secretType`, with the documented legacy default filled in.
+///
+/// Absent means `api_key` and always has — every writer stamps it, which is why
+/// `enrich`'s `is_blank` has to special-case the field.
+pub fn secret_type_of(entry: &Value) -> &str {
+    match entry.get("secretType").and_then(|v| v.as_str()) {
+        None | Some("") => "api_key",
+        Some(t) => t,
+    }
 }
 
-/// Env-var key derived from a provider name, matching `envKey()` in the UI.
-pub fn env_key(provider: &str) -> String {
-    provider
-        .to_uppercase()
-        .chars()
-        .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
-        .collect()
+pub fn is_experimental_project_type(t: &str) -> bool {
+    !STABLE_PROJECT_TYPES.contains(&t)
 }

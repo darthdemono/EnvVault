@@ -449,3 +449,45 @@ select.form-input {
   min-width: 52px;
   text-align: right;
 }
+
+/* ── The generated-variable preview (Phase 23) ──────────────────────────────
+   A read-only line under the value field showing what the five name inputs
+   produce. `white-space: pre-line` because a second line appears when the entry
+   carries a secret, and `user-select: all` so the name can be lifted out of it
+   without a copy button that would need its own accessible name. */
+.env-name-preview {
+  display: block;
+  font-size: 12px;
+  line-height: 1.6;
+  padding: 7px 10px;
+  border: 1px dashed var(--border);
+  border-radius: 6px;
+  background: var(--bg-input, var(--bg2));
+  color: var(--text-dim);
+  white-space: pre-line;
+  overflow-wrap: anywhere;
+  user-select: all;
+}
+.env-name-preview-invalid {
+  border-color: var(--danger, #e5484d);
+  border-style: solid;
+}
+.form-input.input-invalid {
+  border-color: var(--danger, #e5484d);
+}
+
+/* The cookie split helper: a status line and a button on one row. */
+.cookie-split-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+/* E2: the live collision note under the generated-name preview. */
+.env-name-collision {
+  margin: 6px 0 0;
+  font-size: 11.5px;
+  color: var(--danger, #e5484d);
+}
