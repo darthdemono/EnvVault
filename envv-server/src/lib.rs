@@ -304,6 +304,17 @@ pub struct AppState {
     last_peer_activity: Arc<Mutex<Instant>>,
     /// When this state was constructed — reported by `/api/health` as uptime.
     started_at: Instant,
+    /// Phase 24.4: opt-in, off by default. `false` means every `/api/uid/*`
+    /// route refuses rather than silently creating `registry.db` for a
+    /// deployment that never asked for it.
+    uid_registry_enabled: bool,
+    /// Refuses further writes once `registry.db` would exceed this. Default
+    /// 10 GB ≈ 160M ids, per the measured 61 bytes/row (`CLAUDE.md`, Phase 24.4).
+    uid_max_bytes: i64,
+    /// Fixed-window request counters shared by the calendar-feed fetch route
+    /// and every `/api/uid/*` route. Keyed `"<bucket>:<who>"` so one map
+    /// serves every limit in both features without a struct per bucket.
+    limiter: Arc<Mutex<HashMap<String, (Instant, u32)>>>,
 }
 
 /// "Never expires", as a duration rather than a special case at every
@@ -342,7 +353,19 @@ impl AppState {
             lan_mode,
             last_peer_activity: Arc::new(Mutex::new(Instant::now())),
             started_at: Instant::now(),
+            uid_registry_enabled: false,
+            uid_max_bytes: 10 * 1024 * 1024 * 1024,
+            limiter: Arc::new(Mutex::new(HashMap::new())),
         }
+    }
+
+    /// Opts into the unique-ID registry (Phase 24.4). Off by default.
+    pub fn with_uid_registry(mut self, enabled: bool, max_bytes: Option<i64>) -> Self {
+        self.uid_registry_enabled = enabled;
+        if let Some(b) = max_bytes {
+            self.uid_max_bytes = b;
+        }
+        self
     }
 
     /// Seeds an owner session directly from a vault key the caller already holds.
@@ -640,6 +663,68 @@ fn owner_vault_key(state: &AppState) -> Option<VaultKey> {
         .values()
         .find(|s| s.is_owner)
         .map(|s| s.vault_key)
+}
+
+// ── Generic fixed-window limiter (calendar feeds + uid registry) ──────────────
+
+/// `true` when `key` is still under `limit` requests inside `window`, and
+/// counts this call toward it either way.
+///
+/// A fixed window rather than the token-bucket-with-burst the Phase 24.4
+/// design table specifies: the measured numbers there are what the limits
+/// should average to, and a fixed window keyed per bucket-and-actor gets
+/// within the same order of magnitude with a fraction of the bookkeeping. If
+/// the gap ever matters in practice, replace this function; every call site
+/// stays the same.
+fn rate_allow(
+    limiter: &Mutex<HashMap<String, (Instant, u32)>>,
+    key: &str,
+    n: u32,
+    limit: u32,
+    window: Duration,
+) -> Option<u64> {
+    let mut map = limiter.lock().unwrap();
+    let now = Instant::now();
+    let entry = map.entry(key.to_string()).or_insert((now, 0));
+    if now.duration_since(entry.0) >= window {
+        *entry = (now, 0);
+    }
+    entry.1 += n.max(1);
+    if entry.1 > limit {
+        let remaining = window.saturating_sub(now.duration_since(entry.0));
+        return Some(remaining.as_secs().max(1));
+    }
+    // Evict stale keys so a long-running server does not grow this map
+    // without bound under many distinct actors/tokens.
+    if map.len() > 5000 {
+        map.retain(|_, (t, _)| now.duration_since(*t) < window * 2);
+    }
+    None
+}
+
+// ── Registry (uid registry + calendar feeds share vault_meta secrets) ─────────
+
+fn registry_db_path(state: &AppState) -> PathBuf {
+    state
+        .db_path
+        .parent()
+        .map(|p| p.join("registry.db"))
+        .unwrap_or_else(|| PathBuf::from("registry.db"))
+}
+
+/// Opens `registry.db`, creating it and its secrets on first use. Requires the
+/// owner's vault key because the registry's own key and pepper live in the
+/// vault's `vault_meta` — see `vault_core::uid_registry`'s module doc for why.
+/// Returns the connection and the pepper together; nothing holds the pepper
+/// anywhere else.
+fn open_registry(
+    state: &AppState,
+    vault_key: &VaultKey,
+) -> Result<(vault_core::SqlConnection, [u8; 32]), String> {
+    let vault_conn = open_db(&state.db_path, vault_key)?;
+    let (reg_key, pepper) = vault_core::uid_registry::ensure_registry_secrets(&vault_conn)?;
+    let conn = vault_core::uid_registry::open_registry(&registry_db_path(state), &reg_key)?;
+    Ok((conn, pepper))
 }
 
 // ── Vault key management ──────────────────────────────────────────────────────
@@ -2075,6 +2160,688 @@ async fn stats(State(state): State<AppState>) -> Json<StatsResponse> {
     })
 }
 
+// ── Calendar feeds (Phase 24.3) ────────────────────────────────────────────────
+
+#[derive(Deserialize)]
+struct CreateFeedRequest {
+    name: String,
+    #[serde(default)]
+    kinds: Vec<String>,
+    #[serde(default)]
+    include_account_names: bool,
+}
+
+fn feed_to_json(f: &vault_core::ics_feeds::FeedRecord) -> serde_json::Value {
+    serde_json::json!({
+        "id": f.id,
+        "user_id": f.user_id,
+        "name": f.name,
+        "kinds": f.kind_list(),
+        "include_account_names": f.include_account_names(),
+        "created_at": f.created_at,
+        "last_fetched_at": f.last_fetched_at,
+        "revoked_at": f.revoked_at,
+    })
+}
+
+async fn create_feed_handler(
+    headers: HeaderMap,
+    State(state): State<AppState>,
+    Json(req): Json<CreateFeedRequest>,
+) -> impl IntoResponse {
+    let (_, session) = match extract_session(&headers, &state) {
+        Ok(s) => s,
+        Err(e) => return e.into_response(),
+    };
+    let mut kinds: Vec<String> = Vec::new();
+    for k in &req.kinds {
+        match vault_core::calendar::EventKind::parse(k) {
+            Some(_) => kinds.push(k.to_ascii_lowercase()),
+            None => {
+                return err_json(
+                    StatusCode::BAD_REQUEST,
+                    &format!("Unknown kind '{k}'. Supported: created, expires, rotation."),
+                )
+                .into_response()
+            }
+        }
+    }
+    if kinds.is_empty() {
+        kinds = vec!["created".into(), "expires".into(), "rotation".into()];
+    }
+    let conn = match open_db(&state.db_path, &session.vault_key) {
+        Ok(c) => c,
+        Err(e) => return err_json(StatusCode::INTERNAL_SERVER_ERROR, &e).into_response(),
+    };
+    // The owner's own feed sees everything (`user_id = NULL`); a sub-user's
+    // feed is always scoped to themselves — nobody may mint a feed for
+    // someone else's view.
+    let feed_user = if session.is_owner {
+        None
+    } else {
+        Some(session.user_id.as_str())
+    };
+    let (feed, token) = match vault_core::ics_feeds::create_feed(
+        &conn,
+        feed_user,
+        &req.name,
+        &kinds,
+        req.include_account_names,
+    ) {
+        Ok(v) => v,
+        Err(e) => return err_json(StatusCode::INTERNAL_SERVER_ERROR, &e).into_response(),
+    };
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "id": feed.id,
+            "path": format!("/ics/{token}.ics"),
+        })),
+    )
+        .into_response()
+}
+
+async fn list_feeds_handler(
+    headers: HeaderMap,
+    State(state): State<AppState>,
+) -> impl IntoResponse {
+    let (_, session) = match extract_session(&headers, &state) {
+        Ok(s) => s,
+        Err(e) => return e.into_response(),
+    };
+    let conn = match open_db(&state.db_path, &session.vault_key) {
+        Ok(c) => c,
+        Err(e) => return err_json(StatusCode::INTERNAL_SERVER_ERROR, &e).into_response(),
+    };
+    match vault_core::ics_feeds::list_feeds(&conn, session.is_owner, &session.user_id) {
+        Ok(feeds) => (
+            StatusCode::OK,
+            Json(
+                serde_json::json!({ "feeds": feeds.iter().map(feed_to_json).collect::<Vec<_>>() }),
+            ),
+        )
+            .into_response(),
+        Err(e) => err_json(StatusCode::INTERNAL_SERVER_ERROR, &e).into_response(),
+    }
+}
+
+async fn revoke_feed_handler(
+    headers: HeaderMap,
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    let (_, session) = match extract_session(&headers, &state) {
+        Ok(s) => s,
+        Err(e) => return e.into_response(),
+    };
+    let conn = match open_db(&state.db_path, &session.vault_key) {
+        Ok(c) => c,
+        Err(e) => return err_json(StatusCode::INTERNAL_SERVER_ERROR, &e).into_response(),
+    };
+    match vault_core::ics_feeds::revoke_feed(&conn, &id, &session.user_id, session.is_owner) {
+        Ok(true) => StatusCode::NO_CONTENT.into_response(),
+        Ok(false) => err_json(StatusCode::NOT_FOUND, "No such feed, or not yours").into_response(),
+        Err(e) => err_json(StatusCode::INTERNAL_SERVER_ERROR, &e).into_response(),
+    }
+}
+
+/// `GET /ics/{token}.ics` — the feed itself. Not under `/api`, and carries no
+/// `Authorization` header: the token in the path **is** the credential, the
+/// same shape as every calendar-subscription URL any other product issues.
+async fn ics_feed_handler(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    State(state): State<AppState>,
+    Path(token_ics): Path<String>,
+    headers: HeaderMap,
+) -> axum::response::Response {
+    let ip = addr.ip().to_string();
+    let rl_key = format!("ics:{ip}");
+
+    // 30 fetches/minute/IP. A calendar client refreshes on the order of once an
+    // hour; this only ever binds on someone probing tokens.
+    if let Some(retry) = rate_allow(&state.limiter, &rl_key, 1, 30, Duration::from_secs(60)) {
+        return err_json_retry(StatusCode::TOO_MANY_REQUESTS, "Too many requests", retry);
+    }
+
+    let Some(token) = token_ics.strip_suffix(".ics") else {
+        return err_json(StatusCode::NOT_FOUND, "Not found").into_response();
+    };
+
+    // Locked → 503 + Retry-After, **never** an empty calendar. An empty feed
+    // reads as "nothing is expiring", and a calendar client deletes the events
+    // it previously fetched — the design's rule, written because that failure
+    // mode is worse than a visible outage.
+    let Some(key) = owner_vault_key(&state) else {
+        return err_json_retry(StatusCode::SERVICE_UNAVAILABLE, "Vault is locked", 5);
+    };
+
+    let conn = match open_db(&state.db_path, &key) {
+        Ok(c) => c,
+        Err(e) => return err_json(StatusCode::INTERNAL_SERVER_ERROR, &e).into_response(),
+    };
+
+    let feed = match vault_core::ics_feeds::find_active_feed_by_token(&conn, token) {
+        Ok(Some(f)) => f,
+        Ok(None) => {
+            // An unknown or revoked token counts as an auth failure, same as a
+            // wrong password — this endpoint has no other signal to rate-limit on.
+            record_auth_failure(&mut state.rate_limiter.lock().unwrap(), &rl_key);
+            return err_json(StatusCode::NOT_FOUND, "Not found").into_response();
+        }
+        Err(e) => return err_json(StatusCode::INTERNAL_SERVER_ERROR, &e).into_response(),
+    };
+
+    let vault = match load_vault(&conn) {
+        Ok(Some(d)) => d,
+        Ok(None) => return err_json(StatusCode::NOT_FOUND, "Not found").into_response(),
+        Err(e) => return err_json(StatusCode::INTERNAL_SERVER_ERROR, &e).into_response(),
+    };
+
+    // RBAC applied **at fetch time**, not at creation time — a permission
+    // revoked after the feed was minted must shrink it on the very next fetch.
+    let visible = match &feed.user_id {
+        None => vault,
+        Some(uid) => match effective_permission_expr(&conn, uid, "read") {
+            Ok(read) => filter_vault_for_user(vault, read.as_ref()),
+            Err(e) => return err_json(StatusCode::INTERNAL_SERVER_ERROR, &e).into_response(),
+        },
+    };
+
+    let mut entries: Vec<serde_json::Value> = visible
+        .get("api_keys")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+    // Account names are opt-in (design decision): they are often an email
+    // address, and the feed's whole point is to say nothing beyond names and
+    // dates unless the person who created it asked for more.
+    if !feed.include_account_names() {
+        for e in entries.iter_mut() {
+            if let Some(obj) = e.as_object_mut() {
+                obj.remove("account_name");
+                obj.remove("key_id");
+            }
+        }
+    }
+
+    let mut kinds: Vec<vault_core::calendar::EventKind> = feed
+        .kind_list()
+        .iter()
+        .filter_map(|k| vault_core::calendar::EventKind::parse(k))
+        .collect();
+    if kinds.is_empty() {
+        kinds = vec![
+            vault_core::calendar::EventKind::Created,
+            vault_core::calendar::EventKind::Expires,
+            vault_core::calendar::EventKind::Rotation,
+        ];
+    }
+
+    let mut ics = vault_core::calendar::build_ics(
+        &entries,
+        &vault_core::calendar::IcsOptions {
+            kinds,
+            now: vault_core::iso_now(),
+            calendar_name: feed.name.clone(),
+        },
+    );
+    // A non-standard but widely honoured refresh hint. Inserted here rather
+    // than in the shared builder: it is a serving detail of this one route,
+    // not something the CLI's one-shot export or the parity fixture should
+    // have to account for.
+    ics = ics.replacen(
+        "END:VCALENDAR\r\n",
+        "X-PUBLISHED-TTL:PT1H\r\nREFRESH-INTERVAL;VALUE=DURATION:PT1H\r\nEND:VCALENDAR\r\n",
+        1,
+    );
+
+    // Fetches are not audited — the same rule vault reads follow, and for the
+    // same reason: an hourly poll would grow the hash-chained log without
+    // bound. `last_fetched_at` is a plain column, not a chain entry.
+    let _ = vault_core::ics_feeds::touch_feed(&conn, &feed.id);
+
+    let etag = format!("\"{}\"", {
+        use sha2::{Digest, Sha256};
+        hex::encode(Sha256::digest(ics.as_bytes()))
+    });
+    if headers
+        .get(axum::http::header::IF_NONE_MATCH)
+        .and_then(|v| v.to_str().ok())
+        == Some(etag.as_str())
+    {
+        return StatusCode::NOT_MODIFIED.into_response();
+    }
+
+    (
+        StatusCode::OK,
+        [
+            (
+                axum::http::header::CONTENT_TYPE,
+                "text/calendar; charset=utf-8".to_string(),
+            ),
+            (axum::http::header::ETAG, etag),
+            (
+                axum::http::header::CACHE_CONTROL,
+                "private, max-age=3600".to_string(),
+            ),
+        ],
+        ics,
+    )
+        .into_response()
+}
+
+// ── Unique-ID registry (Phase 24.4) ────────────────────────────────────────────
+
+/// Approximations of the token-bucket table in `CLAUDE.md` (Phase 24.4),
+/// collapsed to fixed 60-second windows — see [`rate_allow`]'s doc comment for
+/// why that trade was made. `(per_actor, server_wide)` per 60s.
+fn uid_limits(bucket: &str) -> (u32, u32) {
+    match bucket {
+        "mint_register" => (6_000, 90_000),
+        "check" => (15_000, 360_000),
+        "lookup" => (600, 30_000),
+        _ => (100, 1_000),
+    }
+}
+
+fn uid_actor(session: &Session) -> String {
+    if session.is_owner {
+        "owner".to_string()
+    } else {
+        session.user_id.clone()
+    }
+}
+
+/// Checks both the per-actor and server-wide buckets for `op`, counting `n`
+/// values against each. Returns the longer of the two waits on refusal.
+fn uid_rate_check(state: &AppState, op: &str, actor: &str, n: u32) -> Option<u64> {
+    let (per_actor, per_server) = uid_limits(op);
+    let a = rate_allow(
+        &state.limiter,
+        &format!("uid:{op}:actor:{actor}"),
+        n,
+        per_actor,
+        Duration::from_secs(60),
+    );
+    let s = rate_allow(
+        &state.limiter,
+        &format!("uid:{op}:server"),
+        n,
+        per_server,
+        Duration::from_secs(60),
+    );
+    match (a, s) {
+        (None, None) => None,
+        (a, s) => Some(a.into_iter().chain(s).max().unwrap_or(1)),
+    }
+}
+
+/// The daily cap — 1,000,000 values/actor/day, a disk-guard against a runaway
+/// loop rather than a throughput control (which the per-minute buckets above
+/// already are).
+fn uid_daily_check(state: &AppState, actor: &str, n: u32) -> Option<u64> {
+    rate_allow(
+        &state.limiter,
+        &format!("uid:daily:{actor}"),
+        n,
+        1_000_000,
+        Duration::from_secs(86_400),
+    )
+}
+
+fn uid_disabled() -> axum::response::Response {
+    err_json(
+        StatusCode::NOT_FOUND,
+        "The unique-ID registry is not enabled on this server (--uid-registry).",
+    )
+    .into_response()
+}
+
+fn uid_over_budget(
+    state: &AppState,
+    conn: &vault_core::SqlConnection,
+) -> Option<axum::response::Response> {
+    match vault_core::uid_registry::stats(conn) {
+        Ok(s) if s.size_bytes > state.uid_max_bytes => Some(
+            err_json(
+                StatusCode::INSUFFICIENT_STORAGE,
+                &format!(
+                    "registry.db is at {} bytes, over the {} byte guard. Prune before registering more.",
+                    s.size_bytes, state.uid_max_bytes
+                ),
+            )
+            .into_response(),
+        ),
+        _ => None,
+    }
+}
+
+fn parse_normalise(
+    s: &str,
+) -> Result<vault_core::uid_registry::Normalise, axum::response::Response> {
+    vault_core::uid_registry::Normalise::parse(s).ok_or_else(|| {
+        err_json(
+            StatusCode::BAD_REQUEST,
+            &format!("Unknown --normalise '{s}'. Supported: uuid, ulid, lower, none."),
+        )
+        .into_response()
+    })
+}
+
+#[derive(Deserialize)]
+struct UidCheckRequest {
+    values: Vec<String>,
+    #[serde(default = "default_normalise")]
+    normalise: String,
+}
+fn default_normalise() -> String {
+    "none".to_string()
+}
+
+async fn uid_check_handler(
+    headers: HeaderMap,
+    State(state): State<AppState>,
+    Json(req): Json<UidCheckRequest>,
+) -> impl IntoResponse {
+    if !state.uid_registry_enabled {
+        return uid_disabled();
+    }
+    let (_, session) = match extract_session(&headers, &state) {
+        Ok(s) => s,
+        Err(e) => return e.into_response(),
+    };
+    let mode = match parse_normalise(&req.normalise) {
+        Ok(m) => m,
+        Err(r) => return r,
+    };
+    // check and lookup are the enumeration oracle for a low-entropy namespace;
+    // this and the per-value counting are the control.
+    if req.values.len() > 100 {
+        return err_json(StatusCode::BAD_REQUEST, "At most 100 values per call.").into_response();
+    }
+    let actor = uid_actor(&session);
+    if let Some(retry) = uid_rate_check(&state, "check", &actor, req.values.len() as u32) {
+        return err_json_retry(StatusCode::TOO_MANY_REQUESTS, "Too many requests", retry);
+    }
+    let (conn, pepper) = match open_registry(&state, &session.vault_key) {
+        Ok(v) => v,
+        Err(e) => return err_json(StatusCode::INTERNAL_SERVER_ERROR, &e).into_response(),
+    };
+    match vault_core::uid_registry::check(&conn, &pepper, &req.values, mode) {
+        Ok(results) => Json(serde_json::json!({
+            "results": results.into_iter().map(|(v, unique)| serde_json::json!({ "value": v, "unique": unique })).collect::<Vec<_>>()
+        }))
+        .into_response(),
+        Err(e) => err_json(StatusCode::INTERNAL_SERVER_ERROR, &e).into_response(),
+    }
+}
+
+#[derive(Deserialize)]
+struct UidRegisterRequest {
+    values: Vec<String>,
+    #[serde(default = "default_normalise")]
+    normalise: String,
+    namespace: Option<String>,
+    generator: Option<String>,
+    note: Option<String>,
+}
+
+async fn uid_register_handler(
+    headers: HeaderMap,
+    State(state): State<AppState>,
+    Json(req): Json<UidRegisterRequest>,
+) -> impl IntoResponse {
+    if !state.uid_registry_enabled {
+        return uid_disabled();
+    }
+    let (_, session) = match extract_session(&headers, &state) {
+        Ok(s) => s,
+        Err(e) => return e.into_response(),
+    };
+    let mode = match parse_normalise(&req.normalise) {
+        Ok(m) => m,
+        Err(r) => return r,
+    };
+    if req.values.is_empty() || req.values.len() > 1000 {
+        return err_json(StatusCode::BAD_REQUEST, "1 to 1000 values per call.").into_response();
+    }
+    let actor = uid_actor(&session);
+    if let Some(retry) = uid_rate_check(&state, "mint_register", &actor, req.values.len() as u32) {
+        return err_json_retry(StatusCode::TOO_MANY_REQUESTS, "Too many requests", retry);
+    }
+    if let Some(retry) = uid_daily_check(&state, &actor, req.values.len() as u32) {
+        return err_json_retry(
+            StatusCode::TOO_MANY_REQUESTS,
+            "Daily registration cap reached for this actor",
+            retry,
+        );
+    }
+    let (conn, pepper) = match open_registry(&state, &session.vault_key) {
+        Ok(v) => v,
+        Err(e) => return err_json(StatusCode::INTERNAL_SERVER_ERROR, &e).into_response(),
+    };
+    if let Some(resp) = uid_over_budget(&state, &conn) {
+        return resp;
+    }
+    let meta = vault_core::uid_registry::BatchMeta {
+        namespace: req.namespace.as_deref(),
+        generator: req.generator.as_deref(),
+        actor: Some(actor.as_str()),
+        source: Some("api"),
+        note: req.note.as_deref(),
+        ..Default::default()
+    };
+    match vault_core::uid_registry::register_external(&conn, &pepper, &req.values, mode, &meta) {
+        Ok(results) => Json(serde_json::json!({
+            "results": results.into_iter().map(|r| serde_json::json!({ "value": r.value, "registered": r.registered })).collect::<Vec<_>>()
+        }))
+        .into_response(),
+        Err(e) => err_json(StatusCode::INTERNAL_SERVER_ERROR, &e).into_response(),
+    }
+}
+
+#[derive(Deserialize)]
+struct UidMintRequest {
+    #[serde(default = "default_mint_length")]
+    length: usize,
+    namespace: Option<String>,
+    generator: Option<String>,
+}
+fn default_mint_length() -> usize {
+    32
+}
+
+async fn uid_mint_handler(
+    headers: HeaderMap,
+    State(state): State<AppState>,
+    Json(req): Json<UidMintRequest>,
+) -> impl IntoResponse {
+    if !state.uid_registry_enabled {
+        return uid_disabled();
+    }
+    let (_, session) = match extract_session(&headers, &state) {
+        Ok(s) => s,
+        Err(e) => return e.into_response(),
+    };
+    let length = req.length.clamp(8, 128);
+    let actor = uid_actor(&session);
+    if let Some(retry) = uid_rate_check(&state, "mint_register", &actor, 1) {
+        return err_json_retry(StatusCode::TOO_MANY_REQUESTS, "Too many requests", retry);
+    }
+    if let Some(retry) = uid_daily_check(&state, &actor, 1) {
+        return err_json_retry(
+            StatusCode::TOO_MANY_REQUESTS,
+            "Daily registration cap reached for this actor",
+            retry,
+        );
+    }
+    let (conn, pepper) = match open_registry(&state, &session.vault_key) {
+        Ok(v) => v,
+        Err(e) => return err_json(StatusCode::INTERNAL_SERVER_ERROR, &e).into_response(),
+    };
+    if let Some(resp) = uid_over_budget(&state, &conn) {
+        return resp;
+    }
+    let meta = vault_core::uid_registry::BatchMeta {
+        namespace: req.namespace.as_deref(),
+        generator: req.generator.as_deref(),
+        actor: Some(actor.as_str()),
+        source: Some("api-mint"),
+        ..Default::default()
+    };
+    let result = vault_core::uid_registry::mint(
+        &conn,
+        &pepper,
+        vault_core::uid_registry::Normalise::None,
+        &meta,
+        3,
+        || {
+            // uuid's own RNG (getrandom), not sequential — collision retries
+            // exist precisely so this never has to be more careful than that.
+            let mut s = String::new();
+            while s.len() < length {
+                s.push_str(&uuid::Uuid::new_v4().simple().to_string());
+            }
+            s.truncate(length);
+            s
+        },
+    );
+    match result {
+        Ok(Some(v)) => Json(serde_json::json!({ "value": v })).into_response(),
+        Ok(None) => err_json(
+            StatusCode::CONFLICT,
+            "Could not mint a unique value after 3 attempts.",
+        )
+        .into_response(),
+        Err(e) => err_json(StatusCode::INTERNAL_SERVER_ERROR, &e).into_response(),
+    }
+}
+
+#[derive(Deserialize)]
+struct UidLookupRequest {
+    value: String,
+    #[serde(default = "default_normalise")]
+    normalise: String,
+}
+
+async fn uid_lookup_handler(
+    headers: HeaderMap,
+    State(state): State<AppState>,
+    Json(req): Json<UidLookupRequest>,
+) -> impl IntoResponse {
+    if !state.uid_registry_enabled {
+        return uid_disabled();
+    }
+    let (_, session) = match extract_session(&headers, &state) {
+        Ok(s) => s,
+        Err(e) => return e.into_response(),
+    };
+    let mode = match parse_normalise(&req.normalise) {
+        Ok(m) => m,
+        Err(r) => return r,
+    };
+    let actor = uid_actor(&session);
+    if let Some(retry) = uid_rate_check(&state, "lookup", &actor, 1) {
+        return err_json_retry(StatusCode::TOO_MANY_REQUESTS, "Too many requests", retry);
+    }
+    let (conn, pepper) = match open_registry(&state, &session.vault_key) {
+        Ok(v) => v,
+        Err(e) => return err_json(StatusCode::INTERNAL_SERVER_ERROR, &e).into_response(),
+    };
+    match vault_core::uid_registry::lookup(&conn, &pepper, &req.value, mode) {
+        Ok(r) => Json(r).into_response(),
+        Err(e) => err_json(StatusCode::INTERNAL_SERVER_ERROR, &e).into_response(),
+    }
+}
+
+#[derive(Deserialize)]
+struct UidPruneRequest {
+    /// ISO-8601 date; rows older than this are candidates.
+    before: String,
+    namespace: Option<String>,
+    generator: Option<String>,
+    actor: Option<String>,
+    #[serde(default)]
+    dry_run: bool,
+}
+
+async fn uid_prune_handler(
+    headers: HeaderMap,
+    State(state): State<AppState>,
+    Json(req): Json<UidPruneRequest>,
+) -> impl IntoResponse {
+    if !state.uid_registry_enabled {
+        return uid_disabled();
+    }
+    let (_, session) = match extract_session(&headers, &state) {
+        Ok(s) => s,
+        Err(e) => return e.into_response(),
+    };
+    // Pruning deletes the only evidence an id was issued — owner only.
+    if let Err(e) = require_owner(&session) {
+        return e.into_response();
+    }
+    let before_ts = match parse_prune_before(&req.before) {
+        Some(t) => t,
+        None => {
+            return err_json(
+                StatusCode::BAD_REQUEST,
+                "`before` must be an ISO-8601 date or date-time.",
+            )
+            .into_response()
+        }
+    };
+    let (mut conn, _pepper) = match open_registry(&state, &session.vault_key) {
+        Ok(v) => v,
+        Err(e) => return err_json(StatusCode::INTERNAL_SERVER_ERROR, &e).into_response(),
+    };
+    match vault_core::uid_registry::prune(
+        &mut conn,
+        before_ts,
+        req.namespace.as_deref(),
+        req.generator.as_deref(),
+        req.actor.as_deref(),
+        req.dry_run,
+    ) {
+        Ok(report) => Json(report).into_response(),
+        Err(e) => err_json(StatusCode::INTERNAL_SERVER_ERROR, &e).into_response(),
+    }
+}
+
+/// Parses a full RFC 3339 timestamp, falling back to a bare `YYYY-MM-DD`
+/// prefix — the same fallback `vault_core::calendar::parse_dt` applies, kept
+/// separate here because that one is not `pub`.
+fn parse_prune_before(s: &str) -> Option<i64> {
+    if let Ok(dt) = time::OffsetDateTime::parse(s, &time::format_description::well_known::Rfc3339) {
+        return Some(dt.unix_timestamp());
+    }
+    let head = s.get(0..10)?;
+    let mut parts = head.split('-');
+    let y: i32 = parts.next()?.parse().ok()?;
+    let m: u8 = parts.next()?.parse().ok()?;
+    let d: u8 = parts.next()?.parse().ok()?;
+    let date = time::Date::from_calendar_date(y, time::Month::try_from(m).ok()?, d).ok()?;
+    Some(date.midnight().assume_utc().unix_timestamp())
+}
+
+async fn uid_stats_handler(headers: HeaderMap, State(state): State<AppState>) -> impl IntoResponse {
+    if !state.uid_registry_enabled {
+        return uid_disabled();
+    }
+    let (_, session) = match extract_session(&headers, &state) {
+        Ok(s) => s,
+        Err(e) => return e.into_response(),
+    };
+    let (conn, _pepper) = match open_registry(&state, &session.vault_key) {
+        Ok(v) => v,
+        Err(e) => return err_json(StatusCode::INTERNAL_SERVER_ERROR, &e).into_response(),
+    };
+    match vault_core::uid_registry::stats(&conn) {
+        Ok(s) => Json(s).into_response(),
+        Err(e) => err_json(StatusCode::INTERNAL_SERVER_ERROR, &e).into_response(),
+    }
+}
+
 // ── OpenAPI spec ──────────────────────────────────────────────────────────────
 
 #[derive(OpenApi)]
@@ -2239,6 +3006,20 @@ pub fn build_router(state: AppState, port: u16) -> Router {
         .route("/api/ping", get(ping))
         .route("/api/stats", get(stats))
         .route("/api/health", get(health))
+        // Phase 24.3 — calendar feeds
+        .route(
+            "/api/calendar/feeds",
+            get(list_feeds_handler).post(create_feed_handler),
+        )
+        .route("/api/calendar/feeds/{id}", delete(revoke_feed_handler))
+        .route("/ics/{token_ics}", get(ics_feed_handler))
+        // Phase 24.4 — unique-ID registry, opt-in via `--uid-registry`
+        .route("/api/uid/check", post(uid_check_handler))
+        .route("/api/uid/register", post(uid_register_handler))
+        .route("/api/uid/mint", post(uid_mint_handler))
+        .route("/api/uid/lookup", post(uid_lookup_handler))
+        .route("/api/uid/prune", post(uid_prune_handler))
+        .route("/api/uid/stats", get(uid_stats_handler))
         .with_state(state);
 
     Router::new()

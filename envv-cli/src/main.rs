@@ -17,9 +17,11 @@
 
 use envv_cli::error::{CliError, CliResult};
 use envv_cli::{
-    access, agentio, backup, calendar, chunks, data, doctor, enrich, entries, envfile, exec, fmt,
-    gen, import_vaults, out, pool, projects, render, scan, session, users_cmd,
+    access, agentio, backup, chunks, cxf_cmd, data, doctor, enrich, entries, envfile, exec,
+    feed_cmd, fmt, gen, import_vaults, out, pool, projects, render, scan, session, uid_cmd,
+    users_cmd,
 };
+use vault_core::calendar;
 
 use access::{open_access, Access, AuthOpts};
 use clap::{CommandFactory, Parser, Subcommand};
@@ -178,7 +180,8 @@ enum Commands {
         /// Filter by project ID or name.
         #[arg(long)]
         project: Option<String>,
-        /// Filter by secret type (api_key, password, env_var, …).
+        /// Filter by secret type — comma-separated, OR-combined (e.g. `cookie,composite`).
+        /// `2fa`/`totp` and `pool` are virtual: seed-carrying and pool-membership.
         #[arg(long)]
         r#type: Option<String>,
         /// Filter by tag.
@@ -299,29 +302,22 @@ enum Commands {
         #[command(subcommand)]
         cmd: CookieCmd,
     },
-    /// Write an iCalendar (.ics) feed of every date the vault knows.
-    ///
-    /// Creation dates, expiries and rotation deadlines, in the one format every
-    /// calendar reads. UIDs are stable per entry and per kind, so re-importing
-    /// updates the existing events instead of duplicating them.
-    ///
-    /// The file carries secret NAMES and dates. It carries no values and no
-    /// fingerprints — a fingerprint is stable per value, so a feed full of them
-    /// would tell whoever holds two feeds which secrets match.
+    /// A one-shot iCalendar (.ics) export, or a subscribable feed served by
+    /// `envv-server` (Phase 24.3).
     Calendar {
-        /// Which events to include: created, expires, rotation. Repeatable;
-        /// defaults to all three.
-        #[arg(long = "kind", value_name = "KIND")]
-        kinds: Vec<String>,
-        /// Only include entries in this project.
-        #[arg(long)]
-        project: Option<String>,
-        /// Write to this file instead of stdout.
-        #[arg(long, short = 'o')]
-        out: Option<PathBuf>,
-        /// Calendar display name (X-WR-CALNAME).
-        #[arg(long, default_value = "EnvVault")]
-        name: String,
+        #[command(subcommand)]
+        cmd: CalendarCmd,
+    },
+    /// The unique-ID registry (Phase 24.4). Server-side only — refused against
+    /// a local vault with no `--server`.
+    Uid {
+        #[command(subcommand)]
+        cmd: UidCmd,
+    },
+    /// FIDO Credential Exchange (CXF) import/export (Phase 24.5).
+    Cxf {
+        #[command(subcommand)]
+        cmd: CxfCmd,
     },
     /// List entries expiring within N days (default: 30).
     RotateCheck {
@@ -645,6 +641,160 @@ enum CookieCmd {
     },
 }
 
+/// `envv calendar export` writes a one-shot .ics; `envv calendar feed` manages
+/// subscribable feed URLs served by `envv-server`.
+#[derive(Subcommand)]
+enum CalendarCmd {
+    /// Write an iCalendar (.ics) feed of every date the vault knows.
+    ///
+    /// Creation dates, expiries and rotation deadlines, in the one format every
+    /// calendar reads. UIDs are stable per entry and per kind, so re-importing
+    /// updates the existing events instead of duplicating them.
+    ///
+    /// The file carries secret NAMES and dates. It carries no values and no
+    /// fingerprints — a fingerprint is stable per value, so a feed full of them
+    /// would tell whoever holds two feeds which secrets match.
+    Export {
+        /// Which events to include: created, expires, rotation. Repeatable;
+        /// defaults to all three.
+        #[arg(long = "kind", value_name = "KIND")]
+        kinds: Vec<String>,
+        /// Only include entries in this project.
+        #[arg(long)]
+        project: Option<String>,
+        /// Write to this file instead of stdout.
+        #[arg(long, short = 'o')]
+        out: Option<PathBuf>,
+        /// Calendar display name (X-WR-CALNAME).
+        #[arg(long, default_value = "EnvVault")]
+        name: String,
+    },
+    #[command(subcommand)]
+    Feed(FeedCmd),
+}
+
+/// A per-user subscribable `.ics` URL, token-addressed and revocable — never
+/// carrying a value. Requires `--server`; a local vault has nothing to serve
+/// it from.
+#[derive(Subcommand)]
+enum FeedCmd {
+    /// Mint a feed. The token is shown **once** — `envv-server` stores only its
+    /// hash — so this refuses to print it without `--reveal`/`--out`, the same
+    /// rule as `user token new`.
+    New {
+        /// Which events to include: created, expires, rotation. Repeatable;
+        /// defaults to all three.
+        #[arg(long = "kind", value_name = "KIND")]
+        kinds: Vec<String>,
+        /// Display name for the calendar (X-WR-CALNAME) and for `feed ls`.
+        #[arg(long, default_value = "EnvVault")]
+        name: String,
+        /// Include account names in event titles/descriptions. Off by default —
+        /// an account name is often an email address.
+        #[arg(long)]
+        include_account_names: bool,
+        /// Write the full feed URL to this file (0600) instead of stdout.
+        #[arg(long, short = 'o')]
+        out: Option<PathBuf>,
+    },
+    /// List feeds. The owner sees every feed; a sub-user sees only their own.
+    Ls,
+    /// Revoke a feed by id. Irreversible — the URL stops working immediately.
+    Revoke {
+        id: String,
+        #[arg(long)]
+        yes: bool,
+    },
+}
+
+/// The unique-ID registry's surface (Phase 24.4). Every subcommand is
+/// server-side only.
+#[derive(Subcommand)]
+enum UidCmd {
+    /// Advisory only: "unique right now". `register`/`mint` are the operations
+    /// that actually reserve a value.
+    Check {
+        values: Vec<String>,
+        #[arg(long, default_value = "none")]
+        normalise: String,
+    },
+    /// Record values minted elsewhere. Fails closed per value on a collision —
+    /// nothing else in the batch is rolled back.
+    Register {
+        values: Vec<String>,
+        #[arg(long, default_value = "none")]
+        normalise: String,
+        #[arg(long)]
+        namespace: Option<String>,
+        #[arg(long)]
+        generator: Option<String>,
+        #[arg(long)]
+        note: Option<String>,
+    },
+    /// Generate in-process, check, retry up to 3 times on collision, register,
+    /// and return the value that was actually stored.
+    Mint {
+        /// Number of hex characters in the generated candidate.
+        #[arg(long, default_value_t = 32)]
+        length: usize,
+        #[arg(long)]
+        namespace: Option<String>,
+        #[arg(long)]
+        generator: Option<String>,
+    },
+    /// One value → issued/unknown plus the metadata the caller may see.
+    Lookup {
+        value: String,
+        #[arg(long, default_value = "none")]
+        normalise: String,
+    },
+    /// Delete registry rows before a date. **Deletes the only evidence an ID
+    /// was issued** — a pruned ID can be issued again undetected. Dry-run first.
+    Prune {
+        /// ISO-8601 date; rows older than this are deleted.
+        before: String,
+        #[arg(long)]
+        namespace: Option<String>,
+        #[arg(long)]
+        generator: Option<String>,
+        #[arg(long)]
+        actor: Option<String>,
+        #[arg(long)]
+        dry_run: bool,
+        #[arg(long)]
+        yes: bool,
+    },
+    /// Row count, size on disk, oldest entry.
+    Stats,
+}
+
+/// FIDO Credential Exchange — the format password managers are converging on
+/// for moving credentials between products.
+#[derive(Subcommand)]
+enum CxfCmd {
+    /// Read a CXF file. Every item is appended as one or more new entries —
+    /// see `vault_core::cxf`'s module doc for the one-credential-vs-several
+    /// (bundle) rule and why this is append-only rather than merge-aware.
+    Import {
+        file: PathBuf,
+        /// Put new entries in this project as well as Universal.
+        #[arg(long)]
+        project: Option<String>,
+        /// Tag new entries with this category.
+        #[arg(long)]
+        category: Option<String>,
+    },
+    /// Write every entry as a CXF document. Materialising by construction —
+    /// refused without --out, the same Phase 14 rule every export here obeys.
+    Export {
+        #[arg(long, short = 'o')]
+        out: PathBuf,
+        /// Only entries whose provider name contains this (case-insensitive).
+        #[arg(long)]
+        provider: Option<String>,
+    },
+}
+
 #[derive(Subcommand)]
 enum EntryCmd {
     /// List entries (same filters as `envv list`).
@@ -778,6 +928,31 @@ enum EntryTotpCmd {
     },
     /// List the entries that carry a seed. Names and parameters, never codes.
     Ls,
+    /// Guided add: attach a seed to an existing entry (matched by exact
+    /// provider name) or create a bare `password`-typed one with an empty
+    /// primary. Mirrors the desktop Authenticator panel's "Add 2FA" form.
+    ///
+    /// Refuses when the target already carries a seed — `envv entry set
+    /// NAME --totp-stdin` is the re-enroll-on-purpose path.
+    Add {
+        /// Provider name — matched exactly against an existing entry, or used
+        /// to create one.
+        name: String,
+        /// Base32 seed or a whole otpauth:// URI.
+        #[arg(long)]
+        seed: Option<String>,
+        /// Read the seed from stdin (never appears in `ps`). Prefer this.
+        #[arg(long, conflicts_with = "seed")]
+        seed_stdin: bool,
+        /// Only used when creating a new entry.
+        #[arg(long)]
+        account: Option<String>,
+        #[arg(long, value_parser = ["totp", "hotp", "steam"])]
+        kind: Option<String>,
+        /// The next counter an `hotp` seed will use.
+        #[arg(long)]
+        counter: Option<u64>,
+    },
     /// Advance a counter-based (HOTP) seed to its next position.
     ///
     /// Counter-based codes do not expire — each one stands until it is used, and
@@ -2112,15 +2287,75 @@ fn dispatch(cli: &Cli, a: &Access) -> CliResult {
         Commands::Curl { provider, out, url } => {
             entries::cmd_curl(a, provider, url.first().map(String::as_str), out.as_deref())
         }
-        Commands::Calendar {
-            kinds,
-            project,
-            out: out_path,
-            name,
-        } => {
-            let project = scoped_project(a, project.as_deref())?;
-            cmd_calendar(a, kinds, project.as_deref(), out_path.as_deref(), name)
-        }
+        Commands::Calendar { cmd } => match cmd {
+            CalendarCmd::Export {
+                kinds,
+                project,
+                out: out_path,
+                name,
+            } => {
+                let project = scoped_project(a, project.as_deref())?;
+                cmd_calendar(a, kinds, project.as_deref(), out_path.as_deref(), name)
+            }
+            CalendarCmd::Feed(feed_cmd) => match feed_cmd {
+                FeedCmd::New {
+                    kinds,
+                    name,
+                    include_account_names,
+                    out: out_path,
+                } => feed_cmd::new(a, kinds, name, *include_account_names, out_path.as_deref()),
+                FeedCmd::Ls => feed_cmd::ls(a),
+                FeedCmd::Revoke { id, yes } => feed_cmd::revoke(a, id, *yes),
+            },
+        },
+        Commands::Uid { cmd } => match cmd {
+            UidCmd::Check { values, normalise } => uid_cmd::check(a, values, normalise),
+            UidCmd::Register {
+                values,
+                normalise,
+                namespace,
+                generator,
+                note,
+            } => uid_cmd::register(
+                a,
+                values,
+                normalise,
+                namespace.as_deref(),
+                generator.as_deref(),
+                note.as_deref(),
+            ),
+            UidCmd::Mint {
+                length,
+                namespace,
+                generator,
+            } => uid_cmd::mint(a, *length, namespace.as_deref(), generator.as_deref()),
+            UidCmd::Lookup { value, normalise } => uid_cmd::lookup(a, value, normalise),
+            UidCmd::Prune {
+                before,
+                namespace,
+                generator,
+                actor,
+                dry_run,
+                yes,
+            } => uid_cmd::prune(
+                a,
+                before,
+                namespace.as_deref(),
+                generator.as_deref(),
+                actor.as_deref(),
+                *dry_run,
+                *yes,
+            ),
+            UidCmd::Stats => uid_cmd::stats(a),
+        },
+        Commands::Cxf { cmd } => match cmd {
+            CxfCmd::Import {
+                file,
+                project,
+                category,
+            } => cxf_cmd::cmd_import(a, file, project.as_deref(), category.as_deref()),
+            CxfCmd::Export { out, provider } => cxf_cmd::cmd_export(a, out, provider.as_deref()),
+        },
         Commands::RotateCheck { days } => {
             let list = a.expiring(*days)?;
             let safe = out::redact_entries(&list);
@@ -2225,6 +2460,23 @@ fn dispatch(cli: &Cli, a: &Access) -> CliResult {
                 envv_cli::totp_cmd::cmd_code(a, provider, *next)
             }
             EntryTotpCmd::Ls => envv_cli::totp_cmd::cmd_ls(a),
+            EntryTotpCmd::Add {
+                name,
+                seed,
+                seed_stdin,
+                account,
+                kind,
+                counter,
+            } => {
+                let fields = EntryFields {
+                    totp: seed.clone(),
+                    totp_stdin: *seed_stdin,
+                    totp_kind: kind.clone(),
+                    totp_counter: *counter,
+                    ..Default::default()
+                };
+                entries::cmd_totp_add(a, name, account.as_deref(), &fields)
+            }
             EntryTotpCmd::Advance {
                 provider,
                 by,

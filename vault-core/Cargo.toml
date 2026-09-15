@@ -1,6 +1,6 @@
 [package]
 name    = "vault-core"
-version = "0.23.0"
+version = "0.24.0"
 edition = "2021"
 license = "MIT"
 
@@ -35,7 +35,7 @@ hex        = "=0.4.3"
 zeroize    = { version = "=1.8.1", features = ["zeroize_derive"] }
 rcgen      = "=0.13.2"
 ssh-key    = { version = "=0.6.7", features = ["ed25519", "crypto"] }
-time       = "=0.3.37"
+time       = { version = "=0.3.37", features = ["parsing"] }
 sha2       = "0.10"
 # HKDF is implemented over this rather than pulled in as `hkdf`: the extract and
 # expand steps are ten lines, and `entropy.rs` needs them to be readable — the

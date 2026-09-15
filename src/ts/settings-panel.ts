@@ -60,9 +60,9 @@ const SIDEBAR_SECTION_DEFS = [
   { key: 'project', label: 'Projects' },
   { key: 'tags', label: 'Tags' },
   { key: 'pools', label: 'Key Pools' },
-  { key: 'authenticator', label: 'Authenticator' },
   { key: 'prefixes', label: 'Env Prefixes' },
 ];
+// `authenticator` removed here in A2 (2026-09-14) — see state.ts's migration note.
 const DEFAULT_SIDEBAR_SECTIONS = [
   'all',
   'price',
@@ -71,7 +71,6 @@ const DEFAULT_SIDEBAR_SECTIONS = [
   'project',
   'tags',
   'pools',
-  'authenticator',
   'prefixes',
 ];
 

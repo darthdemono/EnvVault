@@ -1,0 +1,95 @@
+{
+  "version": 1,
+  "_comment": "Phase 24.5 — web session provider presets. Each names the cookies a session needs, the header a copy derives, and what the session is bound to. Nothing here is fetched or verified automatically; the form flags a missing required cookie by name. 'verified_on' is the date the shape was last checked against a real capture, per CLAUDE.md's own honesty rule about which of these are sourced vs unverified.",
+  "presets": [
+    {
+      "id": "x-twitter",
+      "label": "X / Twitter",
+      "required_cookies": ["auth_token", "ct0"],
+      "optional_cookies": [],
+      "header_recipe": [{ "name": "x-csrf-token", "source": "cookie", "cookie_name": "ct0" }],
+      "bindings": [],
+      "verified_on": "2026-09-14"
+    },
+    {
+      "id": "instagram",
+      "label": "Instagram",
+      "required_cookies": ["sessionid", "csrftoken", "ds_user_id"],
+      "optional_cookies": ["mid", "ig_did"],
+      "header_recipe": [
+        { "name": "X-CSRFToken", "source": "cookie", "cookie_name": "csrftoken" },
+        { "name": "X-IG-App-ID", "source": "static", "static_value": "936619743392459" }
+      ],
+      "bindings": ["user_agent"],
+      "verified_on": "2026-09-14"
+    },
+    {
+      "id": "linkedin",
+      "label": "LinkedIn",
+      "required_cookies": ["li_at", "JSESSIONID"],
+      "optional_cookies": [],
+      "header_recipe": [
+        {
+          "name": "csrf-token",
+          "source": "cookie",
+          "cookie_name": "JSESSIONID",
+          "strip_quotes": true
+        },
+        { "name": "x-restli-protocol-version", "source": "static", "static_value": "2.0.0" }
+      ],
+      "bindings": [],
+      "verified_on": "2026-09-14"
+    },
+    {
+      "id": "youtube-google",
+      "label": "YouTube / Google",
+      "required_cookies": ["SAPISID"],
+      "optional_cookies": ["__Secure-1PAPISID", "__Secure-3PAPISID", "HSID", "SSID", "SID"],
+      "header_recipe": [
+        { "name": "Authorization", "source": "derived", "derived_id": "sapisidhash" }
+      ],
+      "bindings": ["origin"],
+      "verified_on": "2026-09-14"
+    },
+    {
+      "id": "spotify",
+      "label": "Spotify",
+      "required_cookies": ["sp_dc"],
+      "optional_cookies": ["sp_key"],
+      "header_recipe": [],
+      "bindings": [],
+      "verified_on": "2026-09-14"
+    },
+    {
+      "id": "slack-browser",
+      "label": "Slack (browser)",
+      "required_cookies": ["d"],
+      "optional_cookies": [],
+      "header_recipe": [],
+      "bindings": [],
+      "verified_on": "2026-09-14"
+    },
+    {
+      "id": "nextauth",
+      "label": "NextAuth sites",
+      "required_cookies": ["__Secure-next-auth.session-token"],
+      "optional_cookies": [
+        "__Secure-next-auth.session-token.0",
+        "__Secure-next-auth.session-token.1",
+        "__Secure-next-auth.session-token.2"
+      ],
+      "header_recipe": [],
+      "bindings": [],
+      "verified_on": "2026-09-14"
+    },
+    {
+      "id": "cloudflare-clearance",
+      "label": "Cloudflare-protected site",
+      "required_cookies": ["cf_clearance"],
+      "optional_cookies": [],
+      "header_recipe": [],
+      "bindings": ["user_agent", "origin"],
+      "verified_on": "2026-09-14"
+    }
+  ]
+}

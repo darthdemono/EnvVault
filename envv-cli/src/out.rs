@@ -220,11 +220,27 @@ const PUBLIC_FIELDS_P23: [&str; 10] = [
 // It is masked like a secret even though it is not one — see the cookie branch
 // of `redact_entry`.
 
+/// Phase 24.1 fields. `composite_template` is the holes, not the values — the
+/// design is explicit that it "must still be added to `PUBLIC_FIELDS`
+/// deliberately, since fail-closed redaction would otherwise mask it" (and a
+/// masked template is useless: nobody can tell where the secret parts go).
+/// `composite_kind`, `bundle_id` and `bundle_slot` are membership and shape,
+/// never a value. `bundle_order` is a number, so the sweep below never touches
+/// it regardless.
+const PUBLIC_FIELDS_24_1: [&str; 5] = [
+    "composite_template",
+    "composite_kind",
+    "bundle_id",
+    "bundle_slot",
+    "bundle_primary",
+];
+
 /// True when a field is known not to hold secret material.
 fn is_public_field(name: &str) -> bool {
     PUBLIC_FIELDS.contains(&name)
         || PUBLIC_FIELDS_EXTRA.contains(&name)
         || PUBLIC_FIELDS_P23.contains(&name)
+        || PUBLIC_FIELDS_24_1.contains(&name)
 }
 
 /// Redact a single vault entry for JSON output. Returns it unchanged when

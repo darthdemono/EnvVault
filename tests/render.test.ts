@@ -421,3 +421,78 @@ describe('card-size stylesheet tokens', () => {
     expect([...css.matchAll(/--cs-desc-lines:\s*(\d+)/g)]).toHaveLength(3);
   });
 });
+
+describe('a composite entry (Phase 24.1)', () => {
+  it('shows the rendered value, not the unused api_key field', () => {
+    st.vault.api_keys = [
+      makeEntry({
+        id: 'e1',
+        secretType: 'composite',
+        api_key: '',
+        composite_template: 'https://x.example/{token}',
+        composite_kind: 'link',
+        extra_vars: [{ key: 'token', value: 'abc-123' }],
+      }),
+    ];
+    st.expanded = new Set(['e1']);
+    Settings.set('maskKeysByDefault', false);
+    renderGrid();
+    expect(grid().textContent).toContain('https://x.example/abc-123');
+  });
+
+  it('masks the rendered value by default, like any other primary', () => {
+    st.vault.api_keys = [
+      makeEntry({
+        id: 'e1',
+        secretType: 'composite',
+        api_key: '',
+        composite_template: 'https://x.example/{token}',
+        composite_kind: 'link',
+        // `secret: true` on the part too — its own row is a separate,
+        // pre-existing display with its own (opt-in) mask flag; this test is
+        // about the rendered *primary* value row, not the parts list below it.
+        extra_vars: [{ key: 'token', value: 'abc-123', secret: true }],
+      }),
+    ];
+    st.expanded = new Set(['e1']);
+    Settings.set('maskKeysByDefault', true);
+    renderGrid();
+    expect(grid().textContent).not.toContain('abc-123');
+    // The primary value row specifically masks the *rendered* text, not the
+    // template — the template shows the shape, so its holes are legible.
+    expect(grid().querySelector(`#kv-key-0`)?.textContent).not.toContain('abc-123');
+  });
+
+  it('shows the render error instead of breaking the card when a placeholder is unfilled', () => {
+    st.vault.api_keys = [
+      makeEntry({
+        id: 'e1',
+        secretType: 'composite',
+        api_key: '',
+        composite_template: 'https://x.example/{missing}',
+        composite_kind: 'link',
+        extra_vars: [],
+      }),
+    ];
+    st.expanded = new Set(['e1']);
+    expect(() => renderGrid()).not.toThrow();
+    expect(grid().textContent).toContain('no part named "missing"');
+  });
+
+  it('never executes markup smuggled through a rendered part', () => {
+    st.vault.api_keys = [
+      makeEntry({
+        id: 'e1',
+        secretType: 'composite',
+        api_key: '',
+        composite_template: '{a}',
+        composite_kind: 'custom',
+        extra_vars: [{ key: 'a', value: '<img src=x onerror=alert(1)>' }],
+      }),
+    ];
+    st.expanded = new Set(['e1']);
+    Settings.set('maskKeysByDefault', false);
+    expect(() => renderGrid()).not.toThrow();
+    expect(grid().querySelector('img')).toBeNull();
+  });
+});

@@ -57,6 +57,11 @@ async function loadWithTauri(invoke: Invoke): Promise<{ totp: TotpModule; st: an
   };
   const totp = (await import('../src/ts/totp')) as unknown as TotpModule;
   const { st } = await import('../src/ts/state');
+  // A1 (2026-09-14): `liveCodeFor` now gates on `st.vaultOpen` instead of the
+  // Rust side's local-vault-only lock check, so a freshly re-imported `st`
+  // (default `vaultOpen: false`) needs this set the way the real app sets it
+  // on unlock — local or remote, both count.
+  st.vaultOpen = true;
   return { totp, st };
 }
 
@@ -193,6 +198,39 @@ describe('liveCodeFor — what crosses the IPC boundary', () => {
       throw new Error('Vault is locked');
     });
     await expect(totp.liveCodeFor(entry())).resolves.toBeNull();
+  });
+
+  it('A1: does not send `state` and asks even without a local key (remote vault fix)', async () => {
+    // The regression: `entry_totp_code` used to be gated on the Tauri
+    // `VaultState` — the *local* SQLCipher key — so every call on a session
+    // connected only to a remote vault refused with "Vault is locked" and
+    // every remote 2FA code came back blank. The command is pure over its
+    // arguments now; nothing it sends should imply a local-vault check, and it
+    // must succeed with `st.vaultOpen` true regardless of a local key.
+    const { totp } = await loadWithTauri(() => LIVE);
+    const code = await totp.liveCodeFor(entry());
+    expect(code).not.toBeNull();
+    expect(calls[0].cmd).toBe('entry_totp_code');
+    expect(calls[0].args).not.toHaveProperty('state');
+  });
+
+  it('A1: refuses only on `st.vaultOpen`, not on a Rust-side lock check', async () => {
+    const { totp, st } = await loadWithTauri(() => LIVE);
+    st.vaultOpen = false;
+    await expect(totp.liveCodeFor(entry())).resolves.toBeNull();
+    // Never asked at all — the gate is now local to the caller.
+    expect(calls).toHaveLength(0);
+  });
+
+  it('A1: names the refusal on the slot instead of leaving it unexplained', async () => {
+    const { totp, st } = await loadWithTauri(() => {
+      throw new Error('Vault is locked');
+    });
+    document.body.innerHTML = '<div data-totp-for="e1"><span class="totp-code"></span></div>';
+    st.vault = { api_keys: [entry()], user_categories: [], projects: [] };
+    await totp.tickTotp();
+    const slot = document.querySelector<HTMLElement>('[data-totp-for]')!;
+    expect(slot.title).toContain('Vault is locked');
   });
 
   it('resetTotpCache drops what lock() must not leave in memory', async () => {

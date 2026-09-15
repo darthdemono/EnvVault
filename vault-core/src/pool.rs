@@ -227,6 +227,23 @@ pub fn set_cooldown(
     }
 }
 
+/// Round-robin over the members that are not cooling, starting at `cursor`.
+///
+/// The cursor indexes the **full** member list rather than a filtered one, so
+/// a member going on cooldown does not shift every other member's position
+/// and make the next call skip an unrelated key. `None` when every member is
+/// cooling. Shared by `envv pool next`/`envv get --pool` (`envv-cli/src/pool.rs`)
+/// and the desktop card's Copy button (`pool_next` in `src-tauri`) — two
+/// callers picking a member by two different rules is exactly the shape that
+/// hands one caller a key the other just put on cooldown.
+pub fn pick_index(cooling: &[bool], cursor: usize) -> Option<usize> {
+    let n = cooling.len();
+    if n == 0 {
+        return None;
+    }
+    (0..n).map(|off| (cursor + off) % n).find(|i| !cooling[*i])
+}
+
 /// Forget a pool's cursor, cooldowns and counts for one vault.
 pub fn forget(state: &mut Value, vault_key: &str, pool: &str) {
     if let Some(obj) = state["vaults"][vault_key].as_object_mut() {

@@ -14,7 +14,7 @@ import {
   primaryEnvName,
   unquoteEnvValue,
 } from './state';
-import { showToast, clipboardWrite } from './utils';
+import { showToast, clipboardWrite, saveFile } from './utils';
 import { getFiltered, sorted } from './filters';
 import { buildCopyTextAll, type CopyProfile, type MetadataStyle } from './copy-profile';
 import * as yaml from 'js-yaml';
@@ -52,7 +52,7 @@ export function copyAll(fmt: string) {
   );
 }
 
-export function exportAs(fmt: string) {
+export async function exportAs(fmt: string) {
   const keys = st.vault.api_keys;
   const content =
     fmt === 'yaml'
@@ -60,37 +60,31 @@ export function exportAs(fmt: string) {
       : fmt === 'json'
         ? JSON.stringify(st.vault, null, 2)
         : Exporter.dotenv(keys);
-  const blob = new Blob([content], { type: 'text/plain' });
-  const url = URL.createObjectURL(blob);
-  const a = Object.assign(document.createElement('a'), {
-    href: url,
-    download: `envvault.${fmt === 'yaml' ? 'yaml' : fmt === 'json' ? 'json' : 'env'}`,
-  });
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
-  showToast(`Exported as .${fmt}`, 'ok');
+  const filename = `envvault.${fmt === 'yaml' ? 'yaml' : fmt === 'json' ? 'json' : 'env'}`;
+  // A3: the toast now follows the write rather than the click — see `saveFile`.
+  const res = await saveFile(content, filename);
+  if (!res.ok) showToast(`Export failed: ${res.error}`, 'error');
+  else showToast(res.path ? `Exported to ${res.path}` : `Exported as .${fmt}`, 'ok');
 }
 
 // ── Infra-as-code export formats ───────────────────────────────────────────
 
 /**
- * Writes `content` to the user's downloads as `filename`.
+ * Writes `content` to disk as `filename` and toasts what actually happened.
  *
- * Exported for the timeline panel's `.ics` export, which needs the identical
- * blob-and-anchor dance. A second copy of it there would be a second place for
- * the CSP `blob:` requirement and the `revokeObjectURL` cleanup to drift.
+ * Exported for the timeline panel's `.ics` export and every other exporter
+ * that used to hand-roll the blob-and-anchor dance — one call site is one
+ * place for `saveFile`'s Tauri/browser split to live, instead of nine.
+ *
+ * **A3 (2026-09-14):** `okMsg` used to be shown unconditionally, whether or
+ * not anything was written — WebKitGTK's webview has no download handler, so
+ * every "Exported ✓" here was a lie in the desktop app. The toast now follows
+ * the write and names the real path when there is one.
  */
-export function downloadText(content: string, filename: string, okMsg: string) {
-  const blob = new Blob([content], { type: 'text/plain' });
-  const url = URL.createObjectURL(blob);
-  const a = Object.assign(document.createElement('a'), { href: url, download: filename });
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
-  showToast(okMsg, 'ok');
+export async function downloadText(content: string, filename: string, okMsg: string) {
+  const res = await saveFile(content, filename);
+  if (!res.ok) showToast(`Export failed: ${res.error}`, 'error');
+  else showToast(res.path ? `${okMsg} → ${res.path}` : okMsg, 'ok');
 }
 
 /** Kubernetes Secret manifest (stringData — values kept readable, not base64). */
@@ -105,7 +99,7 @@ export function exportK8sSecret(name = 'envvault') {
     'stringData:',
     ...keys.map((e) => `  ${primaryEnvName(e)}: ${JSON.stringify(e.api_key)}`),
   ];
-  downloadText(lines.join('\n'), `${name}-secret.yaml`, 'Exported k8s Secret ✓');
+  void downloadText(lines.join('\n'), `${name}-secret.yaml`, 'Exported k8s Secret ✓');
 }
 
 /** Terraform .tfvars — variable = "value" pairs. */
@@ -114,7 +108,7 @@ export function exportTfvars() {
   const lines = keys.map(
     (e) => `${primaryEnvName(e, { case: 'lower' })} = ${JSON.stringify(e.api_key)}`,
   );
-  downloadText(lines.join('\n'), 'envvault.tfvars', 'Exported .tfvars ✓');
+  void downloadText(lines.join('\n'), 'envvault.tfvars', 'Exported .tfvars ✓');
 }
 
 // ── Encrypted backup (AES-256-GCM, PBKDF2-SHA256) ──────────────────────────
@@ -190,7 +184,7 @@ export async function exportEncryptedBackup(password: string) {
     iv: b64(iv.buffer),
     ct: b64(cipher),
   });
-  downloadText(
+  void downloadText(
     envelope,
     `envvault-${new Date().toISOString().slice(0, 10)}.vaultbak`,
     'Encrypted backup exported ✓',

@@ -390,9 +390,9 @@ fn field_aliases_match_the_app() {
 fn calendar_ics() {
     let v = vault();
     let entries: Vec<Value> = v["api_keys"].as_array().unwrap().clone();
-    let ics = envv_cli::calendar::build_ics(
+    let ics = vault_core::calendar::build_ics(
         &entries,
-        &envv_cli::calendar::IcsOptions {
+        &vault_core::calendar::IcsOptions {
             now: "2026-08-26T12:00:00Z".to_string(),
             calendar_name: "EnvVault".to_string(),
             ..Default::default()
@@ -409,7 +409,8 @@ fn calendar_ics() {
 fn calendar_carries_no_secret_value() {
     let v = vault();
     let entries: Vec<Value> = v["api_keys"].as_array().unwrap().clone();
-    let ics = envv_cli::calendar::build_ics(&entries, &envv_cli::calendar::IcsOptions::default());
+    let ics =
+        vault_core::calendar::build_ics(&entries, &vault_core::calendar::IcsOptions::default());
     for e in &entries {
         for field in ["api_key", "api_secret"] {
             if let Some(val) = e.get(field).and_then(|x| x.as_str()) {

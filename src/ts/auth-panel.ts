@@ -29,7 +29,7 @@
  * to draw a *secret* is a poor trade.
  */
 
-import { st, Settings, inTauri } from './state';
+import { st, Settings, inTauri, newEntryId } from './state';
 import type { VaultEntry } from './types';
 import { esc, escAttr, showToast, clipboardWrite } from './utils';
 import {
@@ -38,8 +38,11 @@ import {
   startTotpTicker,
   stopTotpTicker,
   resetTotpCache,
+  parseTotpSeed,
+  TOTP_DEFAULTS,
   type TotpKind,
 } from './totp';
+import { render } from './render';
 
 /** Which kinds the panel is showing. Panel-local: it filters nothing else. */
 let kindFilter: 'all' | TotpKind = 'all';
@@ -190,6 +193,201 @@ async function advance(id: string): Promise<void> {
   renderAuthPanel();
 }
 
+// ── Add 2FA (Phase 24.2) ────────────────────────────────────────────────────
+
+/**
+ * Reads the seed + kind/counter fields, applying the same default-omission
+ * rule the main add/edit form's `readTotpFields` does: a parameter equal to
+ * its `otpauth://` default is written as absent, because a stored
+ * `totp_algorithm: "SHA1"` cannot otherwise be told apart from a defaulted
+ * one. Unlike that form, only kind and counter are user-adjustable here —
+ * algorithm/digits/period come from whatever the seed itself parsed to.
+ *
+ * `null` when the seed field is empty or unusable; the caller is what decides
+ * whether that is an error worth showing.
+ */
+function readAdd2faFields(): Pick<
+  VaultEntry,
+  'totp_secret' | 'totp_algorithm' | 'totp_digits' | 'totp_period' | 'totp_kind' | 'totp_counter'
+> | null {
+  const raw =
+    (document.getElementById('add2fa-seed') as HTMLInputElement | null)?.value?.trim() ?? '';
+  if (!raw) return null;
+  let parsed: ReturnType<typeof parseTotpSeed>;
+  try {
+    parsed = parseTotpSeed(raw);
+  } catch {
+    return null;
+  }
+  const kindSel = (document.getElementById('add2fa-kind') as HTMLSelectElement | null)?.value;
+  const kind = (kindSel as TotpKind) || parsed.kind;
+  const counterRaw = Number(
+    (document.getElementById('add2fa-counter') as HTMLInputElement | null)?.value ?? '0',
+  );
+  const counter = Number.isFinite(counterRaw) ? Math.max(0, Math.trunc(counterRaw)) : 0;
+
+  // Steam forces its own shape on read (`totpParamsOf`) whatever is stored, so
+  // the parameter boxes describe nothing for it — writing what they happen to
+  // hold would store a seed that validates and produces characters Steam
+  // rejects.
+  if (kind === 'steam') {
+    return {
+      totp_secret: parsed.secret,
+      totp_algorithm: undefined,
+      totp_digits: undefined,
+      totp_period: undefined,
+      totp_kind: 'steam',
+      totp_counter: undefined,
+    };
+  }
+  return {
+    totp_secret: parsed.secret,
+    totp_algorithm: parsed.algorithm === TOTP_DEFAULTS.algorithm ? undefined : parsed.algorithm,
+    totp_digits: parsed.digits === TOTP_DEFAULTS.digits ? undefined : parsed.digits,
+    totp_period: parsed.period === TOTP_DEFAULTS.period ? undefined : parsed.period,
+    totp_kind: kind === TOTP_DEFAULTS.kind ? undefined : kind,
+    totp_counter: kind === 'hotp' ? counter : undefined,
+  };
+}
+
+/** Populates the "attach to existing entry" select. Only entries without a
+ * seed already — attaching to one that has one would either silently replace
+ * a working second factor or need its own conflict UI, and the entry's own
+ * edit form is already the place to re-enroll one on purpose. */
+function populateAdd2faExisting(): void {
+  const sel = document.getElementById('add2fa-existing') as HTMLSelectElement | null;
+  if (!sel) return;
+  const candidates = (st.vault?.api_keys ?? []).filter((e) => !hasTotp(e));
+  sel.innerHTML = candidates
+    .map((e) => {
+      const label = e.account_name ? `${e.provider} · ${e.account_name}` : e.provider;
+      return `<option value="${escAttr(e.id ?? '')}">${esc(label)}</option>`;
+    })
+    .join('');
+}
+
+/** Live status line under the seed field — valid/invalid, never blocking
+ * typing. Also where issuer/account are *offered*: filled into the Name/
+ * Account boxes only while those are still empty, never overwriting what the
+ * user already typed (the same rule Phase 22's URI import follows). */
+function updateAdd2faStatus(): void {
+  const status = document.getElementById('add2fa-status');
+  const raw =
+    (document.getElementById('add2fa-seed') as HTMLInputElement | null)?.value?.trim() ?? '';
+  const counterRow = document.getElementById('add2fa-counter-row');
+  const kindSel = document.getElementById('add2fa-kind') as HTMLSelectElement | null;
+  if (counterRow) counterRow.style.display = kindSel?.value === 'hotp' ? '' : 'none';
+
+  if (!status) return;
+  if (!raw) {
+    status.textContent = '';
+    return;
+  }
+  try {
+    const parsed = parseTotpSeed(raw);
+    status.textContent = '✓ Looks like a usable seed';
+    status.style.color = 'var(--price-free)';
+    if (kindSel && !kindSel.dataset.userTouched) kindSel.value = parsed.kind;
+    const nameEl = document.getElementById('add2fa-name') as HTMLInputElement | null;
+    const acctEl = document.getElementById('add2fa-account') as HTMLInputElement | null;
+    if (nameEl && !nameEl.value && parsed.issuer) nameEl.value = parsed.issuer;
+    if (acctEl && !acctEl.value && parsed.account) acctEl.value = parsed.account;
+  } catch (e) {
+    status.textContent = e instanceof Error ? e.message : 'Not a usable seed';
+    status.style.color = 'var(--price-paid)';
+  }
+}
+
+function openAdd2fa(): void {
+  const overlay = document.getElementById('add2fa-overlay');
+  if (!overlay) return;
+  // Every field is blanked on open rather than only on save: a form that
+  // shows the last attempt's values after a cancel reads as still trying it.
+  (document.getElementById('add2fa-name') as HTMLInputElement | null)!.value = '';
+  (document.getElementById('add2fa-account') as HTMLInputElement | null)!.value = '';
+  (document.getElementById('add2fa-seed') as HTMLInputElement | null)!.value = '';
+  (document.getElementById('add2fa-counter') as HTMLInputElement | null)!.value = '0';
+  const kindSel = document.getElementById('add2fa-kind') as HTMLSelectElement | null;
+  if (kindSel) {
+    kindSel.value = 'totp';
+    delete kindSel.dataset.userTouched;
+  }
+  (document.getElementById('add2fa-target-new') as HTMLInputElement | null)!.checked = true;
+  document.getElementById('add2fa-new-row')!.style.display = '';
+  document.getElementById('add2fa-existing-row')!.style.display = 'none';
+  const status = document.getElementById('add2fa-status');
+  if (status) status.textContent = '';
+  populateAdd2faExisting();
+  overlay.classList.add('open');
+  (document.getElementById('add2fa-name') as HTMLInputElement | null)?.focus();
+}
+
+function closeAdd2fa(): void {
+  document.getElementById('add2fa-overlay')?.classList.remove('open');
+}
+
+async function saveAdd2fa(): Promise<void> {
+  const fields = readAdd2faFields();
+  if (!fields) {
+    showToast('Enter a valid seed or otpauth:// URI', 'err');
+    return;
+  }
+  const attachExisting = (
+    document.getElementById('add2fa-target-existing') as HTMLInputElement | null
+  )?.checked;
+
+  if (attachExisting) {
+    const id = (document.getElementById('add2fa-existing') as HTMLSelectElement | null)?.value;
+    const entry = (st.vault?.api_keys ?? []).find((e) => e.id === id);
+    if (!entry) {
+      showToast('Choose an entry to attach to', 'err');
+      return;
+    }
+    if (hasTotp(entry)) {
+      // Refused rather than silently replaced — the same rule the totp-import
+      // merge follows for exactly this reason: an import (or, here, a manual
+      // add) is exactly the moment a stale attempt could overwrite a working
+      // second factor.
+      showToast(`${entry.provider} already has a seed — edit it directly to re-enroll`, 'err');
+      return;
+    }
+    Object.assign(entry, fields);
+  } else {
+    const name = (document.getElementById('add2fa-name') as HTMLInputElement | null)?.value.trim();
+    if (!name) {
+      showToast('Name the entry', 'err');
+      return;
+    }
+    const account =
+      (document.getElementById('add2fa-account') as HTMLInputElement | null)?.value.trim() ||
+      undefined;
+    const entry: VaultEntry = {
+      id: newEntryId(),
+      provider: name,
+      account_name: account,
+      api_key: '',
+      secretType: 'password',
+      price_type: 'free',
+      categories: [],
+      scopes: [],
+      projectIds: ['Universal'],
+      ...fields,
+    };
+    st.vault!.api_keys.push(entry);
+  }
+
+  try {
+    await st.store.save(st.vault!);
+  } catch {
+    showToast('Could not save the new seed', 'err');
+    return;
+  }
+  closeAdd2fa();
+  showToast('2FA added ✓', 'ok');
+  render();
+  renderAuthPanel();
+}
+
 let wired = false;
 
 /**
@@ -276,4 +474,37 @@ export function initAuthPanel(): void {
       }
     };
   }
+
+  // ── Add 2FA modal ──────────────────────────────────────────────────────
+  document.getElementById('auth-add-btn')?.addEventListener('click', openAdd2fa);
+  document.getElementById('add2fa-close')?.addEventListener('click', closeAdd2fa);
+  document.getElementById('add2fa-cancel')?.addEventListener('click', closeAdd2fa);
+  document.getElementById('add2fa-overlay')?.addEventListener('click', (e) => {
+    if (e.target === e.currentTarget) closeAdd2fa();
+  });
+  document.getElementById('add2fa-save')?.addEventListener('click', () => void saveAdd2fa());
+
+  const seedInput = document.getElementById('add2fa-seed') as HTMLInputElement | null;
+  if (seedInput) seedInput.oninput = updateAdd2faStatus;
+
+  const add2faKind = document.getElementById('add2fa-kind') as HTMLSelectElement | null;
+  if (add2faKind) {
+    add2faKind.onchange = () => {
+      // Once the user has picked a kind by hand, the seed field's own live
+      // guess (in `updateAdd2faStatus`) must stop overwriting it — otherwise
+      // choosing "Counter" and then editing the seed silently flips it back.
+      add2faKind.dataset.userTouched = '1';
+      updateAdd2faStatus();
+    };
+  }
+
+  document.querySelectorAll<HTMLInputElement>('input[name="add2fa-target"]').forEach((radio) => {
+    radio.onchange = () => {
+      const existing = radio.value === 'existing' && radio.checked;
+      const newRow = document.getElementById('add2fa-new-row');
+      const existingRow = document.getElementById('add2fa-existing-row');
+      if (newRow) newRow.style.display = existing ? 'none' : '';
+      if (existingRow) existingRow.style.display = existing ? '' : 'none';
+    };
+  });
 }

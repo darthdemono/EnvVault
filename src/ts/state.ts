@@ -348,6 +348,61 @@ export class RemoteVaultStore implements VaultStore {
     }
   }
 
+  // ── Calendar feeds (Phase 24.3) ──────────────────────────────────────────
+
+  /**
+   * Mints a subscribable `.ics` feed. Returns the full URL, or null on
+   * failure — the token is shown to the caller exactly once, so this must
+   * never be retried "just to check": a retry after a network hiccup that
+   * actually succeeded server-side mints a second, orphaned feed.
+   */
+  async createCalendarFeed(
+    name: string,
+    kinds: string[],
+    includeAccountNames: boolean,
+  ): Promise<string | null> {
+    if (!this.token) return null;
+    try {
+      const r = await this._apiFetch('/api/calendar/feeds', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${this.token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, kinds, include_account_names: includeAccountNames }),
+      });
+      if (!r.ok) return null;
+      const data = await r.json();
+      return typeof data.path === 'string' ? `${this.baseUrl}${data.path}` : null;
+    } catch {
+      return null;
+    }
+  }
+
+  async listCalendarFeeds(): Promise<any[]> {
+    if (!this.token) return [];
+    try {
+      const r = await this._apiFetch('/api/calendar/feeds', {
+        headers: { Authorization: `Bearer ${this.token}` },
+      });
+      if (!r.ok) return [];
+      const data = await r.json();
+      return Array.isArray(data.feeds) ? data.feeds : [];
+    } catch {
+      return [];
+    }
+  }
+
+  async revokeCalendarFeed(id: string): Promise<boolean> {
+    if (!this.token) return false;
+    try {
+      const r = await this._apiFetch(`/api/calendar/feeds/${encodeURIComponent(id)}`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${this.token}` },
+      });
+      return r.ok;
+    } catch {
+      return false;
+    }
+  }
+
   /** Fetch server status including TLS cert fingerprint (no auth needed). */
   async getStatus(): Promise<{
     unlocked: boolean;
@@ -421,6 +476,22 @@ export const st = {
    * (invariant 7) — the same treatment tags get, for the same reason.
    */
   activePoolFilter: null as string | null,
+  /**
+   * The type chip bar (Phase 24.2) — multi-toggle, OR-combined, above the
+   * grid. Holds `SecretType` strings plus two virtual tokens: `'__totp'`
+   * (carries a stored authenticator seed — the replacement for the old
+   * `has_totp` single-select filter) and `'__pool'` (belongs to a key pool).
+   * A `Set` rather than an array because membership, not order, is what every
+   * read site cares about.
+   */
+  activeTypeChips: new Set<string>(),
+  /**
+   * Which pool cards are expanded in the grid (Phase 24.2), keyed by pool
+   * name. Session-scoped like `expanded` (regular cards) — not persisted,
+   * since a pool card defaults to collapsed and there is nothing sensitive to
+   * accidentally restore un-collapsed.
+   */
+  expandedPools: new Set<string>(),
   /** True while the embedded "Open to LAN" server is serving this vault (Pass 3). */
   lanServerRunning: false,
   /** True after a successful finishInit(); false after lockVault(). Prevents visibility-change from stacking the relock overlay before the vault is ever opened. */
@@ -458,6 +529,8 @@ export function resetViewState(): void {
   st.activeTagFilter = null;
   st.activePrefixFilter = null;
   st.activePoolFilter = null;
+  st.activeTypeChips.clear();
+  st.expandedPools.clear();
   st.expanded.clear();
   st.allExpanded = false;
   st.revealed = {};
@@ -490,6 +563,7 @@ export function clearAllFilters(): void {
   st.activeTagFilter = null;
   st.activePrefixFilter = null;
   st.activePoolFilter = null;
+  st.activeTypeChips.clear();
 
   const searchEl = document.getElementById('search') as HTMLInputElement | null;
   if (searchEl) searchEl.value = '';
@@ -688,18 +762,9 @@ export const DEFAULT_SETTINGS: AppSettings = {
   showExpiryWarning: true,
   expiryWarningDays: 30,
   customCss: '',
-  sidebarSections: [
-    'all',
-    'price',
-    'env',
-    'category',
-    'project',
-    'tags',
-    'pools',
-    'authenticator',
-    'prefixes',
-  ],
+  sidebarSections: ['all', 'price', 'env', 'category', 'project', 'tags', 'pools', 'prefixes'],
   groupByType: false,
+  groupPools: true,
   activityBarPosition: 'left' as const,
   activityBarStyle: 'icon' as const,
   collapsedSections: [] as ('all' | 'price' | 'env' | 'category' | 'project')[],
@@ -791,15 +856,23 @@ export const Settings = {
         localStorage.setItem('envvault-panel-migrated-auth', '1');
         this._persist();
       }
+      // A2 (2026-09-14): reversed. The Authenticator *sidebar section* — added
+      // by this same flag — is removed: two surfaces for one feature, and the
+      // one that showed nothing (A1) read as the whole feature being broken.
+      // The fifth activity-bar panel (`auth`, migrated above) carries
+      // everything it did; the `has_totp` grid filter is replaced by 24.2's
+      // type chip. `authenticator` is dropped from `sidebarSections` **on
+      // every read** (invariant 7), not by a one-time migration, so a section
+      // key that outlives the code rendering it can never reappear — and the
+      // flag stays set (never cleared, never reused) so nothing ever tries to
+      // insert it again.
       if (!localStorage.getItem('envvault-sb-migrated-totp')) {
-        const secs = [...(this._data.sidebarSections || [])];
-        if (!secs.includes('authenticator' as any)) {
-          const at = secs.indexOf('prefixes' as any);
-          if (at >= 0) secs.splice(at, 0, 'authenticator' as any);
-          else secs.push('authenticator' as any);
-        }
-        this._data.sidebarSections = secs as any;
         localStorage.setItem('envvault-sb-migrated-totp', '1');
+      }
+      if ((this._data.sidebarSections as string[] | undefined)?.includes('authenticator')) {
+        this._data.sidebarSections = (this._data.sidebarSections as string[]).filter(
+          (s) => s !== 'authenticator',
+        ) as any;
         this._persist();
       }
     } catch {}
@@ -873,6 +946,8 @@ export function applyGridSettings() {
 }
 
 /** All toggleable/reorderable sidebar section keys, in default order. */
+// `authenticator` was removed here in A2 (2026-09-14) — see the migration note
+// in `Settings.init()`. The feature lives in the `auth` activity-bar panel now.
 export const ALL_SIDEBAR_SECTIONS = [
   'all',
   'price',
@@ -881,14 +956,9 @@ export const ALL_SIDEBAR_SECTIONS = [
   'project',
   'tags',
   'pools',
-  'authenticator',
   'prefixes',
 ] as const;
 /** Sections whose visibility is also gated on having data (handled by render). */
-// `authenticator` is deliberately absent: it carries an action (Import), so
-// hiding it when the vault holds no seeds hides the one control a user without
-// seeds is looking for. Tags, pools and prefixes are pure filters and have
-// nothing to offer when empty.
 const DATA_GATED_SECTIONS = ['tags', 'pools', 'prefixes'];
 
 export function isSidebarSectionEnabled(key: string): boolean {
@@ -917,22 +987,11 @@ export function applySidebarOrder() {
     }
   });
   const collapsed = Settings.get('collapsedSections') || [];
-  (
-    [
-      'all',
-      'price',
-      'env',
-      'category',
-      'project',
-      'tags',
-      'pools',
-      'authenticator',
-      'prefixes',
-    ] as const
-  ).forEach((key) =>
-    document
-      .getElementById(`sidebar-section-${key}`)
-      ?.classList.toggle('collapsed', collapsed.includes(key)),
+  (['all', 'price', 'env', 'category', 'project', 'tags', 'pools', 'prefixes'] as const).forEach(
+    (key) =>
+      document
+        .getElementById(`sidebar-section-${key}`)
+        ?.classList.toggle('collapsed', collapsed.includes(key)),
   );
 }
 
@@ -999,6 +1058,7 @@ export function saveViewState(): void {
     tagFilter: st.activeTagFilter,
     prefixFilter: st.activePrefixFilter,
     poolFilter: st.activePoolFilter,
+    typeChips: [...st.activeTypeChips],
     projectIds: [...st.currentSelectedProjectIds],
   });
 }
@@ -1054,6 +1114,19 @@ export function restoreViewState(): boolean {
   if (v.poolFilter && entries.some((e) => e.pool === v.poolFilter)) {
     st.activePoolFilter = v.poolFilter;
     applied = true;
+  }
+  // Each chip must still mean something against the loaded vault: '__totp' and
+  // '__pool' are always valid concepts, but a SecretType chip for a type this
+  // vault no longer has would silently narrow the grid to nothing.
+  if (Array.isArray(v.typeChips) && v.typeChips.length) {
+    const validChips = v.typeChips.filter(
+      (c) =>
+        c === '__totp' || c === '__pool' || entries.some((e) => (e.secretType || 'api_key') === c),
+    );
+    if (validChips.length) {
+      st.activeTypeChips = new Set(validChips);
+      applied = true;
+    }
   }
 
   const known = new Set((st.vault.projects || []).map((p) => p.id));
@@ -1481,6 +1554,13 @@ export function entryHasPayload(entry: VaultEntry): boolean {
   if (entry.totp_secret) return true;
   if (entry.certificate_data || entry.cert_key_data) return true;
   if (entry.blob_ref) return true;
+  // A composite's payload is its template (parts are `extra_vars`, checked
+  // below anyway, but a template with zero parts is still a real composite —
+  // `envv describe`-shaped structure, not a value). A bundle's payload is
+  // membership it does not itself record — see B2 in the design, deferred —
+  // so it is never reported empty from this predicate alone.
+  if (entry.secretType === 'composite') return !!entry.composite_template;
+  if (entry.secretType === 'bundle') return true;
   return (entry.extra_vars ?? []).some((v) => v.key);
 }
 
@@ -1492,10 +1572,42 @@ export function entryHasPayload(entry: VaultEntry): boolean {
  */
 export function primaryIsOptional(entry: VaultEntry): boolean {
   const t = entry.secretType || 'api_key';
-  if (t === 'certificate' || t === 'file_blob') return true;
+  // A composite's value is its rendered template, never `api_key`; a
+  // bundle's payload is entirely its members and local variables. Neither
+  // type has any use for the primary slot at all.
+  if (t === 'certificate' || t === 'file_blob' || t === 'composite' || t === 'bundle') return true;
   if (t === 'env_var') return (entry.extra_vars ?? []).some((v) => v.key);
+  // Phase 24.5's sixteen new types all carry `primary: null` in the
+  // secret-type registry — none of them has a single primary slot the way
+  // `api_key`/`password` do, so the value field is optional the same way it
+  // is for `composite`/`bundle`: the real payload is `extra_vars`.
+  if (SECRET_TYPES_WITH_NO_PRIMARY.has(t)) return true;
   return !!entry.totp_secret;
 }
+
+/** The Phase 24.5 types with `primary: null` — kept as a literal set rather
+ * than reading `secret-types.json` here, since `primaryIsOptional` runs on
+ * every keystroke in the add/edit form and a `Set` built once is cheaper than
+ * a registry lookup on every call. `tests/secret-types.test.ts` pins the two
+ * in agreement. */
+const SECRET_TYPES_WITH_NO_PRIMARY = new Set([
+  'oauth_client',
+  'signing_key',
+  'registry_token',
+  'database',
+  'recovery_codes',
+  'gpg_key',
+  'age_key',
+  'local_service',
+  'tracker',
+  'usenet_server',
+  'wifi',
+  'license_key',
+  'crypto_wallet',
+  'passkey',
+  'secure_note',
+  'identity_document',
+]);
 
 // ── Exporter + dotenvKey ───────────────────────────────────────────────────
 

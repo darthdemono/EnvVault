@@ -117,6 +117,24 @@ const SIGNATURES: &[Signature] = &[
         Some("https://api.openai.com/v1"),
         None,
     ),
+    // Must precede the bare `sk-` fallback below — `find()` takes the first
+    // match, and both of these start with `sk-` too.
+    sig(
+        "sk-svcacct-",
+        "OpenAI",
+        "api_key",
+        "openai",
+        Some("https://api.openai.com/v1"),
+        None,
+    ),
+    sig(
+        "sk-admin-",
+        "OpenAI",
+        "api_key",
+        "openai",
+        Some("https://api.openai.com/v1"),
+        None,
+    ),
     sig(
         "sk-",
         "OpenAI",
@@ -325,6 +343,149 @@ const SIGNATURES: &[Signature] = &[
         None,
     ),
     sig("pcsk_", "Pinecone", "api_key", "pinecone", None, None),
+    // Phase 24.5's taxonomy needs prefixes SIGNATURES did not previously carry
+    // on their own, because each names a *different* secret_type or acts_as
+    // than its sibling prefixes at the same issuer.
+    sig(
+        "ghu_",
+        "GitHub",
+        "api_key",
+        "github",
+        Some("https://api.github.com"),
+        None,
+    ),
+    // A GitHub App *refresh* token, not an access token — `envv-cli`'s own
+    // `oauth_client` type is where a refresh token belongs (E7's two-lifetime
+    // shape), never `api_key`.
+    sig("ghr_", "GitHub", "oauth_client", "github", None, None),
+    // A Slack app-level refresh token — same reasoning as `ghr_`.
+    sig("xoxe-", "Slack", "oauth_client", "slack", None, None),
+    // The browser-session half of Slack's `xoxc-`/`d`-cookie pair. Recognised
+    // alone since `envv enrich` sees one value at a time; the design's fuller
+    // rule (xoxc- is only complete paired with the `d` cookie) needs a second
+    // value this scan does not have.
+    sig("xoxc-", "Slack", "cookie", "slack", None, None),
+    sig(
+        "rk_test_",
+        "Stripe",
+        "api_key",
+        "stripe",
+        Some("https://api.stripe.com"),
+        Some("testing"),
+    ),
+    // A webhook signing secret verifies an incoming request; it is never sent
+    // anywhere, which is the opposite of every other Stripe key here.
+    sig("whsec_", "Stripe", "api_key", "stripe", None, None),
+];
+
+/// One issuer prefix's claim about the API-key taxonomy axes (Phase 24.5) —
+/// `acts_as` and `exposure`, layered on top of `SIGNATURES` rather than
+/// added to it: most of the sixty-odd prefixes above have no useful axis
+/// claim (a bare API key `is_blank` axis-wise is not wrong, just unknown),
+/// and folding three more optional fields into every `sig(...)` call would
+/// touch every existing row for the handful that actually need one.
+///
+/// **These are claims, never enforcement** — `exposure: "publishable"`
+/// *suggests* `primary_public`, it never sets it. A misdetected prefix must
+/// not be able to make redaction print less; `primary_public` stays the only
+/// switch redaction reads, exactly as the design requires.
+struct AxisSignature {
+    prefix: &'static str,
+    acts_as: Option<&'static str>,
+    exposure: Option<&'static str>,
+}
+
+const AXIS_SIGNATURES: &[AxisSignature] = &[
+    AxisSignature {
+        prefix: "github_pat_",
+        acts_as: Some("user"),
+        exposure: None,
+    },
+    AxisSignature {
+        prefix: "ghp_",
+        acts_as: Some("user"),
+        exposure: None,
+    },
+    AxisSignature {
+        prefix: "gho_",
+        acts_as: Some("user"),
+        exposure: None,
+    },
+    AxisSignature {
+        prefix: "ghu_",
+        acts_as: Some("user"),
+        exposure: None,
+    },
+    AxisSignature {
+        prefix: "ghs_",
+        acts_as: Some("installation"),
+        exposure: None,
+    },
+    AxisSignature {
+        prefix: "sk-proj-",
+        acts_as: Some("user"),
+        exposure: None,
+    },
+    AxisSignature {
+        prefix: "sk-svcacct-",
+        acts_as: Some("service"),
+        exposure: None,
+    },
+    AxisSignature {
+        prefix: "sk-admin-",
+        acts_as: Some("admin"),
+        exposure: None,
+    },
+    AxisSignature {
+        prefix: "xoxb-",
+        acts_as: Some("bot"),
+        exposure: None,
+    },
+    AxisSignature {
+        prefix: "xoxp-",
+        acts_as: Some("user"),
+        exposure: None,
+    },
+    AxisSignature {
+        prefix: "xapp-",
+        acts_as: Some("installation"),
+        exposure: None,
+    },
+    AxisSignature {
+        prefix: "pk_live_",
+        acts_as: None,
+        exposure: Some("publishable"),
+    },
+    AxisSignature {
+        prefix: "pk_test_",
+        acts_as: None,
+        exposure: Some("publishable"),
+    },
+    AxisSignature {
+        prefix: "sk_live_",
+        acts_as: None,
+        exposure: Some("server_only"),
+    },
+    AxisSignature {
+        prefix: "sk_test_",
+        acts_as: None,
+        exposure: Some("server_only"),
+    },
+    AxisSignature {
+        prefix: "rk_live_",
+        acts_as: None,
+        exposure: Some("server_only"),
+    },
+    AxisSignature {
+        prefix: "rk_test_",
+        acts_as: None,
+        exposure: Some("server_only"),
+    },
+    AxisSignature {
+        prefix: "whsec_",
+        acts_as: None,
+        exposure: Some("verify_only"),
+    },
 ];
 
 /// Structural shapes that name a *kind* of secret rather than an issuer.
@@ -456,6 +617,27 @@ pub fn plan_entry(entry: &Value, force: bool) -> EntryPlan {
                 json!(env),
                 format!("`{}` is {env}-only at {}", s.prefix, s.issuer)
             );
+        }
+        // Every issuer in `SIGNATURES` is a hosted cloud service — there is no
+        // `self_hosted` or `local` prefix table, because those types are set
+        // structurally (`secretType == "local_service"`), not sniffed from a
+        // value's first few characters.
+        propose!("issuer_kind", json!("saas"), why.clone());
+        if let Some(axis) = AXIS_SIGNATURES.iter().find(|a| a.prefix == s.prefix) {
+            if let Some(v) = axis.acts_as {
+                propose!(
+                    "acts_as",
+                    json!(v),
+                    format!("`{}` is {}'s {v} prefix", s.prefix, s.issuer)
+                );
+            }
+            if let Some(v) = axis.exposure {
+                propose!(
+                    "exposure",
+                    json!(v),
+                    format!("`{}` is {}'s {v} prefix", s.prefix, s.issuer)
+                );
+            }
         }
         propose!(
             "api_description",
@@ -949,4 +1131,84 @@ pub fn cmd_enrich(access: &Access, opts: &EnrichOpts<'_>) -> CliResult {
         }
     });
     Ok(())
+}
+
+#[cfg(test)]
+mod axis_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn field_of<'a>(plan: &'a EntryPlan, field: &str) -> Option<&'a Value> {
+        plan.proposals
+            .iter()
+            .find(|p| p.field == field)
+            .map(|p| &p.value)
+    }
+
+    #[test]
+    fn a_classic_github_pat_is_a_user_token() {
+        let entry = json!({ "provider": "X", "api_key": "ghp_abcdef" });
+        let plan = plan_entry(&entry, false);
+        assert_eq!(field_of(&plan, "acts_as"), Some(&json!("user")));
+        assert_eq!(field_of(&plan, "issuer_kind"), Some(&json!("saas")));
+    }
+
+    #[test]
+    fn a_github_app_installation_token_is_not_a_user_token() {
+        let entry = json!({ "provider": "X", "api_key": "ghs_abcdef" });
+        let plan = plan_entry(&entry, false);
+        assert_eq!(field_of(&plan, "acts_as"), Some(&json!("installation")));
+    }
+
+    #[test]
+    fn a_github_refresh_token_is_classified_as_oauth_client_not_api_key() {
+        let entry = json!({ "provider": "X", "api_key": "ghr_abcdef" });
+        let plan = plan_entry(&entry, false);
+        assert_eq!(field_of(&plan, "secretType"), Some(&json!("oauth_client")));
+    }
+
+    #[test]
+    fn an_openai_service_account_key_is_not_shadowed_by_the_bare_sk_dash_prefix() {
+        // sk-svcacct- and sk-admin- both start with "sk-", which also matches
+        // the generic OpenAI fallback earlier in SIGNATURES. Regression test
+        // for exactly that shadowing bug.
+        let entry = json!({ "provider": "X", "api_key": "sk-svcacct-abcdef" });
+        let plan = plan_entry(&entry, false);
+        assert_eq!(field_of(&plan, "acts_as"), Some(&json!("service")));
+
+        let admin = json!({ "provider": "X", "api_key": "sk-admin-abcdef" });
+        let plan = plan_entry(&admin, false);
+        assert_eq!(field_of(&plan, "acts_as"), Some(&json!("admin")));
+    }
+
+    #[test]
+    fn a_stripe_publishable_key_is_marked_publishable_not_server_only() {
+        let entry = json!({ "provider": "X", "api_key": "pk_live_abcdef" });
+        let plan = plan_entry(&entry, false);
+        assert_eq!(field_of(&plan, "exposure"), Some(&json!("publishable")));
+    }
+
+    #[test]
+    fn a_stripe_webhook_secret_is_verify_only() {
+        let entry = json!({ "provider": "X", "api_key": "whsec_abcdef" });
+        let plan = plan_entry(&entry, false);
+        assert_eq!(field_of(&plan, "exposure"), Some(&json!("verify_only")));
+    }
+
+    #[test]
+    fn a_slack_xoxc_value_is_recognised_as_a_web_session_not_an_api_key() {
+        let entry = json!({ "provider": "X", "api_key": "xoxc-abcdef" });
+        let plan = plan_entry(&entry, false);
+        assert_eq!(field_of(&plan, "secretType"), Some(&json!("cookie")));
+    }
+
+    #[test]
+    fn axes_are_suggestions_only_and_never_touch_the_public_flag() {
+        let entry = json!({ "provider": "X", "api_key": "pk_live_abcdef" });
+        let plan = plan_entry(&entry, false);
+        assert!(
+            plan.proposals.iter().all(|p| p.field != "primary_public"),
+            "exposure must never propose setting primary_public itself"
+        );
+    }
 }

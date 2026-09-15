@@ -1,0 +1,173 @@
+{
+  "_comment": [
+    "Golden table for composite-secret rendering (Phase 24.1), which exists",
+    "twice: src/ts/composite.ts (the form's live preview, which has to render",
+    "on every keystroke) and vault-core/src/composite.rs (the CLI and the app,",
+    "over IPC — see CLAUDE.md's twin-pair table for why the app asks Rust",
+    "rather than re-implementing this).",
+    "",
+    "tests/composite.test.ts pins the TypeScript side; vault-core's",
+    "tests/composite_parity.rs pins the Rust side against the identical cases.",
+    "Reviewing two renderers for agreement does not work — same arrangement,",
+    "same reason, as totp-seeds.json and env-names.json.",
+    "",
+    "Each case renders `template` with `kind` against `parts` (an object,",
+    "key -> raw value). A successful case has `out: {text, used, unused}`; a",
+    "refused one has `error: {kind, name?, at?}` and no `out`."
+  ],
+  "render": [
+    {
+      "_why": "The motivating case: a calendar URL with a userinfo-zone part and a path-zone part.",
+      "template": "https://outlook.office365.com/owa/calendar/{mailbox_id}@inf.elte.hu/{calendar_key}/calendar.ics",
+      "kind": "link",
+      "parts": { "mailbox_id": "js.doe", "calendar_key": "abc-123" },
+      "out": {
+        "text": "https://outlook.office365.com/owa/calendar/js.doe@inf.elte.hu/abc-123/calendar.ics",
+        "used": ["mailbox_id", "calendar_key"],
+        "unused": []
+      }
+    },
+    {
+      "_why": "A Discord webhook: two path-segment parts, nothing else in the URL to confuse the classifier.",
+      "template": "https://discord.com/api/webhooks/{webhook_id}/{webhook_token}",
+      "kind": "link",
+      "parts": { "webhook_id": "123456789012345678", "webhook_token": "AbC-def_GHI" },
+      "out": {
+        "text": "https://discord.com/api/webhooks/123456789012345678/AbC-def_GHI",
+        "used": ["webhook_id", "webhook_token"],
+        "unused": []
+      }
+    },
+    {
+      "_why": "Userinfo encoding is mandatory: a raw '@' or ':' in the password would otherwise move the host boundary (postgres://app:p@ss@db/prod parses with host ss@db).",
+      "template": "postgres://{user}:{pass}@db.example.com:5432/prod",
+      "kind": "connection",
+      "parts": { "user": "app", "pass": "p@ss:word/slash" },
+      "out": {
+        "text": "postgres://app:p%40ss%3Aword%2Fslash@db.example.com:5432/prod",
+        "used": ["user", "pass"],
+        "unused": []
+      }
+    },
+    {
+      "_why": "A query value containing a space and a query name that is itself a part, both percent-encoded — this is the '${scope}=bot applications.commands' shape from the design.",
+      "template": "https://discord.com/oauth2/authorize?client_id={id}&{scope_key}={scope_val}",
+      "kind": "link",
+      "parts": {
+        "id": "999",
+        "scope_key": "scope",
+        "scope_val": "bot applications.commands"
+      },
+      "out": {
+        "text": "https://discord.com/oauth2/authorize?client_id=999&scope=bot%20applications.commands",
+        "used": ["id", "scope_key", "scope_val"],
+        "unused": []
+      }
+    },
+    {
+      "_why": "A fragment-zone part, encoded like every other zone.",
+      "template": "https://example.com/doc#{anchor}",
+      "kind": "link",
+      "parts": { "anchor": "a b/c" },
+      "out": {
+        "text": "https://example.com/doc#a%20b%2Fc",
+        "used": ["anchor"],
+        "unused": []
+      }
+    },
+    {
+      "_why": "'{{' and '}}' are literal braces, not an empty placeholder.",
+      "template": "{{literal}} and {a}",
+      "kind": "custom",
+      "parts": { "a": "x" },
+      "out": {
+        "text": "{literal} and x",
+        "used": ["a"],
+        "unused": []
+      }
+    },
+    {
+      "_why": "One placeholder used twice is one part filled in both places (C3), not two parts.",
+      "template": "{tok}::{tok}",
+      "kind": "custom",
+      "parts": { "tok": "abc" },
+      "out": {
+        "text": "abc::abc",
+        "used": ["tok"],
+        "unused": []
+      }
+    },
+    {
+      "_why": "A part no placeholder uses is reported, never an error — the caller (health scan, form) decides what to do with it.",
+      "template": "no holes here",
+      "kind": "custom",
+      "parts": { "orphan": "v" },
+      "out": {
+        "text": "no holes here",
+        "used": [],
+        "unused": ["orphan"]
+      }
+    },
+    {
+      "_why": "custom never encodes — what is copied is exactly what was typed, slashes and spaces included.",
+      "template": "{a}",
+      "kind": "custom",
+      "parts": { "a": "raw value/with slash and space" },
+      "out": {
+        "text": "raw value/with slash and space",
+        "used": ["a"],
+        "unused": []
+      }
+    },
+    {
+      "_why": "An unrecognised kind string behaves like custom — assuming URL structure over an unknown shape corrupts a value as easily as it protects one.",
+      "template": "{a}",
+      "kind": "nonsense",
+      "parts": { "a": "raw/value" },
+      "out": {
+        "text": "raw/value",
+        "used": ["a"],
+        "unused": []
+      }
+    },
+    {
+      "_why": "An unfilled placeholder refuses to render rather than producing a URL with a hole in it.",
+      "template": "https://x.example/{missing}",
+      "kind": "link",
+      "parts": {},
+      "error": { "kind": "unfilled_placeholder", "name": "missing" }
+    },
+    {
+      "_why": "An unbalanced '{' is a form error, not a literal brace.",
+      "template": "https://x.example/{oops",
+      "kind": "link",
+      "parts": {},
+      "error": { "kind": "unbalanced_brace", "at": 18 }
+    },
+    {
+      "_why": "A stray '}' with no opening '{' is refused the same way.",
+      "template": "https://x.example/oops}",
+      "kind": "link",
+      "parts": {},
+      "error": { "kind": "unbalanced_brace", "at": 22 }
+    },
+    {
+      "_why": "A newline in a part is refused for a URL-shaped kind (C6) — a link with an embedded newline is not a link.",
+      "template": "https://x.example/{a}",
+      "kind": "link",
+      "parts": { "a": "line\nbreak" },
+      "error": { "kind": "control_character_in_part", "name": "a" }
+    },
+    {
+      "_why": "The same control character is allowed for custom — not every composite is a URL.",
+      "template": "{a}",
+      "kind": "custom",
+      "parts": { "a": "line\nbreak" },
+      "out": {
+        "text": "line\nbreak",
+        "used": ["a"],
+        "unused": []
+      }
+    }
+  ]
+}

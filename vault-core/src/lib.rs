@@ -14,8 +14,30 @@ pub use zeroize::Zeroize;
 pub mod generators;
 pub use generators::{generate_certificate, generate_ssh_keypair};
 
+// Phase 24.3: the one Rust builder for the .ics feed — moved here from
+// envv-cli so `envv-server` can serve it too. See the module doc for why the
+// TypeScript twin was deleted rather than kept as a second answer.
+pub mod calendar;
+// Phase 24.3: the ics_feeds table (token issuance/lookup/revocation). Storage
+// only — rate limiting and RBAC filtering live in envv-server, same split as
+// `users`.
+pub mod ics_feeds;
+// Phase 24.4: the unique-ID registry — a separate SQLCipher file keyed from a
+// secret stored in this vault's vault_meta. Storage and hashing only; rate
+// limiting lives in envv-server.
+pub mod uid_registry;
+// Phase 24.5: the secret-type registry — one JSON descriptor file, read here
+// and imported as plain JSON by the TypeScript side.
+pub mod secret_types;
+// Phase 24.5: FIDO CXF import/export.
+pub mod cxf;
+
 pub mod permex;
 pub mod pool;
+
+// No outer `///` here either — same reason as `totp` and `totp_import` below:
+// this module's own `//!` block would merge with one and break intra-doc links.
+pub mod composite;
 
 // Both modules carry their own `//!` docs. Adding an outer `///` here as well
 // makes rustdoc merge the two and resolve the *combined* text in this file's
@@ -223,6 +245,8 @@ pub fn init_schema(conn: &Connection) -> Result<(), String> {
     let _ = conn.execute_batch("ALTER TABLE vault_audit ADD COLUMN actor TEXT;");
     // Multi-user tables (Phase 5)
     users::init_users_schema(conn)?;
+    // Calendar feed tokens (Phase 24.3)
+    ics_feeds::init_schema(conn)?;
     Ok(())
 }
 

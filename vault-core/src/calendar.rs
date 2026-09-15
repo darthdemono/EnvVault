@@ -66,7 +66,7 @@ impl Default for IcsOptions {
     fn default() -> Self {
         IcsOptions {
             kinds: vec![EventKind::Created, EventKind::Expires, EventKind::Rotation],
-            now: vault_core::iso_now(),
+            now: crate::iso_now(),
             calendar_name: "EnvVault".to_string(),
         }
     }

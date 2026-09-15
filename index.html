@@ -264,16 +264,9 @@
             <div id="pool-filter-list"></div>
           </div>
         </div>
-        <div class="sidebar-section" id="sidebar-section-authenticator" style="display:none">
-          <div class="sidebar-heading">Authenticator <button class="section-collapse-btn" data-section="authenticator" title="Collapse">▾</button></div>
-          <div class="section-body">
-            <div id="authenticator-list"></div>
-            <div class="totp-io-row">
-              <button class="btn btn-ghost btn-sm" id="totp-import-btn" title="Import from Ente, Aegis, 2FAS, andOTP, Bitwarden or Google Authenticator">Import…</button>
-              <button class="btn btn-ghost btn-sm" id="totp-export-btn" title="Write every seed in a format another authenticator reads">Export…</button>
-            </div>
-          </div>
-        </div>
+        <!-- The Authenticator sidebar section was removed here in A2
+             (2026-09-14) — see state.ts's Settings.init() migration note.
+             The `auth` activity-bar panel is the surface now. -->
         <div class="sidebar-section" id="sidebar-section-prefixes" style="display:none">
           <div class="sidebar-heading">Env Prefixes <button class="section-collapse-btn" data-section="prefixes" title="Collapse">▾</button></div>
           <div class="section-body">
@@ -386,6 +379,7 @@
         <div class="users-panel-header">
           <span class="users-panel-title">Authenticator</span>
           <div style="display:flex;gap:4px">
+            <button id="auth-add-btn" class="btn btn-xs accent" title="Add a 2FA seed">Add</button>
             <button id="auth-import-btn" class="btn btn-xs accent" title="Import from Ente, Aegis, 2FAS, andOTP, Bitwarden or Google Authenticator">Import</button>
             <button id="auth-export-btn" class="btn btn-xs" title="Write every seed in a format another authenticator reads">Export</button>
           </div>
@@ -483,6 +477,12 @@
           </div>
         </div>
       </div>
+
+      <!-- Phase 24.2: multi-toggle type chips, rendered by renderTypeChipBar()
+           in render.ts — one per SecretType present plus two virtual chips
+           (2FA, Pool), OR-combined. Empty and hidden until there is more than
+           one type to choose between. -->
+      <div id="type-chip-bar" class="type-chip-bar" role="group" aria-label="Filter by type" style="display:none"></div>
 
       <div id="load-banner" class="load-banner" style="display:none">
         <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"
@@ -704,7 +704,41 @@
             <option value="ssh_key">SSH Key</option>
             <option value="file_blob">File / Config Blob</option>
             <option value="cookie">Browser session (cookies)</option>
+            <option value="composite">Composite (template with secret parts)</option>
+            <option value="bundle">Bundle (several related credentials)</option>
+            <!-- Phase 24.5's sixteen new types. Every payload lives in named
+                 variables below (Add Variable) — none of these has a single
+                 primary value the way API Key/Password do. -->
+            <optgroup label="Dev / Infra">
+              <option value="oauth_client">OAuth Client</option>
+              <option value="signing_key">Signing Key</option>
+              <option value="registry_token">Registry Token (npm, PyPI, Docker…)</option>
+              <option value="database">Database</option>
+              <option value="recovery_codes">Recovery Codes</option>
+              <option value="gpg_key">GPG Key</option>
+              <option value="age_key">age Key</option>
+            </optgroup>
+            <optgroup label="Self-Hosted / Media">
+              <option value="local_service">Local Service (Sonarr, Plex…)</option>
+              <option value="tracker">Tracker (private tracker passkey)</option>
+              <option value="usenet_server">Usenet Server</option>
+            </optgroup>
+            <optgroup label="Personal">
+              <option value="wifi">Wi-Fi</option>
+              <option value="license_key">License Key</option>
+              <option value="crypto_wallet">Crypto Wallet</option>
+              <option value="passkey">Passkey (import/export only)</option>
+              <option value="secure_note">Secure Note</option>
+              <option value="identity_document">Identity Document</option>
+            </optgroup>
           </select>
+        </div>
+        <!-- A11 (2026-09-14): an entry whose secretType this build does not
+             recognise — made by a newer EnvVault — is shown here rather than
+             silently downgraded to api_key on Save (the select cannot select
+             an option it has no <option> for, and used to fall back). -->
+        <div class="form-group" id="f-unknown-type-banner" hidden role="alert">
+          <p class="form-hint" style="color:var(--warn,#c9a227)"></p>
         </div>
         <div class="form-row-3">
           <div class="form-group">
@@ -807,6 +841,20 @@
             <span class="form-label" id="f-cookie-split-status"></span>
             <button type="button" class="btn btn-ghost btn-sm" id="f-cookie-split-btn">Split into named cookies</button>
           </div>
+        </div>
+        <!-- Phase 24.5: provider presets. Nothing here is fetched or applied
+             automatically — picking one only checks which required cookies
+             are present and, where the site's derived header is known,
+             offers to copy it. -->
+        <div class="form-group" id="f-session-preset-group" style="display:none">
+          <label for="f-session-preset" class="form-label" title="Which cookies this site needs together, and what header (if any) a copy derives from them. Informational only — picking one never edits the jar.">
+            Session preset <span class="opt">optional — for validation and header copy only</span>
+          </label>
+          <select id="f-session-preset" class="form-input">
+            <option value="">— none —</option>
+          </select>
+          <p class="form-hint" id="f-session-preset-status"></p>
+          <button type="button" class="btn btn-ghost btn-sm" id="f-session-preset-copy-header" style="display:none">Copy derived header</button>
         </div>
         <div class="form-group" id="f-mount-path-group" style="display:none">
           <label for="f-mount-path" class="form-label" data-field="mount_path" title="Where the consumer expects to find this file. A GCP service-account JSON, an Apple .p8 and a kubeconfig are all consumed by pointing at them, so the variable names the path and never the contents.">
@@ -1032,6 +1080,25 @@
             Env Prefixes <span class="opt">optional — comma separated</span>
           </label>
           <input class="form-input mono" id="f-env-prefixes" placeholder="e.g. ND, SPOTIFYD">
+        </div>
+        <!-- Composite secrets (Phase 24.1): the template holds {name} holes;
+             each part is an ordinary row below in Extra Variables. Hidden for
+             every other type by dynamicSecretFields. -->
+        <div class="form-group" id="f-template-group" style="display:none">
+          <label for="f-template" class="form-label" title="The shape of the rendered value, with {name} holes for each secret part. Each part is a row below in Extra Variables.">Template <span class="req">*</span></label>
+          <textarea class="form-input mono" id="f-template" rows="2" placeholder="https://example.com/cal/{mailbox_id}@x.com/{calendar_key}/calendar.ics"></textarea>
+          <div class="form-row-3" style="margin-top:6px">
+            <div class="form-group">
+              <label for="f-template-kind" class="form-label">Kind</label>
+              <select id="f-template-kind" class="form-input">
+                <option value="link">Link</option>
+                <option value="signed_link">Signed link</option>
+                <option value="connection">Connection string</option>
+                <option value="custom">Custom (no encoding)</option>
+              </select>
+            </div>
+          </div>
+          <output class="env-name-preview mono" id="f-template-preview" for="f-template f-template-kind"></output>
         </div>
         <div class="form-group" id="f-extra-vars-section">
           <label class="form-label" id="f-extra-vars-label">Extra Variables <span class="opt">optional — use for multi-field credentials and chunk fields</span></label>
@@ -1316,6 +1383,16 @@
               <div class="settings-label">Export settings</div>
               <button id="settings-export-btn" class="btn btn-ghost btn-sm">Export settings.json</button>
             </div>
+            <div class="settings-row">
+              <div class="settings-label" id="settings-cxf-label">
+                CXF (password manager transfer)
+                <p class="settings-hint">FIDO Credential Exchange — the format other password managers are converging on. Import appends every item as one or more new entries; export writes every entry your account can see as one CXF document. Both are unencrypted files — the export follows the same rule every export here does: written to disk, never printed.</p>
+              </div>
+              <div style="display:flex;gap:6px;flex-wrap:wrap">
+                <button id="settings-cxf-import-btn" class="btn btn-ghost btn-sm" aria-describedby="settings-cxf-label">Import CXF…</button>
+                <button id="settings-cxf-export-btn" class="btn btn-ghost btn-sm" aria-describedby="settings-cxf-label">Export CXF…</button>
+              </div>
+            </div>
           </div>
         </div>
 
@@ -1422,6 +1499,67 @@
         <button id="env-import-select-none" class="btn btn-ghost btn-sm">Select None</button>
         <button id="env-import-cancel" class="btn btn-ghost btn-sm">Cancel</button>
         <button id="env-import-confirm" class="btn btn-primary btn-sm">Import Selected</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Add 2FA (Phase 24.2) — a compact seed-only form, reached from the
+       Authenticator panel rather than the full add/edit form. -->
+  <div id="add2fa-overlay" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="add2fa-title">
+    <div class="modal-box" style="max-width:460px">
+      <div class="modal-header">
+        <div class="modal-title" id="add2fa-title">Add 2FA</div>
+        <button id="add2fa-close" class="icon-btn" aria-label="Close">✕</button>
+      </div>
+      <div class="modal-body">
+        <div class="form-group" style="margin-bottom:12px">
+          <label class="form-label">
+            <input type="radio" name="add2fa-target" id="add2fa-target-new" value="new" checked> New entry
+          </label>
+          <label class="form-label" style="margin-left:16px">
+            <input type="radio" name="add2fa-target" id="add2fa-target-existing" value="existing"> Attach to existing entry
+          </label>
+        </div>
+        <div class="form-group" id="add2fa-existing-row" style="display:none;margin-bottom:12px">
+          <label for="add2fa-existing" class="form-label">Entry</label>
+          <select id="add2fa-existing" class="form-input"></select>
+        </div>
+        <div class="form-row-2" id="add2fa-new-row" style="margin-bottom:12px">
+          <div class="form-group">
+            <label for="add2fa-name" class="form-label">Name</label>
+            <input id="add2fa-name" class="form-input" type="text" autocomplete="off" placeholder="GitHub">
+          </div>
+          <div class="form-group">
+            <label for="add2fa-account" class="form-label">Account (optional)</label>
+            <input id="add2fa-account" class="form-input" type="text" autocomplete="off" placeholder="me@example.com">
+          </div>
+        </div>
+        <div class="form-group" style="margin-bottom:6px">
+          <label for="add2fa-seed" class="form-label">Seed or otpauth:// URI</label>
+          <input id="add2fa-seed" class="form-input mono" type="text" autocomplete="off" spellcheck="false" placeholder="JBSWY3DPEHPK3PXP">
+        </div>
+        <div id="add2fa-status" style="font-size:11px;min-height:15px;margin-bottom:10px"></div>
+        <details id="add2fa-advanced">
+          <summary style="font-size:11px;color:var(--text3);cursor:pointer">Advanced</summary>
+          <div class="form-row-2" style="margin-top:10px">
+            <div class="form-group">
+              <label for="add2fa-kind" class="form-label">Kind</label>
+              <select id="add2fa-kind" class="form-input">
+                <option value="totp">Time-based</option>
+                <option value="hotp">Counter</option>
+                <option value="steam">Steam</option>
+              </select>
+            </div>
+            <div class="form-group" id="add2fa-counter-row" style="display:none">
+              <label for="add2fa-counter" class="form-label">Counter</label>
+              <input id="add2fa-counter" class="form-input" type="number" min="0" step="1" value="0">
+            </div>
+          </div>
+        </details>
+      </div>
+      <div class="modal-footer">
+        <button id="add2fa-cancel" class="btn btn-ghost btn-sm">Cancel</button>
+        <button id="add2fa-save" class="btn btn-primary btn-sm">Add</button>
       </div>
     </div>
   </div>

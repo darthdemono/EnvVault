@@ -155,13 +155,8 @@ pub fn members(
 /// Split out from [`select`] so it can be tested without a vault, a key or a
 /// state file — the selection rule is the part worth pinning.
 fn pick_index(list: &[Member], cursor: usize, now: i64) -> Option<usize> {
-    let n = list.len();
-    if n == 0 {
-        return None;
-    }
-    (0..n)
-        .map(|off| (cursor + off) % n)
-        .find(|i| !list[*i].cooling_at(now))
+    let cooling: Vec<bool> = list.iter().map(|m| m.cooling_at(now)).collect();
+    vault_core::pool::pick_index(&cooling, cursor)
 }
 
 /// Pick the next usable member and advance the cursor.

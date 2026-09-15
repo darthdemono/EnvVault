@@ -111,18 +111,43 @@ describe('form element contract with index.html', () => {
 
 describe('TYPE_CONFIG', () => {
   it('covers every secret type', () => {
+    // Sorted, to match `Object.keys(...).sort()` on the left. The sixteen
+    // Phase 24.5 types (`age_key` … `wifi`) are shape only — no `<option>` in
+    // the type picker yet; see CLAUDE.md: "land the shape now, behavior later".
     expect(Object.keys(TYPE_CONFIG).sort()).toEqual([
+      'age_key',
       'api_key',
+      // Phase 24.1. A bundle's payload is entirely its members and local
+      // variables; api_key is unused.
+      'bundle',
       'certificate',
+      // Phase 24.1. A composite's value is its rendered template; api_key is
+      // unused.
+      'composite',
       'connection_string',
       // Phase 23, step 5. A browser session is a credential the vault had no
       // home for: the jar went in a free-text field and the User-Agent it was
       // minted against went nowhere.
       'cookie',
+      'crypto_wallet',
+      'database',
       'env_var',
       'file_blob',
+      'gpg_key',
+      'identity_document',
+      'license_key',
+      'local_service',
+      'oauth_client',
+      'passkey',
       'password',
+      'recovery_codes',
+      'registry_token',
+      'secure_note',
+      'signing_key',
       'ssh_key',
+      'tracker',
+      'usenet_server',
+      'wifi',
     ]);
   });
 
@@ -188,6 +213,43 @@ describe('dynamicSecretFields', () => {
     ($('f-secret-type') as HTMLSelectElement).innerHTML += '<option value="bogus">bogus</option>';
     expect(() => typeIs('bogus')).not.toThrow();
     expect($('f-provider-label').textContent).toContain('Provider');
+  });
+
+  describe('the required marker on the value field (A5, 2026-09-14)', () => {
+    // The bug: the `*` was written once from `cfg.keyLabel` and never
+    // re-evaluated, so an `env_var` entry whose real payload lives in a named
+    // variable still showed "required" on a value the form does not require —
+    // `primaryIsOptional` already said so; the label just never asked it.
+    it('shows required for an ordinary api_key', () => {
+      typeIs('api_key');
+      expect($('f-key-label').innerHTML).toContain('req');
+      expect(($('f-key') as HTMLInputElement).getAttribute('aria-required')).toBe('true');
+    });
+
+    it('drops to optional once an env_var entry has a named variable', () => {
+      typeIs('env_var');
+      expect($('f-key-label').innerHTML).toContain('req');
+      const list = document.getElementById('f-extra-vars-list')!;
+      list.innerHTML = '<div class="extra-var-row"><input class="extra-var-key" value="ID"></div>';
+      // The delegated `input` listener on the list is glue bound once by
+      // `openAdd()`; re-evaluating the marker after a DOM change is what
+      // `dynamicSecretFields` itself does, which is the predicate this test
+      // is really about.
+      dynamicSecretFields();
+      expect($('f-key-label').innerHTML).toContain('opt');
+      expect(($('f-key') as HTMLInputElement).hasAttribute('aria-required')).toBe(false);
+    });
+
+    it('goes back to required when the last named variable is removed', () => {
+      typeIs('env_var');
+      const list = document.getElementById('f-extra-vars-list')!;
+      list.innerHTML = '<div class="extra-var-row"><input class="extra-var-key" value="ID"></div>';
+      dynamicSecretFields();
+      expect($('f-key-label').innerHTML).toContain('opt');
+      list.innerHTML = '';
+      dynamicSecretFields();
+      expect($('f-key-label').innerHTML).toContain('req');
+    });
   });
 });
 
@@ -842,5 +904,54 @@ describe('the two-factor seed field (Phase 22)', () => {
     $('f-totp').type = 'password';
     $('f-totp-reveal').click();
     expect($('f-totp').type).toBe('text');
+  });
+});
+
+describe('an entry of an unrecognised secretType (A11, 2026-09-14)', () => {
+  // The mechanism: a <select> handed a value with no matching <option> reads
+  // back as ''. `formToEntry` used to fall through to 'api_key' whenever the
+  // select was empty, so opening an entry of a type this build predates and
+  // pressing Save silently rewrote it — every type-specific behaviour (a web
+  // session's mask-whole rule, a bundle's membership) would then just stop
+  // applying, with nobody told. This ships one release ahead of 24.1's first
+  // new type for exactly that reason.
+  afterEach(() => {
+    // `_unknownSecretType` is module state, not DOM state — loadRealIndexHtml
+    // in the outer beforeEach does not reset it. Leaving it set would fail
+    // every unrelated saveModal() in a later test with no visible connection
+    // to this block. A normal fillForm() is what really resets it.
+    fillForm({ provider: 'X', api_key: 'k', secretType: 'api_key' } as never);
+  });
+
+  it('shows the banner and disables Save', () => {
+    fillForm({ provider: 'Future', api_key: 'k', secretType: 'from_the_future' } as never);
+    expect($('f-unknown-type-banner').hidden).toBe(false);
+    expect(($('modal-save') as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it('does not touch the banner or Save for a type this build knows', () => {
+    fillForm({ provider: 'X', api_key: 'k', secretType: 'password' } as never);
+    expect($('f-unknown-type-banner').hidden).toBe(true);
+    expect(($('modal-save') as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it('survives open -> save unchanged: formToEntry never downgrades it to api_key', () => {
+    const base = { id: 'e1', provider: 'Future', api_key: 'k', secretType: 'from_the_future' };
+    fillForm(base as never);
+    // Even if something reaches formToEntry directly (saveModal's own guard is
+    // the primary defence, asserted below), the fallback must not rewrite it.
+    expect(formToEntry(base as never).secretType).toBe('from_the_future');
+  });
+
+  it('saveModal refuses outright, leaving the vault unchanged', async () => {
+    st.vault.api_keys = [
+      { id: 'e1', provider: 'Future', api_key: 'k', secretType: 'from_the_future' } as never,
+    ];
+    ($('edit-index') as HTMLInputElement).value = '0';
+    fillForm(st.vault.api_keys[0]);
+    setVal('f-provider', 'Future renamed');
+    await saveModal();
+    expect(st.vault.api_keys[0].provider).toBe('Future');
+    expect(st.vault.api_keys[0].secretType as string).toBe('from_the_future');
   });
 });

@@ -20,17 +20,66 @@
  * it does carry provider names, and "AWS root key" on a shared calendar is a
  * disclosure. The export confirms before writing, and the confirmation says
  * what travels.
+ *
+ * **The `.ics` bytes are built in exactly one place: `vault-core/src/calendar.rs`,
+ * over IPC (`calendar_build_ics`).** There used to be a second implementation
+ * here, pinned against the Rust one by a golden fixture — the twin-pair shape
+ * every other format in this project uses. It drifted from the design the
+ * moment it existed: a format implemented twice is a promise to keep two
+ * things in agreement forever, and the promise is cheaper to keep by not
+ * making it. The cost is the one the design accepted: exporting needs the
+ * desktop app, and `initTimelinePane` says so rather than silently doing
+ * nothing in a plain browser.
  */
 
-import { st, earliestEvidence } from './state';
+import { st, earliestEvidence, inTauri, RemoteVaultStore } from './state';
 import type { VaultEntry } from './types';
-import { esc, showToast, showConfirm } from './utils';
+import { esc, showToast, showConfirm, clipboardWrite } from './utils';
 import { relativeTime } from './ui-qol';
-import { buildIcs, rotationDue, type EventKind } from './calendar';
 import { downloadText } from './import-export';
 
 /** Sort orders offered by the pane. */
 type SortKey = 'created-desc' | 'created-asc' | 'expires-asc' | 'provider';
+
+/** Which kinds of calendar event this pane can produce. Mirrors
+ * `vault_core::calendar::EventKind` — the string spelling is the contract
+ * between the two, asserted by `calendar_build_ics` on the Rust side rather
+ * than by a shared type, since nothing here crosses a type boundary. */
+type EventKind = 'created' | 'expires' | 'rotation';
+
+const invoke = (cmd: string, args?: Record<string, unknown>) =>
+  (
+    window as unknown as {
+      __TAURI__?: { core?: { invoke?: (c: string, a?: unknown) => unknown } };
+    }
+  ).__TAURI__?.core?.invoke?.(cmd, args) as Promise<unknown> | undefined;
+
+/**
+ * The date a rotation is next due, or null when the entry has no cadence.
+ *
+ * A pure display computation — "which date is next" — not part of the `.ics`
+ * byte format, so it stays local rather than round-tripping through IPC for
+ * every row in the table on every render. `vault_core::calendar::rotation_due`
+ * computes the same thing for the same reason `build_ics` needs it; the two
+ * are not a twin pair the way `icsEscape`/`build_ics` were, because neither
+ * produces bytes the other has to match — only a date used to sort and colour
+ * one column.
+ *
+ * Counts from `last_rotated_at` when there is one and from `created_at`
+ * otherwise: a key with a 90-day cadence that has never been rotated is due 90
+ * days after it was issued, not never. An entry with neither date has no
+ * anchor, and inventing one would put a deadline in someone's calendar that no
+ * evidence supports.
+ */
+export function rotationDue(e: VaultEntry): string | null {
+  if (!e.rotation_days || e.rotation_days <= 0) return null;
+  const anchor = e.last_rotated_at || e.created_at;
+  if (!anchor) return null;
+  const d = new Date(anchor);
+  if (Number.isNaN(d.getTime())) return null;
+  d.setUTCDate(d.getUTCDate() + e.rotation_days);
+  return d.toISOString();
+}
 
 let _sort: SortKey = 'created-desc';
 
@@ -140,6 +189,7 @@ function selectedKinds(): EventKind[] {
 
 /** Repaints the table and the summary line. */
 export function renderTimeline(): void {
+  renderFeedSection();
   const body = document.getElementById('tl-rows');
   const summary = document.getElementById('tl-summary');
   if (!body) return;
@@ -191,8 +241,27 @@ export async function exportCalendar(): Promise<void> {
     showToast('Pick at least one kind of event', 'err');
     return;
   }
+  // The builder lives in Rust now (see the module doc): `npm run dev` in a
+  // plain browser cannot reach it, and says so rather than silently doing
+  // nothing — the same trade Phase 22's TOTP code generation made.
+  if (!inTauri) {
+    showToast(
+      'Calendar export needs the desktop app — a plain browser has nothing to build it with.',
+      'err',
+      4000,
+    );
+    return;
+  }
   const entries = st.vault.api_keys ?? [];
-  const ics = buildIcs(entries, { kinds, calendarName: 'EnvVault Secrets' });
+  const ics = (await invoke('calendar_build_ics', {
+    entries,
+    kinds,
+    calendarName: 'EnvVault Secrets',
+  })) as string | undefined;
+  if (typeof ics !== 'string') {
+    showToast('Could not build the calendar', 'err');
+    return;
+  }
   const count = (ics.match(/BEGIN:VEVENT/g) || []).length;
   if (!count) {
     showToast('Nothing to export — no entry has any of the selected dates', 'err', 3500);
@@ -209,7 +278,80 @@ export async function exportCalendar(): Promise<void> {
   );
   if (!ok) return;
 
-  downloadText(ics, 'envvault-secrets.ics', `Exported ${count} events ✓`);
+  void downloadText(ics, 'envvault-secrets.ics', `Exported ${count} events ✓`);
+}
+
+// ── Calendar feeds (Phase 24.3) — server-side only, so this whole section is
+// hidden against a local vault (see `renderFeedSection`).
+
+/** Re-fetches and repaints the feed list from the server. */
+async function renderFeedList(): Promise<void> {
+  const list = document.getElementById('tl-feed-list');
+  if (!list || !(st.store instanceof RemoteVaultStore)) return;
+  const feeds = await st.store.listCalendarFeeds();
+  if (!feeds.length) {
+    list.innerHTML = `<li class="tl-muted">No feeds yet.</li>`;
+    return;
+  }
+  list.innerHTML = feeds
+    .map((f) => {
+      const revoked = !!f.revoked_at;
+      const nameCls = revoked ? 'tl-feed-name tl-feed-revoked' : 'tl-feed-name';
+      const kinds = Array.isArray(f.kinds) ? f.kinds.join(', ') : '';
+      return `<li>
+        <span class="${nameCls}">${esc(f.name || 'Untitled')} — ${esc(kinds)}</span>
+        ${
+          revoked
+            ? '<span class="tl-muted">revoked</span>'
+            : `<button class="btn btn-ghost btn-sm" type="button" data-action="tl-feed-revoke" data-id="${esc(String(f.id))}">Revoke</button>`
+        }
+      </li>`;
+    })
+    .join('');
+  list.querySelectorAll<HTMLButtonElement>('[data-action="tl-feed-revoke"]').forEach((btn) => {
+    btn.onclick = () => void revokeFeed(btn.dataset.id ?? '');
+  });
+}
+
+async function revokeFeed(id: string): Promise<void> {
+  if (!id || !(st.store instanceof RemoteVaultStore)) return;
+  const ok = await showConfirm(
+    'Revoke this feed? The URL stops working immediately and cannot be un-revoked.',
+  );
+  if (!ok) return;
+  const success = await st.store.revokeCalendarFeed(id);
+  showToast(success ? 'Feed revoked' : 'Could not revoke feed', success ? 'ok' : 'err');
+  void renderFeedList();
+}
+
+/** Mints a feed and copies its URL — the token is shown once, server-side. */
+async function subscribeFeed(): Promise<void> {
+  if (!(st.store instanceof RemoteVaultStore)) return;
+  const kinds = selectedKinds();
+  if (!kinds.length) {
+    showToast('Pick at least one kind of event', 'err');
+    return;
+  }
+  const includeAccountNames =
+    (document.getElementById('tl-feed-account-names') as HTMLInputElement | null)?.checked ?? false;
+  const url = await st.store.createCalendarFeed('EnvVault', kinds as string[], includeAccountNames);
+  if (!url) {
+    showToast('Could not create feed', 'err');
+    return;
+  }
+  await clipboardWrite(url);
+  showToast('Feed URL copied — paste it into your calendar app to subscribe', 'ok', 5000);
+  void renderFeedList();
+}
+
+/** Shows the Subscribe section only against a remote vault — there is
+ * nothing local to serve a feed from. */
+function renderFeedSection(): void {
+  const section = document.getElementById('tl-feeds-section');
+  if (!section) return;
+  const isRemote = st.store instanceof RemoteVaultStore;
+  section.style.display = isRemote ? '' : 'none';
+  if (isRemote) void renderFeedList();
 }
 
 let _inited = false;
@@ -230,4 +372,6 @@ export function initTimelinePane(): void {
   if (exportBtn) (exportBtn as HTMLButtonElement).onclick = () => void exportCalendar();
   const refresh = document.getElementById('tl-refresh');
   if (refresh) (refresh as HTMLButtonElement).onclick = () => renderTimeline();
+  const subscribeBtn = document.getElementById('tl-feed-subscribe');
+  if (subscribeBtn) (subscribeBtn as HTMLButtonElement).onclick = () => void subscribeFeed();
 }

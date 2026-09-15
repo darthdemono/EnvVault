@@ -43,6 +43,16 @@ struct Args {
     /// the ceiling.
     #[arg(long, default_value_t = 24)]
     session_max_hours: u64,
+    /// Enable the unique-ID registry (Phase 24.4). Off by default: it is a
+    /// second SQLCipher file with its own storage-growth and rate-limiting
+    /// profile, and a deployment that never asked for it should never find
+    /// `registry.db` on disk.
+    #[arg(long)]
+    uid_registry: bool,
+    /// Refuse further `uid` registrations once `registry.db` exceeds this many
+    /// bytes. Default 10 GiB ≈ 160M ids at the measured 61 bytes/row.
+    #[arg(long, default_value_t = 10 * 1024 * 1024 * 1024)]
+    uid_max_bytes: i64,
 }
 
 fn main() {
@@ -154,7 +164,11 @@ async fn async_main() {
         args.session_ttl_mins,
         args.session_max_hours,
         /* lan_mode */ false,
-    );
+    )
+    .with_uid_registry(args.uid_registry, Some(args.uid_max_bytes));
+    if args.uid_registry {
+        tracing::info!(max_bytes = args.uid_max_bytes, "uid registry enabled");
+    }
 
     // Unattended deployments (Docker) unlock from the environment.
     if let Ok(pw) = std::env::var("ENVV_PASSWORD") {

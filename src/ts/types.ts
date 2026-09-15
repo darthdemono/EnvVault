@@ -36,7 +36,92 @@ export type SecretType =
    * the jar is split. `user_agent` is not optional metadata: replay without the
    * matching one usually 401s.
    */
-  | 'cookie';
+  | 'cookie'
+  /**
+   * One value with secrets inside it (Phase 24.1).
+   *
+   * `composite_template` is the shape, with `{name}` holes; each named part is
+   * an ordinary `extra_vars` entry (a part IS an extra_var — see
+   * `src/ts/composite.ts` for why a second array was rejected). `api_key` is
+   * unused for this type; the rendered template is what Copy copies.
+   */
+  | 'composite'
+  /**
+   * A bundle — one card holding several whole member entries plus its own
+   * local variables (Phase 24.1). Members point back at the bundle via
+   * `bundle_id`; the bundle entry itself never lists them, the same shape as
+   * `pool`. `extra_vars` holds the bundle's own local variables.
+   */
+  | 'bundle'
+  /**
+   * Phase 24.5's sixteen new types. Each is a **descriptor entry** in
+   * `secret-types.json` (`src/ts/secret-types.ts`) plus this union member —
+   * shape now, per-type form fields and card bodies later, the same call
+   * `composite`/`bundle` made in 24.1. Storage for all sixteen is named
+   * `extra_vars`, never new top-level `VaultEntry` fields: sixteen types ×
+   * ~5 fields each would be ~80 columns for Phase 25 to migrate, and named
+   * variables already have masking (E5), history (E8), env names and
+   * `${X/NAME}` references for free.
+   */
+  | 'oauth_client'
+  | 'signing_key'
+  | 'registry_token'
+  | 'database'
+  | 'recovery_codes'
+  | 'gpg_key'
+  | 'age_key'
+  | 'local_service'
+  | 'tracker'
+  | 'usenet_server'
+  | 'wifi'
+  | 'license_key'
+  | 'crypto_wallet'
+  | 'passkey'
+  | 'secure_note'
+  | 'identity_document';
+
+/**
+ * The editor/validator/preview an `extra_vars` value gets (Phase 24.1).
+ *
+ * Never a storage change — see the field doc on `extra_vars[].kind`. Core,
+ * colour, template and large-id/bitfield groups landed in 24.1 (the Discord
+ * acceptance fixture needs them); the dev-format group is deferred to 24.5,
+ * where it lands beside the secret-type registry the descriptors belong to.
+ */
+export type ValueKind =
+  | 'string'
+  | 'multiline'
+  | 'secret'
+  | 'int'
+  | 'float'
+  | 'hex_int'
+  | 'bool'
+  | 'url'
+  | 'markdown_link'
+  | 'email'
+  | 'path'
+  | 'port'
+  | 'ip'
+  | 'cidr'
+  | 'date'
+  | 'datetime'
+  | 'duration'
+  | 'json'
+  | 'list'
+  | 'enum'
+  | 'colour'
+  | 'template'
+  | 'large_id'
+  | 'bitfield'
+  /** The dev-format group (Phase 24.5), landing beside the secret-type
+   * registry these editors belong to. */
+  | 'regex'
+  | 'cron'
+  | 'semver'
+  | 'timezone'
+  | 'locale'
+  | 'byte_size'
+  | 'percentage';
 
 /**
  * A single stored secret entry.
@@ -228,6 +313,46 @@ export interface VaultEntry {
    */
   last_verified_at?: string | null;
   /**
+   * Storage tokens (`localStorage`/`sessionStorage`) a web session needs
+   * alongside its cookies (Phase 24.5). `cookie` generalises from "a cookie
+   * jar" to "a web session" without a field rename — every Phase 23 vault
+   * still uses the `cookie` id, only the label reads "Web session" now.
+   *
+   * Never in `basic` metadata or a redacting resolver's output — a storage
+   * token is exactly as much a live credential as the cookies beside it.
+   */
+  storage_tokens?: { origin: string; storage: 'local' | 'session'; key: string; value: string }[];
+  /**
+   * How a derived header is built for this session — the *arr family's
+   * `X-Api-Key`, YouTube's `SAPISIDHASH`, LinkedIn's csrf header copied off a
+   * cookie. `source: 'derived'` headers are computed **at copy time**, so a
+   * copied header is only good briefly; the UI that renders one says so.
+   */
+  header_recipe?: {
+    name: string;
+    source: 'static' | 'cookie' | 'derived';
+    static_value?: string;
+    cookie_name?: string;
+    strip_quotes?: boolean;
+    derived_id?: string;
+  }[];
+  /**
+   * API-key taxonomy — orthogonal axes (Phase 24.5), auto-filled from issuer
+   * prefixes by `enrich` (gaps only, per the existing rule) and never
+   * enforced: `exposure: 'publishable'` *suggests* `primary_public`, never
+   * sets it, so a misdetected prefix cannot make redaction print less.
+   */
+  acts_as?: 'anonymous' | 'user' | 'service' | 'bot' | 'installation' | 'admin' | null;
+  reach?: (
+    'public_data' | 'own_account' | 'organisation' | 'local_network' | 'billing' | 'infrastructure'
+  )[];
+  exposure?: 'publishable' | 'server_only' | 'verify_only' | null;
+  issuer_kind?: 'saas' | 'self_hosted' | 'local' | null;
+  access?: 'read' | 'write' | 'admin' | 'custom' | null;
+  /** Where to revoke or rotate this credential. */
+  console_url?: string | null;
+  ip_allowlist?: string[];
+  /**
    * The generated variable name this entry was last copied or exported under
    * (Phase 23, step 6).
    *
@@ -268,6 +393,47 @@ export interface VaultEntry {
    * removes it afterwards. Non-secret — it is a path, not a credential.
    */
   mount_path?: string | null;
+  /**
+   * The shape of a `composite` entry's rendered value, holes and all —
+   * `https://.../{mailbox_id}@.../{calendar_key}/calendar.ics`.
+   *
+   * Printed, not masked (it is the holes, not the values) — it must still be
+   * added to `PUBLIC_FIELDS` deliberately, since fail-closed redaction would
+   * otherwise mask it. See `src/ts/composite.ts` for rendering.
+   */
+  composite_template?: string | null;
+  /**
+   * What kind of thing a `composite` template is, which decides its encoding
+   * and whether Open is offered. Open past the four presets — the same
+   * open-vocabulary reasoning as {@link primary_role}.
+   */
+  composite_kind?: 'link' | 'signed_link' | 'connection' | 'custom' | (string & {}) | null;
+  /**
+   * The bundle entry's id this entry is a member of (Phase 24.1).
+   *
+   * Membership is stored **once, on the member** — the same shape as `pool` —
+   * so an older build that deletes the bundle entry cannot leave two
+   * disagreeing copies of "is this bundled". `null`/absent means unbundled.
+   */
+  bundle_id?: string | null;
+  /**
+   * This member's slot name within its bundle — `"discord"`, `"web"`, `"v3"`.
+   * Validated like {@link label} (`^[A-Za-z0-9][A-Za-z0-9_-]{0,23}$`), unique
+   * within the bundle. Addressed as `${bundle:Name/slot}` and `{slot.field}`
+   * inside the bundle's own templates.
+   */
+  bundle_slot?: string | null;
+  /**
+   * Sort key with gaps, never identity (invariant 1) — the same shape as a
+   * pool cursor position, not an array index.
+   */
+  bundle_order?: number | null;
+  /**
+   * On the **bundle** entry itself (`secretType === 'bundle'`): which member's
+   * id the card's main Copy button copies. `null` means nothing is copyable
+   * from the collapsed card yet.
+   */
+  bundle_primary?: string | null;
   /**
    * A short namespace token inserted into generated environment-variable names
    * after the version — `SPOTIFY_V2_GAME_ID`.
@@ -361,6 +527,23 @@ export interface VaultEntry {
      * copy profile is either useless (everything masked) or unsafe (nothing).
      */
     public?: boolean;
+    /**
+     * Overrides the env-name segment derived from `key` (Phase 23 design,
+     * finally added in 24.1 alongside composite parts — a part's placeholder
+     * name and its generated env-name segment are not always the same word).
+     */
+    role?: string;
+    /** Which copy profile includes this variable. Absent means `'basic'`. */
+    tier?: 'basic' | 'extended';
+    /**
+     * The editor/validator/preview this value gets in the form (Phase 24.1).
+     *
+     * Storage never changes: every value is a string end to end, whatever the
+     * kind. A kind is data about how to *edit* the string, never a coercion —
+     * `hex_int` and `large_id` both stay strings so a JSON export can quote a
+     * large id without a JS number silently rounding it.
+     */
+    kind?: ValueKind;
     /**
      * Per-cookie attributes, filled by the paste parser (Phase 23, E14).
      *
@@ -732,6 +915,13 @@ export interface PersistedView {
    * *and* still resolving against the loaded vault (invariant 7).
    */
   poolFilter?: string | null;
+  /**
+   * The type chip bar (Phase 24.2). Optional for the same reason `poolFilter`
+   * is: a `lastView` written before this field existed has no such key.
+   * `restoreViewState()` drops any entry that is neither `'__totp'`/`'__pool'`
+   * nor a `SecretType` actually present in the loaded vault.
+   */
+  typeChips?: string[];
   projectIds: string[];
 }
 
@@ -777,33 +967,23 @@ export interface AppSettings {
    * Sections absent from this array are hidden.
    */
   sidebarSections: (
-    | 'all'
-    | 'price'
-    | 'env'
-    | 'category'
-    | 'project'
-    | 'tags'
-    | 'pools'
-    | 'authenticator'
-    | 'prefixes'
+    'all' | 'price' | 'env' | 'category' | 'project' | 'tags' | 'pools' | 'prefixes'
   )[];
   /** When `true`, the main grid renders section headers grouping cards by secret type. */
   groupByType: boolean;
+  /**
+   * When `true` (default), entries sharing a key pool collapse into one card
+   * in the grid — Phase 24.2. The Key Pools tool pane is unaffected; it always
+   * shows every member, because cooldown management needs them all visible.
+   */
+  groupPools: boolean;
   /** Position of the activity bar. */
   activityBarPosition: 'left' | 'right';
   /** Activity bar display style. */
   activityBarStyle: 'icon' | 'icon-label';
   /** Section keys that are currently collapsed in the secrets sidebar. */
   collapsedSections: (
-    | 'all'
-    | 'price'
-    | 'env'
-    | 'category'
-    | 'project'
-    | 'tags'
-    | 'pools'
-    | 'authenticator'
-    | 'prefixes'
+    'all' | 'price' | 'env' | 'category' | 'project' | 'tags' | 'pools' | 'prefixes'
   )[];
   /** Currently active top-level panel. */
   activePanel: 'secrets' | 'tools' | 'users' | 'remote' | 'auth';

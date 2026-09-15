@@ -462,6 +462,16 @@ const HOTP_CACHE_MS = 5 * 60 * 1000;
 /** Seeds a request is already outstanding for, so a slow IPC call is not queued once a second. */
 const inFlight = new Set<string>();
 
+/**
+ * The last refusal reason per cache key, so a card can *say* why it is blank.
+ *
+ * A1 (2026-09-14): `liveCodeFor` used to swallow the Rust error entirely and
+ * return `null`, indistinguishable from "still fetching" — so a permanent
+ * refusal looked the same as a slow tick, forever. `tickTotp` reads this to
+ * set the slot's `title`.
+ */
+const lastError = new Map<string, string>();
+
 function cacheKey(secret: string, p: TotpParams, withNext: boolean): string {
   // The counter is part of the key: advancing an `hotp` entry must show the new
   // code immediately rather than the cached one for the position it just left.
@@ -472,6 +482,7 @@ function cacheKey(secret: string, p: TotpParams, withNext: boolean): string {
 export function resetTotpCache(): void {
   codeCache.clear();
   inFlight.clear();
+  lastError.clear();
 }
 
 /**
@@ -482,6 +493,12 @@ export function resetTotpCache(): void {
  */
 export async function liveCodeFor(entry: VaultEntry, withNext = false): Promise<LiveCode | null> {
   if (!hasTotp(entry) || !inTauri) return null;
+  // `entry_totp_code` is pure over its arguments (A11, 2026-09-14) — it no
+  // longer checks the *local* SQLCipher key, which used to refuse every call
+  // on a remote-only session and paint every remote 2FA code blank. The gate
+  // that matters is "does the renderer hold a decrypted vault at all", which
+  // is `st.vaultOpen` regardless of whether that vault is local or remote.
+  if (!st.vaultOpen) return null;
   const params = totpParamsOf(entry);
   const secret = normalizeB32(entry.totp_secret || '');
   const key = cacheKey(secret, params, withNext);
@@ -515,6 +532,7 @@ export async function liveCodeFor(entry: VaultEntry, withNext = false): Promise<
       withNext,
     })) as LiveCode | undefined;
     if (!res) return null;
+    lastError.delete(key);
     codeCache.set(key, {
       code: res.code,
       next: res.next_code ?? null,
@@ -527,11 +545,23 @@ export async function liveCodeFor(entry: VaultEntry, withNext = false): Promise<
       period: res.period,
     });
     return res;
-  } catch {
+  } catch (err) {
+    // Still never throws — but the reason is kept, not dropped, so a slot that
+    // will never produce a code stops looking identical to one that is just
+    // slow. See `lastError` above.
+    lastError.set(key, err instanceof Error ? err.message : String(err));
     return null;
   } finally {
     inFlight.delete(key);
   }
+}
+
+/** The reason the last request for this entry's code failed, if any. */
+export function lastTotpError(entry: VaultEntry, withNext = false): string | null {
+  if (!hasTotp(entry)) return null;
+  const params = totpParamsOf(entry);
+  const secret = normalizeB32(entry.totp_secret || '');
+  return lastError.get(cacheKey(secret, params, withNext)) ?? null;
 }
 
 // ── The ticker ────────────────────────────────────────────────────────────
@@ -599,7 +629,22 @@ export async function tickTotp(): Promise<void> {
     // The panel asks for the next code by marking its slots; a card does not.
     const wantNext = slot.dataset.totpNext === '1';
     const live = await liveCodeFor(entry, wantNext);
-    if (!live) continue;
+    if (!live) {
+      // A1: name the refusal instead of leaving the placeholder unexplained —
+      // a blank code and a slow tick used to look identical, forever.
+      const reason = lastTotpError(entry, wantNext);
+      if (reason) {
+        if (codeEl) codeEl.textContent = '— — —';
+        slot.title = `Code not available: ${reason}`;
+        slot.dataset.totpCode = '';
+      } else if (!st.vaultOpen) {
+        if (codeEl) codeEl.textContent = '— — —';
+        slot.title = 'Vault is locked.';
+        slot.dataset.totpCode = '';
+      }
+      continue;
+    }
+    slot.title = '';
     if (codeEl) codeEl.textContent = groupCode(live.code);
     const nextEl = slot.querySelector<HTMLElement>('.totp-next');
     if (nextEl) {

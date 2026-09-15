@@ -1,12 +1,15 @@
 /**
- * The Authenticator screen (Phase 22.2).
+ * The Authenticator screen (Phase 22.2), and its A2 (2026-09-14) aftermath.
  *
  * The panel reverses a Phase 22 decision — the authenticator was deliberately a
- * sidebar section and not a fifth activity-bar entry — so what is asserted here
- * is mostly that the reversal did not break the reasoning behind the original:
- * the sidebar section still exists, the codes are still written by the ticker
- * rather than by a render pass, and advancing a counter is still an explicit
- * action rather than a side effect of looking at a card.
+ * sidebar section and not a fifth activity-bar entry. A2 then reversed *that*:
+ * the sidebar section (which showed nothing on a remote vault, per A1) was
+ * removed rather than fixed, because two surfaces for one feature is exactly
+ * what read as the whole feature being broken. What is asserted here is that
+ * the sidebar section is really gone, the panel is the only surface left, the
+ * codes are still written by the ticker rather than by a render pass, and
+ * advancing a counter is still an explicit action rather than a side effect of
+ * looking at a card.
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { loadRealIndexHtml } from './helpers';
@@ -34,7 +37,7 @@ beforeEach(() => {
   seed([]);
 });
 
-describe('the panel exists alongside the sidebar section, not instead of it', () => {
+describe('the panel is the only surface — the sidebar section is gone (A2)', () => {
   it('has its own activity-bar tab, panel and workspace', () => {
     // All three ids, because `switchPanel` shows them by id and a missing one is
     // a panel that silently never appears.
@@ -43,11 +46,24 @@ describe('the panel exists alongside the sidebar section, not instead of it', ()
     expect(document.getElementById('auth-workspace')).toBeTruthy();
   });
 
-  it('leaves Phase 22 sidebar section in place', () => {
-    // It is still the fastest path to one code, and it still filters the grid.
-    // Removing it was never part of adding this.
-    expect(document.getElementById('sidebar-section-authenticator')).toBeTruthy();
-    expect(document.getElementById('authenticator-list')).toBeTruthy();
+  it('removed the Phase 22 sidebar section', () => {
+    // A2, 2026-09-14: two surfaces for one feature, and the one that showed
+    // nothing on a remote vault (A1) read as the feature being broken.
+    expect(document.getElementById('sidebar-section-authenticator')).toBeNull();
+    expect(document.getElementById('authenticator-list')).toBeNull();
+    expect(document.getElementById('totp-import-btn')).toBeNull();
+    expect(document.getElementById('totp-export-btn')).toBeNull();
+  });
+
+  it('never re-adds the section key to a persisted sidebarSections list', () => {
+    localStorage.setItem('envvault-sb-migrated-totp', '');
+    localStorage.setItem(
+      'envvault-settings',
+      JSON.stringify({ sidebarSections: ['all', 'authenticator', 'prefixes'] }),
+    );
+    return Settings.init().then(() => {
+      expect(Settings.get('sidebarSections')).not.toContain('authenticator');
+    });
   });
 
   it('the new tab does not add a second tab stop to the tablist', () => {

@@ -1,6 +1,6 @@
 [package]
 name    = "envvault"
-version = "0.23.0"
+version = "0.24.0"
 edition = "2021"
 license = "MIT"
 
@@ -35,6 +35,9 @@ rustls            = { version = "0.23", default-features = false, features = ["a
 rustls-pki-types  = "1"
 sha2              = "0.10"
 hex               = "=0.4.3"
+# A3: where an export actually lands on disk (write_export_file), rather than
+# a WebKitGTK `<a download>` click the webview has no handler for.
+dirs              = "5"
 
 # Deny warnings, per [workspace.lints.rust] at the repo root.
 [lints]

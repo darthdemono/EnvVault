@@ -28,6 +28,44 @@
   color: var(--text3);
 }
 
+/* Phase 24.2 — multi-toggle type chip bar, above the grid. */
+.type-chip-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+.type-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg2);
+  color: var(--text2);
+  font-family: "JetBrains Mono", monospace;
+  font-size: 10.5px;
+  cursor: pointer;
+  transition:
+    background 0.12s,
+    border-color 0.12s,
+    color 0.12s;
+}
+.type-chip:hover {
+  border-color: var(--accent);
+  color: var(--text1);
+}
+.type-chip.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-contrast, #fff);
+}
+.type-chip-count {
+  opacity: 0.75;
+  font-size: 9.5px;
+}
+
 .sort-label {
   font-size: 11px;
   color: var(--text2);

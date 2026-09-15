@@ -114,6 +114,15 @@ pub struct EntryFields {
     /// Where the consumer expects to find this credential on disk.
     #[arg(long)]
     pub mount_path: Option<String>,
+    /// A composite's shape, with `{name}` holes — each part is an ordinary
+    /// `--var` (Phase 24.1). Pass an empty string to clear it.
+    #[arg(long)]
+    pub template: Option<String>,
+    /// A composite's kind: link | signed_link | connection | custom, or an
+    /// open string past those four presets. Decides whether the rendered
+    /// template is percent-encoded by zone (every preset but `custom`).
+    #[arg(long = "composite-kind")]
+    pub composite_kind: Option<String>,
     /// Rate limit as free text, e.g. "100/min" or "5000 requests per hour".
     ///
     /// Parsed into the structured count/period pair where it can be; kept
@@ -251,7 +260,12 @@ pub struct EntryFields {
     pub generate_format: String,
 }
 
-pub const SECRET_TYPES: [&str; 8] = [
+/// Every `--type` value the CLI accepts. Kept as a plain `const` array rather
+/// than sourced from `vault_core::secret_types::registry()` at derive time —
+/// clap's `value_parser` attribute wants something `const`-evaluable, and a
+/// JSON-backed `Vec` is not. `tests::secret_types_matches_the_registry`
+/// catches drift instead of preventing it by construction.
+pub const SECRET_TYPES: [&str; 26] = [
     "api_key",
     "password",
     "certificate",
@@ -260,6 +274,24 @@ pub const SECRET_TYPES: [&str; 8] = [
     "ssh_key",
     "file_blob",
     "cookie",
+    "composite",
+    "bundle",
+    "oauth_client",
+    "signing_key",
+    "registry_token",
+    "database",
+    "recovery_codes",
+    "gpg_key",
+    "age_key",
+    "local_service",
+    "tracker",
+    "usenet_server",
+    "wifi",
+    "license_key",
+    "crypto_wallet",
+    "passkey",
+    "secure_note",
+    "identity_document",
 ];
 
 pub const ENV_SUBTYPES: [&str; 11] = [
@@ -592,6 +624,12 @@ impl EntryFields {
         if let Some(v) = &self.mount_path {
             set_str(entry, "mount_path", v);
         }
+        if let Some(v) = &self.template {
+            set_str(entry, "composite_template", v);
+        }
+        if let Some(v) = &self.composite_kind {
+            set_str(entry, "composite_kind", v);
+        }
         if let Some(path) = &self.blob_file {
             let raw = std::fs::read(path)
                 .map_err(|e| CliError::from(format!("Cannot read {}: {e}", path.display())))?;
@@ -848,6 +886,83 @@ pub fn cmd_add(
         "entry.add",
         json!({ "provider": provider, "id": id, "created": true, "fingerprint": fingerprint }),
         || println!("Added '{provider}' ({fingerprint})"),
+    );
+    Ok(())
+}
+
+/// `envv totp add NAME --seed-stdin [--account …]` — the guided path that
+/// mirrors the desktop Authenticator panel's "Add 2FA" form: attach to an
+/// existing entry found by exact provider name, or create a bare
+/// `password`-typed one with an empty primary when none exists.
+///
+/// This could otherwise just be a spelling of `entry set --create
+/// --totp-stdin`, and the one thing that makes it a different command is the
+/// safety check: it **refuses** when the target already carries a seed,
+/// rather than overwriting on request as `entry set` rightly does for an
+/// explicit edit. The whole pitch of a guided "add" command is that it is
+/// safe to run without checking first — the same rule the totp-import merge
+/// and the desktop form's own refusal both follow.
+pub fn cmd_totp_add(
+    access: &Access,
+    name: &str,
+    account: Option<&str>,
+    fields: &EntryFields,
+) -> CliResult {
+    if !fields.touches_totp() {
+        return Err(CliError::invalid(
+            "Pass --totp or --totp-stdin with a seed to add.",
+        ));
+    }
+    let mut vault = access.load_vault_or_empty()?;
+    let existing_idx = data::entries(&vault)
+        .iter()
+        .position(|e| data::provider_of(e).eq_ignore_ascii_case(name));
+
+    let (idx, created) = match existing_idx {
+        Some(i) => {
+            let already = data::entries(&vault)[i]
+                .get("totp_secret")
+                .and_then(|v| v.as_str())
+                .is_some_and(|s| !s.trim().is_empty());
+            if already {
+                return Err(CliError::conflict(format!(
+                    "'{name}' already has a seed — use `envv entry set {name} --totp-stdin` \
+                     to re-enroll it on purpose"
+                )));
+            }
+            (i, false)
+        }
+        None => {
+            let mut entry = json!({
+                "id": uuid::Uuid::new_v4().to_string(),
+                "provider": name,
+                "api_key": "",
+                "price_type": "free",
+                "secretType": "password",
+                "categories": [],
+                "projectIds": ["Universal"],
+                "scopes": [],
+                "created_at": vault_core::iso_now(),
+            });
+            if let Some(a) = account.filter(|a| !a.is_empty()) {
+                entry["account_name"] = json!(a);
+            }
+            entries_mut(&mut vault).push(entry);
+            (data::entries(&vault).len() - 1, true)
+        }
+    };
+
+    fields.apply_totp(&mut entries_mut(&mut vault)[idx])?;
+    access.save(&vault)?;
+    out::ok(
+        "totp.add",
+        json!({ "provider": name, "created": created }),
+        || {
+            println!(
+                "{} '{name}' with a 2FA seed",
+                if created { "Created" } else { "Attached to" }
+            )
+        },
     );
     Ok(())
 }
@@ -1577,11 +1692,32 @@ pub fn cmd_list(
         });
     }
     if let Some(t) = type_filter {
+        // Comma-separated, OR-combined — the CLI twin of the app's Phase 24.2
+        // type chip bar. `2fa`/`totp` and `pool` are the same two virtual
+        // tokens the chip bar uses (`__totp`/`__pool` there; spelled without
+        // the underscores here since this is a flag value a human types).
+        let wanted: Vec<&str> = t
+            .split(',')
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .collect();
         list.retain(|e| {
-            e.get("secretType")
-                .and_then(|v| v.as_str())
-                .unwrap_or("api_key")
-                == t
+            wanted.iter().any(|&w| match w {
+                "2fa" | "totp" => e
+                    .get("totp_secret")
+                    .and_then(|v| v.as_str())
+                    .is_some_and(|s| !s.trim().is_empty()),
+                "pool" => e
+                    .get("pool")
+                    .and_then(|v| v.as_str())
+                    .is_some_and(|s| !s.trim().is_empty()),
+                _ => {
+                    e.get("secretType")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("api_key")
+                        == w
+                }
+            })
         });
     }
     if let Some(t) = tag {
@@ -1747,4 +1883,24 @@ pub fn cmd_tags(access: &Access) -> CliResult {
         }
     });
     Ok(())
+}
+
+#[cfg(test)]
+mod secret_type_tests {
+    use super::SECRET_TYPES;
+    use std::collections::HashSet;
+
+    #[test]
+    fn secret_types_matches_the_registry() {
+        let cli: HashSet<&str> = SECRET_TYPES.iter().copied().collect();
+        let registry: HashSet<String> = vault_core::secret_types::registry()
+            .into_iter()
+            .map(|t| t.id)
+            .collect();
+        let registry_refs: HashSet<&str> = registry.iter().map(String::as_str).collect();
+        assert_eq!(
+            cli, registry_refs,
+            "envv-cli's --type list and secret-types.json disagree"
+        );
+    }
 }

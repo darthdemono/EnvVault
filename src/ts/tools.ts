@@ -20,7 +20,15 @@ import {
 } from './state';
 import { initPoolsPane, renderPoolsPane } from './pools';
 import { initTimelinePane, renderTimeline } from './timeline';
-import { showToast, clipboardWrite, generateULID, showConfirm, esc } from './utils';
+import {
+  showToast,
+  clipboardWrite,
+  generateULID,
+  showConfirm,
+  esc,
+  escAttr,
+  saveFile,
+} from './utils';
 import {
   showDropdown,
   injectIntoForm,
@@ -31,7 +39,7 @@ import {
   openModal,
 } from './modals';
 import { SECRET_TEMPLATES } from './templates';
-import { render } from './render';
+import { render, TYPE_CHIP_LABELS } from './render';
 import { resolveFieldRef } from './chunk-ops';
 import { initAuditPanel } from './audit';
 
@@ -644,27 +652,47 @@ export function initTools() {
     if (v) clipboardWrite(v);
   });
 
-  // ── Health Dashboard (item 7) ──────────────────────────────────────────────
+  // ── Health Dashboard (item 7; per-field detail is Phase 24.2) ──────────────
 
-  document.getElementById('health-scan-btn')?.addEventListener('click', () => {
-    const results = document.getElementById('health-results')!;
-    const timeEl = document.getElementById('health-scan-time')!;
+  /**
+   * One finding. `id`/`secretType`/`field` are present for entry-scoped
+   * findings — everything except the stale-`${ref}` and orphan-project checks,
+   * which are about a chunk or a project rather than one entry and have
+   * nowhere to jump to. Grouping and the type-badge filter both key off `id`;
+   * a finding without one renders in the flat "Other" section instead.
+   */
+  interface HealthIssue {
+    severity: 'high' | 'med' | 'low';
+    msg: string;
+    provider: string;
+    id?: string;
+    secretType?: string;
+    field?: string;
+  }
+
+  /** Extracted from the click handler so a filter change can re-render
+   * against the last scan without re-running it. */
+  function computeHealthIssues(): HealthIssue[] {
     const keys = st.vault.api_keys;
-
     const now = Date.now();
     const today = new Date().toISOString().slice(0, 10);
     const warn30 = new Date(now + 30 * 86_400_000).toISOString().slice(0, 10);
 
-    const issues: { severity: 'high' | 'med' | 'low'; msg: string; provider: string }[] = [];
+    const issues: HealthIssue[] = [];
 
     keys.forEach((k) => {
       const prov = k.provider || '?';
+      const id = entryId(k);
+      const secretType = k.secretType || 'api_key';
       // Marked compromised — emergency rotate
       if (k.compromised) {
         issues.push({
           severity: 'high',
           provider: prov,
           msg: 'Marked COMPROMISED — rotate immediately',
+          id,
+          secretType,
+          field: 'compromised',
         });
       }
       // Weak password (entropy estimate): length < 12 and not a token pattern.
@@ -684,6 +712,9 @@ export function initTools() {
           severity: 'high',
           provider: prov,
           msg: 'Short or weak secret value (< 12 chars)',
+          id,
+          secretType,
+          field: 'api_key',
         });
       }
       // Common weak literal (dictionary check for JWT/cookie secrets etc.)
@@ -695,6 +726,9 @@ export function initTools() {
           severity: 'high',
           provider: prov,
           msg: 'Secret starts with a common weak value',
+          id,
+          secretType,
+          field: 'api_key',
         });
       }
       // A session nobody has confirmed lately (E13). The actionable replacement
@@ -704,6 +738,9 @@ export function initTools() {
           severity: 'low',
           provider: prov,
           msg: 'Session never verified — open the site and confirm it is still signed in',
+          id,
+          secretType,
+          field: 'last_verified_at',
         });
       }
       // Expired
@@ -712,6 +749,9 @@ export function initTools() {
           severity: 'high',
           provider: prov,
           msg: `Expired on ${k.expires_at.slice(0, 10)}`,
+          id,
+          secretType,
+          field: 'expires_at',
         });
       }
       // Expiring soon
@@ -720,6 +760,9 @@ export function initTools() {
           severity: 'med',
           provider: prov,
           msg: `Expiring ${k.expires_at.slice(0, 10)}`,
+          id,
+          secretType,
+          field: 'expires_at',
         });
       }
       // Rotation overdue (cadence set + last rotation older than rotation_days).
@@ -742,12 +785,22 @@ export function initTools() {
             severity: 'med',
             provider: prov,
             msg: `Rotation overdue by ${overdue}d (every ${k.rotation_days}d)`,
+            id,
+            secretType,
+            field: 'last_rotated_at',
           });
         }
       }
       // Never rotated
       if (!k.last_rotated_at && !k.version_history?.length) {
-        issues.push({ severity: 'low', provider: prov, msg: 'Never rotated' });
+        issues.push({
+          severity: 'low',
+          provider: prov,
+          msg: 'Never rotated',
+          id,
+          secretType,
+          field: 'last_rotated_at',
+        });
       }
       // No description
       if (!k.api_description && !k.description) {
@@ -755,25 +808,36 @@ export function initTools() {
           severity: 'low',
           provider: prov,
           msg: 'No description — hard to identify later',
+          id,
+          secretType,
+          field: 'description',
         });
       }
     });
 
-    // Duplicate value detection — same secret stored under multiple entries
-    const valueMap = new Map<string, string[]>();
+    // Duplicate value detection — same secret stored under multiple entries.
+    // One issue per contributing entry (not one issue naming all of them) so
+    // each still lands in its own entry's group, the way every other finding
+    // does; the message names the others regardless.
+    const valueMap = new Map<string, VaultEntry[]>();
     keys.forEach((k) => {
       if (!k.api_key || k.api_key.length < 6) return;
       if (!valueMap.has(k.api_key)) valueMap.set(k.api_key, []);
-      valueMap.get(k.api_key)!.push(k.provider || '?');
+      valueMap.get(k.api_key)!.push(k);
     });
-    valueMap.forEach((provs) => {
-      if (provs.length > 1) {
+    valueMap.forEach((members) => {
+      if (members.length <= 1) return;
+      members.forEach((k) => {
+        const others = members.filter((m) => m !== k).map((m) => m.provider || '?');
         issues.push({
           severity: 'med',
-          provider: provs.join(', '),
-          msg: `Same secret value in ${provs.length} entries — consider merging`,
+          provider: k.provider || '?',
+          msg: `Same secret value as ${others.join(', ')} — consider merging`,
+          id: entryId(k),
+          secretType: k.secretType || 'api_key',
+          field: 'api_key',
         });
-      }
+      });
     });
 
     // Stale ${ref} detection — chunk fields pointing at a deleted/renamed target.
@@ -848,6 +912,8 @@ export function initTools() {
           severity: 'low',
           provider: k.provider || '?',
           msg: 'In a project but no chunk references it',
+          id: entryId(k),
+          secretType: k.secretType || 'api_key',
         });
       }
     });
@@ -863,6 +929,8 @@ export function initTools() {
           severity: 'med',
           provider: k.provider || '?',
           msg: `Generated name changed since last copy: ${k.last_copied_name} → ${now}`,
+          id: entryId(k),
+          secretType: k.secretType || 'api_key',
         });
       }
     });
@@ -874,44 +942,173 @@ export function initTools() {
     // alone. Both sides are named, because a warning you have to go hunting for
     // is one nobody acts on.
     for (const clash of findNameCollisions(keys)) {
-      const who = [...new Set(clash.sources.map((s) => s.entry.provider || '?'))];
-      issues.push({
-        severity: who.length > 1 ? 'med' : 'low',
-        provider: who.join(' + '),
-        msg:
-          who.length > 1
-            ? `${clash.name} is generated by ${who.length} entries — a copy of both overwrites one`
+      // One issue per contributing entry, same reasoning as the duplicate-value
+      // check above — this is the finding E2's own rule says must name both
+      // sides, and "both sides" only happens if both sides get their own row.
+      const uniqueEntries = [...new Set(clash.sources.map((s) => s.entry))];
+      uniqueEntries.forEach((entry) => {
+        const others = uniqueEntries.filter((e) => e !== entry).map((e) => e.provider || '?');
+        issues.push({
+          severity: others.length ? 'med' : 'low',
+          provider: entry.provider || '?',
+          msg: others.length
+            ? `${clash.name} is also generated by ${others.join(', ')} — a copy of both overwrites one`
             : `${clash.name} is generated twice by this entry — the second value wins`,
+          id: entryId(entry),
+          secretType: entry.secretType || 'api_key',
+        });
       });
     }
 
-    timeEl.textContent = `Scanned ${keys.length} secrets · ${new Date().toLocaleTimeString()}`;
+    return issues;
+  }
 
-    if (!issues.length) {
-      results.innerHTML = `<div class="health-ok">✓ No issues found — vault looks healthy!</div>`;
+  /** `high` > `med` > `low`, worst first — an entry's group sorts by its own
+   * worst finding, and within a group findings sort the same way. */
+  const SEVERITY_RANK: Record<HealthIssue['severity'], number> = { high: 0, med: 1, low: 2 };
+  const SEVERITY_LABEL: Record<HealthIssue['severity'], string> = {
+    high: 'Critical',
+    med: 'Warning',
+    low: 'Info',
+  };
+
+  let _lastHealthIssues: HealthIssue[] = [];
+  let _healthSeverityFilter = 'all';
+  let _healthTypeFilter = '';
+
+  function renderHealthResults(): void {
+    const results = document.getElementById('health-results');
+    if (!results) return;
+
+    const filtered = _lastHealthIssues.filter(
+      (i) =>
+        (_healthSeverityFilter === 'all' || i.severity === _healthSeverityFilter) &&
+        (!_healthTypeFilter || i.secretType === _healthTypeFilter),
+    );
+
+    if (!filtered.length) {
+      results.innerHTML = `<div class="health-ok">✓ ${_lastHealthIssues.length ? 'No findings match this filter' : 'No issues found — vault looks healthy!'}</div>`;
       return;
     }
 
-    const grouped = {
-      high: issues.filter((i) => i.severity === 'high'),
-      med: issues.filter((i) => i.severity === 'med'),
-      low: issues.filter((i) => i.severity === 'low'),
-    };
-    // provider and msg both embed user-controlled data (entry/project/chunk names)
-    // and are injected via innerHTML — escape them.
-    const renderGroup = (label: string, cls: string, items: typeof issues) =>
-      items.length
-        ? `
-      <div class="health-group">
-        <div class="health-group-title ${cls}">${label} (${items.length})</div>
-        ${items.map((i) => `<div class="health-row"><span class="health-provider">${esc(i.provider)}</span><span class="health-msg">${esc(i.msg)}</span></div>`).join('')}
-      </div>`
-        : '';
+    const perEntry = new Map<string, HealthIssue[]>();
+    const other: HealthIssue[] = [];
+    filtered.forEach((i) => {
+      if (!i.id) {
+        other.push(i);
+        return;
+      }
+      if (!perEntry.has(i.id)) perEntry.set(i.id, []);
+      perEntry.get(i.id)!.push(i);
+    });
 
-    results.innerHTML =
-      renderGroup('Critical', 'health-high', grouped.high) +
-      renderGroup('Warning', 'health-med', grouped.med) +
-      renderGroup('Info', 'health-low', grouped.low);
+    const groups = [...perEntry.entries()]
+      .map(([id, items]) => ({
+        id,
+        items: items.sort((a, b) => SEVERITY_RANK[a.severity] - SEVERITY_RANK[b.severity]),
+        worst: Math.min(...items.map((i) => SEVERITY_RANK[i.severity])),
+        provider: items[0].provider,
+        secretType: items[0].secretType || 'api_key',
+      }))
+      .sort((a, b) => a.worst - b.worst || a.provider.localeCompare(b.provider));
+
+    // provider/msg/field all embed user-controlled data (entry, project and
+    // chunk names) and are injected via innerHTML — escape them.
+    const entryGroupsHtml = groups
+      .map((g) => {
+        const typeLabel = TYPE_CHIP_LABELS[g.secretType] ?? g.secretType;
+        return `
+      <div class="health-entry-group">
+        <button type="button" class="health-entry-header" data-action="health-jump" data-id="${escAttr(g.id)}" title="Jump to this entry">
+          <span class="health-entry-provider">${esc(g.provider)}</span>
+          <span class="badge health-entry-type">${esc(typeLabel)}</span>
+          <span class="health-entry-count">${g.items.length} finding${g.items.length === 1 ? '' : 's'}</span>
+        </button>
+        ${g.items
+          .map(
+            (i) => `<div class="health-row health-${i.severity}">
+              <span class="health-sev-badge health-${i.severity}">${SEVERITY_LABEL[i.severity]}</span>
+              ${i.field ? `<span class="health-field">${esc(i.field)}</span>` : ''}
+              <span class="health-msg">${esc(i.msg)}</span>
+            </div>`,
+          )
+          .join('')}
+      </div>`;
+      })
+      .join('');
+
+    const otherHtml = other.length
+      ? `<div class="health-entry-group">
+          <div class="health-entry-header health-entry-header--static">
+            <span class="health-entry-provider">Other</span>
+            <span class="health-entry-count">${other.length} finding${other.length === 1 ? '' : 's'}</span>
+          </div>
+          ${other
+            .map(
+              (i) => `<div class="health-row health-${i.severity}">
+                <span class="health-sev-badge health-${i.severity}">${SEVERITY_LABEL[i.severity]}</span>
+                <span class="health-provider">${esc(i.provider)}</span>
+                <span class="health-msg">${esc(i.msg)}</span>
+              </div>`,
+            )
+            .join('')}
+        </div>`
+      : '';
+
+    results.innerHTML = entryGroupsHtml + otherHtml;
+  }
+
+  const healthSevSel = document.getElementById(
+    'health-filter-severity',
+  ) as HTMLSelectElement | null;
+  if (healthSevSel) {
+    healthSevSel.onchange = () => {
+      _healthSeverityFilter = healthSevSel.value;
+      renderHealthResults();
+    };
+  }
+  const healthTypeSel = document.getElementById('health-filter-type') as HTMLSelectElement | null;
+  if (healthTypeSel) {
+    healthTypeSel.onchange = () => {
+      _healthTypeFilter = healthTypeSel.value;
+      renderHealthResults();
+    };
+  }
+
+  // Jump to the finding's card in the Secrets panel — addressed by entry id
+  // (invariant 1), resolved fresh at click time rather than held from scan
+  // time, since a scan can sit on screen through edits and deletes.
+  document.getElementById('health-results')?.addEventListener('click', (e) => {
+    const btn = (e.target as HTMLElement).closest<HTMLElement>('[data-action="health-jump"]');
+    const id = btn?.dataset.id;
+    if (!id) return;
+    const i = st.vault.api_keys.findIndex((en) => entryId(en) === id);
+    if (i < 0) {
+      showToast('That entry no longer exists', 'err');
+      return;
+    }
+    const entry = st.vault.api_keys[i];
+    switchPanel('secrets');
+    st.expanded.add(id);
+    // A collapsed pool card hides its members — expand it too, or the card
+    // this button promises to show stays out of sight behind the summary.
+    if (typeof entry.pool === 'string' && entry.pool.trim()) {
+      st.expandedPools.add(entry.pool.trim());
+    }
+    render();
+    setTimeout(() => {
+      const cardEl = document.querySelector<HTMLElement>(`#card-grid [data-idx="${i}"]`);
+      cardEl?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      cardEl?.classList.add('flash-highlight');
+      setTimeout(() => cardEl?.classList.remove('flash-highlight'), 1500);
+    }, 80);
+  });
+
+  document.getElementById('health-scan-btn')?.addEventListener('click', () => {
+    const timeEl = document.getElementById('health-scan-time')!;
+    _lastHealthIssues = computeHealthIssues();
+    timeEl.textContent = `Scanned ${st.vault.api_keys.length} secrets · ${new Date().toLocaleTimeString()}`;
+    renderHealthResults();
   });
 
   // ── Import tool (item 9) ───────────────────────────────────────────────────
@@ -1093,15 +1290,14 @@ export function initTools() {
         return `${key}=${e.api_key}`;
       })
       .join('\n');
-    const blob = new Blob([lines], { type: 'text/plain' });
-    const url = URL.createObjectURL(blob);
-    const a = Object.assign(document.createElement('a'), { href: url, download: 'export.env' });
-    // The anchor has to be in the document, and the object URL has to outlive
-    // the click — revoking synchronously cancelled the download in WebKitGTK.
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 10_000);
+    // A3 (2026-09-14): this was the reported symptom — the confirmation dialog
+    // above, then a toast-free blob-anchor click that wrote nothing in Tauri's
+    // webview. `saveFile` writes the bytes and only then is anything reported.
+    const res = await saveFile(lines, 'export.env');
+    showToast(
+      res.ok ? (res.path ? `Exported to ${res.path}` : 'Exported') : `Export failed: ${res.error}`,
+      res.ok ? 'ok' : 'error',
+    );
   });
 
   // Expose bulk toggle to card clicks

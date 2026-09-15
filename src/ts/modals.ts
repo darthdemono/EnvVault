@@ -4,6 +4,7 @@
  */
 
 import type { VaultEntry, SecretType } from './types';
+import { renderComposite, renderErrorMessage, type CompositeKind } from './composite';
 import {
   st,
   Settings,
@@ -50,6 +51,11 @@ import {
   toCookieJson,
 } from './cookies';
 import { parseTotpSeed, TOTP_DEFAULTS } from './totp';
+import {
+  presets as sessionPresets,
+  findPreset as findSessionPreset,
+  deriveHeaders as deriveSessionHeaders,
+} from './session-presets';
 
 /**
  * Rate-limit text the structured count/period pair cannot express, carried from
@@ -159,6 +165,138 @@ export const TYPE_CONFIG: Record<SecretType, TypeConfig> = {
     keyLabel: 'Cookie jar',
     keyPlaceholder: 'sp_dc=…; sp_key=…  — or paste a cookies.txt / JSON export',
   },
+  // api_key is unused for both: a composite's value is its rendered template,
+  // and a bundle's payload is entirely its members plus its local variables.
+  composite: {
+    providerLabel: 'Name',
+    providerPlaceholder: 'e.g. Outlook Calendar',
+    showAccount: false,
+    keyLabel: 'Value',
+    keyPlaceholder: '',
+  },
+  bundle: {
+    providerLabel: 'Bundle Name',
+    providerPlaceholder: 'e.g. Discord bot',
+    showAccount: false,
+    keyLabel: 'Value',
+    keyPlaceholder: '',
+  },
+  // Phase 24.5's sixteen new types. No `<option>` exists for any of them in
+  // the type picker yet — these entries exist only to keep `TYPE_CONFIG`
+  // exhaustive over `SecretType`, per invariant "shape now, behavior later".
+  // Every one stores its payload in `extra_vars`, the same as `env_var`.
+  oauth_client: {
+    providerLabel: 'Provider',
+    providerPlaceholder: 'e.g. Google',
+    showAccount: false,
+    keyLabel: 'Value',
+    keyPlaceholder: '',
+  },
+  signing_key: {
+    providerLabel: 'Key name',
+    providerPlaceholder: 'e.g. Webhook signing key',
+    showAccount: false,
+    keyLabel: 'Value',
+    keyPlaceholder: '',
+  },
+  registry_token: {
+    providerLabel: 'Registry',
+    providerPlaceholder: 'e.g. npm',
+    showAccount: true,
+    keyLabel: 'Token',
+    keyPlaceholder: '',
+  },
+  database: {
+    providerLabel: 'Database',
+    providerPlaceholder: 'e.g. Production Postgres',
+    showAccount: false,
+    keyLabel: 'Value',
+    keyPlaceholder: '',
+  },
+  recovery_codes: {
+    providerLabel: 'Service',
+    providerPlaceholder: 'e.g. GitHub recovery codes',
+    showAccount: false,
+    keyLabel: 'Value',
+    keyPlaceholder: '',
+  },
+  gpg_key: {
+    providerLabel: 'Key name',
+    providerPlaceholder: 'e.g. Release signing key',
+    showAccount: false,
+    keyLabel: 'Value',
+    keyPlaceholder: '',
+  },
+  age_key: {
+    providerLabel: 'Key name',
+    providerPlaceholder: 'e.g. Backup encryption key',
+    showAccount: false,
+    keyLabel: 'Value',
+    keyPlaceholder: '',
+  },
+  local_service: {
+    providerLabel: 'Service',
+    providerPlaceholder: 'e.g. Sonarr',
+    showAccount: false,
+    keyLabel: 'Value',
+    keyPlaceholder: '',
+  },
+  tracker: {
+    providerLabel: 'Site',
+    providerPlaceholder: 'e.g. a private tracker',
+    showAccount: true,
+    keyLabel: 'Value',
+    keyPlaceholder: '',
+  },
+  usenet_server: {
+    providerLabel: 'Provider',
+    providerPlaceholder: 'e.g. a Usenet provider',
+    showAccount: true,
+    keyLabel: 'Value',
+    keyPlaceholder: '',
+  },
+  wifi: {
+    providerLabel: 'Network name (SSID)',
+    providerPlaceholder: 'e.g. Home Wi-Fi',
+    showAccount: false,
+    keyLabel: 'Passphrase',
+    keyPlaceholder: '',
+  },
+  license_key: {
+    providerLabel: 'Product',
+    providerPlaceholder: 'e.g. an app license',
+    showAccount: false,
+    keyLabel: 'Key',
+    keyPlaceholder: '',
+  },
+  crypto_wallet: {
+    providerLabel: 'Wallet name',
+    providerPlaceholder: 'e.g. Cold wallet',
+    showAccount: false,
+    keyLabel: 'Value',
+    keyPlaceholder: '',
+  },
+  passkey: {
+    providerLabel: 'Site',
+    providerPlaceholder: 'e.g. GitHub',
+    showAccount: true,
+    keyLabel: 'Value',
+    keyPlaceholder: '',
+  },
+  secure_note: {
+    providerLabel: 'Title',
+    providerPlaceholder: 'e.g. Recovery instructions',
+    showAccount: false,
+    keyLabel: 'Value',
+    keyPlaceholder: '',
+  },
+  identity_document: {
+    providerLabel: 'Document',
+    providerPlaceholder: 'e.g. Passport',
+    showAccount: false,
+    keyLabel: 'Value',
+    keyPlaceholder: '',
+  },
 };
 
 // ── Dynamic form fields ───────────────────────────────────────────────────
@@ -180,9 +318,16 @@ export function dynamicSecretFields() {
   const providerInput = document.getElementById('f-provider') as HTMLInputElement | null;
   const envvarSubtypeGroup = document.getElementById('f-envvar-subtype-group');
 
-  const showKey = type !== 'certificate' && type !== 'file_blob';
+  const showKey =
+    type !== 'certificate' && type !== 'file_blob' && type !== 'composite' && type !== 'bundle';
   const showSecret = type === 'api_key';
   const showUser = type === 'password' || type === 'ssh_key';
+  // A composite's payload is its template plus its parts (extra_vars); a
+  // bundle's is entirely its members and its local variables (extra_vars).
+  // Neither has a single primary value the way every other type does.
+  const templateGroup = document.getElementById('f-template-group');
+  if (templateGroup) templateGroup.style.display = type === 'composite' ? 'flex' : 'none';
+  if (type === 'composite') refreshCompositePreview();
 
   if (keyGroup) keyGroup.style.display = showKey ? 'flex' : 'none';
   if (secretGroup) secretGroup.style.display = showSecret ? 'flex' : 'none';
@@ -215,9 +360,45 @@ export function dynamicSecretFields() {
 
   if (providerLabel) providerLabel.innerHTML = `${cfg.providerLabel} <span class="req">*</span>`;
   if (providerInput) providerInput.placeholder = cfg.providerPlaceholder;
-  if (keyLabelEl && showKey) keyLabelEl.innerHTML = `${cfg.keyLabel} <span class="req">*</span>`;
   const keyInput = document.getElementById('f-key') as HTMLInputElement | null;
   if (keyInput && showKey) keyInput.placeholder = cfg.keyPlaceholder;
+  if (keyLabelEl && showKey) refreshRequiredMarker(keyLabelEl, keyInput, cfg.keyLabel);
+}
+
+/**
+ * A5 (2026-09-14): the `*` on the value label, and `aria-required` on the
+ * field itself, used to be static — written once by `dynamicSecretFields`
+ * from `cfg.keyLabel` and never touched again, so an `env_var` entry with a
+ * named variable (or any entry carrying a seed) still showed "required"
+ * although `primaryIsOptional` — the one predicate that decides whether the
+ * form insists on the primary slot — already said it was not.
+ *
+ * Reads the form's current state into the shape `primaryIsOptional` expects,
+ * so there is exactly one place that answers "is the value optional right
+ * now" and this is a consumer of it, not a second copy of the logic.
+ */
+function refreshRequiredMarker(
+  labelEl: HTMLElement,
+  keyInput: HTMLInputElement | null,
+  label: string,
+): void {
+  const type = (document.getElementById('f-secret-type') as HTMLSelectElement | null)?.value as
+    SecretType | undefined;
+  const extra_vars = [
+    ...document.querySelectorAll<HTMLInputElement>('#f-extra-vars-list .extra-var-key'),
+  ]
+    .map((el) => ({ key: el.value.trim() }))
+    .filter((v) => v.key);
+  const totp_secret =
+    (document.getElementById('f-totp') as HTMLInputElement | null)?.value.trim() || undefined;
+  const optional = primaryIsOptional({ secretType: type, extra_vars, totp_secret } as VaultEntry);
+  labelEl.innerHTML = optional
+    ? `${label} <span class="opt">optional</span>`
+    : `${label} <span class="req">*</span>`;
+  if (keyInput) {
+    if (optional) keyInput.removeAttribute('aria-required');
+    else keyInput.setAttribute('aria-required', 'true');
+  }
 }
 
 // ── Form to entry & fill form ─────────────────────────────────────────────
@@ -249,7 +430,14 @@ export function formToEntry(base?: VaultEntry): VaultEntry {
   const cats = [...document.querySelectorAll<HTMLElement>('#f-categories .cat-chip.selected')].map(
     (c) => c.textContent!,
   );
-  const secretType = (getVal('f-secret-type') || 'api_key') as SecretType;
+  // A11: an unrecognised type leaves the select at `''` (no matching
+  // `<option>`) — fall back to the base entry's real value, verbatim, rather
+  // than `api_key`. `saveModal` also refuses outright while this is set; this
+  // fallback is defence in depth for any other caller of `formToEntry`.
+  const secretType = (getVal('f-secret-type') ||
+    _unknownSecretType ||
+    base?.secretType ||
+    'api_key') as SecretType;
 
   const selectedProjectIds = [
     ...document.querySelectorAll<HTMLElement>('#f-project .project-pick-item.selected'),
@@ -273,6 +461,11 @@ export function formToEntry(base?: VaultEntry): VaultEntry {
     auth_param: getVal('f-auth-param') || undefined,
     user_agent: getVal('f-user-agent') || undefined,
     mount_path: getVal('f-mount-path') || undefined,
+    composite_template: secretType === 'composite' ? getVal('f-template') || undefined : undefined,
+    composite_kind:
+      secretType === 'composite'
+        ? ((getVal('f-template-kind') as VaultEntry['composite_kind']) ?? undefined)
+        : undefined,
     price_type: getVal('f-price', 'free') as VaultEntry['price_type'],
     environment: (getVal('f-env') as VaultEntry['environment']) || undefined,
     projectIds: selectedProjectIds.includes('Universal')
@@ -548,11 +741,18 @@ function setNumber(id: string, value: number): void {
 export function wireTotpField(): void {
   const input = document.getElementById('f-totp') as HTMLInputElement | null;
   const reveal = document.getElementById('f-totp-reveal') as HTMLButtonElement | null;
+  // A5: a seed is one of the shapes `primaryIsOptional` recognises (an
+  // imported entry whose password lives elsewhere), so typing or clearing one
+  // must re-check whether the primary value is still required.
+  const refresh = () => {
+    refreshTotpStatus();
+    dynamicSecretFields();
+  };
   if (input) {
-    input.oninput = () => refreshTotpStatus();
-    input.onchange = () => refreshTotpStatus();
+    input.oninput = refresh;
+    input.onchange = refresh;
     // A URI arrives by paste, and `paste` fires before the value lands.
-    input.onpaste = () => setTimeout(() => refreshTotpStatus(), 0);
+    input.onpaste = () => setTimeout(refresh, 0);
   }
   for (const id of [
     'f-totp-algorithm',
@@ -591,6 +791,33 @@ export function resetTotpField(): void {
   }
 }
 
+/**
+ * The real `secretType` of the entry currently open, when this build has no
+ * `<option>` for it — `null` in the ordinary case. Read by `formToEntry` (to
+ * preserve it rather than defaulting to `api_key`) and by `saveModal` (to
+ * refuse outright). Reset on every `fillForm` call, including `openAdd`'s,
+ * where it is always `null` — a *new* entry can only ever be a type this form
+ * offers.
+ */
+let _unknownSecretType: string | null = null;
+
+/** A11: shows or hides the "made by a newer EnvVault" banner and (dis)ables Save. */
+function applyUnknownSecretType(rawType: string | null): void {
+  _unknownSecretType = rawType;
+  const banner = document.getElementById('f-unknown-type-banner');
+  const saveBtn = document.getElementById('modal-save') as HTMLButtonElement | null;
+  if (banner) {
+    banner.hidden = !rawType;
+    const p = banner.querySelector('p');
+    if (p && rawType)
+      p.textContent = `This entry's type ("${rawType}") was made by a newer EnvVault — update to edit it. Everything else here is safe to view.`;
+  }
+  if (saveBtn) {
+    saveBtn.disabled = !!rawType;
+    saveBtn.title = rawType ? 'Update EnvVault to edit this entry' : '';
+  }
+}
+
 export function fillForm(entry: Partial<VaultEntry>) {
   (document.getElementById('f-provider') as HTMLInputElement).value = entry.provider || '';
   (document.getElementById('f-account') as HTMLInputElement).value =
@@ -623,6 +850,10 @@ export function fillForm(entry: Partial<VaultEntry>) {
   (document.getElementById('f-auth-param') as HTMLInputElement).value = entry.auth_param || '';
   (document.getElementById('f-user-agent') as HTMLInputElement).value = entry.user_agent || '';
   (document.getElementById('f-mount-path') as HTMLInputElement).value = entry.mount_path || '';
+  const fTemplate = document.getElementById('f-template') as HTMLTextAreaElement | null;
+  if (fTemplate) fTemplate.value = entry.composite_template || '';
+  const fTemplateKind = document.getElementById('f-template-kind') as HTMLSelectElement | null;
+  if (fTemplateKind) fTemplateKind.value = entry.composite_kind || 'link';
   // Normalised on read, not trusted: this entry may have been written by an
   // older build that only had the free-text field, by a remote server, or by an
   // imported backup. `normalizeRateLimit` is the one reader (CLAUDE.md
@@ -667,8 +898,17 @@ export function fillForm(entry: Partial<VaultEntry>) {
     ? iconHTML('', entry.custom_icon)
     : '';
   const stVal = entry.secretType || 'api_key';
-  (document.getElementById('f-secret-type') as HTMLSelectElement).value = stVal;
+  const stSelect = document.getElementById('f-secret-type') as HTMLSelectElement;
+  stSelect.value = stVal;
   st.formCustomSelects.get('f-secret-type')?.setValue(stVal);
+  // A11 (2026-09-14): a `<select>` handed a value it has no `<option>` for
+  // reads back as the empty string — `stSelect.value` silently did not become
+  // `stVal`. That is exactly what an entry saved by a newer EnvVault with a
+  // type this build has never heard of looks like (24.1's `composite`, or any
+  // of 24.5's sixteen), and saving over it used to rewrite the entry as
+  // `api_key` with nobody told. Lock the form instead: preserve the real
+  // value verbatim (`formToEntry`'s `base` fallback) and refuse to save.
+  applyUnknownSecretType(stSelect.value === stVal ? null : stVal);
   if (entry.secretType === 'certificate') {
     (document.getElementById('f-cert') as HTMLInputElement).value = entry.certificate_data || '';
     (document.getElementById('f-cert-key') as HTMLInputElement).value = entry.cert_key_data || '';
@@ -804,6 +1044,43 @@ export function updateNamePreview(): void {
 }
 
 /**
+ * Live preview for a `composite` entry's template (Phase 24.1).
+ *
+ * Reads the same `#f-extra-vars-list` rows `formToEntry` does — parts *are*
+ * `extra_vars`, so there is nowhere else this could read from without
+ * building a second copy of "what are the current rows" (invariant already
+ * established by E4's `formToEntry`).
+ */
+export function refreshCompositePreview(): void {
+  const out = document.getElementById('f-template-preview');
+  if (!out) return;
+  const template =
+    (document.getElementById('f-template') as HTMLTextAreaElement | null)?.value ?? '';
+  const kind =
+    ((document.getElementById('f-template-kind') as HTMLSelectElement | null)
+      ?.value as CompositeKind) || 'link';
+  if (!template) {
+    out.textContent = '';
+    return;
+  }
+  const parts = [
+    ...document.querySelectorAll<HTMLElement>('#f-extra-vars-list .extra-var-row'),
+  ].map((row) => ({
+    key: row.querySelector<HTMLInputElement>('.extra-var-key')?.value.trim() || '',
+    value: row.querySelector<HTMLInputElement>('.extra-var-value')?.value || '',
+  }));
+  const res = renderComposite(template, parts, kind);
+  if (res.ok) {
+    out.textContent = res.result.text;
+    out.classList.remove('env-name-preview-invalid');
+    if (res.result.unused.length) out.textContent += `  (unused: ${res.result.unused.join(', ')})`;
+  } else {
+    out.textContent = renderErrorMessage(res.error);
+    out.classList.add('env-name-preview-invalid');
+  }
+}
+
+/**
  * The cookie paste helper.
  *
  * Dropping a raw `document.cookie` string, a DevTools "Copy all as JSON" or a
@@ -860,9 +1137,101 @@ function wireCookieSplit(): void {
         if (xv.attrs) row.dataset.cookieAttrs = JSON.stringify(xv.attrs);
         list.appendChild(row);
       }
+      dynamicSecretFields(); // A5: new named variables can change whether the primary is required
       showToast(`Split into ${jar.length} cookie${jar.length === 1 ? '' : 's'}`, 'ok');
     };
   }
+}
+
+let _sessionPresetOptionsBuilt = false;
+let _sessionPresetBound = false;
+
+/**
+ * Which required cookies (from the currently selected preset) the form's own
+ * jar — the primary value plus every `extra_vars` row — does not have yet.
+ * Reads the form directly rather than `formToEntry()`, so this can run on
+ * every keystroke without constructing a whole entry each time.
+ */
+function currentJarNames(): Set<string> {
+  const raw = (document.getElementById('f-key') as HTMLInputElement | null)?.value ?? '';
+  const type = (document.getElementById('f-secret-type') as HTMLSelectElement | null)?.value;
+  const names = new Set<string>();
+  if (type === 'cookie') {
+    for (const c of parseAnyCookies(raw)) names.add(c.name);
+  }
+  for (const row of document.querySelectorAll<HTMLElement>('#f-extra-vars-list .extra-var-row')) {
+    const key = row.querySelector<HTMLInputElement>('.extra-var-key')?.value.trim();
+    if (key) names.add(key);
+  }
+  return names;
+}
+
+/** Shows/hides the preset picker and, when one is selected, which of its
+ * required cookies the jar is missing. Never edits the jar itself — see the
+ * module doc on `session-presets.ts` for why this is informational only. */
+function refreshSessionPresetUI(): void {
+  const group = document.getElementById('f-session-preset-group');
+  const select = document.getElementById('f-session-preset') as HTMLSelectElement | null;
+  const status = document.getElementById('f-session-preset-status');
+  const copyBtn = document.getElementById(
+    'f-session-preset-copy-header',
+  ) as HTMLButtonElement | null;
+  if (!group || !select || !status) return;
+
+  const isCookie =
+    (document.getElementById('f-secret-type') as HTMLSelectElement | null)?.value === 'cookie';
+  group.style.display = isCookie ? 'flex' : 'none';
+  if (!isCookie) return;
+
+  if (!_sessionPresetOptionsBuilt) {
+    _sessionPresetOptionsBuilt = true;
+    for (const p of sessionPresets()) {
+      const opt = document.createElement('option');
+      opt.value = p.id;
+      opt.textContent = p.label;
+      select.appendChild(opt);
+    }
+  }
+
+  const preset = findSessionPreset(select.value);
+  if (!preset) {
+    status.textContent = '';
+    if (copyBtn) copyBtn.style.display = 'none';
+    return;
+  }
+  const have = currentJarNames();
+  const missing = preset.required_cookies.filter((c) => !have.has(c));
+  status.textContent = missing.length
+    ? `Missing: ${missing.join(', ')}`
+    : `All required cookies present${preset.optional_cookies.length ? ` (optional: ${preset.optional_cookies.join(', ')})` : ''}`;
+  if (copyBtn) copyBtn.style.display = preset.header_recipe.length ? '' : 'none';
+}
+
+/** Assignment-guarded (invariant 9): `openModal` runs on every open. */
+function wireSessionPreset(): void {
+  if (_sessionPresetBound) return;
+  _sessionPresetBound = true;
+  document.getElementById('f-session-preset')?.addEventListener('change', refreshSessionPresetUI);
+  document.getElementById('f-key')?.addEventListener('input', refreshSessionPresetUI);
+  document.getElementById('f-secret-type')?.addEventListener('change', refreshSessionPresetUI);
+  document.getElementById('f-extra-vars-list')?.addEventListener('input', refreshSessionPresetUI);
+
+  document.getElementById('f-session-preset-copy-header')?.addEventListener('click', () => {
+    void (async () => {
+      const select = document.getElementById('f-session-preset') as HTMLSelectElement | null;
+      const preset = findSessionPreset(select?.value ?? '');
+      if (!preset) return;
+      const entry = formToEntry();
+      const headers = await deriveSessionHeaders(entry, preset, entry.api_url ?? undefined);
+      if (!headers.length) {
+        showToast('Nothing to derive — check the required cookies are present', 'err');
+        return;
+      }
+      const text = headers.map((h) => `${h.name}: ${h.value}`).join('\n');
+      await clipboardWrite(text);
+      showToast(`Copied ${headers.length} header${headers.length === 1 ? '' : 's'} ✓`, 'ok');
+    })();
+  });
 }
 
 let _previewBound = false;
@@ -889,6 +1258,14 @@ function wireNamePreview(): void {
     const el = document.getElementById(id);
     if (el) el.addEventListener('input', updateNamePreview);
   }
+  // Composite live preview: the template, its kind, and every extra-var row
+  // (parts) — delegated on the list so a row added or removed later is
+  // covered without a second binding pass.
+  for (const id of ['f-template', 'f-template-kind']) {
+    const el = document.getElementById(id);
+    if (el) el.addEventListener('input', refreshCompositePreview);
+  }
+  document.getElementById('f-extra-vars-list')?.addEventListener('input', refreshCompositePreview);
 }
 
 // ── Modal open/close/save ─────────────────────────────────────────────────
@@ -904,6 +1281,8 @@ export function openModal(title: string, idx: number) {
   updateNamePreview();
   wireCookieSplit();
   refreshCookieSplit();
+  wireSessionPreset();
+  refreshSessionPresetUI();
   document.getElementById('modal-overlay')!.classList.add('open');
   (document.getElementById('f-provider') as HTMLInputElement).focus();
   populateProjectSelect();
@@ -935,8 +1314,131 @@ function _makeExtraVarRow(key = '', value = '', secret = false, isPublic = false
   row.querySelector<HTMLInputElement>('.extra-var-secret')!.addEventListener('change', (ev) => {
     inp.type = (ev.target as HTMLInputElement).checked ? 'password' : 'text';
   });
-  row.querySelector('.extra-var-remove')!.addEventListener('click', () => row.remove());
+  row.querySelector('.extra-var-remove')!.addEventListener('click', () => {
+    row.remove();
+    dynamicSecretFields(); // A5: removing the only named variable can make the primary required again
+  });
   return row;
+}
+
+/**
+ * Suggested `extra_vars` names for Phase 24.5's sixteen new types — the
+ * per-type field tables from the design, without building sixteen bespoke
+ * widgets. `[key, secret]`; `secret` pre-ticks the mask checkbox for a name
+ * that is realistically going to hold one.
+ *
+ * Deliberately excludes anything the form already has a dedicated field for:
+ * `provider` (name/SSID/site), the primary value (passphrase/key/body),
+ * `account_name` (username), `api_secret`, `description` (a note's body).
+ */
+const SUGGESTED_VARS: Partial<Record<SecretType, [string, boolean][]>> = {
+  oauth_client: [
+    ['client_id', false],
+    ['client_secret', true],
+    ['auth_url', false],
+    ['token_url', false],
+    ['redirect_uri', false],
+    ['scopes', false],
+    ['refresh_token', true],
+    ['access_token', true],
+    ['access_expires_at', false],
+  ],
+  signing_key: [
+    ['alg', false],
+    ['kid', false],
+    ['public_key', false],
+    ['usage', false],
+    ['previous_key', true],
+  ],
+  registry_token: [
+    ['registry', false],
+    ['scope', false],
+  ],
+  database: [
+    ['engine', false],
+    ['host', false],
+    ['port', false],
+    ['database', false],
+    ['user', false],
+    ['sslmode', false],
+  ],
+  recovery_codes: [
+    ['codes', true],
+    ['used_at', false],
+  ],
+  gpg_key: [
+    ['fingerprint', false],
+    ['key_id', false],
+    ['uids', false],
+    ['subkey_expiries', false],
+  ],
+  age_key: [['recipient', false]],
+  local_service: [
+    ['base_url', false],
+    ['auth_placement', false],
+    ['reachability', false],
+  ],
+  tracker: [
+    ['announce_url', true],
+    ['rss_url', true],
+  ],
+  usenet_server: [
+    ['host', false],
+    ['port', false],
+    ['ssl', false],
+    ['connections', false],
+  ],
+  wifi: [
+    ['security', false],
+    ['hidden', false],
+  ],
+  license_key: [
+    ['licensed_to', false],
+    ['email', false],
+    ['seats', false],
+    ['activations', false],
+    ['purchased', false],
+    ['maintenance_until', false],
+    ['order_id', false],
+  ],
+  crypto_wallet: [
+    ['bip39_passphrase', true],
+    ['derivation_path', false],
+    ['network', false],
+    ['addresses', false],
+    ['xpub', false],
+  ],
+  passkey: [
+    ['credential_id', false],
+    ['rp_id', false],
+    ['user_handle', true],
+  ],
+  identity_document: [
+    ['kind', false],
+    ['issuing_country', false],
+    ['subdivision', false],
+    ['issued', false],
+    ['expires', false],
+  ],
+};
+
+/**
+ * Populates `extra_vars` with blank rows named for the type just picked —
+ * only when the list is still empty, so this never touches an entry that
+ * already has values (editing an existing one, or a type change the user
+ * changed their mind about and changed back). A user-driven `change` on the
+ * type select is the only caller; `fillForm` sets `.value` directly, which
+ * fires no `change` event, so loading an existing entry never triggers this.
+ */
+export function suggestExtraVarsForType(type: SecretType): void {
+  const list = document.getElementById('f-extra-vars-list');
+  if (!list || list.children.length > 0) return;
+  const suggestions = SUGGESTED_VARS[type];
+  if (!suggestions) return;
+  for (const [key, secret] of suggestions) {
+    list.appendChild(_makeExtraVarRow(key, '', secret, false));
+  }
+  dynamicSecretFields();
 }
 
 export function openAdd(e?: Event) {
@@ -968,6 +1470,12 @@ export function openAdd(e?: Event) {
       const row = _makeExtraVarRow();
       document.getElementById('f-extra-vars-list')?.appendChild(row);
       row.querySelector<HTMLInputElement>('.extra-var-key')?.focus();
+      dynamicSecretFields(); // A5: a fresh row has no key yet, so this is a no-op until one is typed
+    });
+    // A5: typing a variable's key can turn the primary value optional (or back)
+    // for an `env_var` entry — delegated so it covers every row, present and future.
+    document.getElementById('f-extra-vars-list')?.addEventListener('input', (e) => {
+      if ((e.target as HTMLElement).classList.contains('extra-var-key')) dynamicSecretFields();
     });
     _draftBound = true;
   }
@@ -991,6 +1499,12 @@ export function closeModal() {
 
 export async function saveModal() {
   try {
+    // A11: belt and braces alongside the disabled Save button — this refuses
+    // even if something programmatic reaches `saveModal` directly.
+    if (_unknownSecretType) {
+      showToast('Update EnvVault to edit this entry', 'err');
+      return;
+    }
     const idx = parseInt((document.getElementById('edit-index') as HTMLInputElement).value);
     // The entry being edited is the *base*: every field with no form input rides
     // through by construction rather than by the save path remembering it (E4).
@@ -1007,6 +1521,10 @@ export async function saveModal() {
     }
     if (t === 'file_blob' && !entry.blob_ref) {
       showToast('File path/reference is required', 'err');
+      return;
+    }
+    if (t === 'composite' && !entry.composite_template) {
+      showToast('Template is required', 'err');
       return;
     }
     // The primary value is required **unless the entry legitimately has none**
@@ -1469,7 +1987,7 @@ export function openCopyEnvMenu(e: Event, idx: number) {
               const f = fileContentsOf(entry);
               if (!f) return;
               const base = envName(entry, { case: 'lower' });
-              downloadText(f.text, `${base}.${f.ext}`, 'File written ✓');
+              void downloadText(f.text, `${base}.${f.ext}`, 'File written ✓');
             },
           },
           ...(entry.mount_path

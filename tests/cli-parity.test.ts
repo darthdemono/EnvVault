@@ -58,7 +58,6 @@ import {
   curlFor,
   shellQuote,
 } from '../src/ts/auth-request';
-import { buildIcs } from '../src/ts/calendar';
 import { loadRealIndexHtml, resetState } from './helpers';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -185,34 +184,14 @@ describe('exporter parity fixtures', () => {
     golden('chunk-docker-service.txt', chunkToString(chunk));
   });
 
-  /**
-   * The calendar is the fourth format written twice — `src/ts/calendar.ts` and
-   * `envv-cli/src/calendar.rs` — so it gets the same treatment as the config
-   * exporters: one golden file, asserted from both sides.
-   *
-   * `now` is pinned. A DTSTAMP taken from the wall clock makes the fixture fail
-   * one second after it is written, and means the two implementations can never
-   * produce identical bytes even when they agree perfectly.
-   */
-  it('icalendar feed', () => {
-    golden(
-      'calendar.ics',
-      buildIcs(st.vault.api_keys as any, {
-        now: '2026-08-26T12:00:00Z',
-        calendarName: 'EnvVault',
-      }),
-    );
-  });
-
-  it('the calendar carries no secret value from the fixture vault', () => {
-    // The guarantee, asserted against the real fixture rather than a toy entry:
-    // an .ics is handed to a third-party calendar service.
-    const ics = buildIcs(st.vault.api_keys as any, { now: '2026-08-26T12:00:00Z' });
-    for (const e of st.vault.api_keys as any[]) {
-      if (e.api_key) expect(ics).not.toContain(e.api_key);
-      if (e.api_secret) expect(ics).not.toContain(e.api_secret);
-    }
-  });
+  // The iCalendar feed used to be a fourth format written twice here and in
+  // `envv-cli/src/calendar.rs`, pinned by this same `calendar.ics` fixture from
+  // both sides. Phase 24.3 deleted the TypeScript builder — the format is now
+  // built in exactly one place, `vault-core/src/calendar.rs`, reached by the
+  // app over IPC (`calendar_build_ics`) and by the CLI and `envv-server`
+  // directly. The fixture still exists and still pins the Rust output; see
+  // `calendar_ics` and `calendar_carries_no_secret_value` in
+  // `envv-cli/tests/parity.rs`.
 
   /**
    * The `${Provider/field}` alias table — a fourth twin pair, and one that had

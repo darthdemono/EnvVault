@@ -28,8 +28,10 @@ import { getFiltered, sorted, buildProjectTree, getDescendantProjectIds } from '
 import { timeUntil } from './ui-qol';
 import { iconHTML } from './icons';
 import { normalizeRateLimit } from './ratelimit';
-import { poolsOf } from './pools';
+import { poolsOf, poolBadgeInfo } from './pools';
+import { secretTypeLabel } from './secret-types';
 import { hasTotp, startTotpTicker, stopTotpTicker } from './totp';
+import { renderComposite, renderErrorMessage } from './composite';
 import {
   esc,
   escAttr,
@@ -39,6 +41,7 @@ import {
   showPrompt,
   showPromptLarge,
   clipboardWrite,
+  saveFile,
   eyeSVG,
   copySVG,
   editSVG,
@@ -200,7 +203,10 @@ function renderSidebar() {
 
   renderTagSection(all);
   renderPoolSection(all);
-  renderAuthenticatorSection(all);
+  // A2 (2026-09-14): the Authenticator *sidebar section* is gone — two
+  // surfaces for one feature, and the one that showed nothing (A1) read as
+  // the feature being broken. The `auth` activity-bar panel below is the path.
+  //
   // The Authenticator screen shows the same seeds, so it repaints with them —
   // a vault edited anywhere must not leave a stale card behind (invariant 1).
   if (Settings.get('activePanel') === 'auth') {
@@ -275,6 +281,77 @@ function renderPrefixSection(all: VaultEntry[]) {
     .join('');
 }
 
+/** Human labels for the chip bar and the health scan's type badges (Phase
+ * 24.2). Falls back to the raw string — a newer build's type is still
+ * filterable/readable in an older one, just unlabelled. */
+export const TYPE_CHIP_LABELS: Record<string, string> = {
+  api_key: 'API Key',
+  password: 'Password',
+  certificate: 'Certificate',
+  env_var: 'Env Var',
+  connection_string: 'Connection',
+  ssh_key: 'SSH Key',
+  file_blob: 'File',
+  cookie: 'Web Session',
+  composite: 'Composite',
+  bundle: 'Bundle',
+};
+
+/**
+ * The multi-toggle type chip bar above the grid (Phase 24.2).
+ *
+ * One chip per `SecretType` actually present, plus two virtual chips — 2FA
+ * (carries a stored authenticator seed) and Pool (key-pool membership) —
+ * neither of which is a `secretType` value on its own. OR-combined within the
+ * bar, ANDed with every other active filter in `getFiltered()`.
+ *
+ * Counts are computed over the **whole vault**, matching the sidebar's own
+ * price/type counters — narrowing them by the currently active chips would
+ * make every chip's own number drop to zero the moment it is pressed, which
+ * reads as "nothing else matches" rather than "here is what else exists".
+ */
+function renderTypeChipBar(all: VaultEntry[]) {
+  const bar = document.getElementById('type-chip-bar');
+  if (!bar) return;
+
+  const byType = new Map<string, number>();
+  let totpCount = 0;
+  let poolCount = 0;
+  for (const k of all) {
+    const t = k.secretType || 'api_key';
+    byType.set(t, (byType.get(t) ?? 0) + 1);
+    if (k.totp_secret && k.totp_secret.trim() !== '') totpCount++;
+    if (typeof k.pool === 'string' && k.pool.trim() !== '') poolCount++;
+  }
+
+  // Bundle members (fields exist since Phase 24.1 step 2, no card yet) are a
+  // real type on the entry — no special-casing needed here.
+  const chips: { key: string; label: string; count: number }[] = [...byType.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .map(([type, count]) => ({ key: type, label: TYPE_CHIP_LABELS[type] ?? type, count }));
+  if (totpCount) chips.push({ key: '__totp', label: '2FA', count: totpCount });
+  if (poolCount) chips.push({ key: '__pool', label: 'Pool', count: poolCount });
+
+  // Nothing to choose between: one type, no seeds, no pools. A chip bar with a
+  // single always-on chip is a control that cannot do anything.
+  if (chips.length < 2) {
+    bar.style.display = 'none';
+    bar.innerHTML = '';
+    return;
+  }
+
+  bar.style.display = '';
+  bar.innerHTML = chips
+    .map(({ key, label, count }) => {
+      const active = st.activeTypeChips.has(key);
+      return `<button type="button" class="type-chip${active ? ' active' : ''}" aria-pressed="${active}" data-chip="${escAttr(key)}">
+        <span class="type-chip-label">${esc(label)}</span>
+        <span class="type-chip-count">${count}</span>
+      </button>`;
+    })
+    .join('');
+}
+
 function renderTagSection(all: VaultEntry[]) {
   const container = document.getElementById('tag-filter-list');
   if (!container) return;
@@ -306,85 +383,10 @@ function renderTagSection(all: VaultEntry[]) {
     .join('');
 }
 
-/**
- * The Authenticator section of the secrets sidebar (Phase 22).
- *
- * Every entry carrying a TOTP seed, with the code it is producing right now.
- * This is the Bitwarden/1Password authenticator view, and it lives here rather
- * than as a fifth activity-bar panel on purpose: it is a *filter over the
- * secrets already in this panel*, so it reuses `sidebar-section` markup and
- * inherits collapse, reorder and hide from the section machinery instead of
- * introducing a second navigation idiom next to it.
- *
- * The header row filters the grid to seed-carrying entries; a body row copies
- * its code. The digits themselves are painted by `tickTotp()` in
- * `src/ts/totp.ts` once a second — this function writes the empty slots and the
- * ticker fills them, which is what keeps the code out of the HTML string and
- * therefore out of every re-render.
- */
-function renderAuthenticatorSection(all: VaultEntry[]) {
-  const container = document.getElementById('authenticator-list');
-  if (!container) return;
-  const withSeed = all.filter((k) => !!k.totp_secret && String(k.totp_secret).trim() !== '');
-
-  const section = document.getElementById('sidebar-section-authenticator');
-  if (section) section.style.display = isSidebarSectionEnabled('authenticator') ? '' : 'none';
-  if (!withSeed.length) {
-    // Not hidden: unlike Tags and Key Pools, which are pure filters with nothing
-    // to say when empty, this section carries the Import button — and an empty
-    // authenticator list is exactly when somebody is looking for it.
-    container.innerHTML =
-      '<div class="sidebar-empty-note">No seeds yet. Import from Ente, Aegis, 2FAS, andOTP, Bitwarden or Google Authenticator.</div>';
-    stopTotpTicker();
-    // Offering "Export" with nothing to write produces an error toast for a
-    // button the user was right to press. Disabling says the same thing first.
-    const emptyExport = document.getElementById('totp-export-btn') as HTMLButtonElement | null;
-    if (emptyExport) emptyExport.disabled = true;
-    return;
-  }
-
-  const active = st.filter.type === 'has_totp';
-  const rows = withSeed
-    .slice()
-    .sort((a, b) => a.provider.localeCompare(b.provider))
-    .map((k) => {
-      // Invariant 1: the row addresses the entry by id, never by its position.
-      // The ticker re-looks-it-up every second, so a delete between renders
-      // leaves an empty slot rather than the neighbour's code.
-      const id = k.id ?? '';
-      const label = k.account_name ? `${k.provider} · ${k.account_name}` : k.provider;
-      return `<div class="sidebar-cat-row">
-        <button class="sidebar-item totp-row" data-action="copy-totp" data-totp-for="${escAttr(id)}"
-          title="${escAttr('Copy the code for ' + label)}">
-          <span class="totp-row-label">${esc(label)}</span>
-          <span class="totp-code" aria-live="off">— — —</span>
-          <span class="totp-countdown"><i class="totp-countdown-fill"></i></span>
-          <span class="totp-secs" aria-hidden="true"></span>
-          <!-- A counter-based seed has no clock; the ticker writes its position
-               here instead of a countdown. Present on every row because the
-               ticker looks the element up rather than being told which kind a
-               row is, and an absent element is simply skipped. -->
-          <span class="totp-counter" aria-hidden="true"></span>
-        </button>
-      </div>`;
-    })
-    .join('');
-
-  container.innerHTML = `<div class="sidebar-cat-row">
-      <button class="sidebar-item${active ? ' active' : ''}"${active ? ' aria-current="true"' : ''}
-        data-filter-type="has_totp" data-filter-value="1">
-        <span class="sidebar-icon">◷</span>
-        <span class="sidebar-label">With a code</span>
-        <span class="sidebar-count">${withSeed.length}</span>
-      </button>
-    </div>${rows}`;
-
-  // Idempotent by assignment (invariant 9): calling this on every render leaves
-  // one interval, not one per render.
-  startTotpTicker();
-  const exportBtn = document.getElementById('totp-export-btn') as HTMLButtonElement | null;
-  if (exportBtn) exportBtn.disabled = false;
-}
+// The Authenticator *sidebar section* that used to live here was removed in
+// A2 (2026-09-14) — see the migration note in `state.ts`'s `Settings.init()`.
+// The `auth` activity-bar panel (`src/ts/auth-panel.ts`) is the surface now;
+// the per-card 2FA row (`buildCard`, below) is the other.
 
 function renderUserCatTree(container: HTMLElement, cats: string[], all: VaultEntry[]) {
   type CatNode = { name: string; real: boolean; children: CatNode[] };
@@ -508,6 +510,7 @@ function diffAndStashCopy(chunk: SecretChunk, snapshot: Record<string, string>) 
 
 export function renderGrid() {
   buildRefIndex();
+  renderTypeChipBar(st.vault.api_keys || []);
   const items = sorted(getFiltered());
   const grid = document.getElementById('card-grid')!;
   // Derived here rather than only flipped on click: lock, import and vault
@@ -518,6 +521,12 @@ export function renderGrid() {
   document.getElementById('result-count')!.textContent =
     `${items.length} secret${items.length !== 1 ? 's' : ''}`;
   applyGridSettings();
+  // A2 (2026-09-14): the sidebar Authenticator section used to own the
+  // ticker's start/stop; removing it left nothing driving the ticker for the
+  // per-card 2FA row. The card grid is now what decides whether a seed is on
+  // screen — idempotent by assignment either way (invariant 9).
+  if (items.some(hasTotp)) startTotpTicker();
+  else stopTotpTicker();
   if (!items.length) {
     grid.innerHTML = `<div class="empty-state"><svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg><p>No secrets found</p><small>${st.searchQ ? 'Try a different search' : 'Add a secret or import a backup'}</small></div>`;
     return;
@@ -563,9 +572,86 @@ export function renderGrid() {
       grid.appendChild(hdr);
       groupItems.forEach((entry) => grid.appendChild(buildCard(entry, idxOf(entry), animIdx++)));
     });
+  } else if (Settings.get('groupPools')) {
+    const fullPools = poolsOf(st.vault);
+    const filteredPools = poolsOf({ api_keys: items });
+    const consumed = new Set<string>();
+    let animIdx = 0;
+    items.forEach((entry) => {
+      const poolName = typeof entry.pool === 'string' ? entry.pool.trim() : '';
+      const poolMembers = poolName ? filteredPools.get(poolName) : undefined;
+      if (poolName && poolMembers && poolMembers.length >= 2) {
+        if (consumed.has(poolName)) return;
+        consumed.add(poolName);
+        // A search that matches only some of a pool's members forces it open
+        // on those members, rather than hiding the reason the card matched
+        // behind a collapsed summary the user did not ask to expand.
+        const partialMatch =
+          !!st.searchQ && poolMembers.length < (fullPools.get(poolName)?.length ?? 0);
+        grid.appendChild(buildPoolCard(poolName, poolMembers, idxOf, animIdx++, partialMatch));
+        return;
+      }
+      grid.appendChild(buildCard(entry, idxOf(entry), animIdx++));
+    });
   } else {
     items.forEach((entry, i) => grid.appendChild(buildCard(entry, idxOf(entry), i)));
   }
+}
+
+/**
+ * One card for every entry sharing a key pool (Phase 24.2), collapsed by
+ * default. Copy takes the pool cursor (`envv pool next`), which is why it is
+ * wired separately from a member's own Copy button — that one never advances
+ * the cursor, this one always does.
+ *
+ * Wraps `buildCard` rather than reimplementing a card body: every per-type
+ * rendering rule (masking, the 2FA row, cookie handling) already lives there,
+ * and a pool member is still, in full, whatever type it is.
+ */
+function buildPoolCard(
+  poolName: string,
+  members: VaultEntry[],
+  idxOf: (e: VaultEntry) => number,
+  animIdx: number,
+  forceExpanded: boolean,
+): HTMLElement {
+  const expanded = forceExpanded || st.expandedPools.has(poolName);
+
+  const wrap = document.createElement('div');
+  wrap.className = `pool-card-wrap${expanded ? ' expanded' : ''}`;
+  wrap.dataset.pool = poolName;
+
+  const badgeId = `pool-card-badge-${animIdx}`;
+  const summary = document.createElement('div');
+  summary.className = 'pool-card-summary';
+  summary.innerHTML = `
+    <button type="button" class="pool-card-expand" data-action="pool-card-toggle" data-pool="${escAttr(poolName)}" aria-expanded="${expanded}" title="${expanded ? 'Collapse' : 'Expand'} pool">
+      <svg class="pool-card-chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 18 15 12 9 6"/></svg>
+    </button>
+    <span class="pool-card-icon" aria-hidden="true">⧉</span>
+    <span class="pool-card-name">${esc(poolName)}</span>
+    <span class="pool-card-badge" id="${escAttr(badgeId)}">pool: ${members.length}</span>
+    <button type="button" class="btn btn-ghost btn-sm pool-card-copy" data-action="pool-card-copy" data-pool="${escAttr(poolName)}" title="Copy the next available key and advance the cursor">Copy</button>
+  `;
+  wrap.appendChild(summary);
+
+  const body = document.createElement('div');
+  body.className = 'pool-card-members';
+  body.hidden = !expanded;
+  members.forEach((m, i) => body.appendChild(buildCard(m, idxOf(m), animIdx + i)));
+  wrap.appendChild(body);
+
+  // Ready/cooling needs an IPC round trip; paint the plain count first and
+  // enrich it if (and only if) an answer comes back, rather than blocking the
+  // grid paint on it.
+  void poolBadgeInfo(poolName, members).then((info) => {
+    if (!info) return;
+    const el = document.getElementById(badgeId);
+    if (el)
+      el.textContent = `pool: ${members.length} · ${info.ready} ready${info.cooling ? ` · ${info.cooling} cooling` : ''}`;
+  });
+
+  return wrap;
 }
 
 function buildCard(entry: VaultEntry, idx: number, animIdx: number): HTMLElement {
@@ -585,7 +671,7 @@ function buildCard(entry: VaultEntry, idx: number, animIdx: number): HTMLElement
     : '';
   const typeBadge =
     entry.secretType && entry.secretType !== 'api_key'
-      ? `<span class="badge badge-keyid">${esc(entry.secretType)}</span>`
+      ? `<span class="badge badge-keyid">${esc(secretTypeLabel(entry.secretType))}</span>`
       : '';
   const compromisedBadge = entry.compromised
     ? `<span class="badge badge-compromised" title="Marked compromised — rotate immediately">⚠ LEAKED</span>`
@@ -617,6 +703,24 @@ function buildCard(entry: VaultEntry, idx: number, animIdx: number): HTMLElement
       : Settings.get('maskKeysByDefault');
   };
   const hasMask = masked('key');
+  // A composite's "value" is its rendered template, never `api_key` (which it
+  // does not use). Rendered here, once, rather than in the template string
+  // below, so a render error shows as text instead of breaking card markup.
+  const compositeRendered =
+    entry.secretType === 'composite'
+      ? renderComposite(
+          entry.composite_template || '',
+          (entry.extra_vars || []).map((v) => ({ key: v.key, value: v.value })),
+          entry.composite_kind || 'link',
+        )
+      : null;
+  const compositeValue = compositeRendered
+    ? compositeRendered.ok
+      ? compositeRendered.result.text
+      : ''
+    : '';
+  const compositeError =
+    compositeRendered && !compositeRendered.ok ? renderErrorMessage(compositeRendered.error) : '';
   const secretMasked = masked('secret');
   const envFmt = Settings.get('defaultExportFormat');
   const envLabel = envFmt === 'yaml' ? 'YAML' : '.env';
@@ -726,14 +830,22 @@ function buildCard(entry: VaultEntry, idx: number, animIdx: number): HTMLElement
     ${entry.api_description ? `<div class="card-apidesc">${esc(entry.api_description)}</div>` : ''}
     <div class="card-body">
       <div class="key-section">
-        <div class="key-row">
+        ${
+          compositeRendered
+            ? compositeRendered.ok
+              ? `<div class="key-row"><div class="key-label">VALUE</div><div class="key-value${hasMask ? '' : ' revealed'}" id="kv-key-${idx}" data-action="copy-field" data-value="${escAttr(compositeValue)}" title="${escAttr(entry.composite_template || '')}">${hasMask ? maskKey(compositeValue) : esc(compositeValue)}</div><div class="key-actions"><button class="icon-btn sm${hasMask ? '' : ' active'}" id="reveal-key-${idx}" data-action="reveal" data-field="key" data-idx="${idx}" data-value="${escAttr(compositeValue)}" aria-pressed="${!hasMask}" aria-label="${escAttr('Reveal value for ' + entry.provider)}">${eyeSVG}</button><button class="icon-btn sm" data-action="copy-field" data-value="${escAttr(compositeValue)}" aria-label="${escAttr('Copy value for ' + entry.provider)}">${copySVG}</button></div></div>
+                 <div class="key-row"><div class="key-label">TEMPLATE</div><div class="key-value revealed mono" style="font-size:11px;opacity:.7" title="${escAttr(entry.composite_template || '')}">${esc(entry.composite_template || '')}</div></div>`
+              : `<div class="key-row"><div class="key-label">VALUE</div><div class="key-value revealed" style="color:var(--danger,#e07070)">${esc(compositeError)}</div></div>
+                 <div class="key-row"><div class="key-label">TEMPLATE</div><div class="key-value revealed mono" style="font-size:11px;opacity:.7">${esc(entry.composite_template || '')}</div></div>`
+            : `<div class="key-row">
           <div class="key-label">${(TYPE_CONFIG[entry.secretType || 'api_key']?.keyLabel || 'API Key').toUpperCase()}</div>
           <div class="key-value${hasMask ? '' : ' revealed'}" id="kv-key-${idx}" data-action="copy-field" data-value="${escAttr(entry.api_key)}">${hasMask ? maskKey(entry.api_key) : esc(entry.api_key)}</div>
           <div class="key-actions">
             <button class="icon-btn sm${hasMask ? '' : ' active'}" id="reveal-key-${idx}" data-action="reveal" data-field="key" data-idx="${idx}" data-value="${escAttr(entry.api_key)}" aria-pressed="${!hasMask}" aria-label="${escAttr('Reveal value for ' + entry.provider)}">${eyeSVG}</button>
             <button class="icon-btn sm" data-action="copy-field" data-value="${escAttr(entry.api_key)}" aria-label="${escAttr('Copy value for ' + entry.provider)}">${copySVG}</button>
           </div>
-        </div>
+        </div>`
+        }
         ${entry.api_secret ? `<div class="key-row"><div class="key-label">SECRET</div><div class="key-value${secretMasked ? '' : ' revealed'}" id="kv-secret-${idx}" data-action="copy-field" data-value="${escAttr(entry.api_secret)}">${secretMasked ? maskKey(entry.api_secret) : esc(entry.api_secret)}</div><div class="key-actions"><button class="icon-btn sm${secretMasked ? '' : ' active'}" id="reveal-secret-${idx}" data-action="reveal" data-field="secret" data-idx="${idx}" data-value="${escAttr(entry.api_secret)}" aria-pressed="${!secretMasked}" aria-label="${escAttr('Reveal secret for ' + entry.provider)}">${eyeSVG}</button><button class="icon-btn sm" data-action="copy-field" data-value="${escAttr(entry.api_secret)}" aria-label="${escAttr('Copy secret for ' + entry.provider)}">${copySVG}</button></div></div>` : ''}
         ${
           hasTotp(entry)
@@ -1300,19 +1412,19 @@ function renderConfigView(project: Project) {
         },
         {
           label: 'Download wg0.conf',
-          fn: () => {
-            const blob = new Blob([conf], { type: 'text/plain' });
-            const url = URL.createObjectURL(blob);
-            const a = Object.assign(document.createElement('a'), {
-              href: url,
-              download: `${proj.name}.conf`,
-            });
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
-            setTimeout(() => URL.revokeObjectURL(url), 1000);
-            showToast('Downloaded', 'ok');
-          },
+          // A3: was a blob-anchor click with no download handler behind it in
+          // Tauri — `saveFile` actually writes the bytes now.
+          fn: () =>
+            void saveFile(conf, `${proj.name}.conf`).then((res) =>
+              showToast(
+                res.ok
+                  ? res.path
+                    ? `Downloaded to ${res.path}`
+                    : 'Downloaded'
+                  : `Failed: ${res.error}`,
+                res.ok ? 'ok' : 'error',
+              ),
+            ),
         },
       ]);
       return;
@@ -1331,33 +1443,33 @@ function renderConfigView(project: Project) {
         },
         {
           label: 'Download YAML',
-          fn: () => {
-            const blob = new Blob([yaml], { type: 'text/plain' });
-            const url = URL.createObjectURL(blob);
-            const a = Object.assign(document.createElement('a'), {
-              href: url,
-              download: 'docker-compose.yml',
-            });
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
-            setTimeout(() => URL.revokeObjectURL(url), 1000);
-          },
+          // A3: `saveFile` writes real bytes; the old blob-anchor click had no
+          // download handler behind it in Tauri's webview.
+          fn: () =>
+            void saveFile(yaml, 'docker-compose.yml').then((res) =>
+              showToast(
+                res.ok
+                  ? res.path
+                    ? `Downloaded to ${res.path}`
+                    : 'Downloaded'
+                  : `Failed: ${res.error}`,
+                res.ok ? 'ok' : 'error',
+              ),
+            ),
         },
         {
           label: 'Download .env',
-          fn: () => {
-            const blob = new Blob([envFile], { type: 'text/plain' });
-            const url = URL.createObjectURL(blob);
-            const a = Object.assign(document.createElement('a'), {
-              href: url,
-              download: `${proj.name}.env`,
-            });
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
-            setTimeout(() => URL.revokeObjectURL(url), 1000);
-          },
+          fn: () =>
+            void saveFile(envFile, `${proj.name}.env`).then((res) =>
+              showToast(
+                res.ok
+                  ? res.path
+                    ? `Downloaded to ${res.path}`
+                    : 'Downloaded'
+                  : `Failed: ${res.error}`,
+                res.ok ? 'ok' : 'error',
+              ),
+            ),
         },
       ]);
       return;
@@ -1547,19 +1659,17 @@ function renderConfigView(project: Project) {
         },
         {
           label: 'Download .env',
-          fn: () => {
-            const blob = new Blob([dotenv], { type: 'text/plain' });
-            const url = URL.createObjectURL(blob);
-            const a = Object.assign(document.createElement('a'), {
-              href: url,
-              download: `${chunk.name}.env`,
-            });
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
-            setTimeout(() => URL.revokeObjectURL(url), 1000);
-            showToast('Downloaded', 'ok');
-          },
+          fn: () =>
+            void saveFile(dotenv, `${chunk.name}.env`).then((res) =>
+              showToast(
+                res.ok
+                  ? res.path
+                    ? `Downloaded to ${res.path}`
+                    : 'Downloaded'
+                  : `Failed: ${res.error}`,
+                res.ok ? 'ok' : 'error',
+              ),
+            ),
         },
       ]);
       return;
@@ -1903,14 +2013,15 @@ function renderConfigView(project: Project) {
       return;
     }
 
+    // A3: real bytes on disk via `saveFile`, not a blob-anchor click WebKitGTK
+    // has no download handler for.
     const dlText = (content: string, filename: string) => {
-      const blob = new Blob([content], { type: 'text/plain' });
-      const url = URL.createObjectURL(blob);
-      const a = Object.assign(document.createElement('a'), { href: url, download: filename });
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      void saveFile(content, filename).then((res) =>
+        showToast(
+          res.ok ? (res.path ? `Downloaded to ${res.path}` : 'Downloaded') : `Failed: ${res.error}`,
+          res.ok ? 'ok' : 'error',
+        ),
+      );
     };
 
     if (action === 'export-nginx') {
@@ -2162,6 +2273,11 @@ export function render() {
   if (selectedId !== 'Universal' && !selectedId.startsWith('virtual:')) {
     const project = st.vault.projects.find((p) => p.id === selectedId);
     if (project?.project_type && project.project_type !== 'generic') {
+      // Structured project types (`renderConfigView`) reuse `#card-grid` for a
+      // chunk tree, not entry cards — the type chip bar has nothing to filter
+      // there and would otherwise linger from the last "All Secrets" render.
+      const bar = document.getElementById('type-chip-bar');
+      if (bar) bar.style.display = 'none';
       renderConfigView(project);
       updateCopyAllBtn();
       return;
@@ -2185,6 +2301,7 @@ export function activeFilterLabels(): string[] {
   if (st.activeTagFilter) out.push(`tag: ${st.activeTagFilter}`);
   if (st.activePrefixFilter) out.push(`prefix: ${st.activePrefixFilter}`);
   if (st.activePoolFilter) out.push(`pool: ${st.activePoolFilter}`);
+  if (st.activeTypeChips.size) out.push(`type: ${[...st.activeTypeChips].join(', ')}`);
   if (st.searchQ) out.push(`search: ${st.searchQ}`);
   const proj = st.currentSelectedProjectIds.filter((id) => id !== 'Universal');
   proj.forEach((id) => {

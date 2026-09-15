@@ -90,4 +90,27 @@ describe('IPC contract — frontend invoke names vs registered Tauri commands', 
       expect(be.has(cmd), `${cmd} (Phase 22: a seed held for a third party)`).toBe(true);
     }
   });
+
+  it('write_export_file is registered (A3: every export writes through it)', () => {
+    expect(be.has('write_export_file')).toBe(true);
+  });
+});
+
+describe('A3 — exports write through saveFile, not a bare blob-anchor click', () => {
+  // `createObjectURL` is `saveFile`'s own browser-dev-server fallback in
+  // `utils.ts` — every other call site used to build a `Blob`, click a
+  // `<a download>` anchor and toast success unconditionally, which downloaded
+  // nothing in Tauri's WebKitGTK webview (no download handler, no dialog/fs
+  // plugin) while still claiming to have worked. A second `createObjectURL`
+  // anywhere in `src/ts` is that bug again.
+  it('appears nowhere in src/ts except inside saveFile', () => {
+    for (const file of tsFiles(join(ROOT, 'src', 'ts'))) {
+      const rel = file.slice(ROOT.length + 1);
+      const src = readFileSync(file, 'utf8');
+      if (!src.includes('createObjectURL')) continue;
+      expect(rel, "createObjectURL belongs only in saveFile's browser fallback").toBe(
+        'src/ts/utils.ts',
+      );
+    }
+  });
 });

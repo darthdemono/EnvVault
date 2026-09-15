@@ -269,8 +269,29 @@ export const TOOLS_PANES_HTML = String.raw`
             <p>Audit your vault for weak, stale, or risky credentials.</p>
           </div>
           <div class="tool-body" style="max-width:700px">
-            <div class="tool-actions" style="margin-bottom:12px">
+            <div class="tool-actions" style="margin-bottom:12px;flex-wrap:wrap;gap:10px">
               <button id="health-scan-btn" class="btn btn-accent btn-sm">Run Scan</button>
+              <label class="tool-label" for="health-filter-severity" style="margin-left:8px">Severity</label>
+              <select id="health-filter-severity" class="tool-input" style="max-width:130px">
+                <option value="all">All</option>
+                <option value="high">Critical</option>
+                <option value="med">Warning</option>
+                <option value="low">Info</option>
+              </select>
+              <label class="tool-label" for="health-filter-type">Type</label>
+              <select id="health-filter-type" class="tool-input" style="max-width:150px">
+                <option value="">All types</option>
+                <option value="api_key">API Key</option>
+                <option value="password">Password</option>
+                <option value="certificate">Certificate</option>
+                <option value="env_var">Env Var</option>
+                <option value="connection_string">Connection</option>
+                <option value="ssh_key">SSH Key</option>
+                <option value="file_blob">File</option>
+                <option value="cookie">Web Session</option>
+                <option value="composite">Composite</option>
+                <option value="bundle">Bundle</option>
+              </select>
               <span id="health-scan-time" style="font-size:11px;color:var(--text3)"></span>
             </div>
             <div id="health-results"></div>
@@ -402,6 +423,25 @@ export const TOOLS_PANES_HTML = String.raw`
                 <label class="tl-check"><input type="checkbox" id="tl-kind-rotation" checked /> Rotation due</label>
                 <button id="tl-export-ics" class="btn btn-primary btn-sm" type="button">Export .ics</button>
               </div>
+            </div>
+
+            <div id="tl-feeds-section" class="tl-export" style="display:none">
+              <h4>Subscribe (remote vaults only)</h4>
+              <p class="tl-note">
+                A live URL your calendar app polls, served by <code>envv-server</code>. It carries a
+                bearer token — anyone holding the URL can read event names and dates until you revoke
+                it. Permissions are re-applied on every fetch, so a sub-user's feed shrinks the moment
+                you revoke their access.
+              </p>
+              <div class="tool-row" style="gap:16px;flex-wrap:wrap;align-items:center">
+                <label class="tl-check"
+                  ><input type="checkbox" id="tl-feed-account-names" /> Include account names</label
+                >
+                <button id="tl-feed-subscribe" class="btn btn-primary btn-sm" type="button">
+                  Create feed URL
+                </button>
+              </div>
+              <ul id="tl-feed-list" class="tl-feed-list"></ul>
             </div>
           </div>
         </div>

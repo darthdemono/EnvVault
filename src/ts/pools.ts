@@ -49,7 +49,7 @@ interface MemberState {
  * recomputing it here would be a second identity scheme that agrees until it
  * does not.
  */
-function memberRef(e: VaultEntry) {
+export function memberRef(e: VaultEntry) {
   return {
     id: e.id ?? '',
     provider: e.provider ?? '',
@@ -59,7 +59,7 @@ function memberRef(e: VaultEntry) {
 }
 
 /** A label that distinguishes members of one pool. Mirrors `Member::label`. */
-function label(e: VaultEntry): string {
+export function label(e: VaultEntry): string {
   return e.key_id ? `${e.provider}:${e.key_id}` : e.provider || '(unnamed)';
 }
 
@@ -85,7 +85,7 @@ export function poolsOf(vault: { api_keys?: VaultEntry[] }): Map<string, VaultEn
  * The same mistake the LAN gate exists to prevent: acting on this machine's
  * vault while the screen shows someone else's.
  */
-function remoteBase(): string | null {
+export function remoteBase(): string | null {
   const store = st.store as { isRemote?: boolean; baseUrl?: string } | undefined;
   return store?.isRemote ? (store.baseUrl ?? null) : null;
 }
@@ -229,6 +229,49 @@ export async function renderPoolsPane(): Promise<void> {
          machine only.</p>`;
 
   host.innerHTML = rows + footer;
+}
+
+/**
+ * Ready/cooling counts for one pool, for the card grid's collapsed pool card
+ * (Phase 24.2). `null` outside Tauri or on any IPC failure — the caller shows
+ * the plain member count instead of a stale or fabricated split.
+ */
+export async function poolBadgeInfo(
+  name: string,
+  members: VaultEntry[],
+): Promise<{ ready: number; cooling: number } | null> {
+  if (!inTauri) return null;
+  try {
+    const rows = (await invoke('pool_state', {
+      pool: name,
+      members: members.map(memberRef),
+      remoteBase: remoteBase(),
+    })) as MemberState[] | undefined;
+    if (!rows) return null;
+    const cooling = rows.filter((r) => r.cooling).length;
+    return { ready: rows.length - cooling, cooling };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Picks the next non-cooling member and advances the cursor — the pool card's
+ * Copy button, and the exact selection `envv pool next` makes. `null` outside
+ * Tauri (nothing to read the cursor from) or when every member is cooling.
+ */
+export async function poolNext(name: string, members: VaultEntry[]): Promise<VaultEntry | null> {
+  if (!inTauri || !members.length) return null;
+  try {
+    const i = (await invoke('pool_next', {
+      pool: name,
+      members: members.map(memberRef),
+      remoteBase: remoteBase(),
+    })) as number | null | undefined;
+    return typeof i === 'number' ? (members[i] ?? null) : null;
+  } catch {
+    return null;
+  }
 }
 
 /**

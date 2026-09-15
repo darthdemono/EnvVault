@@ -28,8 +28,9 @@ import {
   SIDEBAR_MAX_W,
 } from './state';
 import { initIconPicker, openIconPicker, iconHTML } from './icons';
-import { showToast, showConfirm, clipboardWrite } from './utils';
+import { showToast, showConfirm, clipboardWrite, saveFile } from './utils';
 import { getFiltered, sorted } from './filters';
+import { poolsOf, poolNext } from './pools';
 import {
   CustomSelect,
   DropdownItem,
@@ -57,6 +58,7 @@ import {
   onIconWrapClick,
   openIconPickerFor,
   markAsRotated,
+  suggestExtraVarsForType,
 } from './modals';
 import {
   doSetFilter,
@@ -116,8 +118,9 @@ import {
   readChunkEditFields,
 } from './chunk-ops';
 import { wireSearchHistory, closeSearchHistory, wireCloseGuard, wireModalFocus } from './ui-qol';
-import type { ProjectType } from './types';
+import type { ProjectType, SecretType } from './types';
 import { EXPORT_FORMATS, runTotpExport, runTotpImport } from './totp-io';
+import { runCxfImport, runCxfExport } from './cxf-io';
 
 // Wire the global render callback so all modules can call triggerRender()
 setRenderFn(render);
@@ -172,6 +175,35 @@ function copyTotpFrom(el: HTMLElement): void {
   }
   void clipboardWrite(code);
   showToast('Code copied ✓', 'ok', 1500);
+}
+
+/**
+ * The pool card's Copy button — advances the pool cursor and copies whatever
+ * it landed on, exactly `envv pool next`. Members are read from the **live**
+ * vault via `poolsOf`, not a snapshot the card was built with, so a member
+ * deleted between render and click cannot be copied.
+ */
+async function copyPoolNext(poolName: string): Promise<void> {
+  if (!poolName) return;
+  const members = poolsOf(st.vault).get(poolName) ?? [];
+  if (!members.length) return;
+  const chosen = await poolNext(poolName, members);
+  if (!chosen) {
+    showToast(
+      inTauri
+        ? `Every key in "${poolName}" is rate limited`
+        : 'Pool cursors are read by the desktop app',
+      'err',
+      2500,
+    );
+    return;
+  }
+  const realIdx = st.vault.api_keys.indexOf(chosen);
+  if (realIdx < 0) return;
+  doCopyEnv({ stopPropagation() {} } as Event, realIdx);
+  // The badge's ready/cooling split just changed; the copied member's card
+  // (if the pool is expanded) may need its own use-count refreshed too.
+  triggerRender();
 }
 
 let searchDebounceTimer: ReturnType<typeof setTimeout>;
@@ -408,12 +440,9 @@ async function init() {
   // wire-up in this file that was written as `addEventListener` has eventually
   // been called twice by something.
   //
-  // There are two pairs of these buttons and they must do the same thing: the
-  // sidebar section's (`#totp-*`) and the Authenticator panel's (`#auth-*`).
-  // The panel's pair shipped with markup, a title and no handler, so the only
-  // visible way into the importer from the screen built to manage seeds was
-  // inert — which reads as the feature being missing rather than unwired.
-  for (const id of ['totp-import-btn', 'auth-import-btn']) {
+  // A2 (2026-09-14) removed the sidebar section's pair (`#totp-*`); the
+  // Authenticator panel's (`#auth-*`) is the only surface left.
+  for (const id of ['auth-import-btn']) {
     const btn = document.getElementById(id);
     if (!btn) continue;
     btn.onclick = () => {
@@ -425,7 +454,7 @@ async function init() {
       );
     };
   }
-  for (const id of ['totp-export-btn', 'auth-export-btn']) {
+  for (const id of ['auth-export-btn']) {
     const btn = document.getElementById(id);
     if (!btn) continue;
     btn.onclick = () => {
@@ -440,11 +469,6 @@ async function init() {
   document.getElementById('sidebar')!.addEventListener('click', (e) => {
     const btn = (e.target as HTMLElement).closest<HTMLButtonElement>('.sidebar-item');
     if (!btn) return;
-    // Authenticator row: copy the code that is on screen.
-    if (btn.classList.contains('totp-row')) {
-      copyTotpFrom(btn);
-      return;
-    }
     // Tag filter button
     if (btn.classList.contains('tag-filter-btn')) {
       const tag = btn.dataset.tag ?? '';
@@ -486,6 +510,18 @@ async function init() {
         doSetFilter(filterType, filterValue);
       }
     }
+  });
+
+  // Type chip bar (Phase 24.2) — multi-toggle, so a click adds or removes one
+  // chip from the Set rather than replacing it, unlike every sidebar filter
+  // above which is single-select.
+  document.getElementById('type-chip-bar')?.addEventListener('click', (e) => {
+    const btn = (e.target as HTMLElement).closest<HTMLButtonElement>('.type-chip');
+    const chip = btn?.dataset.chip;
+    if (!chip) return;
+    if (st.activeTypeChips.has(chip)) st.activeTypeChips.delete(chip);
+    else st.activeTypeChips.add(chip);
+    triggerRender();
   });
 
   // Categories section: rename/delete tags
@@ -691,14 +727,18 @@ async function init() {
     }
   });
   document.getElementById('settings-export-btn')!.addEventListener('click', () => {
-    const url = URL.createObjectURL(
-      new Blob([JSON.stringify(Settings.getAll(), null, 2)], { type: 'application/json' }),
+    // A3: same fix as every other export — a blob-anchor click wrote nothing
+    // in Tauri's webview and nothing said so.
+    void saveFile(JSON.stringify(Settings.getAll(), null, 2), 'settings.json').then((res) =>
+      showToast(
+        res.ok
+          ? res.path
+            ? `Exported to ${res.path}`
+            : 'Exported'
+          : `Export failed: ${res.error}`,
+        res.ok ? 'ok' : 'error',
+      ),
     );
-    const a = Object.assign(document.createElement('a'), { href: url, download: 'settings.json' });
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    setTimeout(() => URL.revokeObjectURL(url), 1000);
   });
 
   // Segmented controls (card size, grid columns, activity bar)
@@ -785,19 +825,25 @@ async function init() {
     ?.addEventListener('click', () => openFilePicker('.json,.env,.yaml,.yml,text/plain'));
   document
     .getElementById('settings-export-dotenv')
-    ?.addEventListener('click', () => exportAs('dotenv'));
+    ?.addEventListener('click', () => void exportAs('dotenv'));
   document
     .getElementById('settings-export-yaml')
-    ?.addEventListener('click', () => exportAs('yaml'));
+    ?.addEventListener('click', () => void exportAs('yaml'));
   document
     .getElementById('settings-export-json')
-    ?.addEventListener('click', () => exportAs('json'));
+    ?.addEventListener('click', () => void exportAs('json'));
   document
     .getElementById('settings-export-k8s')
     ?.addEventListener('click', () => exportK8sSecret());
   document
     .getElementById('settings-export-tfvars')
     ?.addEventListener('click', () => exportTfvars());
+  document.getElementById('settings-cxf-import-btn')?.addEventListener('click', () => {
+    openFilePicker('.json,.cxf,text/plain,application/json', (text) => void runCxfImport(text));
+  });
+  document
+    .getElementById('settings-cxf-export-btn')
+    ?.addEventListener('click', () => void runCxfExport());
   document.getElementById('settings-export-encrypted')?.addEventListener('click', () => {
     const pw = (document.getElementById('settings-backup-pw') as HTMLInputElement).value;
     exportEncryptedBackup(pw);
@@ -1058,6 +1104,26 @@ async function init() {
         // permanently collapsed, whatever is on screen.
         el.setAttribute('aria-expanded', String(el.classList.contains('open')));
         break;
+      case 'pool-card-toggle': {
+        const pool = el.dataset.pool ?? '';
+        // In bulk mode the card has no per-pool checkbox of its own; the
+        // summary bar stands in for one, ticking every member it covers.
+        if ((window as any).__envvIsBulkMode?.()) {
+          const members = poolsOf(st.vault).get(pool) ?? [];
+          members.forEach((m) => {
+            const i = st.vault.api_keys.indexOf(m);
+            if (i >= 0) (window as any).__envvBulkToggle?.(i);
+          });
+          break;
+        }
+        if (st.expandedPools.has(pool)) st.expandedPools.delete(pool);
+        else st.expandedPools.add(pool);
+        renderGrid();
+        break;
+      }
+      case 'pool-card-copy':
+        void copyPoolNext(el.dataset.pool ?? '');
+        break;
     }
   });
 
@@ -1158,7 +1224,10 @@ async function init() {
     items.push({ label: 'Remote settings…', active: false, fn: () => openSettings() });
     showDropdown(e.currentTarget as HTMLElement, items);
   });
-  document.getElementById('f-secret-type')?.addEventListener('change', dynamicSecretFields);
+  document.getElementById('f-secret-type')?.addEventListener('change', (e) => {
+    dynamicSecretFields();
+    suggestExtraVarsForType((e.target as HTMLSelectElement).value as SecretType);
+  });
   document.getElementById('f-key-generate')?.addEventListener('click', () => quickGenerate());
 
   // ── Tauri unlock flow ──

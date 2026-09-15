@@ -390,6 +390,42 @@ mod commands {
             .collect())
     }
 
+    /// Picks the next non-cooling member, round-robin, and advances the
+    /// cursor — Phase 24.2's pool card Copy button, and the pure IPC twin of
+    /// `envv pool next` / `envv get --pool`. `None` when every member is
+    /// cooling, so the caller can say so rather than copying nothing with no
+    /// explanation.
+    #[tauri::command]
+    pub fn pool_next(
+        app: AppHandle,
+        pool: String,
+        members: Vec<PoolMemberRef>,
+        remote_base: Option<String>,
+    ) -> Result<Option<usize>, String> {
+        let vk = pool_vault_key(&app, remote_base)?;
+        let mut st = vault_core::pool::load();
+        let now = vault_core::pool::now_ts();
+        let cks: Vec<String> = members.iter().map(|m| m.ck()).collect();
+        let cooling: Vec<bool> = cks
+            .iter()
+            .map(|ck| {
+                let s = vault_core::pool::member_state(&st, &vk, &pool, ck);
+                vault_core::pool::is_cooling(s.cooling_until.as_deref(), now)
+            })
+            .collect();
+        let cursor = vault_core::pool::cursor(&st, &vk, &pool);
+        let Some(i) = vault_core::pool::pick_index(&cooling, cursor) else {
+            return Ok(None);
+        };
+        let n = cks.len();
+        vault_core::pool::record_use(&mut st, &vk, &pool, &cks[i], (i + 1) % n, now);
+        // Not fatal: the caller already has the chosen index and can copy the
+        // member's value. A cursor that fails to advance on a read-only state
+        // directory is a worse day than a repeated pick, not a blocked copy.
+        let _ = vault_core::pool::save(&st);
+        Ok(Some(i))
+    }
+
     /// Put one member on cooldown, or clear it with `seconds: None`.
     #[tauri::command]
     pub fn pool_set_cooldown(
@@ -739,17 +775,21 @@ mod commands {
     /// vault path would mean this command needed an entry id, an ambiguity rule
     /// and a second definition of which field the seed lives in.
     ///
-    /// It still refuses while the vault is locked. Nothing in the app can call
-    /// it with a seed at that point — but a command that generates live codes
-    /// from any string handed to it, whatever the vault's state, is a capability
-    /// that outlives the reason it was safe.
+    /// **A11 (2026-09-14): no longer gated on the local `VaultState`.** It used
+    /// to refuse with "Vault is locked" whenever the *local* SQLCipher key was
+    /// absent — which is the ordinary state of a session connected only to a
+    /// remote vault. The renderer had already decrypted the entry it is asking
+    /// about (locally or over the remote API); the gate was checking the wrong
+    /// vault, the same bug class as the Phase 12 LAN wrong-vault fix. Every 2FA
+    /// code on every remote vault came back blank because of this one check.
+    /// The command is pure over its arguments now, and the caller gates on
+    /// `st.vaultOpen` instead (`src/ts/totp.ts`).
     ///
     /// Generation happens here and only here. The TypeScript side parses seeds
     /// (`src/ts/totp.ts`) and asks for codes; it does not own an HMAC.
     #[tauri::command]
     #[allow(clippy::too_many_arguments)]
     pub fn entry_totp_code(
-        state: State<VaultState>,
         secret: String,
         kind: Option<String>,
         algorithm: Option<String>,
@@ -758,8 +798,6 @@ mod commands {
         counter: Option<u64>,
         with_next: Option<bool>,
     ) -> Result<vault_core::totp::LiveCode, String> {
-        let g = state.0.lock().map_err(|_| "State lock poisoned")?;
-        g.as_ref().ok_or("Vault is locked")?;
         // `Params::from_fields` is the only reader of these three values in the
         // project — the CLI's `params_of` and the form's `totpParamsOf` are the
         // other two callers of that one rule. Reading them here instead meant
@@ -787,6 +825,66 @@ mod commands {
         vault_core::totp::parse_seed(&seed)
     }
 
+    /// Converts a CXF document's text into entries ready to append — Phase
+    /// 24.5's desktop path for the same `vault_core::cxf::import` the CLI's
+    /// `envv cxf import` calls. Pure over its argument: the caller already
+    /// holds the decrypted vault and does the appending and the save, the
+    /// same split `calendar_build_ics` uses.
+    #[tauri::command]
+    pub fn cxf_import(text: String) -> Result<Vec<serde_json::Value>, String> {
+        let doc = vault_core::cxf::parse(text.as_bytes())?;
+        let now = vault_core::iso_now();
+        Ok(vault_core::cxf::import(&doc, vault_core::new_uuid, &now))
+    }
+
+    /// Builds a CXF document from entries the caller already holds. Returns
+    /// pretty-printed JSON text; the caller writes it with `saveFile`, the
+    /// same materialising-path rule every export in this project follows —
+    /// there is no stdout-equivalent form of this command.
+    #[tauri::command]
+    pub fn cxf_export(entries: Vec<serde_json::Value>) -> Result<String, String> {
+        let doc = vault_core::cxf::export(&entries);
+        serde_json::to_string_pretty(&doc).map_err(|e| e.to_string())
+    }
+
+    /// Builds the `.ics` calendar feed from entries the caller already holds.
+    ///
+    /// Phase 24.3: `src/ts/calendar.ts` used to be a second implementation of
+    /// this format, pinned against `vault-core/src/calendar.rs` by a golden
+    /// fixture — the twin-pair shape. It is gone now; this is the one builder,
+    /// exactly as `envv-server`'s `/ics/{token}.ics` route and `envv calendar
+    /// export` both already use it. Pure over its arguments rather than reading
+    /// `VaultState` — the caller already holds the decrypted vault, local or
+    /// remote, the same reasoning as `entry_totp_code` — so a Timeline export
+    /// works on a remote vault too, which the old local-only TypeScript builder
+    /// never could.
+    #[tauri::command]
+    pub fn calendar_build_ics(
+        entries: Vec<serde_json::Value>,
+        kinds: Vec<String>,
+        calendar_name: String,
+    ) -> Result<String, String> {
+        let mut parsed: Vec<vault_core::calendar::EventKind> = kinds
+            .iter()
+            .filter_map(|k| vault_core::calendar::EventKind::parse(k))
+            .collect();
+        if parsed.is_empty() {
+            parsed = vec![
+                vault_core::calendar::EventKind::Created,
+                vault_core::calendar::EventKind::Expires,
+                vault_core::calendar::EventKind::Rotation,
+            ];
+        }
+        Ok(vault_core::calendar::build_ics(
+            &entries,
+            &vault_core::calendar::IcsOptions {
+                kinds: parsed,
+                now: vault_core::iso_now(),
+                calendar_name,
+            },
+        ))
+    }
+
     /// Read another authenticator app's export.
     ///
     /// Ente Auth, Aegis, 2FAS, andOTP, Bitwarden and Google Authenticator, with
@@ -800,14 +898,13 @@ mod commands {
     ///
     /// It returns parsed seeds to the frontend, which is where they were headed
     /// anyway: the caller holds the decrypted vault and is about to write them
-    /// into it. Refused while locked all the same.
+    /// into it.
+    ///
+    /// **A11: no longer gated on `VaultState`.** It never touched the local
+    /// database — the gate only ever checked the wrong vault on a remote
+    /// session, same class as `entry_totp_code` above.
     #[tauri::command]
-    pub fn totp_import_parse(
-        state: State<VaultState>,
-        text: String,
-    ) -> Result<vault_core::totp_import::ParseReport, String> {
-        let g = state.0.lock().map_err(|_| "State lock poisoned")?;
-        g.as_ref().ok_or("Vault is locked")?;
+    pub fn totp_import_parse(text: String) -> Result<vault_core::totp_import::ParseReport, String> {
         vault_core::totp_import::parse(&text)
     }
 
@@ -824,9 +921,10 @@ mod commands {
     /// here: the frontend is the thing holding the decrypted vault, and having
     /// this command load and save independently would put two writers on one
     /// file with no compare-and-swap between them.
+    /// **A11: no longer gated on `VaultState`** — pure over `entries` and
+    /// `text`, same reasoning as `totp_import_parse`.
     #[tauri::command]
     pub fn totp_import_merge(
-        state: State<VaultState>,
         entries: Vec<serde_json::Value>,
         text: String,
         force: bool,
@@ -834,8 +932,6 @@ mod commands {
         category: Option<String>,
     ) -> Result<serde_json::Value, String> {
         use vault_core::totp_import::{self as imp, Plan};
-        let g = state.0.lock().map_err(|_| "State lock poisoned")?;
-        g.as_ref().ok_or("Vault is locked")?;
 
         let report = imp::parse(&text)?;
         let plans = imp::plan(&entries, &report.items, force);
@@ -884,14 +980,13 @@ mod commands {
     /// **The returned string is nothing but secret material.** The frontend hands
     /// it straight to a save dialog; it never reaches a log, a toast or the
     /// clipboard by default. Same rule as `envv totp export --out`.
+    ///
+    /// **A11: no longer gated on `VaultState`** — pure over `items`.
     #[tauri::command]
     pub fn totp_export_build(
-        state: State<VaultState>,
         items: Vec<vault_core::totp_import::Imported>,
         format: String,
     ) -> Result<String, String> {
-        let g = state.0.lock().map_err(|_| "State lock poisoned")?;
-        g.as_ref().ok_or("Vault is locked")?;
         let fmt = vault_core::totp_import::Format::parse(&format)
             .ok_or_else(|| format!("Unknown format '{format}'"))?;
         vault_core::totp_import::build(&items, fmt)
@@ -1193,6 +1288,73 @@ mod commands {
         fp.ok_or_else(|| "Server did not present a TLS certificate".to_string())
     }
 
+    /// Writes an export to disk and returns the absolute path it landed at.
+    ///
+    /// **A3 (2026-09-14).** Every app export — ICS included — built a `Blob`,
+    /// clicked a `<a download>` anchor, and toasted "Exported ✓" unconditionally
+    /// (`downloadText` in `src/ts/import-export.ts`). Tauri's WebKitGTK webview
+    /// has no download handler registered and no `tauri-plugin-dialog`/`-fs`
+    /// capability either, so the click silently went nowhere — the toast was
+    /// true only in a plain browser dev server. This is the app's `--out`: it
+    /// writes real bytes before the caller is told anything succeeded.
+    ///
+    /// No save dialog (the app has no `tauri-plugin-dialog` dependency, and
+    /// adding one is a larger change than this defect fix warrants): resolves
+    /// the platform downloads directory, falling back to the home directory and
+    /// then the OS temp directory if neither exists, and disambiguates a
+    /// filename that is already there (`name (2).ext`) rather than silently
+    /// overwriting yesterday's export — the write is trusted precisely because
+    /// it never clobbers.
+    ///
+    /// `0600` on Unix: most of what flows through here is a `.env` or a backup,
+    /// and there is no reason to leave either group/world-readable. Windows
+    /// inherits the directory ACL, the same gap `session.rs` already documents
+    /// for `sessions.json`.
+    #[tauri::command]
+    pub fn write_export_file(filename: String, content: String) -> Result<String, String> {
+        let dir = dirs::download_dir()
+            .or_else(dirs::home_dir)
+            .unwrap_or_else(std::env::temp_dir);
+        fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+
+        // Take only the final path component of whatever the caller sent — this
+        // is a *filename*, not a path, and untrusted vault-derived text (a
+        // provider name, invariant 4) must never be able to write outside the
+        // resolved directory.
+        let safe_name = Path::new(&filename)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .filter(|n| !n.is_empty())
+            .unwrap_or("envvault-export")
+            .to_string();
+
+        let stem = Path::new(&safe_name)
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or(&safe_name)
+            .to_string();
+        let ext = Path::new(&safe_name)
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|e| format!(".{e}"))
+            .unwrap_or_default();
+
+        let mut path = dir.join(&safe_name);
+        let mut n = 2;
+        while path.exists() {
+            path = dir.join(format!("{stem} ({n}){ext}"));
+            n += 1;
+        }
+
+        fs::write(&path, content.as_bytes()).map_err(|e| e.to_string())?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = fs::set_permissions(&path, fs::Permissions::from_mode(0o600));
+        }
+        Ok(path.display().to_string())
+    }
+
     /// Proxy an HTTP(S) request through Rust/reqwest so self-signed server certs
     /// can be used.  When `fingerprint` is provided the TLS connection is accepted
     /// **only** if the server's leaf certificate matches that SHA-256 fingerprint
@@ -1328,6 +1490,7 @@ pub fn run() {
             commands::save_vault,
             commands::get_vault_path,
             commands::pool_state,
+            commands::pool_next,
             commands::pool_set_cooldown,
             commands::pool_reset,
             commands::pool_state_path,
@@ -1348,6 +1511,9 @@ pub fn run() {
             commands::vault_version,
             commands::entry_totp_code,
             commands::parse_totp_seed,
+            commands::calendar_build_ics,
+            commands::cxf_import,
+            commands::cxf_export,
             commands::totp_import_parse,
             commands::totp_import_merge,
             commands::totp_export_build,
@@ -1372,6 +1538,7 @@ pub fn run() {
             commands::lan_status,
             commands::remote_request,
             commands::probe_cert_fingerprint,
+            commands::write_export_file,
         ])
         .setup(|app| {
             // ── System Tray (item 18) ────────────────────────────────────────
@@ -1405,4 +1572,56 @@ pub fn run() {
         })
         .run(tauri::generate_context!())
         .expect("error while running EnvVault");
+}
+
+#[cfg(test)]
+mod export_file_tests {
+    //! `write_export_file` (A3, 2026-09-14). The rest of `mod commands` needs a
+    //! live `AppHandle`/`VaultState`; this one is a plain function over its
+    //! arguments, so it is the one command in this file that can be unit
+    //! tested directly without a test harness for the others.
+    use super::commands::write_export_file;
+    use std::fs;
+
+    #[test]
+    fn writes_the_content_and_returns_the_real_path() {
+        let content = "SPOTIFY_ID=abc123\n";
+        let path = write_export_file("envvault-test-basic.env".into(), content.into()).unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), content);
+        fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn a_filename_that_already_exists_is_disambiguated_rather_than_overwritten() {
+        // The whole point of not asking for a save location: the write must
+        // never silently clobber yesterday's export.
+        let a = write_export_file("envvault-test-dup.env".into(), "first".into()).unwrap();
+        let b = write_export_file("envvault-test-dup.env".into(), "second".into()).unwrap();
+        assert_ne!(a, b);
+        assert_eq!(fs::read_to_string(&a).unwrap(), "first");
+        assert_eq!(fs::read_to_string(&b).unwrap(), "second");
+        fs::remove_file(&a).ok();
+        fs::remove_file(&b).ok();
+    }
+
+    #[test]
+    fn a_path_in_the_filename_cannot_escape_the_resolved_directory() {
+        // The filename is vault-derived text on some call sites (a provider or
+        // project name) — untrusted input, invariant 4. `../../etc/passwd`
+        // must land as a file literally named that inside the resolved
+        // directory, never traverse out of it.
+        let path = write_export_file("../../etc/passwd".into(), "x".into()).unwrap();
+        assert!(!path.contains(".."));
+        fs::remove_file(&path).ok();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn is_written_0600_on_unix() {
+        use std::os::unix::fs::PermissionsExt;
+        let path = write_export_file("envvault-test-perms.env".into(), "x".into()).unwrap();
+        let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
+        fs::remove_file(&path).ok();
+    }
 }

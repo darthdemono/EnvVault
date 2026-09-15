@@ -44,6 +44,9 @@ pub fn canonical_field(field: &str) -> &str {
         // `${GCP/path}` is what a rendered `.env` wants beside
         // `GOOGLE_APPLICATION_CREDENTIALS`.
         "PATH" | "MOUNT" | "MOUNT_PATH" | "FILE" => "mount_path",
+        // A composite's shape, not its rendered value — `${X/template}` shows
+        // the holes, `${X}` (the bare reference) renders them (Phase 24.1).
+        "TEMPLATE" => "composite_template",
         _ => field,
     }
 }
@@ -261,6 +264,38 @@ pub fn resolve_or_literal(
         .unwrap_or_else(|| raw.to_string())
 }
 
+/// Renders a `composite` entry's template against its parts (`extra_vars`).
+///
+/// `None` when there is no template, or when rendering refuses (an unfilled
+/// placeholder, an unbalanced brace, a control character in a URL-shaped
+/// part) — the caller reports that as an ordinary unresolved reference, the
+/// same as every other broken `${…}`, rather than surfacing the render error
+/// text through a path that was never meant to carry one.
+fn render_composite_entry(entry: &Value) -> Option<String> {
+    let template = entry.get("composite_template").and_then(|v| v.as_str())?;
+    let kind = vault_core::composite::Kind::parse(
+        entry
+            .get("composite_kind")
+            .and_then(|v| v.as_str())
+            .unwrap_or("custom"),
+    );
+    let parts: Vec<vault_core::composite::Part> = entry
+        .get("extra_vars")
+        .and_then(|v| v.as_array())
+        .into_iter()
+        .flatten()
+        .filter_map(|xv| {
+            Some(vault_core::composite::Part {
+                key: xv.get("key")?.as_str()?.to_string(),
+                value: xv.get("value")?.as_str()?.to_string(),
+            })
+        })
+        .collect();
+    vault_core::composite::render(template, &parts, kind)
+        .ok()
+        .map(|r| r.text)
+}
+
 /// Resolve a `${...}` ref inner-string against vault entries and chunks.
 pub fn resolve_ref(
     entries: &[Value],
@@ -302,10 +337,21 @@ pub fn resolve_ref(
 
     if let Some(slash) = inner.find('/') {
         let (prov, field) = (&inner[..slash], &inner[slash + 1..]);
-        return entry_field(find_entry(entries, prov)?, field);
+        let entry = find_entry(entries, prov)?;
+        // `${X/template}` names the shape, not a rendered value — the raw
+        // field is what `entry_field`'s built-in-field lookup already returns
+        // once `canonical_field` maps the alias, so no special case is needed
+        // there. A part (`${X/mailbox_id}`) is an ordinary `extra_vars` entry
+        // and already resolves through `entry_field`'s fallback.
+        return entry_field(entry, field);
     }
 
     if let Some(entry) = find_entry(entries, inner) {
+        // A composite's bare reference is its **rendered** value — the whole
+        // point of the type — never `api_key`, which it does not use.
+        if entry.get("secretType").and_then(|v| v.as_str()) == Some("composite") {
+            return render_composite_entry(entry);
+        }
         // Honour envCopyField, falling back to api_key when the chosen field is
         // empty — the UI does the same, and an empty value in a .env is worse
         // than the "wrong" field.
@@ -455,4 +501,66 @@ impl Resolver {
 pub fn is_ref(raw: &str) -> bool {
     let t = raw.trim();
     t.starts_with("${") && t.ends_with('}') && t.len() > 3
+}
+
+#[cfg(test)]
+mod composite_ref_tests {
+    //! `${…}` resolution for a `composite` entry (Phase 24.1) — a bare
+    //! reference renders, `${X/template}` shows the shape, and a part is an
+    //! ordinary `extra_vars` lookup, already covered by the general
+    //! `entry_field` tests this module's fixture pins.
+    use super::*;
+    use serde_json::json;
+
+    fn discord_webhook() -> Value {
+        json!({
+            "provider": "Discord webhook",
+            "secretType": "composite",
+            "composite_template": "https://discord.com/api/webhooks/{webhook_id}/{webhook_token}",
+            "composite_kind": "link",
+            "extra_vars": [
+                { "key": "webhook_id", "value": "123456789012345678" },
+                { "key": "webhook_token", "value": "AbC-def_GHI" }
+            ]
+        })
+    }
+
+    #[test]
+    fn a_bare_reference_renders_the_whole_value() {
+        let entries = vec![discord_webhook()];
+        let got = resolve_ref(&entries, &[], "Discord webhook", "api_key", 0);
+        assert_eq!(
+            got.as_deref(),
+            Some("https://discord.com/api/webhooks/123456789012345678/AbC-def_GHI")
+        );
+    }
+
+    #[test]
+    fn template_alias_returns_the_raw_shape_not_the_rendered_value() {
+        let entries = vec![discord_webhook()];
+        let got = resolve_ref(&entries, &[], "Discord webhook/template", "api_key", 0);
+        assert_eq!(
+            got.as_deref(),
+            Some("https://discord.com/api/webhooks/{webhook_id}/{webhook_token}")
+        );
+    }
+
+    #[test]
+    fn a_part_resolves_through_the_ordinary_extra_vars_fallback() {
+        let entries = vec![discord_webhook()];
+        let got = resolve_ref(&entries, &[], "Discord webhook/webhook_id", "api_key", 0);
+        assert_eq!(got.as_deref(), Some("123456789012345678"));
+    }
+
+    #[test]
+    fn an_unfilled_placeholder_makes_the_bare_reference_unresolved_not_wrong() {
+        let entries = vec![json!({
+            "provider": "Broken",
+            "secretType": "composite",
+            "composite_template": "https://x/{missing}",
+            "composite_kind": "link",
+            "extra_vars": []
+        })];
+        assert_eq!(resolve_ref(&entries, &[], "Broken", "api_key", 0), None);
+    }
 }

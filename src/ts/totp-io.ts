@@ -235,5 +235,5 @@ export async function runTotpExport(format: string): Promise<void> {
   }
   if (!body) return;
   const stamp = new Date().toISOString().slice(0, 10);
-  downloadText(body, `envvault-2fa-${format}-${stamp}.${meta.ext}`, `Exported ${count} seeds`);
+  void downloadText(body, `envvault-2fa-${format}-${stamp}.${meta.ext}`, `Exported ${count} seeds`);
 }

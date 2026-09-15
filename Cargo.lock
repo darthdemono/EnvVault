@@ -1190,7 +1190,7 @@ dependencies = [
 
 [[package]]
 name = "envv-cli"
-version = "0.23.0"
+version = "0.24.0"
 dependencies = [
  "aes-gcm",
  "base64 0.22.1",
@@ -1214,7 +1214,7 @@ dependencies = [
 
 [[package]]
 name = "envv-server"
-version = "0.23.0"
+version = "0.24.0"
 dependencies = [
  "axum",
  "axum-server",
@@ -1239,8 +1239,9 @@ dependencies = [
 
 [[package]]
 name = "envvault"
-version = "0.23.0"
+version = "0.24.0"
 dependencies = [
+ "dirs 5.0.1",
  "envv-server",
  "hex",
  "reqwest 0.12.28",
@@ -5464,7 +5465,7 @@ checksum = "ba73ea9cf16a25df0c8caa16c51acb937d5712a8429db78a3ee29d5dcacd3a65"
 
 [[package]]
 name = "vault-core"
-version = "0.23.0"
+version = "0.24.0"
 dependencies = [
  "argon2",
  "base64 0.22.1",

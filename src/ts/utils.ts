@@ -251,6 +251,62 @@ export async function clipboardWrite(text: string): Promise<void> {
   return execCopy(text);
 }
 
+// ── Saving a file to disk ────────────────────────────────────────────────
+
+/**
+ * Writes `content` to disk as `suggestedName` and reports where it landed.
+ *
+ * **A3 (2026-09-14).** Every export in the app used to build a `Blob`, click a
+ * `<a download>` anchor and toast "Exported ✓" **unconditionally**
+ * (`downloadText`, formerly in `import-export.ts`). Tauri's WebKitGTK webview
+ * has no download handler and no dialog/fs plugin, so the click went nowhere —
+ * the toast was true only in a plain browser dev server (`npm run dev`). This
+ * is the one place that decides, so a toast can finally say what happened
+ * instead of what was hoped.
+ *
+ * In Tauri: writes through `write_export_file` (a real file, on disk, `0600`
+ * on Unix) and resolves with the absolute path. In a browser: falls back to
+ * the blob-and-anchor dance, which a real download manager does handle there.
+ *
+ * Never throws — the caller decides how to tell the user, and a rejected
+ * promise from a copy/export button is a console nobody reads.
+ */
+export async function saveFile(
+  content: string,
+  suggestedName: string,
+  mime = 'text/plain',
+): Promise<{ ok: true; path: string | null } | { ok: false; error: string }> {
+  const invoke = (
+    window as unknown as {
+      __TAURI__?: { core?: { invoke?: (c: string, a?: unknown) => unknown } };
+    }
+  ).__TAURI__?.core?.invoke;
+  if (invoke) {
+    try {
+      const path = (await invoke('write_export_file', {
+        filename: suggestedName,
+        content,
+      })) as string;
+      return { ok: true, path };
+    } catch (e) {
+      return { ok: false, error: e instanceof Error ? e.message : String(e) };
+    }
+  }
+  // Browser dev server: the anchor click is real here, so keep it.
+  try {
+    const blob = new Blob([content], { type: mime });
+    const url = URL.createObjectURL(blob);
+    const a = Object.assign(document.createElement('a'), { href: url, download: suggestedName });
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    return { ok: true, path: null };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) };
+  }
+}
+
 export function execCopy(text: string): Promise<void> {
   const ta = Object.assign(document.createElement('textarea'), { value: text });
   Object.assign(ta.style, { position: 'fixed', left: '-9999px', top: '-9999px', opacity: '0' });

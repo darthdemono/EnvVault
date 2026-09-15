@@ -63,9 +63,11 @@ describe('secretType', () => {
   });
 
   it('still renders a normal non-default type', () => {
+    // The badge shows the registry's human label (Phase 24.5), not the raw
+    // `secretType` string — "SSH Key", not "ssh_key".
     st.vault.api_keys = [makeEntry({ secretType: 'ssh_key' })];
     renderGrid();
-    expect(grid().textContent).toContain('ssh_key');
+    expect(grid().textContent).toContain('SSH Key');
   });
 });
 
