@@ -31,6 +31,10 @@ RUN mkdir -p vault-core/src envv-server/src envv-cli/src src-tauri/src && \
 RUN cargo build --release -p envv-server 2>&1 | grep -v "^warning" || true
 
 # Copy real source and rebuild only the changed crates
+# secret-types.json (Phase 24.5) is `include_str!`'d from vault-core/src at a
+# repo-root-relative path — without it here the build fails past the stub
+# stage with "couldn't read vault-core/src/../../secret-types.json".
+COPY secret-types.json ./
 COPY vault-core/src vault-core/src
 COPY envv-server/src envv-server/src
 

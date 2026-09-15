@@ -445,7 +445,7 @@ pub struct PruneReport {
 
 /// Deletes rows older than `before_ts`, optionally narrowed by namespace,
 /// generator or actor (all resolved through `uid_meta`). Runs in chunks of
-/// [`PRUNE_CHUNK`] rows in **separate transactions**, so registration and
+/// `PRUNE_CHUNK` rows in **separate transactions**, so registration and
 /// minting are never blocked behind one long-held writer lock — the measured
 /// reason a single `DELETE` was rejected (45.7s at 10M rows vs. a 0.38s worst
 /// chunk).
