@@ -1,21 +1,15 @@
-/**
- * @file
- * Small cross-cutting UX affordances: password reveal toggles, Caps Lock
- * warnings, a password strength meter, and the recent-search dropdown.
- *
- * These are deliberately independent of `vault.ts`'s init: each `wire*` helper
- * is idempotent and binds to elements by id, so a screen that is rebuilt (the
- * unlock modal is shown, hidden and shown again across a lock cycle) can call
- * them freely without stacking duplicate listeners.
- */
-
 import { Settings, pushRecentSearch, RECENT_SEARCH_MAX, st } from './state';
-import { esc } from './utils';
+import { inTauri, invokeTauri } from './tauri';
+import { html, raw, setHtml } from './html';
 
 // ── Password reveal ───────────────────────────────────────────────────────────
 
-const EYE_OPEN = `<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>`;
-const EYE_OFF = `<path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/>`;
+const EYE_OPEN = raw(
+  `<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>`,
+);
+const EYE_OFF = raw(
+  `<path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/>`,
+);
 
 /**
  * Wires every `[data-reveal="<input id>"]` button to toggle its input's type.
@@ -36,7 +30,7 @@ export function wireRevealButtons(root: ParentNode = document): void {
       btn.title = show ? 'Hide password' : 'Show password';
       btn.setAttribute('aria-label', btn.title);
       const svg = btn.querySelector('svg');
-      if (svg) svg.innerHTML = show ? EYE_OFF : EYE_OPEN;
+      if (svg) setHtml(svg, show ? EYE_OFF : EYE_OPEN);
       input.focus();
     };
   });
@@ -60,7 +54,7 @@ export function resetReveal(inputId: string): void {
   btn.title = 'Show password';
   btn.setAttribute('aria-label', 'Show password');
   const svg = btn.querySelector('svg');
-  if (svg) svg.innerHTML = EYE_OPEN;
+  if (svg) setHtml(svg, EYE_OPEN);
 }
 
 // ── Caps Lock warning ─────────────────────────────────────────────────────────
@@ -171,6 +165,22 @@ export function wireCapsLockHint(inputId: string, hintId: string): void {
     hint.style.display = known === true ? 'flex' : 'none';
   };
 
+  let focused = false;
+  let probeGeneration = 0;
+  const readOsState = async () => {
+    if (!inTauri || !focused) return;
+    const generation = ++probeGeneration;
+    try {
+      const state = await invokeTauri<boolean | null>('caps_lock_state');
+      if (focused && generation === probeGeneration && state !== null) {
+        known = state;
+        paint();
+      }
+    } catch {
+      // The typed-character reading remains the fallback on unsupported hosts.
+    }
+  };
+
   /**
    * Caps Lock state implied by a key event, or null when the event carries no
    * evidence (a modifier, an editing key, a digit, a chorded shortcut).
@@ -206,6 +216,14 @@ export function wireCapsLockHint(inputId: string, hintId: string): void {
   // every update, and was how the two events' disagreeing modifier masks became
   // a visible flicker — so keyup is bound for exactly one key.
   input.onkeydown = update;
+  input.addEventListener('focus', () => {
+    focused = true;
+    void readOsState();
+  });
+  input.addEventListener('blur', () => {
+    focused = false;
+    probeGeneration++;
+  });
   input.onkeyup = (e) => {
     // The Caps Lock key itself produces no character, so it is the one press
     // that can change the answer without any evidence following it. On keyup the
@@ -215,6 +233,7 @@ export function wireCapsLockHint(inputId: string, hintId: string): void {
     if (probed !== null) known = probed;
     else if (known !== null) known = !known; // no belief in the API, but we knew
     paint();
+    void readOsState();
   };
   // Clicking in is the one moment a hint can appear before a single keystroke —
   // a MouseEvent carries the modifier state too, and by now the platform may
@@ -430,7 +449,17 @@ export function wirePasswordStrength(inputId: string, wrapId: string): void {
 
 // ── Recent search history ─────────────────────────────────────────────────────
 
-const CLOCK_SVG = `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><polyline points="12 7 12 12 15 14"/></svg>`;
+const CLOCK_SVG = html`<svg
+  width="11"
+  height="11"
+  viewBox="0 0 24 24"
+  fill="none"
+  stroke="currentColor"
+  stroke-width="2"
+>
+  <circle cx="12" cy="12" r="9" />
+  <polyline points="12 7 12 12 15 14" />
+</svg>`;
 
 /** Closes the recent-search dropdown if it is open. */
 export function closeSearchHistory(): void {
@@ -457,16 +486,18 @@ export function openSearchHistory(onPick: (q: string) => void): boolean {
   // localStorage — a vault imported from elsewhere never touches this, but the
   // settings blob is still plain JSON on disk, so escape it like any other
   // untrusted field (invariant 4).
-  panel.innerHTML =
-    `<div class="search-history-head">Recent searches` +
-    `<button type="button" class="search-history-clear" data-clear-history>Clear</button></div>` +
-    items
-      .map(
+  setHtml(
+    panel,
+    html`<div class="search-history-head">
+        Recent searches<button type="button" class="search-history-clear" data-clear-history>
+          Clear
+        </button>
+      </div>${items.map(
         (q) =>
-          `<button type="button" class="search-history-item" data-recent="${esc(q)}">` +
-          `${CLOCK_SVG}<span>${esc(q)}</span></button>`,
-      )
-      .join('');
+          html`<button type="button" class="search-history-item" data-recent="${q}">${CLOCK_SVG}<span>${q}</span>
+          </button>`,
+      )}`,
+  );
   panel.style.display = 'block';
 
   panel.onclick = (e) => {
