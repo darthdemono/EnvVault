@@ -534,6 +534,62 @@ fn merge(
     (entries, created, updated, unchanged)
 }
 
+/// Everything an import would do, computed without writing anything. Shared by
+/// `envv import-vault` and the desktop app's import pane (Phase 33.3), so what the
+/// app previews is what the CLI would write.
+pub struct ImportPlan {
+    /// The whole entry array after the import.
+    pub entries: Vec<Value>,
+    pub created: usize,
+    pub updated: usize,
+    pub unchanged: usize,
+    pub skipped: usize,
+    /// One row per incoming credential: fingerprint, never the value.
+    pub preview: Vec<Value>,
+}
+
+pub fn plan_import(
+    vault: &Value,
+    vendor: &str,
+    doc: &Value,
+    opts: &ImportOpts<'_>,
+) -> CliResult<ImportPlan> {
+    let (incoming, skipped) = match vendor {
+        "bitwarden" => read_bitwarden(doc),
+        "onepassword" => read_onepassword(doc),
+        "proton" => read_proton(doc).map_err(CliError::invalid)?,
+        other => return Err(CliError::invalid(format!("Unknown vendor '{other}'"))),
+    };
+    if incoming.is_empty() {
+        return Err(CliError::invalid(format!(
+            "No importable credentials found. {skipped} item(s) were skipped: cards, \
+             identities and items with no password have nothing this vault can store."
+        )));
+    }
+    let (entries, created, updated, unchanged) = merge(vault, &incoming, opts);
+    let preview = incoming
+        .iter()
+        .map(|r| {
+            json!({
+                "provider": r.provider,
+                "secret_type": r.secret_type,
+                // Fingerprint, never the value: this is stdout.
+                "fingerprint": crate::out::fingerprint(&r.secret),
+                "username": r.username,
+                "folder": r.folder,
+            })
+        })
+        .collect();
+    Ok(ImportPlan {
+        entries,
+        created,
+        updated,
+        unchanged,
+        skipped,
+        preview,
+    })
+}
+
 /// `envv import bitwarden FILE` / `envv import onepassword FILE`.
 pub fn run(
     access: &Access,
@@ -550,37 +606,15 @@ pub fn run(
         ))
     })?;
 
-    let (incoming, skipped) = match vendor {
-        "bitwarden" => read_bitwarden(&doc),
-        "onepassword" => read_onepassword(&doc),
-        "proton" => read_proton(&doc).map_err(CliError::invalid)?,
-        other => return Err(CliError::invalid(format!("Unknown vendor '{other}'"))),
-    };
-    if incoming.is_empty() {
-        return Err(CliError::invalid(format!(
-            "No importable credentials found in {}. \
-             {skipped} item(s) were skipped — cards, identities and items with no \
-             password have nothing this vault can store.",
-            file.display()
-        )));
-    }
-
     let vault = access.load_vault_or_empty()?;
-    let (entries, created, updated, unchanged) = merge(&vault, &incoming, opts);
-
-    let preview: Vec<Value> = incoming
-        .iter()
-        .map(|r| {
-            json!({
-                "provider": r.provider,
-                "secret_type": r.secret_type,
-                // Fingerprint, never the value: this is stdout.
-                "fingerprint": crate::out::fingerprint(&r.secret),
-                "username": r.username,
-                "folder": r.folder,
-            })
-        })
-        .collect();
+    let ImportPlan {
+        entries,
+        created,
+        updated,
+        unchanged,
+        skipped,
+        preview,
+    } = plan_import(&vault, vendor, &doc, opts)?;
 
     if !opts.apply {
         crate::out::ok(
