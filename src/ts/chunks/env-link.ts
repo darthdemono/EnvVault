@@ -162,7 +162,7 @@ function _findBestVaultMatch(
       // Build ref as ${PROVIDER_LABEL/field} — key_id disambiguates multiple keys from same provider.
       best = { entry: e, ref: `${provRef}/${fieldOut}`, field: fieldOut, confidence: score };
       tiedWith = null;
-    } else if (best && score === best.confidence && e !== best.entry) {
+    } else if (best?.confidence === score && e !== best.entry) {
       tiedWith = e;
     }
   }
