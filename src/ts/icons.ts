@@ -1,12 +1,6 @@
-/**
- * @file
- * Icon resolution and picker for EnvVault.
- * @description Provides Simple Icons CDN integration, provider-name-to-slug auto-detection,
- *              and an interactive icon-picker overlay for custom icon assignment.
- */
-
-import { esc, escAttr, showToast } from './utils';
+import { showToast } from './utils';
 import { ICON_PATHS } from './icon-paths';
+import { html, setHtml, type SafeHtml } from './html';
 
 /**
  * Master registry of supported Simple Icons entries.
@@ -805,30 +799,33 @@ function iconImgURL(slug: string): string {
  *
  * @param provider   - Provider name used both for alt text and slug resolution.
  * @param customIcon - Optional explicit slug override.
- * @returns HTML string safe for insertion into `innerHTML`.
+ * @returns Escaped markup (a `SafeHtml`).
  */
-export function iconHTML(provider: string, customIcon?: string | null): string {
+export function iconHTML(provider: string, customIcon?: string | null): SafeHtml {
   const letter = (provider || '?')[0].toUpperCase();
   // An embedded file is used as the src directly — but only after validating it
   // here rather than trusting the vault, because this string goes into an
   // attribute and the vault may have come from someone else's server.
   if (isEmbeddedIcon(customIcon)) {
     if (validateEmbeddedIcon(customIcon!)) {
-      return `<span class="si-fallback">${esc(letter)}</span>`;
+      return html`<span class="si-fallback">${letter}</span>`;
     }
-    return `<img class="si-icon si-icon-custom" src="${escAttr(customIcon!)}"
-          alt="${escAttr(provider || '')}" loading="lazy">`;
+    return html`<img
+      class="si-icon si-icon-custom"
+      src="${customIcon!}"
+      alt="${provider || ''}"
+      loading="lazy"
+    />`;
   }
   const slug = getIconSlug(provider, customIcon);
   const url = slug ? iconImgURL(slug) : '';
   if (url) {
-    return `<img class="si-icon" src="${escAttr(url)}"
-          alt="${escAttr(provider || '')}" loading="lazy">`;
+    return html`<img class="si-icon" src="${url}" alt="${provider || ''}" loading="lazy" />`;
   }
   // A slug with no bundled path renders as a letter here rather than as an
   // <img> with an empty src. The global error listener would have caught that
   // eventually, but only after painting a broken image first.
-  return `<span class="si-fallback">${esc(letter)}</span>`;
+  return html`<span class="si-fallback">${letter}</span>`;
 }
 
 /**
@@ -864,7 +861,14 @@ function renderIconGrid(query: string) {
     : SI_REGISTRY;
 
   if (!items.length) {
-    grid.innerHTML = `<div style="grid-column:1/-1;text-align:center;color:var(--text3);font-size:12px;padding:20px">No icons found</div>`;
+    setHtml(
+      grid,
+      html`<div
+        style="grid-column:1/-1;text-align:center;color:var(--text3);font-size:12px;padding:20px"
+      >
+        No icons found
+      </div>`,
+    );
     return;
   }
 
@@ -872,25 +876,35 @@ function renderIconGrid(query: string) {
   // our CSP (script-src 'self'), so it silently never ran. The `si-icon` class
   // routes failures to the global capture-phase error listener in
   // initIconPicker(), which swaps in a letter fallback for real.
-  grid.innerHTML = items
-    .map(([slug, name]) => {
+  setHtml(
+    grid,
+    html`${items.map(([slug, name]) => {
       const url = iconImgURL(slug);
       // A registry entry whose icon is not in the bundle still appears in the
       // picker — it is a real, selectable provider — it just shows its initial,
       // which is exactly what the card will show once it is picked.
       const art = url
-        ? `<img class="si-icon" src="${escAttr(url)}" alt="${escAttr(name)}"
-           width="24" height="24" loading="lazy">`
-        : `<span class="si-fallback">${esc((name || '?')[0].toUpperCase())}</span>`;
-      return `
-    <div class="icon-item${iconPicker.selected === slug ? ' selected' : ''}"
-         data-action="select" data-slug="${escAttr(slug)}" title="${escAttr(name)}">
-      ${art}
-      <div class="icon-item-name">${esc(name)}</div>
-    </div>
-  `;
-    })
-    .join('');
+        ? html`<img
+            class="si-icon"
+            src="${url}"
+            alt="${name}"
+            width="24"
+            height="24"
+            loading="lazy"
+          />`
+        : html`<span class="si-fallback">${(name || '?')[0].toUpperCase()}</span>`;
+      return html`
+        <div
+          class="icon-item${iconPicker.selected === slug ? ' selected' : ''}"
+          data-action="select"
+          data-slug="${slug}"
+          title="${name}"
+        >${art}
+          <div class="icon-item-name">${name}</div>
+        </div>
+      `;
+    })}`,
+  );
 }
 
 /**
@@ -914,7 +928,7 @@ function applyIconToTarget(slug: string | null) {
   if (!iconPicker.target) return;
   const { field, preview } = iconPicker.target;
   if (field) field.value = slug || '';
-  if (preview) preview.innerHTML = slug ? iconHTML('', slug) : '';
+  if (preview) setHtml(preview, slug ? iconHTML('', slug) : '');
 }
 
 /**
@@ -1027,7 +1041,7 @@ export function pickIconFile(
     }
     const reader = new FileReader();
     reader.onload = () => {
-      const uri = String(reader.result || '');
+      const uri = typeof reader.result === 'string' ? reader.result : '';
       const problem = validateEmbeddedIcon(uri);
       if (problem) onError(problem);
       else onPicked(uri);
@@ -1069,10 +1083,12 @@ export function initIconPicker() {
   });
   document.getElementById('icon-manual-apply')!.addEventListener('click', () => {
     const v = (document.getElementById('icon-manual') as HTMLInputElement).value.trim();
-    if (v) {
-      selectIcon(v);
-      closeIconPicker();
+    if (!v) {
+      showToast('Type an icon name first', 'err', 1500);
+      return;
     }
+    selectIcon(v);
+    closeIconPicker();
   });
   // An uploaded file becomes the selection like any slug would, so it flows
   // through the same onClose callback the picker already has — the card path and
