@@ -1,28 +1,6 @@
-/**
- * @file
- * First-run onboarding wizard.
- *
- * Four steps, shown once after a vault is created, and re-openable from
- * Settings. It is deliberately **not** a tutorial: every step either writes a
- * setting the user would otherwise never find, or performs the one action that
- * turns an empty vault into a useful one.
- *
- * Two structural decisions worth knowing before editing this file.
- *
- * **The overlay is built and destroyed per showing, not hidden.** Every handler
- * is therefore bound to a node that exists for exactly one wizard run, which
- * makes invariant 9 (handlers assigned, never accumulated) hold by construction
- * rather than by discipline — and it sidesteps the WebKitGTK ghost widgets that
- * static hidden markup produces.
- *
- * **Nothing here is a gate.** Skipping the wizard must leave a working vault, so
- * every step's effect is either a setting with a sane default already in place
- * or an action the user can take later from the normal UI. A wizard that has to
- * be completed is a wizard that gets completed wrongly at speed.
- */
-
 import { Settings, st } from './state';
-import { esc, showToast } from './utils';
+import { showToast, errorMessage } from './utils';
+import { html, setHtml, type SafeHtml } from './html';
 
 /** Steps, in order. `render` returns the body; `commit` runs on "Next". */
 interface Step {
@@ -30,7 +8,7 @@ interface Step {
   title: string;
   /** One line under the title. Sets expectations for what this step asks for. */
   blurb: string;
-  render: () => string;
+  render: () => SafeHtml;
   /** Applied when the user leaves the step forwards. Never on Back or Skip. */
   commit?: () => void | Promise<void>;
 }
@@ -88,8 +66,9 @@ export function showOnboarding(actions: OnboardingActions): void {
   overlay.setAttribute('role', 'dialog');
   overlay.setAttribute('aria-modal', 'true');
   overlay.setAttribute('aria-labelledby', 'onboard-title');
-  overlay.innerHTML = `
-    <div class="onboard-card">
+  setHtml(
+    overlay,
+    html` <div class="onboard-card">
       <div class="onboard-progress" id="onboard-progress" aria-hidden="true"></div>
       <div class="onboard-head">
         <h2 class="onboard-title" id="onboard-title"></h2>
@@ -103,7 +82,8 @@ export function showOnboarding(actions: OnboardingActions): void {
           <button class="btn btn-sm btn-accent" id="onboard-next">Next</button>
         </div>
       </div>
-    </div>`;
+    </div>`,
+  );
   document.body.appendChild(overlay);
 
   // The header carries a backdrop-filter, which creates a compositing layer that
@@ -119,13 +99,16 @@ export function showOnboarding(actions: OnboardingActions): void {
     const step = steps[index];
     $('onboard-title').textContent = step.title;
     $('onboard-blurb').textContent = step.blurb;
-    $('onboard-body').innerHTML = step.render();
-    $('onboard-progress').innerHTML = steps
-      .map(
+    setHtml($('onboard-body'), step.render());
+    setHtml(
+      $('onboard-progress'),
+      html`${steps.map(
         (_, i) =>
-          `<span class="onboard-dot${i === index ? ' active' : i < index ? ' done' : ''}"></span>`,
-      )
-      .join('');
+          html`<span
+            class="onboard-dot${i === index ? ' active' : i < index ? ' done' : ''}"
+          ></span>`,
+      )}`,
+    );
     ($('onboard-back') as HTMLButtonElement).disabled = index === 0;
     $('onboard-next').textContent = index === steps.length - 1 ? 'Finish' : 'Next';
     // Assignment, not addEventListener: `paint` replaces the body on every step
@@ -177,8 +160,8 @@ export function showOnboarding(actions: OnboardingActions): void {
   ($('onboard-next') as HTMLButtonElement).onclick = async () => {
     try {
       await steps[index].commit?.();
-    } catch (e: any) {
-      showToast('Could not save that step: ' + (e?.message ?? e), 'err');
+    } catch (e) {
+      showToast('Could not save that step: ' + errorMessage(e), 'err');
       return;
     }
     if (index === steps.length - 1) {
@@ -200,14 +183,20 @@ function buildSteps(): Step[] {
       id: 'welcome',
       title: 'Welcome to EnvVault',
       blurb: 'Four short steps. You can skip them and change everything later.',
-      render: () => `
-        <ul class="onboard-facts">
-          <li><strong>Your key never leaves this machine.</strong> The master password derives the
-              database key with Argon2id; the key is held in memory and zeroized on lock.</li>
-          <li><strong>Nothing is sent anywhere.</strong> No telemetry, no account, no sync — unless
-              you deliberately run a server and connect to it.</li>
-          <li><strong>Lose the master password and the vault is gone.</strong> There is no reset,
-              because a reset would be a second way in. Keep a written copy somewhere safe.</li>
+      render: () =>
+        html` <ul class="onboard-facts">
+          <li>
+            <strong>Your key never leaves this machine.</strong> The master password derives the
+            database key with Argon2id; the key is held in memory and zeroized on lock.
+          </li>
+          <li>
+            <strong>Nothing is sent anywhere.</strong> No telemetry, no account, no sync — unless
+            you deliberately run a server and connect to it.
+          </li>
+          <li>
+            <strong>Lose the master password and the vault is gone.</strong> There is no reset,
+            because a reset would be a second way in. Keep a written copy somewhere safe.
+          </li>
         </ul>`,
     },
     {
@@ -217,18 +206,28 @@ function buildSteps(): Step[] {
       render: () => {
         const mins = Settings.get('autoLockMinutes');
         const hide = Settings.get('lockOnHide');
-        return `
-        <label class="onboard-field">
-          <span class="onboard-field-label" id="onboard-autolock-label">Auto-lock after (minutes)</span>
-          <input id="onboard-autolock" class="tool-input" type="number" min="0" max="1440"
-                 value="${esc(String(mins))}" aria-labelledby="onboard-autolock-label">
-        </label>
-        <label class="onboard-check">
-          <input type="checkbox" id="onboard-lockhide"${hide ? ' checked' : ''}>
-          <span>Also lock the moment the window is hidden</span>
-        </label>
-        <p class="onboard-note">Locking on hide is off by default: it used to be unconditional, and
-        alt-tabbing away ended your session. The inactivity timer already covers walking away.</p>`;
+        return html` <label class="onboard-field">
+            <span class="onboard-field-label" id="onboard-autolock-label"
+              >Auto-lock after (minutes)</span
+            >
+            <input
+              id="onboard-autolock"
+              class="tool-input"
+              type="number"
+              min="0"
+              max="1440"
+              value="${String(mins)}"
+              aria-labelledby="onboard-autolock-label"
+            />
+          </label>
+          <label class="onboard-check">
+            <input type="checkbox" id="onboard-lockhide" ${hide ? ' checked' : ''} />
+            <span>Also lock the moment the window is hidden</span>
+          </label>
+          <p class="onboard-note">
+            Locking on hide is off by default: it used to be unconditional, and alt-tabbing away
+            ended your session. The inactivity timer already covers walking away.
+          </p>`;
       },
       commit: () => {
         const el = document.getElementById('onboard-autolock') as HTMLInputElement | null;
@@ -250,14 +249,15 @@ function buildSteps(): Step[] {
       blurb: 'Masked by default keeps secrets off screen until you ask for them.',
       render: () => {
         const mask = Settings.get('maskKeysByDefault');
-        return `
-        <label class="onboard-check">
-          <input type="checkbox" id="onboard-mask"${mask ? ' checked' : ''}>
-          <span>Mask secret values until revealed</span>
-        </label>
-        <p class="onboard-note">This is a display default, not a security boundary — the values are
-        in the vault either way. It exists because a screen share, a photo or someone walking past
-        should not be enough.</p>`;
+        return html` <label class="onboard-check">
+            <input type="checkbox" id="onboard-mask" ${mask ? ' checked' : ''} />
+            <span>Mask secret values until revealed</span>
+          </label>
+          <p class="onboard-note">
+            This is a display default, not a security boundary — the values are in the vault either
+            way. It exists because a screen share, a photo or someone walking past should not be
+            enough.
+          </p>`;
       },
       commit: () => {
         Settings.set(
@@ -272,19 +272,16 @@ function buildSteps(): Step[] {
       blurb: 'Or close this and use the + button whenever you are ready.',
       render: () => {
         const n = st.vault.api_keys.length;
-        return `
-        ${
-          n
-            ? `<p class="onboard-note">This vault already holds ${n} ${n === 1 ? 'entry' : 'entries'}.</p>`
-            : ''
-        }
-        <div class="onboard-actions">
-          <button class="btn btn-sm" id="onboard-add">Add a secret manually</button>
-          <button class="btn btn-sm" id="onboard-import">Import a .env file</button>
-        </div>
-        <p class="onboard-note">Everything here is also on the command line —
-        <code>envv entry add</code> and <code>envv import</code>. The two halves are kept at
-        deliberate parity, so anything you can do in one you can script in the other.</p>`;
+        return html` ${n ? html`<p class="onboard-note">This vault already holds ${n} ${n === 1 ? 'entry' : 'entries'}.</p>` : ''}
+          <div class="onboard-actions">
+            <button class="btn btn-sm" id="onboard-add">Add a secret manually</button>
+            <button class="btn btn-sm" id="onboard-import">Import a .env file</button>
+          </div>
+          <p class="onboard-note">
+            Everything here is also on the command line — <code>envv entry add</code> and
+            <code>envv import</code>. The two halves are kept at deliberate parity, so anything you
+            can do in one you can script in the other.
+          </p>`;
       },
     },
   ];
