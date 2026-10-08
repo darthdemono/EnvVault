@@ -4,6 +4,7 @@
 //! path serves `envv list` and `envv --server https://… list`.
 
 use crate::error::{CliError, CliResult};
+use std::cell::RefCell;
 use std::path::PathBuf;
 use std::sync::OnceLock;
 use vault_core::{derive_key, open_db, read_or_create_salt, VaultKey};
@@ -373,6 +374,17 @@ fn urlencode(v: &str) -> String {
 
 // ── Data access abstraction ───────────────────────────────────────────────────
 
+thread_local! {
+    /// The vault version this process last read or wrote locally (Phase 30).
+    ///
+    /// Every CLI command is load, edit, save. Saving unconditionally meant a long
+    /// `enrich --online` silently overwrote whatever the desktop app or a LAN peer
+    /// stored in the meantime. With row-level merging the write can be conditional
+    /// at no cost to the common case: entries nobody else touched merge, and only
+    /// an entry both sides changed is refused (exit 6, naming it).
+    static LOCAL_BASE: RefCell<Option<String>> = const { RefCell::new(None) };
+}
+
 pub enum Access {
     Local(VaultKey),
     Remote(RemoteClient),
@@ -383,9 +395,14 @@ impl Access {
         match self {
             Access::Local(key) => {
                 let conn = open_db(&default_db_path(), key)?;
-                vault_core::load_vault(&conn)
-                    .map_err(CliError::from)?
-                    .ok_or_else(|| CliError::not_found("Vault is empty"))
+                let doc = vault_core::load_vault(&conn).map_err(CliError::from)?;
+                // Read the version after the data it describes only because the
+                // load itself may have just migrated the vault; a write racing in
+                // between makes the version newer than the data, which the merge
+                // treats as "someone else's change to this row" — safe.
+                let ver = vault_core::vault_version(&conn).map_err(CliError::from)?;
+                LOCAL_BASE.with(|b| *b.borrow_mut() = ver);
+                doc.ok_or_else(|| CliError::not_found("Vault is empty"))
             }
             Access::Remote(c) => c.get_vault(),
         }
@@ -428,18 +445,29 @@ impl Access {
                 let conn = open_db(&default_db_path(), key)?;
                 // Local CLI access is by definition the master-password holder.
                 let actor = vault_core::ensure_owner_user(&conn).ok();
-                // Single-process CLI use; nothing else is writing this vault in
-                // the same instant, so an unconditional write is correct here.
-                vault_core::save_vault(
+                let base = LOCAL_BASE.with(|b| b.borrow().clone());
+                let saved = vault_core::save_vault(
                     &conn,
                     data.clone(),
                     vault_core::SaveCtx {
                         actor: actor.as_deref(),
-                        ..Default::default()
+                        expect_version: base.as_deref(),
                     },
                 )
-                .map(|_| ())
-                .map_err(CliError::from)
+                .map_err(CliError::from)?;
+                // After a save that merged someone else's changes this process's
+                // copy is behind. A second save in the same run must not be
+                // allowed to write that copy back over them, and no real version
+                // describes it, so the base becomes one nothing matches: the next
+                // save is refused (exit 6) rather than clobbering the merge.
+                LOCAL_BASE.with(|b| {
+                    *b.borrow_mut() = Some(if saved.ends_with(vault_core::MERGED_SUFFIX) {
+                        "stale-copy".to_string()
+                    } else {
+                        saved
+                    })
+                });
+                Ok(())
             }
             Access::Remote(c) => c.save_vault(data),
         }
