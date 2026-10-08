@@ -1,10 +1,5 @@
-/**
- * @file
- * Tools panel — secret generator, password generator, UUID/ULID,
- * API key patterns, hash generator, JWT validator, cert gen, SSH keygen,
- * string tools, base64.
- */
-
+import { buildBundle } from './bundle-scope';
+import { codeStatus } from './recovery-codes';
 import * as yaml from 'js-yaml';
 import type { VaultEntry } from './types';
 import {
@@ -20,30 +15,62 @@ import {
 } from './state';
 import { initPoolsPane, renderPoolsPane } from './pools';
 import { initTimelinePane, renderTimeline } from './timeline';
+import { initEnrichPane, initDoctorPane } from './enrich-pane';
+import { initUidPane } from './uid-pane';
+import { initVendorImportPane } from './vendor-import-pane';
 import {
   showToast,
   clipboardWrite,
   generateULID,
   showConfirm,
-  esc,
-  escAttr,
+  showPrompt,
   saveFile,
+  errorMessage,
 } from './utils';
-import {
-  showDropdown,
-  injectIntoForm,
-  quickGenerate,
-  openAdd,
-  fillForm,
-  buildCatChips,
-  openModal,
-} from './modals';
+import { injectIntoForm, fillForm, buildCatChips, openModal } from './modals';
 import { SECRET_TEMPLATES } from './templates';
-import { render, TYPE_CHIP_LABELS } from './render';
+import {
+  generateRandomBytes,
+  generatePassword,
+  guardEntropy,
+  passwordCharset,
+  generateApiKeyPattern,
+  generateHash,
+} from './generators';
+import { render, revealEntry } from './render';
+import { secretTypeLabel, secretTypesByGroup } from './secret-types';
 import { resolveFieldRef } from './chunk-ops';
 import { initAuditPanel } from './audit';
+import { invokeTauri, isTauri } from './tauri';
+import { html, setHtml, type SafeHtml } from './html';
 
-function parseImport(raw: string, fmt: string): any[] {
+type ImportRecord = Record<string, unknown>;
+
+function asImportRecord(value: unknown): ImportRecord {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+    ? (value as ImportRecord)
+    : {};
+}
+
+function stringItems(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === 'string')
+    : [];
+}
+
+function stringValue(value: unknown): string {
+  return typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean'
+    ? String(value)
+    : '';
+}
+
+function diffValue(value: unknown): string {
+  return typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean'
+    ? String(value)
+    : '';
+}
+
+function parseImport(raw: string, fmt: string): unknown[] {
   const base = (p: string, v: string) => ({
     provider: p,
     api_key: v,
@@ -71,20 +98,31 @@ function parseImport(raw: string, fmt: string): any[] {
 
   if (fmt === 'bitwarden') {
     try {
-      const data = JSON.parse(raw);
-      const items = data.items ?? data;
-      return (Array.isArray(items) ? items : []).map((item: any) => ({
-        provider: item.name || 'Unknown',
-        account_name: item.login?.username ?? null,
-        api_key: item.login?.password ?? item.notes ?? '',
-        api_url: item.login?.uris?.[0]?.uri ?? null,
-        price_type: 'paid',
-        secretType: 'password',
-        categories: [],
-        projectIds: ['Universal'],
-        scopes: [],
-        description: item.notes ?? null,
-      }));
+      const data: unknown = JSON.parse(raw);
+      const root = asImportRecord(data);
+      const items = root.items ?? data;
+      return (Array.isArray(items) ? items : []).map((item) => {
+        const value = asImportRecord(item);
+        const login = asImportRecord(value.login);
+        const uri = asImportRecord(Array.isArray(login.uris) ? login.uris[0] : undefined);
+        return {
+          provider: typeof value.name === 'string' ? value.name : 'Unknown',
+          account_name: typeof login.username === 'string' ? login.username : null,
+          api_key:
+            typeof login.password === 'string'
+              ? login.password
+              : typeof value.notes === 'string'
+                ? value.notes
+                : '',
+          api_url: typeof uri.uri === 'string' ? uri.uri : null,
+          price_type: 'paid',
+          secretType: 'password',
+          categories: [],
+          projectIds: ['Universal'],
+          scopes: [],
+          description: typeof value.notes === 'string' ? value.notes : null,
+        };
+      });
     } catch {
       return [];
     }
@@ -92,21 +130,24 @@ function parseImport(raw: string, fmt: string): any[] {
 
   if (fmt === '1password') {
     try {
-      const items = JSON.parse(raw);
-      return (Array.isArray(items) ? items : []).map((item: any) => {
-        const pw = item.fields?.find(
-          (f: any) => f.designation === 'password' || f.id === 'password',
+      const parsed: unknown = JSON.parse(raw);
+      const items = Array.isArray(parsed) ? parsed : [];
+      return items.map((item) => {
+        const value = asImportRecord(item);
+        const fields = Array.isArray(value.fields) ? value.fields.map(asImportRecord) : [];
+        const pw = fields.find(
+          (field) => field.designation === 'password' || field.id === 'password',
         );
-        const user = item.fields?.find(
-          (f: any) => f.designation === 'username' || f.id === 'username',
+        const user = fields.find(
+          (field) => field.designation === 'username' || field.id === 'username',
         );
         return {
-          provider: item.title || 'Unknown',
-          account_name: user?.value ?? null,
-          api_key: pw?.value ?? '',
+          provider: typeof value.title === 'string' ? value.title : 'Unknown',
+          account_name: typeof user?.value === 'string' ? user.value : null,
+          api_key: typeof pw?.value === 'string' ? pw.value : '',
           price_type: 'paid',
           secretType: 'password',
-          categories: item.tags ?? [],
+          categories: stringItems(value.tags),
           projectIds: ['Universal'],
           scopes: [],
         };
@@ -118,9 +159,9 @@ function parseImport(raw: string, fmt: string): any[] {
 
   if (fmt === 'json') {
     try {
-      const data = JSON.parse(raw);
-      const items = Array.isArray(data) ? data : (data.api_keys ?? []);
-      return items;
+      const data: unknown = JSON.parse(raw);
+      const items = Array.isArray(data) ? data : asImportRecord(data).api_keys;
+      return Array.isArray(items) ? items : [];
     } catch {
       return [];
     }
@@ -128,10 +169,11 @@ function parseImport(raw: string, fmt: string): any[] {
 
   if (fmt === 'yaml') {
     try {
-      const data: any = yaml.load(raw);
+      const data: unknown = yaml.load(raw);
       // Accept a full vault ({api_keys:[...]}), a bare list, or a flat KEY: value map.
       if (Array.isArray(data)) return data;
-      if (data && Array.isArray(data.api_keys)) return data.api_keys;
+      if (Array.isArray(asImportRecord(data).api_keys))
+        return asImportRecord(data).api_keys as unknown[];
       if (data && typeof data === 'object') {
         return Object.entries(data).map(([k, v]) =>
           base(k, typeof v === 'string' ? v : JSON.stringify(v)),
@@ -155,32 +197,53 @@ function parseImport(raw: string, fmt: string): any[] {
  * grid down rather than being rejected. Missing arrays caused the same class of
  * failure further in.
  */
-export function normalizeImported(raw: any): VaultEntry | null {
+export function normalizeImported(raw: unknown): VaultEntry | null {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
-  const provider = String(raw.provider ?? raw.name ?? '').trim();
+  const item = raw as ImportRecord;
+  const provider = stringValue(item.provider ?? item.name).trim();
   if (!provider) return null;
-  const projectIds: string[] = Array.isArray(raw.projectIds) ? [...raw.projectIds] : [];
+  const projectIds = stringItems(item.projectIds);
   if (!projectIds.includes('Universal')) projectIds.push('Universal');
   return {
-    ...raw,
+    ...item,
     provider,
-    api_key: typeof raw.api_key === 'string' ? raw.api_key : String(raw.api_key ?? ''),
-    price_type: ['free', 'local', 'paid', 'conditional'].includes(raw.price_type)
-      ? raw.price_type
-      : 'free',
-    secretType: raw.secretType ?? 'api_key',
-    categories: Array.isArray(raw.categories) ? raw.categories : [],
-    scopes: Array.isArray(raw.scopes) ? raw.scopes : [],
+    api_key: stringValue(item.api_key),
+    price_type:
+      typeof item.price_type === 'string' &&
+      ['free', 'local', 'paid', 'conditional'].includes(item.price_type)
+        ? (item.price_type as VaultEntry['price_type'])
+        : 'free',
+    secretType:
+      typeof item.secretType === 'string'
+        ? (item.secretType as VaultEntry['secretType'])
+        : 'api_key',
+    categories: stringItems(item.categories),
+    scopes: stringItems(item.scopes),
     projectIds,
   } as VaultEntry;
 }
 
 let _toolsInited = false;
 
+/**
+ * The Copy buttons on the generator and converter panes. They used to be
+ * `if (v) clipboardWrite(v)`: nothing happened with an empty output, and nothing
+ * visible happened with a full one either, because `clipboardWrite` does not
+ * toast. Phase 32's efficacy probe found 14 of them. A control must say what it
+ * did, including when it did nothing.
+ */
+function copyOrExplain(v: string): void {
+  if (!v) {
+    showToast('Nothing to copy yet', 'err', 1500);
+    return;
+  }
+  void clipboardWrite(v).then(() => showToast('Copied ✓', 'ok', 1500));
+}
+
 export function initTools() {
   if (_toolsInited) return;
   _toolsInited = true;
-  const invoke = (window as any).__TAURI__?.core?.invoke?.bind((window as any).__TAURI__?.core);
+  const invoke = isTauri() ? invokeTauri : undefined;
 
   // ── Activity bar panel switching ──
   const activityBtns = Array.from(document.querySelectorAll<HTMLButtonElement>('.activity-btn'));
@@ -229,6 +292,10 @@ export function initTools() {
 
   initPoolsPane();
   initTimelinePane();
+  initEnrichPane();
+  initUidPane();
+  initVendorImportPane();
+  initDoctorPane();
   if ((Settings.get('activeTool') || '') === 'timeline') renderTimeline();
   document.getElementById('pools-refresh-btn')?.addEventListener('click', () => {
     void renderPoolsPane();
@@ -255,7 +322,7 @@ export function initTools() {
       const updated = isNowCollapsed
         ? [...new Set([...collapsed, section])]
         : collapsed.filter((s) => s !== section);
-      Settings.set('collapsedSections', updated as any);
+      Settings.set('collapsedSections', updated);
     });
     // Seed from the restored state rather than from the markup: collapsed
     // sections persist, so a fresh launch can open with several already shut and
@@ -281,26 +348,19 @@ export function initTools() {
     });
   });
   const sgGenerate = () => {
-    const buf = new Uint8Array(sgBytes);
-    crypto.getRandomValues(buf);
-    const fmt = (document.getElementById('sg-format') as HTMLSelectElement).value;
-    let out: string;
-    if (fmt === 'hex')
-      out = Array.from(buf)
-        .map((b) => b.toString(16).padStart(2, '0'))
-        .join('');
-    else if (fmt === 'base64url')
-      out = btoa(String.fromCharCode(...buf))
-        .replace(/\+/g, '-')
-        .replace(/\//g, '_')
-        .replace(/=/g, '');
-    else out = btoa(String.fromCharCode(...buf));
-    (document.getElementById('sg-output') as HTMLTextAreaElement).value = out;
+    const fmt = (document.getElementById('sg-format') as HTMLSelectElement).value as
+      'hex' | 'base64' | 'base64url';
+    const out = guardEntropy(
+      () => generateRandomBytes(sgBytes, fmt),
+      (m) => showToast(m, 'err'),
+    );
+    if (out !== undefined)
+      (document.getElementById('sg-output') as HTMLTextAreaElement).value = out;
   };
   document.getElementById('sg-generate')!.addEventListener('click', sgGenerate);
   document.getElementById('sg-copy')!.addEventListener('click', () => {
     const v = (document.getElementById('sg-output') as HTMLTextAreaElement).value;
-    if (v) clipboardWrite(v);
+    copyOrExplain(v);
   });
   document.getElementById('sg-inject')!.addEventListener('click', () => {
     const v = (document.getElementById('sg-output') as HTMLTextAreaElement).value;
@@ -320,22 +380,18 @@ export function initTools() {
     const digits = (document.getElementById('pg-digits') as HTMLInputElement).checked;
     const symbols = (document.getElementById('pg-symbols') as HTMLInputElement).checked;
     const noAmbig = (document.getElementById('pg-noambig') as HTMLInputElement).checked;
-    let chars = '';
-    if (upper) chars += noAmbig ? 'ABCDEFGHJKLMNPQRSTUVWXYZ' : 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
-    if (lower) chars += noAmbig ? 'abcdefghjkmnpqrstuvwxyz' : 'abcdefghijklmnopqrstuvwxyz';
-    if (digits) chars += noAmbig ? '23456789' : '0123456789';
-    if (symbols) chars += '!@#$%^&*()-_=+[]{}|;:,.<>?';
-    if (!chars) {
+    const pwd = guardEntropy(
+      () => generatePassword({ length: len, upper, lower, digits, symbols, noAmbig }),
+      (m) => showToast(m, 'err'),
+    );
+    if (pwd === undefined) return;
+    if (pwd === null) {
       showToast('Select at least one character set', 'err');
       return;
     }
-    const buf = new Uint32Array(len);
-    crypto.getRandomValues(buf);
-    const pwd = Array.from(buf)
-      .map((n) => chars[n % chars.length])
-      .join('');
     (document.getElementById('pg-output') as HTMLInputElement).value = pwd;
-    const entropy = len * Math.log2(chars.length);
+    const entropy =
+      len * Math.log2(passwordCharset({ upper, lower, digits, symbols, noAmbig }).length);
     const fill = document.getElementById('pg-strength-fill')!;
     const pct = Math.min(100, (entropy / 128) * 100);
     fill.style.width = pct + '%';
@@ -344,7 +400,7 @@ export function initTools() {
   document.getElementById('pg-generate')!.addEventListener('click', pgGenerate);
   document.getElementById('pg-copy')!.addEventListener('click', () => {
     const v = (document.getElementById('pg-output') as HTMLInputElement).value;
-    if (v) clipboardWrite(v);
+    copyOrExplain(v);
   });
   document.getElementById('pg-inject')!.addEventListener('click', () => {
     const v = (document.getElementById('pg-output') as HTMLInputElement).value;
@@ -369,34 +425,23 @@ export function initTools() {
   });
   document.getElementById('uu-copy')!.addEventListener('click', () => {
     const v = (document.getElementById('uu-output') as HTMLTextAreaElement).value;
-    if (v) clipboardWrite(v);
+    copyOrExplain(v);
   });
 
   // ── API KEY PATTERNS ──
   const akGenerate = () => {
-    const pattern = (document.getElementById('ak-pattern') as HTMLSelectElement).value;
-    const buf = new Uint8Array(64);
-    crypto.getRandomValues(buf);
-    let out = '';
-    const toHex = (b: Uint8Array) =>
-      Array.from(b)
-        .map((x) => x.toString(16).padStart(2, '0'))
-        .join('');
-    const toB64 = (b: Uint8Array) => btoa(String.fromCharCode(...b));
-    const toB64url = (b: Uint8Array) =>
-      toB64(b).replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
-    if (pattern === 'jwt-secret') out = toHex(buf.slice(0, 32));
-    else if (pattern === 'base64-32') out = toB64(buf.slice(0, 32));
-    else if (pattern === 'hex-32') out = toHex(buf.slice(0, 32));
-    else if (pattern === 'hex-16') out = toHex(buf.slice(0, 16));
-    else if (pattern === 'bearer') out = toB64url(buf.slice(0, 32));
-    else if (pattern === 'sk-prefix') out = 'sk-' + toB64url(buf.slice(0, 32)).slice(0, 48);
-    (document.getElementById('ak-output') as HTMLInputElement).value = out;
+    const pattern = (document.getElementById('ak-pattern') as HTMLSelectElement)
+      .value as Parameters<typeof generateApiKeyPattern>[0];
+    const out = guardEntropy(
+      () => generateApiKeyPattern(pattern),
+      (m) => showToast(m, 'err'),
+    );
+    if (out !== undefined) (document.getElementById('ak-output') as HTMLInputElement).value = out;
   };
   document.getElementById('ak-generate')!.addEventListener('click', akGenerate);
   document.getElementById('ak-copy')!.addEventListener('click', () => {
     const v = (document.getElementById('ak-output') as HTMLInputElement).value;
-    if (v) clipboardWrite(v);
+    copyOrExplain(v);
   });
   document.getElementById('ak-inject')!.addEventListener('click', () => {
     const v = (document.getElementById('ak-output') as HTMLInputElement).value;
@@ -420,22 +465,20 @@ export function initTools() {
       hgFmt = btn.dataset.fmt!;
     });
   });
-  document.getElementById('hg-hash')!.addEventListener('click', async () => {
-    const input = (document.getElementById('hg-input') as HTMLTextAreaElement).value;
-    const enc = new TextEncoder().encode(input);
-    const hashBuf = await crypto.subtle.digest(hgAlgo, enc);
-    const hashArr = new Uint8Array(hashBuf);
-    let out: string;
-    if (hgFmt === 'base64') out = btoa(String.fromCharCode(...hashArr));
-    else
-      out = Array.from(hashArr)
-        .map((b) => b.toString(16).padStart(2, '0'))
-        .join('');
-    (document.getElementById('hg-output') as HTMLInputElement).value = out;
+  document.getElementById('hg-hash')!.addEventListener('click', () => {
+    void (async () => {
+      const input = (document.getElementById('hg-input') as HTMLTextAreaElement).value;
+      const out = await generateHash(
+        input,
+        hgAlgo as Parameters<typeof generateHash>[1],
+        hgFmt as Parameters<typeof generateHash>[2],
+      );
+      (document.getElementById('hg-output') as HTMLInputElement).value = out;
+    })();
   });
   document.getElementById('hg-copy')!.addEventListener('click', () => {
     const v = (document.getElementById('hg-output') as HTMLInputElement).value;
-    if (v) clipboardWrite(v);
+    copyOrExplain(v);
   });
   document.getElementById('hg-inject')!.addEventListener('click', () => {
     const v = (document.getElementById('hg-output') as HTMLInputElement).value;
@@ -456,7 +499,7 @@ export function initTools() {
       return;
     }
     try {
-      const decode = (s: string) =>
+      const decode = (s: string): unknown =>
         JSON.parse(
           atob(
             s
@@ -466,7 +509,7 @@ export function initTools() {
           ),
         );
       const header = decode(parts[0]);
-      const payload = decode(parts[1]);
+      const payload = asImportRecord(decode(parts[1]));
       (document.getElementById('tv-header') as HTMLPreElement).textContent = JSON.stringify(
         header,
         null,
@@ -478,7 +521,7 @@ export function initTools() {
         2,
       );
       statusEl.style.display = '';
-      if (payload.exp) {
+      if (typeof payload.exp === 'number') {
         const exp = new Date(payload.exp * 1000);
         const now = new Date();
         if (exp < now) {
@@ -500,12 +543,12 @@ export function initTools() {
   });
   document.getElementById('tv-copy-header')?.addEventListener('click', () => {
     const v = (document.getElementById('tv-header') as HTMLPreElement).textContent;
-    if (v?.trim()) clipboardWrite(v).then(() => showToast('Header copied ✓', 'ok', 1500));
+    if (v?.trim()) void clipboardWrite(v).then(() => showToast('Header copied ✓', 'ok', 1500));
     else showToast('Decode a JWT first', 'err');
   });
   document.getElementById('tv-copy-payload')?.addEventListener('click', () => {
     const v = (document.getElementById('tv-payload') as HTMLPreElement).textContent;
-    if (v?.trim()) clipboardWrite(v).then(() => showToast('Payload copied ✓', 'ok', 1500));
+    if (v?.trim()) void clipboardWrite(v).then(() => showToast('Payload copied ✓', 'ok', 1500));
     else showToast('Decode a JWT first', 'err');
   });
 
@@ -515,66 +558,71 @@ export function initTools() {
   pcDays.addEventListener('input', () => {
     pcDaysDisplay.textContent = pcDays.value;
   });
-  document.getElementById('pc-generate')!.addEventListener('click', async () => {
-    if (!invoke) {
-      showToast('Tauri not available', 'err');
-      return;
-    }
-    const cn = (document.getElementById('pc-cn') as HTMLInputElement).value.trim() || 'localhost';
-    const days = parseInt(pcDays.value) || 365;
-    const loading = document.getElementById('pc-loading')!;
-    loading.style.display = '';
-    try {
-      const result: { cert_pem: string; key_pem: string } = await invoke('generate_certificate', {
-        commonName: cn,
-        validityDays: days,
-      });
-      (document.getElementById('pc-cert-output') as HTMLTextAreaElement).value = result.cert_pem;
-      (document.getElementById('pc-key-output') as HTMLTextAreaElement).value = result.key_pem;
-    } catch (e) {
-      showToast(String(e), 'err');
-    } finally {
-      loading.style.display = 'none';
-    }
+  document.getElementById('pc-generate')!.addEventListener('click', () => {
+    void (async () => {
+      if (!invoke) {
+        showToast('Tauri not available', 'err');
+        return;
+      }
+      const cn = (document.getElementById('pc-cn') as HTMLInputElement).value.trim() || 'localhost';
+      const days = parseInt(pcDays.value) || 365;
+      const loading = document.getElementById('pc-loading')!;
+      loading.style.display = '';
+      try {
+        const result = await invoke<{ cert_pem: string; key_pem: string }>('generate_certificate', {
+          commonName: cn,
+          validityDays: days,
+        });
+        (document.getElementById('pc-cert-output') as HTMLTextAreaElement).value = result.cert_pem;
+        (document.getElementById('pc-key-output') as HTMLTextAreaElement).value = result.key_pem;
+      } catch (e) {
+        showToast(String(e), 'err');
+      } finally {
+        loading.style.display = 'none';
+      }
+    })();
   });
   document.getElementById('pc-copy-cert')!.addEventListener('click', () => {
     const v = (document.getElementById('pc-cert-output') as HTMLTextAreaElement).value;
-    if (v) clipboardWrite(v);
+    copyOrExplain(v);
   });
   document.getElementById('pc-copy-key')!.addEventListener('click', () => {
     const v = (document.getElementById('pc-key-output') as HTMLTextAreaElement).value;
-    if (v) clipboardWrite(v);
+    copyOrExplain(v);
   });
 
   // ── SSH KEYGEN (Rust) ──
-  document.getElementById('sk-generate')!.addEventListener('click', async () => {
-    if (!invoke) {
-      showToast('Tauri not available', 'err');
-      return;
-    }
-    const comment = (document.getElementById('sk-comment') as HTMLInputElement).value.trim();
-    const loading = document.getElementById('sk-loading')!;
-    loading.style.display = '';
-    try {
-      const result: { public_key: string; private_key: string } = await invoke(
-        'generate_ssh_keypair',
-        { comment },
-      );
-      (document.getElementById('sk-pub-output') as HTMLTextAreaElement).value = result.public_key;
-      (document.getElementById('sk-priv-output') as HTMLTextAreaElement).value = result.private_key;
-    } catch (e) {
-      showToast(String(e), 'err');
-    } finally {
-      loading.style.display = 'none';
-    }
+  document.getElementById('sk-generate')!.addEventListener('click', () => {
+    void (async () => {
+      if (!invoke) {
+        showToast('Tauri not available', 'err');
+        return;
+      }
+      const comment = (document.getElementById('sk-comment') as HTMLInputElement).value.trim();
+      const loading = document.getElementById('sk-loading')!;
+      loading.style.display = '';
+      try {
+        const result = await invoke<{ public_key: string; private_key: string }>(
+          'generate_ssh_keypair',
+          { comment },
+        );
+        (document.getElementById('sk-pub-output') as HTMLTextAreaElement).value = result.public_key;
+        (document.getElementById('sk-priv-output') as HTMLTextAreaElement).value =
+          result.private_key;
+      } catch (e) {
+        showToast(String(e), 'err');
+      } finally {
+        loading.style.display = 'none';
+      }
+    })();
   });
   document.getElementById('sk-copy-pub')!.addEventListener('click', () => {
     const v = (document.getElementById('sk-pub-output') as HTMLTextAreaElement).value;
-    if (v) clipboardWrite(v);
+    copyOrExplain(v);
   });
   document.getElementById('sk-copy-priv')!.addEventListener('click', () => {
     const v = (document.getElementById('sk-priv-output') as HTMLTextAreaElement).value;
-    if (v) clipboardWrite(v);
+    copyOrExplain(v);
   });
 
   // ── STRING TOOLS ──
@@ -598,7 +646,7 @@ export function initTools() {
             : input;
       } else if (op === 'shell-quote') out = "'" + input.replace(/'/g, "'\\''") + "'";
       else if (op === 'json-escape') out = JSON.stringify(input).slice(1, -1);
-      else if (op === 'json-unescape') out = JSON.parse('"' + input + '"');
+      else if (op === 'json-unescape') out = JSON.parse('"' + input + '"') as string;
     } catch (e) {
       showToast('Conversion error: ' + String(e), 'err');
       return;
@@ -607,7 +655,7 @@ export function initTools() {
   });
   document.getElementById('st-copy')!.addEventListener('click', () => {
     const v = (document.getElementById('st-output') as HTMLTextAreaElement).value;
-    if (v) clipboardWrite(v);
+    copyOrExplain(v);
   });
 
   // ── BASE64 ──
@@ -629,27 +677,27 @@ export function initTools() {
   });
   document.getElementById('b64-convert')!.addEventListener('click', () => {
     const input = (document.getElementById('b64-input') as HTMLTextAreaElement).value;
-    let out = '';
     try {
       if (b64Op === 'encode') {
         let encoded = btoa(unescape(encodeURIComponent(input)));
         if (b64Var === 'url')
           encoded = encoded.replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
-        out = encoded;
+        (document.getElementById('b64-output') as HTMLTextAreaElement).value = encoded;
       } else {
         let normalized = input;
         if (b64Var === 'url') normalized = input.replace(/-/g, '+').replace(/_/g, '/');
-        out = decodeURIComponent(escape(atob(normalized)));
+        (document.getElementById('b64-output') as HTMLTextAreaElement).value = decodeURIComponent(
+          escape(atob(normalized)),
+        );
       }
     } catch (e) {
       showToast('Base64 error: ' + String(e), 'err');
       return;
     }
-    (document.getElementById('b64-output') as HTMLTextAreaElement).value = out;
   });
   document.getElementById('b64-copy')!.addEventListener('click', () => {
     const v = (document.getElementById('b64-output') as HTMLTextAreaElement).value;
-    if (v) clipboardWrite(v);
+    copyOrExplain(v);
   });
 
   // ── Health Dashboard (item 7; per-field detail is Phase 24.2) ──────────────
@@ -668,6 +716,7 @@ export function initTools() {
     id?: string;
     secretType?: string;
     field?: string;
+    action?: 'delete-empty-bundle';
   }
 
   /** Extracted from the click handler so a filter change can re-render
@@ -684,6 +733,35 @@ export function initTools() {
       const prov = k.provider || '?';
       const id = entryId(k);
       const secretType = k.secretType || 'api_key';
+      if (
+        secretType === 'bundle' &&
+        !keys.some((entry) => entry.bundle_id === id) &&
+        !k.extra_vars?.length
+      ) {
+        issues.push({
+          severity: 'low',
+          provider: prov,
+          msg: 'Empty bundle — safe to remove if it was created by mistake',
+          id,
+          secretType,
+          field: 'bundle_members',
+          action: 'delete-empty-bundle',
+        });
+      }
+      // Single-use recovery codes: at two left, the next lockout is permanent.
+      if (secretType === 'recovery_codes') {
+        const { total, remaining } = codeStatus(k);
+        if (total > 0 && remaining <= 2) {
+          issues.push({
+            severity: remaining === 0 ? 'high' : 'med',
+            provider: prov,
+            msg: `Only ${remaining} of ${total} recovery codes left — generate a new set at the service`,
+            id,
+            secretType,
+            field: 'extra_vars/codes',
+          });
+        }
+      }
       // Marked compromised — emergency rotate
       if (k.compromised) {
         issues.push({
@@ -845,7 +923,11 @@ export function initTools() {
     const lev = (a: string, b: string): number => {
       const m = a.length,
         n = b.length;
-      const d = Array.from({ length: m + 1 }, (_, i) => [i, ...Array(n).fill(0)]);
+      const d = Array.from({ length: m + 1 }, (_, i) => {
+        const row = Array<number>(n + 1).fill(0);
+        row[0] = i;
+        return row;
+      });
       for (let j = 0; j <= n; j++) d[0][j] = j;
       for (let i = 1; i <= m; i++)
         for (let j = 1; j <= n; j++)
@@ -987,7 +1069,12 @@ export function initTools() {
     );
 
     if (!filtered.length) {
-      results.innerHTML = `<div class="health-ok">✓ ${_lastHealthIssues.length ? 'No findings match this filter' : 'No issues found — vault looks healthy!'}</div>`;
+      setHtml(
+        results,
+        html`<div class="health-ok">
+          ✓
+          ${_lastHealthIssues.length ? 'No findings match this filter' : 'No issues found — vault looks healthy!'}</div>`,
+      );
       return;
     }
 
@@ -1014,48 +1101,51 @@ export function initTools() {
 
     // provider/msg/field all embed user-controlled data (entry, project and
     // chunk names) and are injected via innerHTML — escape them.
-    const entryGroupsHtml = groups
-      .map((g) => {
-        const typeLabel = TYPE_CHIP_LABELS[g.secretType] ?? g.secretType;
-        return `
-      <div class="health-entry-group">
-        <button type="button" class="health-entry-header" data-action="health-jump" data-id="${escAttr(g.id)}" title="Jump to this entry">
-          <span class="health-entry-provider">${esc(g.provider)}</span>
-          <span class="badge health-entry-type">${esc(typeLabel)}</span>
-          <span class="health-entry-count">${g.items.length} finding${g.items.length === 1 ? '' : 's'}</span>
-        </button>
-        ${g.items
-          .map(
-            (i) => `<div class="health-row health-${i.severity}">
-              <span class="health-sev-badge health-${i.severity}">${SEVERITY_LABEL[i.severity]}</span>
-              ${i.field ? `<span class="health-field">${esc(i.field)}</span>` : ''}
-              <span class="health-msg">${esc(i.msg)}</span>
-            </div>`,
-          )
-          .join('')}
-      </div>`;
-      })
-      .join('');
+    const entryGroupsHtml = groups.map((g) => {
+      const typeLabel = secretTypeLabel(g.secretType);
+      return html` <div class="health-entry-group">
+        <button
+          type="button"
+          class="health-entry-header"
+          data-action="health-jump"
+          data-id="${g.id}"
+          title="Jump to this entry"
+        >
+          <span class="health-entry-provider">${g.provider}</span>
+          <span class="badge health-entry-type">${typeLabel}</span>
+          <span class="health-entry-count"
+            >${g.items.length} finding${g.items.length === 1 ? '' : 's'}</span
+          >
+        </button>${g.items.map(
+          (i) =>
+            html`<div class="health-row health-${i.severity}">
+              <span class="health-sev-badge health-${i.severity}"
+                >${SEVERITY_LABEL[i.severity]}</span
+              >${i.field ? html`<span class="health-field">${i.field}</span>` : ''}
+              <span class="health-msg">${i.msg}</span>${i.action === 'delete-empty-bundle' ? html`<button type="button" class="btn btn-ghost btn-sm" data-action="health-delete-empty-bundle" data-id="${i.id ?? ''}">Delete empty bundle</button>` : ''}</div>`,
+        )}</div>`;
+    });
 
     const otherHtml = other.length
-      ? `<div class="health-entry-group">
+      ? html`<div class="health-entry-group">
           <div class="health-entry-header health-entry-header--static">
             <span class="health-entry-provider">Other</span>
-            <span class="health-entry-count">${other.length} finding${other.length === 1 ? '' : 's'}</span>
-          </div>
-          ${other
-            .map(
-              (i) => `<div class="health-row health-${i.severity}">
-                <span class="health-sev-badge health-${i.severity}">${SEVERITY_LABEL[i.severity]}</span>
-                <span class="health-provider">${esc(i.provider)}</span>
-                <span class="health-msg">${esc(i.msg)}</span>
+            <span class="health-entry-count"
+              >${other.length} finding${other.length === 1 ? '' : 's'}</span
+            >
+          </div>${other.map(
+            (i) =>
+              html`<div class="health-row health-${i.severity}">
+                <span class="health-sev-badge health-${i.severity}"
+                  >${SEVERITY_LABEL[i.severity]}</span
+                >
+                <span class="health-provider">${i.provider}</span>
+                <span class="health-msg">${i.msg}</span>
               </div>`,
-            )
-            .join('')}
-        </div>`
+          )}</div>`
       : '';
 
-    results.innerHTML = entryGroupsHtml + otherHtml;
+    setHtml(results, html`${entryGroupsHtml}${otherHtml}`);
   }
 
   const healthSevSel = document.getElementById(
@@ -1069,6 +1159,27 @@ export function initTools() {
   }
   const healthTypeSel = document.getElementById('health-filter-type') as HTMLSelectElement | null;
   if (healthTypeSel) {
+    // Populated from the secret-type registry rather than hand-maintained
+    // here — the markup used to hardcode ten of the (now) twenty-six types,
+    // which is exactly the kind of partial, silently-drifting list this
+    // registry exists to replace with one real source.
+    const groupLabels: Record<string, string> = {
+      core: 'Core',
+      dev_infra: 'Dev / Infra',
+      self_hosted: 'Self-Hosted / Media',
+      personal: 'Personal',
+    };
+    for (const [group, types] of secretTypesByGroup()) {
+      const optgroup = document.createElement('optgroup');
+      optgroup.label = groupLabels[group] ?? group;
+      for (const t of types) {
+        const opt = document.createElement('option');
+        opt.value = t.id;
+        opt.textContent = t.label;
+        optgroup.appendChild(opt);
+      }
+      healthTypeSel.appendChild(optgroup);
+    }
     healthTypeSel.onchange = () => {
       _healthTypeFilter = healthTypeSel.value;
       renderHealthResults();
@@ -1079,6 +1190,32 @@ export function initTools() {
   // (invariant 1), resolved fresh at click time rather than held from scan
   // time, since a scan can sit on screen through edits and deletes.
   document.getElementById('health-results')?.addEventListener('click', (e) => {
+    const deleteButton = (e.target as HTMLElement).closest<HTMLElement>(
+      '[data-action="health-delete-empty-bundle"]',
+    );
+    const deleteId = deleteButton?.dataset.id;
+    if (deleteId) {
+      void (async () => {
+        const bundle = st.vault.api_keys.find(
+          (entry) => entryId(entry) === deleteId && entry.secretType === 'bundle',
+        );
+        if (!bundle) return;
+        if (!(await showConfirm(`Delete empty bundle "${bundle.provider}"?`))) return;
+        const stillEmpty =
+          !st.vault.api_keys.some((entry) => entry.bundle_id === deleteId) &&
+          !bundle.extra_vars?.length;
+        if (!stillEmpty) {
+          showToast('Bundle is no longer empty; nothing was deleted', 'err');
+          return;
+        }
+        st.vault.api_keys = st.vault.api_keys.filter((entry) => entryId(entry) !== deleteId);
+        await persist();
+        _lastHealthIssues = computeHealthIssues();
+        renderHealthResults();
+        showToast('Empty bundle deleted', 'ok');
+      })();
+      return;
+    }
     const btn = (e.target as HTMLElement).closest<HTMLElement>('[data-action="health-jump"]');
     const id = btn?.dataset.id;
     if (!id) return;
@@ -1087,21 +1224,7 @@ export function initTools() {
       showToast('That entry no longer exists', 'err');
       return;
     }
-    const entry = st.vault.api_keys[i];
-    switchPanel('secrets');
-    st.expanded.add(id);
-    // A collapsed pool card hides its members — expand it too, or the card
-    // this button promises to show stays out of sight behind the summary.
-    if (typeof entry.pool === 'string' && entry.pool.trim()) {
-      st.expandedPools.add(entry.pool.trim());
-    }
-    render();
-    setTimeout(() => {
-      const cardEl = document.querySelector<HTMLElement>(`#card-grid [data-idx="${i}"]`);
-      cardEl?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      cardEl?.classList.add('flash-highlight');
-      setTimeout(() => cardEl?.classList.remove('flash-highlight'), 1500);
-    }, 80);
+    revealEntry(st.vault.api_keys[i]);
   });
 
   document.getElementById('health-scan-btn')?.addEventListener('click', () => {
@@ -1114,7 +1237,7 @@ export function initTools() {
   // ── Import tool (item 9) ───────────────────────────────────────────────────
 
   let _importFormat = 'env';
-  let _importData: any[] = [];
+  let _importData: unknown[] = [];
 
   document.querySelectorAll<HTMLButtonElement>('.import-fmt-btn').forEach((btn) => {
     btn.addEventListener('click', () => {
@@ -1134,7 +1257,7 @@ export function initTools() {
       document.getElementById('import-file-name')!.textContent = f.name;
       const reader = new FileReader();
       reader.onload = (e) => {
-        const raw = String(e.target?.result ?? '');
+        const raw = typeof e.target?.result === 'string' ? e.target.result : '';
         _importData = parseImport(raw, _importFormat);
         const preview = document.getElementById('import-preview')!;
         const previewText = document.getElementById('import-preview-text')!;
@@ -1143,7 +1266,12 @@ export function initTools() {
           `Found ${_importData.length} entries:\n` +
           _importData
             .slice(0, 5)
-            .map((e) => `  ${e.provider}: ${e.api_key?.slice(0, 20)}…`)
+            .map((e) => {
+              const item = asImportRecord(e);
+              const provider = typeof item.provider === 'string' ? item.provider : 'Unknown';
+              const key = typeof item.api_key === 'string' ? item.api_key : '';
+              return `  ${provider}: ${key.slice(0, 20)}…`;
+            })
             .join('\n') +
           (_importData.length > 5 ? `\n  … +${_importData.length - 5} more` : '');
         const confirmBtn = document.getElementById('import-confirm-btn')!;
@@ -1156,45 +1284,53 @@ export function initTools() {
     inp.remove();
   });
 
-  document.getElementById('import-confirm-btn')?.addEventListener('click', async () => {
-    if (!_importData.length) return;
-    // Capture the count *before* clearing the buffer — the toast used to read
-    // _importData.length after the reset and so always said "all entries".
-    const usable = _importData.map(normalizeImported).filter((e): e is VaultEntry => e !== null);
-    const count = usable.length;
-    const skipped = _importData.length - count;
-    if (!count) {
-      showToast('Nothing importable — every entry was missing a provider name', 'err', 4000);
-      return;
-    }
-    st.vault.api_keys.push(...usable);
-    ensureEntryIds(st.vault.api_keys);
-    await persist();
-    render();
-    document.getElementById('import-status')!.textContent =
-      `✓ Imported ${count} entries` +
-      (skipped ? ` · skipped ${skipped} with no provider name` : '');
-    _importData = [];
-    document.getElementById('import-confirm-btn')!.style.display = 'none';
-    document.getElementById('import-preview')!.style.display = 'none';
-    showToast(`Imported ${count} ${count === 1 ? 'entry' : 'entries'}`, 'ok');
+  document.getElementById('import-confirm-btn')?.addEventListener('click', () => {
+    void (async () => {
+      if (!_importData.length) {
+        showToast('Nothing to import — load a file first', 'err', 1800);
+        return;
+      }
+      // Capture the count *before* clearing the buffer — the toast used to read
+      // _importData.length after the reset and so always said "all entries".
+      const usable = _importData.map(normalizeImported).filter((e): e is VaultEntry => e !== null);
+      const count = usable.length;
+      const skipped = _importData.length - count;
+      if (!count) {
+        showToast('Nothing importable — every entry was missing a provider name', 'err', 4000);
+        return;
+      }
+      st.vault.api_keys.push(...usable);
+      ensureEntryIds(st.vault.api_keys);
+      await persist();
+      render();
+      document.getElementById('import-status')!.textContent =
+        `✓ Imported ${count} entries` +
+        (skipped ? ` · skipped ${skipped} with no provider name` : '');
+      _importData = [];
+      document.getElementById('import-confirm-btn')!.style.display = 'none';
+      document.getElementById('import-preview')!.style.display = 'none';
+      showToast(`Imported ${count} ${count === 1 ? 'entry' : 'entries'}`, 'ok');
+    })();
   });
 
   // ── Templates (item 23) ────────────────────────────────────────────────────
 
   const templateGrid = document.getElementById('template-grid');
   if (templateGrid) {
-    templateGrid.innerHTML = SECRET_TEMPLATES.map(
-      (t) => `
-      <button class="template-card" data-tpl-id="${t.id}">
-        <div class="template-icon">${t.icon.slice(0, 2).toUpperCase()}</div>
-        <div class="template-info">
-          <div class="template-name">${t.name}</div>
-          <div class="template-cat">${t.category}</div>
-        </div>
-      </button>
-    `,
-    ).join('');
+    setHtml(
+      templateGrid,
+      html`${SECRET_TEMPLATES.map(
+        (t) => html`
+          <button class="template-card" data-tpl-id="${t.id}">
+            <div class="template-icon">${t.icon.slice(0, 2).toUpperCase()}</div>
+            <div class="template-info">
+              <div class="template-name">${t.name}</div>
+              <div class="template-cat">${t.category}</div>
+            </div>
+          </button>
+        `,
+      )}`,
+    );
     templateGrid.addEventListener('click', (e) => {
       const btn = (e.target as HTMLElement).closest<HTMLButtonElement>('[data-tpl-id]');
       if (!btn) return;
@@ -1202,7 +1338,7 @@ export function initTools() {
       if (!tpl) return;
       switchPanel('secrets');
       setTimeout(() => {
-        fillForm({ ...tpl.defaults, secretType: tpl.secretType } as any);
+        fillForm({ ...tpl.defaults, secretType: tpl.secretType });
         buildCatChips([]);
         openModal('Add Secret', -1);
       }, 100);
@@ -1245,63 +1381,112 @@ export function initTools() {
   bulkSelectBtn.addEventListener('click', () => (st.bulkMode ? exitBulkMode() : enterBulkMode()));
   document.getElementById('bulk-cancel-btn')?.addEventListener('click', exitBulkMode);
 
-  document.getElementById('bulk-delete-btn')?.addEventListener('click', async () => {
-    if (!st.bulkSelected.size) return;
-    if (
-      !(await showConfirm(
-        `Delete ${st.bulkSelected.size} selected secrets? This cannot be undone.`,
-      ))
-    )
-      return;
-    // Filter by identity rather than splicing positions: the selection is a set
-    // of ids, so nothing that reordered the array since ticking can misdirect
-    // the delete.
-    const doomed = new Set(st.bulkSelected);
-    const before = st.vault.api_keys.length;
-    st.vault.api_keys = st.vault.api_keys.filter((e) => !(e.id && doomed.has(e.id)));
-    const removed = before - st.vault.api_keys.length;
-    for (const id of doomed) {
-      st.expanded.delete(id);
-      delete st.revealed[`key-${id}`];
-      delete st.revealed[`secret-${id}`];
-    }
-    await persist();
-    exitBulkMode();
-    render();
-    showToast(`Deleted ${removed} secrets`, 'ok');
+  document.getElementById('bulk-bundle-btn')?.addEventListener('click', () => {
+    void (async () => {
+      let selected = selectedEntries().filter(
+        (entry) => entry.secretType !== 'bundle' && !entry.bundle_id,
+      );
+      const selectedIds = new Set(selected.map((entry) => entry.id));
+      const poolNames = new Set(
+        selected.map((entry) => entry.pool?.trim()).filter((pool): pool is string => !!pool),
+      );
+      for (const poolName of poolNames) {
+        const poolMembers = st.vault.api_keys.filter((entry) => entry.pool?.trim() === poolName);
+        if (poolMembers.some((entry) => entry.bundle_id || entry.secretType === 'bundle')) {
+          showToast(`Pool "${poolName}" already crosses a bundle boundary`, 'err');
+          return;
+        }
+        if (poolMembers.some((entry) => !selectedIds.has(entry.id))) {
+          if (
+            !(await showConfirm(`Include all ${poolMembers.length} entries in pool "${poolName}"?`))
+          )
+            return;
+          for (const member of poolMembers) selectedIds.add(member.id);
+          selected = st.vault.api_keys.filter((entry) => selectedIds.has(entry.id));
+        }
+      }
+      if (selected.length < 2) {
+        showToast('Select at least two unbundled entries', 'err');
+        return;
+      }
+      const name = await showPrompt('Name this bundle');
+      if (!name?.trim()) return;
+      const bundle = buildBundle(selected, name);
+      st.vault.api_keys.push(bundle);
+      await persist();
+      exitBulkMode();
+      showToast(`Bundled ${selected.length} entries`, 'ok');
+    })();
   });
 
-  document.getElementById('bulk-export-btn')?.addEventListener('click', async () => {
-    const selected = selectedEntries();
-    if (!selected.length) {
-      showToast('Nothing selected', 'err');
-      return;
-    }
-    // Writing secrets to an unencrypted file on disk deserves a prompt.
-    if (
-      !(await showConfirm(
-        `Write ${selected.length} secret${selected.length === 1 ? '' : 's'} to an unencrypted export.env file?`,
-      ))
-    )
-      return;
-    const lines = selected
-      .map((e) => {
-        const key = (e.provider || 'UNKNOWN').toUpperCase().replace(/[^A-Z0-9]/g, '_');
-        return `${key}=${e.api_key}`;
-      })
-      .join('\n');
-    // A3 (2026-09-14): this was the reported symptom — the confirmation dialog
-    // above, then a toast-free blob-anchor click that wrote nothing in Tauri's
-    // webview. `saveFile` writes the bytes and only then is anything reported.
-    const res = await saveFile(lines, 'export.env');
-    showToast(
-      res.ok ? (res.path ? `Exported to ${res.path}` : 'Exported') : `Export failed: ${res.error}`,
-      res.ok ? 'ok' : 'error',
-    );
+  document.getElementById('bulk-delete-btn')?.addEventListener('click', () => {
+    void (async () => {
+      if (!st.bulkSelected.size) {
+        showToast('Tick at least one secret first', 'err', 1800);
+        return;
+      }
+      if (
+        !(await showConfirm(
+          `Delete ${st.bulkSelected.size} selected secrets? This cannot be undone.`,
+        ))
+      )
+        return;
+      // Filter by identity rather than splicing positions: the selection is a set
+      // of ids, so nothing that reordered the array since ticking can misdirect
+      // the delete.
+      const doomed = new Set(st.bulkSelected);
+      const before = st.vault.api_keys.length;
+      st.vault.api_keys = st.vault.api_keys.filter((e) => !(e.id && doomed.has(e.id)));
+      const removed = before - st.vault.api_keys.length;
+      for (const id of doomed) {
+        st.expanded.delete(id);
+        delete st.revealed[`key-${id}`];
+        delete st.revealed[`secret-${id}`];
+      }
+      await persist();
+      exitBulkMode();
+      render();
+      showToast(`Deleted ${removed} secrets`, 'ok');
+    })();
+  });
+
+  document.getElementById('bulk-export-btn')?.addEventListener('click', () => {
+    void (async () => {
+      const selected = selectedEntries();
+      if (!selected.length) {
+        showToast('Nothing selected', 'err');
+        return;
+      }
+      // Writing secrets to an unencrypted file on disk deserves a prompt.
+      if (
+        !(await showConfirm(
+          `Write ${selected.length} secret${selected.length === 1 ? '' : 's'} to an unencrypted export.env file?`,
+        ))
+      )
+        return;
+      const lines = selected
+        .map((e) => {
+          const key = (e.provider || 'UNKNOWN').toUpperCase().replace(/[^A-Z0-9]/g, '_');
+          return `${key}=${e.api_key}`;
+        })
+        .join('\n');
+      // A3 (2026-09-14): this was the reported symptom — the confirmation dialog
+      // above, then a toast-free blob-anchor click that wrote nothing in Tauri's
+      // webview. `saveFile` writes the bytes and only then is anything reported.
+      const res = await saveFile(lines, 'export.env');
+      showToast(
+        res.ok
+          ? res.path
+            ? `Exported to ${res.path}`
+            : 'Exported'
+          : `Export failed: ${res.error}`,
+        res.ok ? 'ok' : 'error',
+      );
+    })();
   });
 
   // Expose bulk toggle to card clicks
-  (window as any).__envvBulkToggle = (idx: number) => {
+  window.__envvBulkToggle = (idx: number) => {
     if (!st.bulkMode) return false;
     const entry = st.vault.api_keys[idx];
     if (!entry) return true;
@@ -1314,7 +1499,7 @@ export function initTools() {
       ?.classList.toggle('bulk-selected', st.bulkSelected.has(id));
     return true;
   };
-  (window as any).__envvIsBulkMode = () => st.bulkMode;
+  window.__envvIsBulkMode = () => st.bulkMode;
 
   // ── SECRET DIFF ────────────────────────────────────────────────────────────
 
@@ -1323,18 +1508,14 @@ export function initTools() {
     // rebuilt when the Diff tool is opened, so a delete elsewhere in the app
     // used to leave stale positions behind and diff two unrelated secrets.
     ensureEntryIds(st.vault.api_keys);
-    const opts =
-      `<option value="">Select secret…</option>` +
-      st.vault.api_keys
-        .map(
-          (e) =>
-            `<option value="${esc(entryId(e))}">${esc(e.provider)}${e.account_name ? ' / ' + esc(e.account_name) : ''}</option>`,
-        )
-        .join('');
+    const opts = html`<option value="">Select secret…</option>${st.vault.api_keys.map(
+      (e) =>
+        html`<option value="${entryId(e)}">${e.provider}${e.account_name ? ` / ${e.account_name}` : ''}</option>`,
+    )}`;
     const da = document.getElementById('diff-a') as HTMLSelectElement | null;
     const db = document.getElementById('diff-b') as HTMLSelectElement | null;
-    if (da) da.innerHTML = opts;
-    if (db) db.innerHTML = opts;
+    if (da) setHtml(da, html`${opts}`);
+    if (db) setHtml(db, html`${opts}`);
   };
   refreshDiffSelects();
   document.getElementById('diff-run')?.addEventListener('click', () => {
@@ -1351,7 +1532,7 @@ export function initTools() {
       refreshDiffSelects();
       return;
     }
-    const fields: [string, string][] = [
+    const fields: [keyof VaultEntry, string][] = [
       ['provider', 'Provider'],
       ['account_name', 'Account'],
       ['api_key', 'Key (masked)'],
@@ -1367,28 +1548,32 @@ export function initTools() {
       ['version', 'Version'],
       ['api_description', 'Description'],
     ];
-    const esc2 = (s: string) =>
-      s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-    const rows = fields
-      .map(([f, label]) => {
-        const av = String((a as any)[f] || '');
-        const bv = String((b as any)[f] || '');
-        const isSec = f === 'api_key' || f === 'api_secret';
-        const av2 = isSec && av ? '••••••••' : esc2(av);
-        const bv2 = isSec && bv ? '••••••••' : esc2(bv);
-        const changed = av !== bv;
-        return `<tr class="${changed ? 'diff-changed' : 'diff-same'}">
+    const rows = fields.map(([f, label]) => {
+      const av = diffValue(a[f]);
+      const bv = diffValue(b[f]);
+      const isSec = f === 'api_key' || f === 'api_secret';
+      const av2 = isSec && av ? '••••••••' : av;
+      const bv2 = isSec && bv ? '••••••••' : bv;
+      const changed = av !== bv;
+      return html`<tr class="${changed ? 'diff-changed' : 'diff-same'}">
         <td class="diff-field">${label}</td>
-        <td class="diff-val">${av2 || '<em style="color:var(--text3)">—</em>'}</td>
-        <td class="diff-val">${bv2 || '<em style="color:var(--text3)">—</em>'}</td>
+        <td class="diff-val">${av2 || html`<em style="color:var(--text3)">—</em>`}</td>
+        <td class="diff-val">${bv2 || html`<em style="color:var(--text3)">—</em>`}</td>
       </tr>`;
-      })
-      .join('');
-    document.getElementById('diff-output')!.innerHTML = `
-      <table class="diff-table">
-        <thead><tr><th>Field</th><th>${esc2(a.provider)}</th><th>${esc2(b.provider)}</th></tr></thead>
+    });
+    setHtml(
+      document.getElementById('diff-output')!,
+      html` <table class="diff-table">
+        <thead>
+          <tr>
+            <th>Field</th>
+            <th>${a.provider}</th>
+            <th>${b.provider}</th>
+          </tr>
+        </thead>
         <tbody>${rows}</tbody>
-      </table>`;
+      </table>`,
+    );
   });
 
   // ── EXPIRY CALENDAR ────────────────────────────────────────────────────────
@@ -1422,12 +1607,11 @@ export function initTools() {
       }
     });
 
-    let html = '<div class="cal-header">';
-    ['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa'].forEach((d) => {
-      html += `<div class="cal-day-name">${d}</div>`;
-    });
-    html += '</div><div class="cal-body">';
-    for (let i = 0; i < firstDay; i++) html += '<div class="cal-cell empty"></div>';
+    const header = ['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa'].map(
+      (d) => html`<div class="cal-day-name">${d}</div>`,
+    );
+    const cells: SafeHtml[] = [];
+    for (let i = 0; i < firstDay; i++) cells.push(html`<div class="cal-cell empty"></div>`);
     for (let d = 1; d <= daysInMonth; d++) {
       const ds = `${_calYear}-${String(_calMonth + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
       const entries = byDate.get(ds) || [];
@@ -1439,17 +1623,17 @@ export function initTools() {
       if (entries.length) cls += isPast ? ' cal-expired' : isWarn ? ' cal-warn' : ' cal-safe';
       const title =
         entries.slice(0, 5).join(', ') + (entries.length > 5 ? ` +${entries.length - 5}` : '');
-      const dots = entries
-        .slice(0, 4)
-        .map(() => `<span class="cal-entry-dot"></span>`)
-        .join('');
-      html += `<div class="${cls}" title="${title}">
-        <span class="cal-day-num">${d}</span>
-        ${entries.length ? `<div class="cal-entries">${dots}${entries.length > 4 ? `<span class="cal-extra">+${entries.length - 4}</span>` : ''}</div>` : ''}
-      </div>`;
+      const dots = entries.slice(0, 4).map(() => html`<span class="cal-entry-dot"></span>`);
+      cells.push(
+        html`<div class="${cls}" title="${title}">
+          <span class="cal-day-num">${d}</span>${entries.length ? html`<div class="cal-entries">${dots}${entries.length > 4 ? html`<span class="cal-extra">+${entries.length - 4}</span>` : ''}</div>` : ''}</div>`,
+      );
     }
-    html += '</div>';
-    grid.innerHTML = html;
+    setHtml(
+      grid,
+      html`<div class="cal-header">${header}</div>
+        <div class="cal-body">${cells}</div>`,
+    );
   };
   document.getElementById('cal-prev')?.addEventListener('click', () => {
     _calMonth--;
@@ -1618,24 +1802,34 @@ export function initTools() {
   }
 
   document.getElementById('cron-parse')?.addEventListener('click', () => {
-    const raw = (document.getElementById('cron-input') as HTMLInputElement).value.trim();
+    const expr = (document.getElementById('cron-input') as HTMLInputElement).value.trim();
     const output = document.getElementById('cron-output')!;
-    if (!raw) {
+    if (!expr) {
       showToast('Enter a cron expression', 'err');
       return;
     }
 
-    if (CRON_NAMED[raw] === 'at system reboot') {
+    if (CRON_NAMED[expr] === 'at system reboot') {
       output.style.display = '';
-      output.innerHTML = `<div class="cron-result"><div class="cron-resolved">@reboot — runs once when system starts</div></div>`;
+      setHtml(
+        output,
+        html`<div class="cron-result">
+          <div class="cron-resolved">@reboot — runs once when system starts</div>
+        </div>`,
+      );
       return;
     }
 
-    const resolved = CRON_NAMED[raw] || raw;
+    const resolved = CRON_NAMED[expr] || expr;
     const parts = resolved.split(/\s+/);
     if (parts.length !== 5) {
       output.style.display = '';
-      output.innerHTML = `<div class="cron-result"><div class="tool-status err">Invalid: expected 5 fields (min hr dom mon dow)</div></div>`;
+      setHtml(
+        output,
+        html`<div class="cron-result">
+          <div class="tool-status err">Invalid: expected 5 fields (min hr dom mon dow)</div>
+        </div>`,
+      );
       return;
     }
 
@@ -1650,15 +1844,16 @@ export function initTools() {
 
     const fires = nextFireTimes(resolved);
     const nextBlock = fires.length
-      ? `<div style="margin-top:10px"><div class="tool-label" style="margin-bottom:6px">Next ${fires.length} fire times</div>${fires.map((f) => `<div style="font-size:11px;color:var(--text2);padding:2px 0">${f}</div>`).join('')}</div>`
+      ? html`<div style="margin-top:10px">
+          <div class="tool-label" style="margin-bottom:6px">Next ${fires.length} fire times</div>${fires.map((f) => html`<div style="font-size:11px;color:var(--text2);padding:2px 0">${f}</div>`)}</div>`
       : '';
 
     output.style.display = '';
-    output.innerHTML = `<div class="cron-result">
-      ${resolved !== raw ? `<div class="cron-resolved"><code>${raw}</code> → <code>${resolved}</code></div>` : ''}
-      <pre class="tool-pre" style="margin-top:8px">${lines.join('\n')}</pre>
-      ${nextBlock}
-    </div>`;
+    setHtml(
+      output,
+      html`<div class="cron-result">${resolved !== expr ? html`<div class="cron-resolved"><code>${expr}</code> → <code>${resolved}</code></div>` : ''}
+        <pre class="tool-pre" style="margin-top:8px">${lines.join('\n')}</pre>${nextBlock}</div>`,
+    );
   });
 
   // ── CIDR CALCULATOR ────────────────────────────────────────────────────────
@@ -1704,14 +1899,35 @@ export function initTools() {
       return;
     }
     output.style.display = '';
-    output.innerHTML = `<table class="cidr-table">
-      <tr><td class="cidr-key">Network</td><td class="cidr-val">${result.network}/${input.split('/')[1]}</td></tr>
-      <tr><td class="cidr-key">Broadcast</td><td class="cidr-val">${result.broadcast}</td></tr>
-      <tr><td class="cidr-key">First host</td><td class="cidr-val">${result.first}</td></tr>
-      <tr><td class="cidr-key">Last host</td><td class="cidr-val">${result.last}</td></tr>
-      <tr><td class="cidr-key">Subnet mask</td><td class="cidr-val">${result.mask}</td></tr>
-      <tr><td class="cidr-key">Usable hosts</td><td class="cidr-val">${result.hosts.toLocaleString()}</td></tr>
-    </table>`;
+    setHtml(
+      output,
+      html`<table class="cidr-table">
+        <tr>
+          <td class="cidr-key">Network</td>
+          <td class="cidr-val">${result.network}/${input.split('/')[1]}</td>
+        </tr>
+        <tr>
+          <td class="cidr-key">Broadcast</td>
+          <td class="cidr-val">${result.broadcast}</td>
+        </tr>
+        <tr>
+          <td class="cidr-key">First host</td>
+          <td class="cidr-val">${result.first}</td>
+        </tr>
+        <tr>
+          <td class="cidr-key">Last host</td>
+          <td class="cidr-val">${result.last}</td>
+        </tr>
+        <tr>
+          <td class="cidr-key">Subnet mask</td>
+          <td class="cidr-val">${result.mask}</td>
+        </tr>
+        <tr>
+          <td class="cidr-key">Usable hosts</td>
+          <td class="cidr-val">${result.hosts.toLocaleString()}</td>
+        </tr>
+      </table>`,
+    );
   });
 
   // Enter key submits CIDR
@@ -1760,8 +1976,8 @@ export function initTools() {
         const formatted = JSON.stringify(JSON.parse(input), null, 2);
         showFmtOutput(formatted);
         setFmtStatus(`Valid JSON — ${formatted.split('\n').length} lines`, 'ok');
-      } catch (e: any) {
-        setFmtStatus(`JSON parse error: ${e.message}`, 'err');
+      } catch (e) {
+        setFmtStatus(`JSON parse error: ${errorMessage(e)}`, 'err');
       }
     } else {
       try {
@@ -1769,8 +1985,8 @@ export function initTools() {
         const formatted = yaml.dump(parsed, { indent: 2, lineWidth: 120 });
         showFmtOutput(formatted);
         setFmtStatus(`Valid YAML — ${formatted.split('\n').length} lines`, 'ok');
-      } catch (e: any) {
-        setFmtStatus(`YAML parse error: ${e.message}`, 'err');
+      } catch (e) {
+        setFmtStatus(`YAML parse error: ${errorMessage(e)}`, 'err');
       }
     }
   });
@@ -1785,15 +2001,15 @@ export function initTools() {
       try {
         JSON.parse(input);
         setFmtStatus('Valid JSON ✓', 'ok');
-      } catch (e: any) {
-        setFmtStatus(`Invalid JSON: ${e.message}`, 'err');
+      } catch (e) {
+        setFmtStatus(`Invalid JSON: ${errorMessage(e)}`, 'err');
       }
     } else {
       try {
         yaml.load(input);
         setFmtStatus('Valid YAML ✓', 'ok');
-      } catch (e: any) {
-        setFmtStatus(`Invalid YAML: ${e.message}`, 'err');
+      } catch (e) {
+        setFmtStatus(`Invalid YAML: ${errorMessage(e)}`, 'err');
       }
     }
   });
@@ -1810,8 +2026,8 @@ export function initTools() {
       try {
         showFmtOutput(JSON.stringify(JSON.parse(input)));
         setFmtStatus('Minified ✓', 'ok');
-      } catch (e: any) {
-        setFmtStatus(`JSON parse error: ${e.message}`, 'err');
+      } catch (e) {
+        setFmtStatus(`JSON parse error: ${errorMessage(e)}`, 'err');
       }
     } else {
       // YAML minify: round-trip through js-yaml with flow style
@@ -1820,14 +2036,14 @@ export function initTools() {
         const minified = yaml.dump(parsed, { flowLevel: 0 }).trimEnd();
         showFmtOutput(minified);
         setFmtStatus('YAML minified (flow style) ✓', 'ok');
-      } catch (e: any) {
-        setFmtStatus(`YAML parse error: ${e.message}`, 'err');
+      } catch (e) {
+        setFmtStatus(`YAML parse error: ${errorMessage(e)}`, 'err');
       }
     }
   });
 
   document.getElementById('fmt-copy')?.addEventListener('click', () => {
     const v = (document.getElementById('fmt-output') as HTMLTextAreaElement).value;
-    if (v) clipboardWrite(v).then(() => showToast('Copied ✓', 'ok', 1500));
+    copyOrExplain(v);
   });
 }
