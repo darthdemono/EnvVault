@@ -1,3 +1,4 @@
+import { entropySource, setEntropySource } from './generators';
 import type {
   VaultData,
   AppSettings,
@@ -8,46 +9,88 @@ import type {
 } from './types';
 import { dump as yamlDump } from 'js-yaml';
 import { hexAlpha, showToast } from './utils';
+import { invokeTauri, isTauri } from './tauri';
+export { inTauri } from './tauri';
+
+type JsonObject = Record<string, unknown>;
+
+function jsonObject(value: unknown): JsonObject {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+    ? (value as JsonObject)
+    : {};
+}
+
+function jsonError(value: unknown, fallback: string): string {
+  const error = jsonObject(value).error;
+  return typeof error === 'string' ? error : fallback;
+}
 
 // ── VaultStore ─────────────────────────────────────────────────────────────
 
 export interface VaultStore {
   load(): Promise<VaultData | null>;
   save(data: VaultData): Promise<void>;
+  /**
+   * True once, right after a save that folded in changes another writer had
+   * already stored (Phase 30). The caller's copy of the vault is then behind what
+   * is stored and must be reloaded before the next edit.
+   */
+  takeMerged?(): boolean;
   readonly isRemote: boolean;
   readonly vaultId: string;
 }
 
+type SidebarSection = AppSettings['sidebarSections'][number];
+type Panel = AppSettings['activePanel'];
+type CalendarFeed = {
+  id: string;
+  name?: string;
+  kinds?: string[];
+  revoked_at?: string | null;
+};
+
 export class LocalVaultStore implements VaultStore {
-  async load(): Promise<VaultData | null> {
-    const raw = sessionStorage.getItem('envvault');
-    return raw ? JSON.parse(raw) : null;
+  load(): Promise<VaultData | null> {
+    return Promise.resolve().then(() => {
+      const raw = sessionStorage.getItem('envvault');
+      if (!raw) return null;
+      const data: unknown = JSON.parse(raw);
+      return data as VaultData;
+    });
   }
-  async save(data: VaultData): Promise<void> {
+  save(data: VaultData): Promise<void> {
     try {
       sessionStorage.setItem('envvault', JSON.stringify(data));
     } catch {
       showToast('Session storage full — export to save changes', 'err');
     }
+    return Promise.resolve();
   }
-  get isRemote() {
-    return false;
-  }
-  get vaultId() {
-    return 'local';
-  }
+  readonly isRemote = false;
+  readonly vaultId = 'local';
 }
 
 /** Thrown when a write was refused because someone else wrote first. */
 export class VaultConflictError extends Error {
-  constructor() {
+  /** Names of the entries both writers changed, when the storage layer said. */
+  readonly entries: string | null;
+  constructor(entries: string | null = null) {
     super('The vault changed since you last loaded it');
     this.name = 'VaultConflictError';
+    this.entries = entries;
   }
 }
 
+/** The `a, b` list after "both changed:" in a conflict message, if there is one. */
+export function conflictEntries(message: string): string | null {
+  const i = message.indexOf('both changed: ');
+  return i < 0 ? null : message.slice(i + 'both changed: '.length).trim() || null;
+}
+
+const MERGED_SUFFIX = '+merged';
+
 export class TauriVaultStore implements VaultStore {
-  private invoke = (window as any).__TAURI__?.core?.invoke?.bind((window as any).__TAURI__.core);
+  private invoke = invokeTauri;
   /**
    * Version of the vault as we last read it.
    *
@@ -58,41 +101,58 @@ export class TauriVaultStore implements VaultStore {
   private lastVersion: string | null = null;
 
   async unlock(password: string): Promise<boolean> {
-    return this.invoke('unlock_vault', { password });
+    return this.invoke<boolean>('unlock_vault', { password });
   }
   async lock(): Promise<void> {
-    return this.invoke('lock_vault');
+    return this.invoke<void>('lock_vault');
   }
   async isUnlocked(): Promise<boolean> {
-    return this.invoke('vault_is_unlocked');
+    return this.invoke<boolean>('vault_is_unlocked');
   }
   async exists(): Promise<boolean> {
-    return this.invoke('vault_exists');
+    return this.invoke<boolean>('vault_exists');
   }
   async reset(): Promise<void> {
-    return this.invoke('reset_vault');
+    return this.invoke<void>('reset_vault');
   }
   async vaultFilePath(): Promise<string> {
-    return this.invoke('get_vault_path').catch(() => '');
+    return this.invoke<string>('get_vault_path').catch(() => '');
   }
 
   async load(): Promise<VaultData | null> {
-    const res = (await this.invoke('load_vault')) as {
+    const res = await this.invoke<{
       data: VaultData;
       version: string | null;
-    } | null;
+    } | null>('load_vault');
     this.lastVersion = res?.version ?? null;
     return res?.data ?? null;
   }
 
+  private merged = false;
+
+  takeMerged(): boolean {
+    const m = this.merged;
+    this.merged = false;
+    return m;
+  }
+
+  /** Adopt the version a save returned; a `+merged` marker means our copy is behind. */
+  private adopt(v: string): void {
+    this.merged = v.endsWith(MERGED_SUFFIX);
+    this.lastVersion = this.merged ? v.slice(0, -MERGED_SUFFIX.length) : v;
+  }
+
   async save(data: VaultData): Promise<void> {
     try {
-      this.lastVersion = await this.invoke('save_vault', {
-        data,
-        expectVersion: this.lastVersion,
-      });
-    } catch (e: any) {
-      if (String(e?.message ?? e).includes('VAULT_CONFLICT')) throw new VaultConflictError();
+      this.adopt(
+        await this.invoke<string>('save_vault', {
+          data,
+          expectVersion: this.lastVersion,
+        }),
+      );
+    } catch (e) {
+      const msg = String(e instanceof Error ? e.message : e);
+      if (msg.includes('VAULT_CONFLICT')) throw new VaultConflictError(conflictEntries(msg));
       throw e;
     }
   }
@@ -102,19 +162,14 @@ export class TauriVaultStore implements VaultStore {
    * new base. Only for a user explicitly choosing to overwrite after a conflict.
    */
   async forceSave(data: VaultData): Promise<void> {
-    this.lastVersion = await this.invoke('save_vault', { data, expectVersion: null });
+    this.adopt(await this.invoke<string>('save_vault', { data, expectVersion: null }));
   }
 
-  get isRemote() {
-    return false;
-  }
-  get vaultId() {
-    return 'local-native';
-  }
+  readonly isRemote = false;
+  readonly vaultId = 'local-native';
 }
 
-export const inTauri = !!(window as any).__TAURI__;
-const _invoke = (window as any).__TAURI__?.core?.invoke?.bind((window as any).__TAURI__?.core);
+const _invoke = (command: string, args?: unknown) => invokeTauri(command, args);
 
 /**
  * Thrown when a password was accepted but the account also has a second factor.
@@ -149,9 +204,15 @@ export class RemoteVaultStore implements VaultStore {
   private async _apiFetch(
     path: string,
     opts: { method?: string; headers?: Record<string, string>; body?: string } = {},
-  ): Promise<{ ok: boolean; status: number; json: () => Promise<any>; etag: string | null }> {
+  ): Promise<{
+    ok: boolean;
+    status: number;
+    json: () => Promise<unknown>;
+    etag: string | null;
+    merged: boolean;
+  }> {
     const url = `${this.baseUrl}${path}`;
-    const useNative = inTauri && url.startsWith('https://');
+    const useNative = isTauri() && url.startsWith('https://');
 
     if (useNative && _invoke) {
       // Tauri proxy does not surface response headers — ETag unavailable on this path.
@@ -163,20 +224,38 @@ export class RemoteVaultStore implements VaultStore {
         fingerprint: this.fingerprint ?? null,
       })) as { status: number; body: string };
       const ok = result.status >= 200 && result.status < 300;
-      return { ok, status: result.status, json: async () => JSON.parse(result.body), etag: null };
+      return {
+        ok,
+        status: result.status,
+        json: () => {
+          const parsed: unknown = JSON.parse(result.body);
+          return Promise.resolve(parsed);
+        },
+        etag: null,
+        merged: false,
+      };
     }
 
     const headers: Record<string, string> = {};
     if (opts.headers) Object.assign(headers, opts.headers);
     const r = await fetch(url, { method: opts.method, headers, body: opts.body });
-    return { ok: r.ok, status: r.status, json: () => r.json(), etag: r.headers.get('etag') };
+    return {
+      ok: r.ok,
+      status: r.status,
+      json: async () => {
+        const parsed: unknown = await r.json();
+        return parsed;
+      },
+      etag: r.headers.get('etag'),
+      merged: r.headers.get('x-vault-merged') === '1',
+    };
   }
 
   /**
    * Authenticated REST call for the user/class management panel.
    * Returns parsed JSON, or `null` for 204 No Content. Throws on non-2xx with the server error.
    */
-  async api(path: string, method = 'GET', body?: any): Promise<any> {
+  async api<T = unknown>(path: string, method = 'GET', body?: unknown): Promise<T | null> {
     if (!this.token) throw new Error('Not authenticated');
     const headers: Record<string, string> = { Authorization: `Bearer ${this.token}` };
     if (body !== undefined) headers['Content-Type'] = 'application/json';
@@ -187,10 +266,10 @@ export class RemoteVaultStore implements VaultStore {
     });
     if (!r.ok) {
       const err = await r.json().catch(() => ({}));
-      throw new Error(err?.error ?? `Server error ${r.status}`);
+      throw new Error(jsonError(err, `Server error ${r.status}`));
     }
     if (r.status === 204) return null;
-    return r.json().catch(() => null);
+    return r.json().catch(() => null) as Promise<T | null>;
   }
 
   async unlock(password: string): Promise<boolean> {
@@ -201,10 +280,10 @@ export class RemoteVaultStore implements VaultStore {
     });
     if (!r.ok) {
       const body = await r.json().catch(() => ({}));
-      throw new Error(body?.error ?? `Server error ${r.status}`);
+      throw new Error(jsonError(body, `Server error ${r.status}`));
     }
-    const { token } = await r.json();
-    this.token = token ?? '';
+    const token = jsonObject(await r.json()).token;
+    this.token = typeof token === 'string' ? token : '';
     return !!this.token;
   }
 
@@ -225,11 +304,12 @@ export class RemoteVaultStore implements VaultStore {
     });
     if (!r.ok) {
       const body = await r.json().catch(() => ({}));
-      if (r.status === 401 && body?.totp_required) throw new TotpRequiredError();
-      throw new Error(body?.error ?? `Auth failed ${r.status}`);
+      if (r.status === 401 && jsonObject(body).totp_required === true)
+        throw new TotpRequiredError();
+      throw new Error(jsonError(body, `Auth failed ${r.status}`));
     }
-    const { token } = await r.json();
-    this.token = token ?? '';
+    const token = jsonObject(await r.json()).token;
+    this.token = typeof token === 'string' ? token : '';
     return !!this.token;
   }
 
@@ -250,7 +330,7 @@ export class RemoteVaultStore implements VaultStore {
     if (!this.token) return false;
     try {
       const r = await this._apiFetch('/api/status');
-      return r.ok && (await r.json()).unlocked === true;
+      return r.ok && jsonObject(await r.json()).unlocked === true;
     } catch {
       return false;
     }
@@ -263,10 +343,18 @@ export class RemoteVaultStore implements VaultStore {
         headers: { Authorization: `Bearer ${this.token}` },
       });
       if (r.ok && r.etag) this.lastVersion = r.etag;
-      return r.ok ? await r.json() : null;
+      return r.ok ? ((await r.json()) as VaultData) : null;
     } catch {
       return null;
     }
+  }
+
+  private merged = false;
+
+  takeMerged(): boolean {
+    const m = this.merged;
+    this.merged = false;
+    return m;
   }
 
   async save(data: VaultData): Promise<void> {
@@ -284,8 +372,11 @@ export class RemoteVaultStore implements VaultStore {
         body: JSON.stringify(data),
       });
       if (r.status === 409) {
+        const names = conflictEntries(jsonError(await r.json().catch(() => ({})), ''));
         showToast(
-          'Conflict: vault changed on server since you loaded it. Reconnect/reload before saving.',
+          names
+            ? `Conflict: you and another writer both changed ${names}. Reload before saving.`
+            : 'Conflict: vault changed on server since you loaded it. Reconnect/reload before saving.',
           'err',
           6000,
         );
@@ -294,38 +385,47 @@ export class RemoteVaultStore implements VaultStore {
       if (!r.ok) {
         const body = await r.json().catch(() => ({}));
         showToast(
-          `Remote save failed (${r.status})${body?.error ? ': ' + body.error : ''}`,
+          `Remote save failed (${r.status})${jsonError(body, '') ? ': ' + jsonError(body, '') : ''}`,
           'err',
           4000,
         );
         return;
       }
-      // Saved cleanly — drop the token so the next write is unconditional until the next load refreshes it.
-      this.lastVersion = '';
-    } catch (e: any) {
-      showToast(`Remote save failed: ${e?.message ?? 'network error'}`, 'err', 4000);
+      // Saved. The server returns the version to send as the next If-Match; when it
+      // could not (the pinned-HTTPS proxy surfaces no headers) the next write is
+      // unconditional until a load refreshes the token, as before.
+      this.lastVersion = r.etag ?? '';
+      this.merged = r.merged;
+    } catch (e) {
+      showToast(
+        `Remote save failed: ${e instanceof Error ? e.message : 'network error'}`,
+        'err',
+        4000,
+      );
     }
   }
 
-  async getExpiring(days: number): Promise<any[]> {
+  async getExpiring(days: number): Promise<unknown[]> {
     if (!this.token) return [];
     try {
       const r = await this._apiFetch(`/api/vault/expiring?days=${days}`, {
         headers: { Authorization: `Bearer ${this.token}` },
       });
-      return r.ok ? await r.json() : [];
+      const data = r.ok ? await r.json() : [];
+      return Array.isArray(data) ? (data as unknown[]) : ([] as unknown[]);
     } catch {
       return [];
     }
   }
 
-  async getAuditLog(): Promise<any[]> {
+  async getAuditLog(): Promise<unknown[]> {
     if (!this.token) return [];
     try {
       const r = await this._apiFetch('/api/audit', {
         headers: { Authorization: `Bearer ${this.token}` },
       });
-      return r.ok ? await r.json() : [];
+      const data = r.ok ? await r.json() : [];
+      return Array.isArray(data) ? (data as unknown[]) : ([] as unknown[]);
     } catch {
       return [];
     }
@@ -369,22 +469,40 @@ export class RemoteVaultStore implements VaultStore {
         body: JSON.stringify({ name, kinds, include_account_names: includeAccountNames }),
       });
       if (!r.ok) return null;
-      const data = await r.json();
-      return typeof data.path === 'string' ? `${this.baseUrl}${data.path}` : null;
+      const path = jsonObject(await r.json()).path;
+      return typeof path === 'string' ? `${this.baseUrl}${path}` : null;
     } catch {
       return null;
     }
   }
 
-  async listCalendarFeeds(): Promise<any[]> {
+  async listCalendarFeeds(): Promise<CalendarFeed[]> {
     if (!this.token) return [];
     try {
       const r = await this._apiFetch('/api/calendar/feeds', {
         headers: { Authorization: `Bearer ${this.token}` },
       });
       if (!r.ok) return [];
-      const data = await r.json();
-      return Array.isArray(data.feeds) ? data.feeds : [];
+      const feeds = jsonObject(await r.json()).feeds;
+      return Array.isArray(feeds)
+        ? feeds.flatMap((feed) => {
+            const item = jsonObject(feed);
+            if (typeof item.id !== 'string') return [];
+            return [
+              {
+                id: item.id,
+                ...(typeof item.name === 'string' ? { name: item.name } : {}),
+                ...(Array.isArray(item.kinds) &&
+                item.kinds.every((kind) => typeof kind === 'string')
+                  ? { kinds: item.kinds }
+                  : {}),
+                ...(typeof item.revoked_at === 'string' || item.revoked_at === null
+                  ? { revoked_at: item.revoked_at }
+                  : {}),
+              },
+            ];
+          })
+        : [];
     } catch {
       return [];
     }
@@ -403,6 +521,35 @@ export class RemoteVaultStore implements VaultStore {
     }
   }
 
+  /**
+   * One authenticated call to the unique-ID registry (`/api/uid/*`, Phase 24.4).
+   * Returns the status and parsed body instead of collapsing errors to `null`:
+   * a 429 with its `Retry-After`, a 403 for a missing capability and a 404 for a
+   * server started without `--uid-registry` are each an answer the pane shows.
+   */
+  async uidRequest(
+    method: 'GET' | 'POST',
+    path: string,
+    body?: unknown,
+  ): Promise<{ status: number; body: unknown }> {
+    if (!this.token) return { status: 401, body: { error: 'Not connected' } };
+    const r = await this._apiFetch(path, {
+      method,
+      headers: {
+        Authorization: `Bearer ${this.token}`,
+        ...(body === undefined ? {} : { 'Content-Type': 'application/json' }),
+      },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    });
+    let parsed: unknown = null;
+    try {
+      parsed = await r.json();
+    } catch {
+      // A 204 or an HTML error page has no JSON; the status carries the answer.
+    }
+    return { status: r.status, body: parsed };
+  }
+
   /** Fetch server status including TLS cert fingerprint (no auth needed). */
   async getStatus(): Promise<{
     unlocked: boolean;
@@ -411,15 +558,21 @@ export class RemoteVaultStore implements VaultStore {
   }> {
     try {
       const r = await this._apiFetch('/api/status');
-      return r.ok ? await r.json() : { unlocked: false, vault_exists: false };
+      if (!r.ok) return { unlocked: false, vault_exists: false };
+      const status = jsonObject(await r.json());
+      return {
+        unlocked: status.unlocked === true,
+        vault_exists: status.vault_exists === true,
+        ...(typeof status.cert_fingerprint === 'string'
+          ? { cert_fingerprint: status.cert_fingerprint }
+          : {}),
+      };
     } catch {
       return { unlocked: false, vault_exists: false };
     }
   }
 
-  get isRemote() {
-    return true;
-  }
+  readonly isRemote = true;
   get vaultId() {
     return this.baseUrl;
   }
@@ -437,7 +590,11 @@ export const st = {
       { id: 'Universal', name: 'Universal', description: 'All keys belong here by default' },
     ],
   } as VaultData,
-  schema: null as any,
+  schema: null as {
+    properties?: {
+      api_keys?: { items?: { properties?: Record<string, { description?: string }> } };
+    };
+  } | null,
   store: new LocalVaultStore() as VaultStore,
   filter: { type: 'all', value: '' },
   searchQ: '',
@@ -456,7 +613,7 @@ export const st = {
   revealed: {} as Record<string, boolean>,
   currentSelectedProjectIds: ['Universal'] as string[],
   currentSortBy: 'provider',
-  formCustomSelects: new Map<string, any>(),
+  formCustomSelects: new Map<string, { setValue(value: string): void }>(),
   /** Active environment filter value; empty string = all environments. */
   currentEnvFilter: '' as string,
   /** ID of the user whose detail is shown in the users workspace. */
@@ -478,9 +635,11 @@ export const st = {
   activePoolFilter: null as string | null,
   /**
    * The type chip bar (Phase 24.2) — multi-toggle, OR-combined, above the
-   * grid. Holds `SecretType` strings plus two virtual tokens: `'__totp'`
+   * grid. Holds `SecretType` strings plus one virtual token: `'__totp'`
    * (carries a stored authenticator seed — the replacement for the old
-   * `has_totp` single-select filter) and `'__pool'` (belongs to a key pool).
+   * `has_totp` single-select filter). Deliberately no pool token: key-pool
+   * filtering already has its own sidebar section, and duplicating it here
+   * would be the same redundancy this bar exists to remove from the sidebar.
    * A `Set` rather than an array because membership, not order, is what every
    * read site cares about.
    */
@@ -492,6 +651,10 @@ export const st = {
    * accidentally restore un-collapsed.
    */
   expandedPools: new Set<string>(),
+  /** Bundle cards expanded in the current view; never persisted. */
+  expandedBundles: new Set<string>(),
+  /** Selected member slot for each bundle card. */
+  bundleSlotTabs: {} as Record<string, string>,
   /** True while the embedded "Open to LAN" server is serving this vault (Pass 3). */
   lanServerRunning: false,
   /** True after a successful finishInit(); false after lockVault(). Prevents visibility-change from stacking the relock overlay before the vault is ever opened. */
@@ -531,6 +694,8 @@ export function resetViewState(): void {
   st.activePoolFilter = null;
   st.activeTypeChips.clear();
   st.expandedPools.clear();
+  st.expandedBundles.clear();
+  st.bundleSlotTabs = {};
   st.expanded.clear();
   st.allExpanded = false;
   st.revealed = {};
@@ -686,12 +851,18 @@ export async function persist(): Promise<void> {
   ensureEntryIds(st.vault.api_keys);
   try {
     await st.store.save(st.vault);
-  } catch (err: any) {
+    // The save folded in changes another writer had stored: our copy is behind,
+    // and the next save from it would be judged against the wrong base.
+    if (st.store.takeMerged?.()) {
+      await reloadFromStore();
+      showToast('Saved, and merged with changes someone else made', 'ok', 3500);
+    }
+  } catch (err) {
     if (err instanceof VaultConflictError) {
-      await resolveSaveConflict();
+      await resolveSaveConflict(err);
       return;
     }
-    showToast(`Save failed: ${err?.message ?? err}`, 'err', 4000);
+    showToast(`Save failed: ${err instanceof Error ? err.message : String(err)}`, 'err', 4000);
   }
 }
 
@@ -703,12 +874,15 @@ export async function persist(): Promise<void> {
  * and silently picking one is how data goes missing. So ask, and make the cost
  * of each option explicit.
  */
-async function resolveSaveConflict(): Promise<void> {
+async function resolveSaveConflict(err: VaultConflictError): Promise<void> {
   const { showConfirm } = await import('./utils');
+  const which = err.entries
+    ? `You and the other writer both changed: ${err.entries}.\n\n`
+    : 'Someone else changed this vault while you were editing.\n\n';
   const overwrite = await showConfirm(
-    'Someone else changed this vault while you were editing — most likely a peer ' +
-      'connected to your LAN server.\n\n' +
-      'OK: keep your version and overwrite theirs.\n' +
+    which +
+      'Changes to other entries were not in conflict and are already kept.\n\n' +
+      'OK: keep your version of these entries and overwrite theirs.\n' +
       'Cancel: discard your unsaved change and reload theirs.',
   );
 
@@ -719,22 +893,27 @@ async function resolveSaveConflict(): Promise<void> {
         await store.forceSave(st.vault);
         showToast('Your version saved, overwriting the other change', 'ok', 3500);
         return;
-      } catch (e: any) {
-        showToast(`Overwrite failed: ${e?.message ?? e}`, 'err', 4000);
+      } catch (e) {
+        showToast(`Overwrite failed: ${e instanceof Error ? e.message : String(e)}`, 'err', 4000);
         return;
       }
     }
   }
 
-  // Reload: adopt what is now stored, dropping our unsaved edit.
-  const fresh = await st.store.load();
-  if (fresh) {
-    st.vault.api_keys = fresh.api_keys;
-    st.vault.user_categories = fresh.user_categories || [];
-    st.vault.projects = fresh.projects || [{ id: 'Universal', name: 'Universal', description: '' }];
-    triggerRender();
+  if (await reloadFromStore()) {
     showToast('Reloaded the other version — your unsaved change was discarded', 'err', 5000);
   }
+}
+
+/** Adopt what is now stored, replacing our copy. `false` when nothing could be loaded. */
+async function reloadFromStore(): Promise<boolean> {
+  const fresh = await st.store.load();
+  if (!fresh) return false;
+  st.vault.api_keys = fresh.api_keys;
+  st.vault.user_categories = fresh.user_categories || [];
+  st.vault.projects = fresh.projects || [{ id: 'Universal', name: 'Universal', description: '' }];
+  triggerRender();
+  return true;
 }
 
 // ── Render callback (breaks potential circular deps) ───────────────────────
@@ -765,6 +944,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
   sidebarSections: ['all', 'price', 'env', 'category', 'project', 'tags', 'pools', 'prefixes'],
   groupByType: false,
   groupPools: true,
+  groupBundles: true,
+  dismissedBundleSuggestions: [] as string[],
   activityBarPosition: 'left' as const,
   activityBarStyle: 'icon' as const,
   collapsedSections: [] as ('all' | 'price' | 'env' | 'category' | 'project')[],
@@ -788,6 +969,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   // Off by default: the safe behaviour is the default, and the convenience is
   // the thing you opt into.
   keepLocalUnlocked: false,
+  entropySource: 'os',
   onboardingCompleted: false,
 };
 
@@ -825,17 +1007,17 @@ export const Settings = {
     try {
       if (!localStorage.getItem('envvault-sb-migrated')) {
         const secs = [...(this._data.sidebarSections || [])];
-        const insertAfter = (anchor: string, key: any) => {
+        const insertAfter = (anchor: SidebarSection, key: SidebarSection) => {
           if (secs.includes(key)) return;
-          const at = secs.indexOf(anchor as any);
+          const at = secs.indexOf(anchor);
           if (at >= 0) secs.splice(at + 1, 0, key);
           else secs.push(key);
         };
         insertAfter('price', 'env');
-        if (!secs.includes('tags' as any)) secs.push('tags' as any);
-        if (!secs.includes('pools' as any)) secs.push('pools' as any);
-        if (!secs.includes('prefixes' as any)) secs.push('prefixes' as any);
-        this._data.sidebarSections = secs as any;
+        if (!secs.includes('tags')) secs.push('tags');
+        if (!secs.includes('pools')) secs.push('pools');
+        if (!secs.includes('prefixes')) secs.push('prefixes');
+        this._data.sidebarSections = secs;
         localStorage.setItem('envvault-sb-migrated', '1');
         this._persist();
       }
@@ -869,17 +1051,24 @@ export const Settings = {
       if (!localStorage.getItem('envvault-sb-migrated-totp')) {
         localStorage.setItem('envvault-sb-migrated-totp', '1');
       }
-      if ((this._data.sidebarSections as string[] | undefined)?.includes('authenticator')) {
-        this._data.sidebarSections = (this._data.sidebarSections as string[]).filter(
-          (s) => s !== 'authenticator',
-        ) as any;
-        this._persist();
-      }
     } catch {}
+    // A2: persisted settings can outlive the Authenticator sidebar surface.
+    // Sanitize after both settings sources have been merged, on every load.
+    this._data.sidebarSections = (this._data.sidebarSections || []).filter(
+      (section) => (section as string) !== 'authenticator',
+    );
     this._apply();
   },
   _apply() {
     const d = this._data;
+    // The generators' entropy source follows the setting (Phase 33.4). Only when it
+    // changed, so the pool is not thrown away on every theme repaint.
+    if ((d.entropySource || 'os') !== entropySource()) {
+      void setEntropySource(d.entropySource || 'os').catch(() => {
+        // The Settings row reports an unusable source when it is chosen; here a
+        // failure leaves the pool empty and the generators say so when used.
+      });
+    }
     // OS theme auto-sync (item 21)
     const resolvedTheme =
       d.theme === 'system'
@@ -1059,6 +1248,8 @@ export function saveViewState(): void {
     prefixFilter: st.activePrefixFilter,
     poolFilter: st.activePoolFilter,
     typeChips: [...st.activeTypeChips],
+    expandedBundleIds: [...st.expandedBundles],
+    bundleSlotTabs: { ...st.bundleSlotTabs },
     projectIds: [...st.currentSelectedProjectIds],
   });
 }
@@ -1083,6 +1274,33 @@ export function restoreViewState(): boolean {
 
   const entries = st.vault.api_keys || [];
   let applied = false;
+
+  if (Array.isArray(v.expandedBundleIds)) {
+    const bundles = new Set(
+      entries.filter((entry) => entry.secretType === 'bundle').map((entry) => entryId(entry)),
+    );
+    const expanded = v.expandedBundleIds.filter((id) => bundles.has(id));
+    st.expandedBundles = new Set(expanded);
+    applied ||= expanded.length > 0;
+  }
+
+  const validSlotTabs: Record<string, string> = {};
+  if (
+    v.bundleSlotTabs &&
+    typeof v.bundleSlotTabs === 'object' &&
+    !Array.isArray(v.bundleSlotTabs)
+  ) {
+    for (const [bundleId, memberId] of Object.entries(v.bundleSlotTabs)) {
+      if (
+        typeof memberId === 'string' &&
+        entries.some((entry) => entry.id === bundleId && entry.secretType === 'bundle') &&
+        entries.some((entry) => entry.id === memberId && entry.bundle_id === bundleId)
+      )
+        validSlotTabs[bundleId] = memberId;
+    }
+  }
+  st.bundleSlotTabs = validSlotTabs;
+  applied ||= Object.keys(validSlotTabs).length > 0;
 
   const categories = new Set(st.vault.user_categories || []);
   const okFilter =
@@ -1115,13 +1333,21 @@ export function restoreViewState(): boolean {
     st.activePoolFilter = v.poolFilter;
     applied = true;
   }
-  // Each chip must still mean something against the loaded vault: '__totp' and
-  // '__pool' are always valid concepts, but a SecretType chip for a type this
-  // vault no longer has would silently narrow the grid to nothing.
+  // Each chip must still mean something against the loaded vault: '__totp' is
+  // always a valid concept, but a SecretType chip for a type this vault no
+  // longer has would silently narrow the grid to nothing — and so would a
+  // stale '__pool' from a `lastView` written before the Pool chip was
+  // removed (invariant 7): nothing matches that token any more, so restoring
+  // it unfiltered would open the app to an empty grid with no filter visibly
+  // set. Dropped explicitly rather than left to fall through to the "does any
+  // entry have this secretType" check, which a literal `'__pool'` would
+  // always fail anyway — but failing it *on purpose*, not by accident, is
+  // the difference between a decision and a bug that happens to look right.
   if (Array.isArray(v.typeChips) && v.typeChips.length) {
     const validChips = v.typeChips.filter(
       (c) =>
-        c === '__totp' || c === '__pool' || entries.some((e) => (e.secretType || 'api_key') === c),
+        c !== '__pool' &&
+        (c === '__totp' || entries.some((e) => (e.secretType || 'api_key') === c)),
     );
     if (validChips.length) {
       st.activeTypeChips = new Set(validChips);
@@ -1169,7 +1395,7 @@ export function applyUsersPanelVisibility(): void {
   if (!available && Settings.get('activePanel') === 'users') switchPanel('secrets');
 }
 
-export function switchPanel(panel: string) {
+export function switchPanel(panel: Panel) {
   const panelEls: Record<string, string[]> = {
     secrets: ['secrets-panel', 'vault-workspace'],
     tools: ['tools-panel', 'tools-workspace'],
@@ -1209,7 +1435,7 @@ export function switchPanel(panel: string) {
     btn.setAttribute('aria-selected', on ? 'true' : 'false');
     btn.tabIndex = on ? 0 : -1;
   });
-  Settings.set('activePanel', panel as any);
+  Settings.set('activePanel', panel);
 
   if (panel === 'users') import('./users').then((m) => m.renderUsersPanel()).catch(() => {});
   // The authenticator screen paints its own list, and the ticker it starts is
