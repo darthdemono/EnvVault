@@ -74,6 +74,11 @@ export const AUDIT_FN = `() => {
   const all = [...document.querySelectorAll('body *')].filter(visible);
 
   for (const el of all) {
+    // .sr-only is clipped on purpose: it exists to be read, not seen.
+    if (el.closest('.sr-only')) continue;
+    // A collapsed card clamps its badge row and tag row to whole rows on purpose
+    // and Expand reveals the rest (cards.css), so clipping there is the design.
+    const clampedByDesign = el.matches('.card:not(.expanded) .card-provider, .card:not(.expanded) .card-tags');
     const s = getComputedStyle(el);
     const r = el.getBoundingClientRect();
 
@@ -83,7 +88,7 @@ export const AUDIT_FN = `() => {
     if (overX > 1 && el.clientWidth > 0) {
       const scrolls = s.overflowX === 'auto' || s.overflowX === 'scroll';
       const ellipsis = s.textOverflow === 'ellipsis';
-      if (!scrolls && !ellipsis) {
+      if (!scrolls && !ellipsis && !clampedByDesign) {
         add('content-clipped-x', el, overX + 'px of content is unreachable (overflow-x: ' + s.overflowX + ')');
       }
     }
@@ -92,7 +97,7 @@ export const AUDIT_FN = `() => {
     // Visible overflow is usually intentional (a dropdown, a shadow); hidden
     // overflow with more content than box is text nobody can read.
     const overY = el.scrollHeight - el.clientHeight;
-    if (overY > 1 && s.overflowY === 'hidden' && el.clientHeight > 0) {
+    if (overY > 1 && s.overflowY === 'hidden' && el.clientHeight > 0 && !clampedByDesign) {
       add('content-clipped-y', el, overY + 'px of content is cut off below the fold of this box');
     }
 
@@ -105,12 +110,25 @@ export const AUDIT_FN = `() => {
     // 24×24 CSS px is the WCAG 2.2 minimum. Below that it is a target you miss.
     const interactive = el.matches('button, a[href], input, select, textarea, [role="button"], [data-action]');
     if (interactive) {
-      if (r.width < 24 || r.height < 24) {
+      // A checkbox or radio inside (or named by) a <label> is hit through the
+      // label, which is what WCAG 2.5.8 means by an adequate target.
+      const viaLabel = el instanceof HTMLInputElement && (el.type === 'checkbox' || el.type === 'radio') &&
+        !!(el.labels && el.labels.length);
+      if (!viaLabel && (r.width < 24 || r.height < 24)) {
         add('target-too-small', el, Math.round(r.width) + '×' + Math.round(r.height) + ' (minimum 24×24)');
       }
       // ── 6. A control with no accessible name ─────────────────────────────
-      const name = (el.getAttribute('aria-label') || el.getAttribute('title') || label(el) ||
-                    el.getAttribute('alt') || el.getAttribute('placeholder') || '').trim();
+      // Accessible-name computation, enough of it: aria-labelledby and a
+      // <label for> are how every form control here is named, and a check that
+      // ignored them reported correctly-labelled settings as unnamed.
+      const byIds = (el.getAttribute('aria-labelledby') || '').split(/\\s+/)
+        .map((id) => (id ? document.getElementById(id) : null))
+        .filter(Boolean).map((n) => label(n)).join(' ');
+      const forLabel = el.id ? label(document.querySelector('label[for="' + el.id + '"]') || document.createElement('i')) : '';
+      const wrapping = el.closest('label') ? label(el.closest('label')) : '';
+      const name = (el.getAttribute('aria-label') || byIds || el.getAttribute('title') || forLabel ||
+                    wrapping || label(el) || el.getAttribute('alt') ||
+                    el.getAttribute('placeholder') || '').trim();
       if (!name) add('control-unnamed', el, 'no text, aria-label, title, alt or placeholder');
     }
   }
@@ -128,6 +146,40 @@ export const AUDIT_FN = `() => {
       const ox = Math.min(ra.right, rb.right) - Math.max(ra.left, rb.left);
       const oy = Math.min(ra.bottom, rb.bottom) - Math.max(ra.top, rb.top);
       if (ox > 4 && oy > 4) {
+        // A control an overlay covers (the header under an open modal) cannot be
+        // clicked, so it cannot clash with anything. Scroll each into view (a form
+        // below the fold has no hit-test) and keep the pair only if each one is
+        // the element actually under its own centre.
+        // What covers a control may be the other one (that is the clash), but
+        // anything else covering it means an overlay hides the pair.
+        const clickable = (el, other) => {
+          el.scrollIntoView({ block: 'center', inline: 'center' });
+          const q = el.getBoundingClientRect();
+          const t = document.elementFromPoint(q.left + q.width / 2, q.top + q.height / 2);
+          return !!t && (el.contains(t) || other.contains(t));
+        };
+        if (!clickable(a, b) || !clickable(b, a)) continue;
+        // Content in a scrolling body passes under a pinned footer or header by
+        // design; that is scrolling, not a clash. Only pairs in the same scroll
+        // context can really sit on top of each other.
+        const scroller = (el) => {
+          for (let p = el.parentElement; p; p = p.parentElement) {
+            const o = getComputedStyle(p).overflowY;
+            if ((o === 'auto' || o === 'scroll') && p.scrollHeight > p.clientHeight) return p;
+          }
+          return null;
+        };
+        if (scroller(a) !== scroller(b)) continue;
+        // A sticky or fixed bar (the modal footer) is the same thing: the body
+        // scrolls beneath it. Pinned versus unpinned is not a clash.
+        const pinned = (el) => {
+          for (let p = el; p && p !== document.body; p = p.parentElement) {
+            const pos = getComputedStyle(p).position;
+            if (pos === 'sticky' || pos === 'fixed') return p;
+          }
+          return null;
+        };
+        if (pinned(a) !== pinned(b)) continue;
         add('controls-overlap', a, 'overlaps ' + sel(b) + ' by ' + Math.round(ox) + '×' + Math.round(oy) + 'px');
       }
     }
