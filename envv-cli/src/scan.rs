@@ -29,6 +29,11 @@ pub struct Issue {
     pub severity: Severity,
     pub subject: String,
     pub message: String,
+    /// The entry's `secretType`, filled in by [`analyse`] from the subject.
+    /// Empty for findings that are not about one entry (stale references).
+    pub secret_type: String,
+    /// Which field the finding is about (`api_secret`, `extra_vars/codes`, …).
+    pub field: String,
 }
 
 fn today() -> String {
@@ -91,6 +96,8 @@ pub fn analyse(vault: &Value) -> Vec<Issue> {
             .unwrap_or(false)
         {
             issues.push(Issue {
+                secret_type: String::new(),
+                field: String::new(),
                 severity: Severity::High,
                 subject: prov.clone(),
                 message: "Marked COMPROMISED — rotate immediately".into(),
@@ -105,6 +112,8 @@ pub fn analyse(vault: &Value) -> Vec<Issue> {
             && !token_shaped
         {
             issues.push(Issue {
+                secret_type: String::new(),
+                field: String::new(),
                 severity: Severity::High,
                 subject: prov.clone(),
                 message: "Short or weak secret value (< 12 chars)".into(),
@@ -117,6 +126,8 @@ pub fn analyse(vault: &Value) -> Vec<Issue> {
         let lower = api_key.to_lowercase();
         if !api_key.is_empty() && WEAK.iter().any(|w| lower.starts_with(w)) {
             issues.push(Issue {
+                secret_type: String::new(),
+                field: String::new(),
                 severity: Severity::High,
                 subject: prov.clone(),
                 message: "Secret starts with a common weak value".into(),
@@ -130,12 +141,16 @@ pub fn analyse(vault: &Value) -> Vec<Issue> {
             let day: String = exp.chars().take(10).collect();
             if day < today {
                 issues.push(Issue {
+                    secret_type: String::new(),
+                    field: String::new(),
                     severity: Severity::High,
                     subject: prov.clone(),
                     message: format!("Expired on {day}"),
                 });
             } else if day <= warn30 {
                 issues.push(Issue {
+                    secret_type: String::new(),
+                    field: String::new(),
                     severity: Severity::Med,
                     subject: prov.clone(),
                     message: format!("Expiring {day}"),
@@ -161,6 +176,8 @@ pub fn analyse(vault: &Value) -> Vec<Issue> {
                     if due < now {
                         let overdue = (now - due) / 86_400;
                         issues.push(Issue {
+                            secret_type: String::new(),
+                            field: String::new(),
                             severity: Severity::Med,
                             subject: prov.clone(),
                             message: format!(
@@ -181,6 +198,8 @@ pub fn analyse(vault: &Value) -> Vec<Issue> {
                 .is_none_or(|a| a.is_empty());
         if never_rotated && !is_cookie {
             issues.push(Issue {
+                secret_type: String::new(),
+                field: String::new(),
                 severity: Severity::Low,
                 subject: prov.clone(),
                 message: "Never rotated".into(),
@@ -195,11 +214,50 @@ pub fn analyse(vault: &Value) -> Vec<Issue> {
                 .is_empty()
         {
             issues.push(Issue {
+                secret_type: String::new(),
+                field: String::new(),
                 severity: Severity::Low,
                 subject: prov.clone(),
                 message: "Session never verified — open the site and confirm it is still signed in"
                     .into(),
             });
+        }
+        // A recovery-code set is single-use: at two left, the next lockout is
+        // permanent. Actionable — generate a fresh set at the service.
+        if crate::data::secret_type_of(k) == "recovery_codes" {
+            let st = vault_core::type_emit::code_status(k);
+            if st.total > 0 && st.remaining <= 2 {
+                issues.push(Issue {
+                    secret_type: String::new(),
+                    field: String::new(),
+                    severity: if st.remaining == 0 {
+                        Severity::High
+                    } else {
+                        Severity::Med
+                    },
+                    subject: prov.clone(),
+                    message: format!(
+                        "Only {} of {} recovery codes left — generate a new set at the service",
+                        st.remaining, st.total
+                    ),
+                });
+            }
+        }
+        // A mnemonic with a bad checksum is a typo discovered when the funds are
+        // needed. Checked against the bundled BIP39 wordlist; never echoed.
+        if crate::data::secret_type_of(k) == "crypto_wallet" {
+            let m = k.get("api_key").and_then(|v| v.as_str()).unwrap_or("");
+            if !m.trim().is_empty() {
+                if let Err(e) = vault_core::type_emit::bip39_validate(m) {
+                    issues.push(Issue {
+                        secret_type: String::new(),
+                        field: String::new(),
+                        severity: Severity::High,
+                        subject: prov.clone(),
+                        message: format!("Recovery phrase does not validate: {e}"),
+                    });
+                }
+            }
         }
         let described = !k
             .get("api_description")
@@ -213,6 +271,8 @@ pub fn analyse(vault: &Value) -> Vec<Issue> {
                 .is_empty();
         if !described {
             issues.push(Issue {
+                secret_type: String::new(),
+                field: String::new(),
                 severity: Severity::Low,
                 subject: prov.clone(),
                 message: "No description — hard to identify later".into(),
@@ -237,6 +297,8 @@ pub fn analyse(vault: &Value) -> Vec<Issue> {
     for (_, provs) in by_value {
         if provs.len() > 1 {
             issues.push(Issue {
+                secret_type: String::new(),
+                field: String::new(),
                 severity: Severity::Med,
                 subject: provs.join(", "),
                 message: format!(
@@ -310,6 +372,8 @@ pub fn analyse(vault: &Value) -> Vec<Issue> {
                     .map(|g| format!(" — did you mean ${{{g}/…}}?"))
                     .unwrap_or_default();
                 issues.push(Issue {
+                    secret_type: String::new(),
+                    field: String::new(),
                     severity: Severity::High,
                     subject: format!("{pname} / {cname}"),
                     message: format!("Stale ref {raw}{hint}"),
@@ -318,6 +382,31 @@ pub fn analyse(vault: &Value) -> Vec<Issue> {
         }
     }
 
+    // Name the type and field each finding is about, so the CLI says what the
+    // app's health scan says (Phase 24.2). The message is the only signal the
+    // checks above leave, so the table is keyed on it; a new check adds a row.
+    for i in &mut issues {
+        if let Some(e) = entries
+            .iter()
+            .find(|e| e.get("provider").and_then(|p| p.as_str()) == Some(i.subject.as_str()))
+        {
+            i.secret_type = crate::data::secret_type_of(e).to_string();
+        }
+        i.field = match i.message.as_str() {
+            m if m.starts_with("Marked COMPROMISED") => "compromised",
+            m if m.starts_with("Short or weak") || m.starts_with("Secret starts") => "api_key",
+            m if m.starts_with("Expired") || m.starts_with("Expiring") => "expires_at",
+            m if m.starts_with("Rotation overdue") => "rotation_days",
+            m if m.starts_with("Never rotated") => "last_rotated_at",
+            m if m.starts_with("Session never verified") => "last_verified_at",
+            m if m.starts_with("Only ") && m.contains("recovery codes") => "extra_vars/codes",
+            m if m.starts_with("Recovery phrase") => "api_key",
+            m if m.starts_with("No description") => "description",
+            m if m.starts_with("Same secret value") => "api_key",
+            _ => "",
+        }
+        .to_string();
+    }
     issues.sort_by_key(|i| i.severity);
     issues
 }
@@ -355,6 +444,8 @@ pub fn cmd_scan(access: &Access, min_severity: &str, json_out: bool) -> CliResul
                     "severity": i.severity.label().to_lowercase(),
                     "subject": i.subject,
                     "message": i.message,
+                    "secretType": i.secret_type,
+                    "field": i.field,
                 })
             })
             .collect();
@@ -388,6 +479,28 @@ pub fn cmd_scan(access: &Access, min_severity: &str, json_out: bool) -> CliResul
         "\n{} issue(s): {high} high, {med} medium, {low} low",
         issues.len()
     );
+    Ok(())
+}
+
+/// `envv scan --exposed PATH --out REPORT`.
+///
+/// The locations are valuable to an attacker, so this is deliberately unlike
+/// the health scan: it is never a stdout report, even with `--reveal`.
+pub fn cmd_exposed(
+    access: &Access,
+    path: &std::path::Path,
+    out_path: Option<&std::path::Path>,
+) -> CliResult {
+    let Some(out_path) = out_path else {
+        return Err(CliError::redacted(
+            "An exposure report names sensitive locations. Pass --out <file>; it is never printed.",
+        ));
+    };
+    let engine = crate::shield::Engine::from_vault(&access.load_vault()?);
+    let findings = engine.scan_path(path)?;
+    let report = crate::shield::exposure_report(&findings);
+    crate::fmt::write_secret_file(out_path, &report)?;
+    eprintln!("Wrote {}", out_path.display());
     Ok(())
 }
 
@@ -635,4 +748,37 @@ pub fn cmd_status(access: &Access) -> CliResult {
         },
     );
     Ok(())
+}
+
+#[cfg(test)]
+mod finding_shape_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn findings_name_the_entry_type_and_the_field() {
+        let vault = json!({ "api_keys": [
+            { "provider": "Backup codes", "secretType": "recovery_codes", "api_key": "",
+              "description": "d", "extra_vars": [{ "key": "codes", "value": "a\tUSED x\nb\tUSED x\nc" }] },
+            { "provider": "Wallet", "secretType": "crypto_wallet", "description": "d",
+              "api_key": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon" },
+        ]});
+        let issues = analyse(&vault);
+        let codes = issues
+            .iter()
+            .find(|i| i.subject == "Backup codes")
+            .expect("low-codes finding");
+        assert_eq!(
+            (codes.secret_type.as_str(), codes.field.as_str()),
+            ("recovery_codes", "extra_vars/codes")
+        );
+        let wallet = issues
+            .iter()
+            .find(|i| i.message.starts_with("Recovery phrase"))
+            .expect("bad phrase");
+        assert_eq!(wallet.secret_type, "crypto_wallet");
+        assert_eq!(wallet.field, "api_key");
+        // The phrase itself never appears in a finding.
+        assert!(!wallet.message.contains("abandon"));
+    }
 }
