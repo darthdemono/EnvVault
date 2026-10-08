@@ -1,0 +1,1039 @@
+//! Cross-chunk, cross-format checks for a project (Phase 29, "the config compiler"; ADR-0137).
+//!
+//! Phase 18's validation matrix runs each generated file past its own tool
+//! (`nginx -t`, `wg-quick strip`), which can only ever see one format. The
+//! mistakes that bite sit between chunks: a `proxy_pass` naming a service the
+//! project does not define, two WireGuard peers claiming one address.
+//!
+//! **Eight rule ids over the six designed checks, hand-written, and no rule language**
+//! (WireGuard and Kubernetes each split into an error case and a softer one). A false positive costs far
+//! more than a missing check: a validator that cries wolf gets switched off and
+//! then protects nothing. So every rule fires only on positive evidence that the
+//! project means to define the thing (a rule about Docker services stays silent in
+//! a project with no `docker_service` chunk), and anything that could be resolved
+//! somewhere this function cannot see — a `name@provider` Traefik reference, a
+//! `${bundle:…}` reference, a hostname with a dot — is skipped, not guessed at.
+//!
+//! The functions are pure over the project JSON, so the CLI (`envv check`) and the
+//! desktop app (over IPC) cannot disagree about what a project means. Messages
+//! carry names and never values: a finding must be safe to print, and a hostname
+//! or chunk name is not a secret where a field value might be.
+
+use serde_json::{json, Value};
+use std::collections::{HashMap, HashSet};
+use std::net::IpAddr;
+
+/// One finding. `severity` is `"error"` (the generated config is wrong) or
+/// `"warning"` (probably wrong; could be satisfied somewhere this cannot see).
+pub struct Finding {
+    pub rule: &'static str,
+    pub severity: &'static str,
+    pub chunk_id: String,
+    pub chunk_name: String,
+    pub chunk_type: String,
+    pub field: String,
+    pub message: String,
+    /// Other chunks involved, by name.
+    pub related: Vec<String>,
+}
+
+impl Finding {
+    pub fn to_json(&self) -> Value {
+        json!({
+            "rule": self.rule,
+            "severity": self.severity,
+            "chunk_id": self.chunk_id,
+            "chunk": self.chunk_name,
+            "chunk_type": self.chunk_type,
+            "field": self.field,
+            "message": self.message,
+            "related": self.related,
+        })
+    }
+}
+
+fn s<'a>(v: &'a Value, key: &str) -> &'a str {
+    v.get(key).and_then(Value::as_str).unwrap_or("")
+}
+
+fn fields(chunk: &Value) -> Vec<&Value> {
+    chunk
+        .get("fields")
+        .and_then(Value::as_array)
+        .map(|a| a.iter().collect())
+        .unwrap_or_default()
+}
+
+/// First non-empty value of `key`, trimmed.
+fn field<'a>(chunk: &'a Value, key: &str) -> &'a str {
+    fields(chunk)
+        .into_iter()
+        .find(|f| s(f, "key") == key && !s(f, "value").trim().is_empty())
+        .map(|f| s(f, "value").trim())
+        .unwrap_or("")
+}
+
+/// Every non-empty value of `key` (a key may repeat, e.g. `listen`).
+fn field_all<'a>(chunk: &'a Value, key: &str) -> Vec<&'a str> {
+    fields(chunk)
+        .into_iter()
+        .filter(|f| s(f, "key") == key)
+        .map(|f| s(f, "value").trim())
+        .filter(|v| !v.is_empty())
+        .collect()
+}
+
+fn split_list(raw: &str) -> Vec<String> {
+    raw.split(|c: char| c == ',' || c.is_whitespace())
+        .map(str::trim)
+        .filter(|x| !x.is_empty())
+        .map(String::from)
+        .collect()
+}
+
+/// A disabled chunk is excluded from exports, so it is excluded here too.
+fn active_chunks(project: &Value) -> Vec<&Value> {
+    project
+        .get("chunks")
+        .and_then(Value::as_array)
+        .map(|a| {
+            a.iter()
+                .filter(|c| !c.get("disabled").and_then(Value::as_bool).unwrap_or(false))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn of_type<'a>(chunks: &[&'a Value], t: &str) -> Vec<&'a Value> {
+    chunks
+        .iter()
+        .copied()
+        .filter(|c| s(c, "chunk_type") == t)
+        .collect()
+}
+
+fn finding(
+    rule: &'static str,
+    severity: &'static str,
+    chunk: &Value,
+    field: &str,
+    message: String,
+    related: Vec<String>,
+) -> Finding {
+    Finding {
+        rule,
+        severity,
+        chunk_id: s(chunk, "id").to_string(),
+        chunk_name: s(chunk, "name").to_string(),
+        chunk_type: s(chunk, "chunk_type").to_string(),
+        field: field.to_string(),
+        message,
+        related,
+    }
+}
+
+/// Compose names a service the way the exporter does: whitespace to `_`, lowercase.
+fn service_name(chunk: &Value) -> String {
+    s(chunk, "name")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join("_")
+        .to_lowercase()
+}
+
+/// Every name a service answers to on a Docker network.
+fn service_aliases(chunk: &Value) -> Vec<String> {
+    let mut v = vec![service_name(chunk)];
+    let cn = field(chunk, "container_name").to_lowercase();
+    if !cn.is_empty() {
+        v.push(cn);
+    }
+    v
+}
+
+fn norm(name: &str) -> String {
+    name.chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() {
+                c.to_ascii_uppercase()
+            } else {
+                '_'
+            }
+        })
+        .collect()
+}
+
+fn is_ref(v: &str) -> bool {
+    v.contains("${")
+}
+
+// ── Rule 1: nginx proxy_pass → a Docker service the project does not define ──
+
+fn rule_nginx_proxy_pass(chunks: &[&Value], out: &mut Vec<Finding>) {
+    let services = of_type(chunks, "docker_service");
+    if services.is_empty() {
+        return; // no evidence this project defines services at all
+    }
+    let mut known: HashSet<String> = services.iter().flat_map(|c| service_aliases(c)).collect();
+    for u in of_type(chunks, "nginx_upstream") {
+        known.insert(s(u, "name").to_lowercase());
+    }
+    for t in ["nginx_location", "nginx_server"] {
+        for c in of_type(chunks, t) {
+            for target in field_all(c, "proxy_pass") {
+                let Some(host) = proxy_host(target) else {
+                    continue;
+                };
+                if !known.contains(&host) {
+                    out.push(finding(
+                        "nginx-proxy-pass-unknown-service",
+                        "warning",
+                        c,
+                        "proxy_pass",
+                        format!(
+                            "proxy_pass names `{host}`, which is neither a Docker service nor an upstream defined in this project"
+                        ),
+                        services.iter().map(|x| service_name(x)).collect(),
+                    ));
+                }
+            }
+        }
+    }
+}
+
+/// The bare host of a `proxy_pass` target, or `None` when it is not a service-style
+/// name (an IP, a dotted hostname, `localhost`, a variable, a unix socket, a ref).
+fn proxy_host(target: &str) -> Option<String> {
+    if is_ref(target) || target.contains('$') || target.starts_with("unix:") {
+        return None;
+    }
+    let rest = target.split_once("://").map(|(_, r)| r).unwrap_or(target);
+    if rest.starts_with("unix:") {
+        return None;
+    }
+    let host = rest.split(['/', ':']).next().unwrap_or("").to_lowercase();
+    if host.is_empty()
+        || host == "localhost"
+        || host.contains('.')
+        || host.contains('[')
+        || host.parse::<IpAddr>().is_ok()
+    {
+        return None;
+    }
+    Some(host)
+}
+
+// ── Rule 2: two WireGuard peers with the same AllowedIPs network ─────────────
+
+/// `10.0.0.5/24` → the masked network `10.0.0.0/24`; `None` if unparseable.
+fn network(cidr: &str) -> Option<(u8, u128, u8)> {
+    let (addr, len) = match cidr.split_once('/') {
+        Some((a, l)) => (a, Some(l.parse::<u8>().ok()?)),
+        None => (cidr, None),
+    };
+    match addr.parse::<IpAddr>().ok()? {
+        IpAddr::V4(a) => {
+            let len = len.unwrap_or(32);
+            if len > 32 {
+                return None;
+            }
+            let bits = u32::from(a) as u128;
+            let mask = if len == 0 {
+                0
+            } else {
+                (!0u32 << (32 - len)) as u128
+            };
+            Some((4, bits & mask, len))
+        }
+        IpAddr::V6(a) => {
+            let len = len.unwrap_or(128);
+            if len > 128 {
+                return None;
+            }
+            let bits = u128::from(a);
+            let mask = if len == 0 { 0 } else { !0u128 << (128 - len) };
+            Some((6, bits & mask, len))
+        }
+    }
+}
+
+/// `a` strictly contains `b` (same family, shorter prefix, same leading bits).
+fn contains(a: (u8, u128, u8), b: (u8, u128, u8)) -> bool {
+    if a.0 != b.0 || a.2 >= b.2 {
+        return false;
+    }
+    let width: u32 = if a.0 == 4 { 32 } else { 128 };
+    let shift = width - a.2 as u32;
+    // For IPv4 the address sits in the low 32 bits of the u128.
+    if a.2 == 0 {
+        return true;
+    }
+    (a.1 >> shift) == (b.1 >> shift)
+}
+
+/// Two peers claiming the *same* network is always wrong: the kernel silently
+/// moves it to whichever peer was added last (an error). One peer's network
+/// *containing* another's is how WireGuard expresses a split route, since it routes
+/// by longest prefix, so it is only a warning, and a default route (`/0`) beside
+/// host routes, the standard full-tunnel pattern, is not reported at all.
+fn rule_wireguard_allowed_ips(chunks: &[&Value], out: &mut Vec<Finding>) {
+    let peers = of_type(chunks, "wg_peer");
+    let mut seen: HashMap<(u8, u128, u8), &Value> = HashMap::new();
+    let mut nets: Vec<((u8, u128, u8), String, &Value)> = Vec::new();
+    for p in peers {
+        let mut mine: HashSet<(u8, u128, u8)> = HashSet::new();
+        for raw in field_all(p, "AllowedIPs") {
+            if is_ref(raw) {
+                continue;
+            }
+            for item in split_list(raw) {
+                let Some(net) = network(&item) else { continue };
+                if !mine.insert(net) {
+                    continue;
+                }
+                if let Some(other) = seen.get(&net) {
+                    out.push(finding(
+                        "wireguard-allowed-ips-duplicate",
+                        "error",
+                        p,
+                        "AllowedIPs",
+                        format!(
+                            "AllowedIPs `{item}` is also claimed by peer `{}`; WireGuard gives the address to only one of them",
+                            s(other, "name")
+                        ),
+                        vec![s(other, "name").to_string()],
+                    ));
+                } else {
+                    seen.insert(net, p);
+                    nets.push((net, item.clone(), p));
+                }
+            }
+        }
+    }
+    // Strict containment between different peers, excluding default routes.
+    for (outer, outer_text, op) in &nets {
+        if outer.2 == 0 {
+            continue;
+        }
+        for (inner, inner_text, ip) in &nets {
+            if std::ptr::eq(*op, *ip) || !contains(*outer, *inner) {
+                continue;
+            }
+            out.push(finding(
+                "wireguard-allowed-ips-overlap",
+                "warning",
+                ip,
+                "AllowedIPs",
+                format!(
+                    "AllowedIPs `{inner_text}` sits inside `{outer_text}` claimed by peer `{}`; WireGuard sends it to this peer (longest prefix), so the wider peer never sees it",
+                    s(op, "name")
+                ),
+                vec![s(op, "name").to_string()],
+            ));
+        }
+    }
+}
+
+// ── Rule 3: a Traefik router naming a middleware that does not exist ────────
+
+fn rule_traefik_middleware(chunks: &[&Value], out: &mut Vec<Finding>) {
+    let defined: HashSet<String> = of_type(chunks, "traefik_middleware")
+        .iter()
+        .map(|m| s(m, "name").to_lowercase())
+        .collect();
+    for router in of_type(chunks, "traefik_router") {
+        for raw in field_all(router, "middlewares") {
+            if is_ref(raw) {
+                continue;
+            }
+            for name in split_list(raw) {
+                // `name@provider` lives in another provider; not ours to judge.
+                if name.contains('@') || defined.contains(&name.to_lowercase()) {
+                    continue;
+                }
+                out.push(finding(
+                    "traefik-middleware-missing",
+                    "warning",
+                    router,
+                    "middlewares",
+                    format!(
+                        "router uses middleware `{name}`, which no traefik_middleware chunk defines (write `{name}@file` if it lives in another file)"
+                    ),
+                    vec![],
+                ));
+            }
+        }
+    }
+}
+
+// ── Rule 4: a Deployment consuming a Secret no chunk creates ─────────────────
+//
+// A Deployment names Secrets in `secretEnv` (list) and `secretMounts`
+// (`secret:/path` list); the exporters turn them into `envFrom` and a volume.
+// Silent when the project has no `k8s_secret` chunk at all: the Secret may be
+// created by another manifest set, and a rule that fires there is a rule that
+// gets switched off. The same family also checks an Ingress's Service.
+
+fn split_list_k8s(raw: &str) -> Vec<String> {
+    split_list(raw)
+}
+
+fn rule_k8s_secrets(chunks: &[&Value], out: &mut Vec<Finding>) {
+    let secrets = of_type(chunks, "k8s_secret");
+    if secrets.is_empty() {
+        return;
+    }
+    let defined: HashSet<(String, String)> =
+        secrets.iter().map(|c| (k8s_name(c), k8s_ns(c))).collect();
+    for dep in of_type(chunks, "k8s_deployment") {
+        let ns = k8s_ns(dep);
+        let mut wanted: Vec<(&str, String)> = Vec::new();
+        for raw in field_all(dep, "secretEnv") {
+            for n in split_list_k8s(raw) {
+                wanted.push(("secretEnv", n));
+            }
+        }
+        for raw in field_all(dep, "secretMounts") {
+            for m in split_list_k8s(raw) {
+                if let Some(i) = m.find(':').filter(|i| *i > 0 && *i < m.len() - 1) {
+                    wanted.push(("secretMounts", m[..i].to_string()));
+                }
+            }
+        }
+        let mut reported: HashSet<String> = HashSet::new();
+        for (key, n) in wanted {
+            if is_ref(&n)
+                || defined.contains(&(n.clone(), ns.clone()))
+                || !reported.insert(n.clone())
+            {
+                continue;
+            }
+            out.push(finding(
+                "k8s-deployment-secret-missing",
+                "error",
+                dep,
+                key,
+                format!("Deployment uses Secret `{n}` in namespace `{ns}`, which no k8s_secret chunk creates; the Pod will not start"),
+                secrets.iter().map(|c| k8s_name(c)).collect(),
+            ));
+        }
+    }
+}
+
+// ── Rule 4b: a Kubernetes Ingress backed by a Service no chunk defines ───────
+
+fn k8s_name(chunk: &Value) -> String {
+    let n = field(chunk, "name");
+    if n.is_empty() { s(chunk, "name") } else { n }.to_string()
+}
+
+fn k8s_ns(chunk: &Value) -> String {
+    let n = field(chunk, "namespace");
+    if n.is_empty() { "default" } else { n }.to_string()
+}
+
+fn rule_k8s_ingress(chunks: &[&Value], out: &mut Vec<Finding>) {
+    let services = of_type(chunks, "k8s_service");
+    if services.is_empty() {
+        return;
+    }
+    let defined: HashSet<(String, String)> =
+        services.iter().map(|c| (k8s_name(c), k8s_ns(c))).collect();
+    for ing in of_type(chunks, "k8s_ingress") {
+        let svc = {
+            let v = field(ing, "serviceName");
+            if v.is_empty() {
+                k8s_name(ing)
+            } else {
+                v.to_string()
+            }
+        };
+        if is_ref(&svc) {
+            continue;
+        }
+        let ns = k8s_ns(ing);
+        if !defined.contains(&(svc.clone(), ns.clone())) {
+            out.push(finding(
+                "k8s-ingress-service-missing",
+                "warning",
+                ing,
+                "serviceName",
+                format!("Ingress routes to Service `{svc}` in namespace `{ns}`, which no k8s_service chunk defines"),
+                services.iter().map(|c| k8s_name(c)).collect(),
+            ));
+        }
+    }
+}
+
+// ── Rule 5: a Compose service reading a variable nothing provides ───────────
+//
+// Compose substitutes `${NAME}` anywhere in a service from the `.env` beside the
+// file and the shell. In this model that `.env` is built from the vault references
+// the exporter derives (one per environment field holding a reference) and from
+// env_file chunks. So a `${NAME}` in any service value (image tag, port, command,
+// an environment value) must be a key some env_file chunk sets, or a vault entry.
+// `${NAME:-default}` and the other operator forms carry their own fallback and
+// are not reported; `$${NAME}` is an escaped literal.
+
+/// `${NAME}` tokens in `value` whose body is a plain name or `Provider/field`,
+/// with no operator, skipping `$${…}` escapes.
+fn compose_tokens(value: &str) -> Vec<String> {
+    let b = value.as_bytes();
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i + 1 < b.len() {
+        if b[i] == b'$' && b[i + 1] == b'$' {
+            i += 2;
+            continue;
+        }
+        if b[i] == b'$' && b[i + 1] == b'{' {
+            if let Some(end) = value[i + 2..].find('}') {
+                let body = &value[i + 2..i + 2 + end];
+                if !body.is_empty()
+                    && !body.contains(":-")
+                    && !body.contains(":?")
+                    && !body.contains('-')
+                    && !body.contains('?')
+                    && !body.contains('+')
+                {
+                    out.push(body.to_string());
+                }
+                i += 2 + end + 1;
+                continue;
+            }
+        }
+        i += 1;
+    }
+    out
+}
+
+/// `known` is the vault's entry names (provider, and `provider_keyid`).
+fn rule_compose_env(chunks: &[&Value], known: &[String], out: &mut Vec<Finding>) {
+    let env_keys: HashSet<String> = of_type(chunks, "env_file")
+        .iter()
+        .flat_map(|c| fields(c))
+        .map(|f| norm(s(f, "key")))
+        .collect();
+    let providers: Vec<String> = known.iter().map(|k| norm(k)).collect();
+    let resolves = |name: &str| -> bool {
+        if name.starts_with("chunk:") || name.starts_with("bundle:") {
+            return true; // resolved by machinery this module does not duplicate
+        }
+        let head = name.split('/').next().unwrap_or(name);
+        let n = norm(head);
+        env_keys.contains(&n)
+            || providers
+                .iter()
+                .any(|p| !p.is_empty() && (n == *p || n.starts_with(&format!("{p}_"))))
+    };
+    for svc in of_type(chunks, "docker_service") {
+        for f in fields(svc) {
+            let raw = s(f, "value");
+            let mut names: Vec<String> = Vec::new();
+            if !s(f, "ref_name").is_empty() {
+                names.push(s(f, "ref_name").to_string());
+            }
+            names.extend(compose_tokens(raw));
+            let mut reported: HashSet<String> = HashSet::new();
+            for name in names {
+                if resolves(&name) || !reported.insert(name.clone()) {
+                    continue;
+                }
+                out.push(finding(
+                    "compose-env-ref-unresolved",
+                    "warning",
+                    svc,
+                    s(f, "key"),
+                    format!(
+                        "`{}` reads `${{{name}}}`, which is neither a vault entry nor a key in an env_file chunk",
+                        s(f, "key")
+                    ),
+                    vec![],
+                ));
+            }
+        }
+    }
+}
+
+// ── Rule 6: a pg_connection host on a network its caller is not attached to ─
+
+fn networks_of(svc: &Value) -> Option<HashSet<String>> {
+    // `network_mode` replaces networking altogether; nothing to compare.
+    if !field(svc, "network_mode").is_empty() {
+        return None;
+    }
+    let listed: HashSet<String> = field_all(svc, "networks")
+        .iter()
+        .flat_map(|v| split_list(v))
+        .collect();
+    Some(if listed.is_empty() {
+        HashSet::from(["default".to_string()])
+    } else {
+        listed
+    })
+}
+
+fn mentions(svc: &Value, name: &str) -> bool {
+    if field_all(svc, "depends_on")
+        .iter()
+        .flat_map(|v| split_list(v))
+        .any(|d| d.to_lowercase() == name)
+    {
+        return true;
+    }
+    fields(svc)
+        .into_iter()
+        .filter(|f| s(f, "description") == "env" || s(f, "field_type") == "env_var")
+        .any(|f| {
+            s(f, "value")
+                .to_lowercase()
+                .split(|c: char| !(c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.')))
+                .any(|tok| tok == name)
+        })
+}
+
+/// A service that reads the connection through `${chunk:<pg chunk>/…}` consumes it
+/// even though no env value spells the host.
+fn reads_chunk(svc: &Value, pg_name: &str) -> bool {
+    let needle = format!("chunk:{}", pg_name.to_lowercase());
+    fields(svc).into_iter().any(|f| {
+        let v = s(f, "value").to_lowercase();
+        let r = s(f, "ref_name").to_lowercase();
+        v.contains(&needle) || r.contains(&needle)
+    })
+}
+
+fn rule_pg_network(chunks: &[&Value], out: &mut Vec<Finding>) {
+    let services = of_type(chunks, "docker_service");
+    for pg in of_type(chunks, "pg_connection") {
+        let host = field(pg, "host").to_lowercase();
+        if host.is_empty() || is_ref(&host) {
+            continue;
+        }
+        let Some(db) = services.iter().find(|c| service_aliases(c).contains(&host)) else {
+            continue;
+        };
+        let Some(db_nets) = networks_of(db) else {
+            continue;
+        };
+        for c in &services {
+            if std::ptr::eq(*c, *db) {
+                continue;
+            }
+            let Some(c_nets) = networks_of(c) else {
+                continue;
+            };
+            let reaches =
+                service_aliases(db).iter().any(|a| mentions(c, a)) || reads_chunk(c, s(pg, "name"));
+            if reaches && c_nets.is_disjoint(&db_nets) {
+                out.push(finding(
+                    "pg-host-network-unreachable",
+                    "warning",
+                    pg,
+                    "host",
+                    format!(
+                        "host `{host}` is Docker service `{}`, but service `{}` uses it and shares no network with it",
+                        service_name(db),
+                        service_name(c)
+                    ),
+                    vec![service_name(db), service_name(c)],
+                ));
+            }
+        }
+    }
+}
+
+/// Run every rule over one project. `vault_names` are the vault's entry names
+/// (provider, and `provider_keyid`) so a `${…}` reference to a real entry is not
+/// reported; pass an empty slice to skip nothing and report every non-env_file ref.
+pub fn check_project(project: &Value, vault_names: &[String]) -> Vec<Finding> {
+    let chunks = active_chunks(project);
+    let mut out = Vec::new();
+    rule_nginx_proxy_pass(&chunks, &mut out);
+    rule_wireguard_allowed_ips(&chunks, &mut out);
+    rule_traefik_middleware(&chunks, &mut out);
+    rule_k8s_secrets(&chunks, &mut out);
+    rule_k8s_ingress(&chunks, &mut out);
+    rule_compose_env(&chunks, vault_names, &mut out);
+    rule_pg_network(&chunks, &mut out);
+    out
+}
+
+/// The rule ids, in the order they run — `envv describe` and the panel list them.
+pub const RULES: [&str; 8] = [
+    "nginx-proxy-pass-unknown-service",
+    "wireguard-allowed-ips-duplicate",
+    "wireguard-allowed-ips-overlap",
+    "traefik-middleware-missing",
+    "k8s-deployment-secret-missing",
+    "k8s-ingress-service-missing",
+    "compose-env-ref-unresolved",
+    "pg-host-network-unreachable",
+];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn f(key: &str, value: &str) -> Value {
+        json!({"key": key, "value": value, "field_type": "var"})
+    }
+    fn chunk(name: &str, t: &str, fields: Vec<Value>) -> Value {
+        json!({"id": format!("id-{name}"), "name": name, "chunk_type": t, "fields": fields})
+    }
+    fn project(chunks: Vec<Value>) -> Value {
+        json!({"id": "p", "name": "p", "chunks": chunks})
+    }
+    fn rules(p: &Value, names: &[&str]) -> Vec<&'static str> {
+        let names: Vec<String> = names.iter().map(|s| s.to_string()).collect();
+        check_project(p, &names).iter().map(|x| x.rule).collect()
+    }
+
+    #[test]
+    fn proxy_pass_to_an_undefined_service_is_flagged_but_only_when_services_exist() {
+        let loc = |t: &str| {
+            chunk(
+                "loc",
+                "nginx_location",
+                vec![f("path", "/"), f("proxy_pass", t)],
+            )
+        };
+        let svc = chunk("web app", "docker_service", vec![f("image", "x")]);
+        assert_eq!(
+            rules(&project(vec![loc("http://api:8080"), svc.clone()]), &[]),
+            ["nginx-proxy-pass-unknown-service"]
+        );
+        // The service the project does define, under the name Compose gives it.
+        assert!(rules(
+            &project(vec![loc("http://web_app:8080/x"), svc.clone()]),
+            &[]
+        )
+        .is_empty());
+        // No docker_service chunk at all: no evidence, no finding.
+        assert!(rules(&project(vec![loc("http://api:8080")]), &[]).is_empty());
+        // Not service-style names: dotted, IP, localhost, variable.
+        for t in [
+            "http://api.example.com",
+            "http://10.0.0.5:80",
+            "http://localhost:3000",
+            "http://$backend",
+            "http://unix:/run/x.sock",
+        ] {
+            assert!(
+                rules(&project(vec![loc(t), svc.clone()]), &[]).is_empty(),
+                "{t}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_upstream_defined_in_the_project_satisfies_proxy_pass() {
+        let up = chunk(
+            "backend",
+            "nginx_upstream",
+            vec![f("server", "10.0.0.1:80")],
+        );
+        let loc = chunk(
+            "loc",
+            "nginx_location",
+            vec![f("proxy_pass", "http://backend")],
+        );
+        let svc = chunk("web", "docker_service", vec![]);
+        assert!(rules(&project(vec![up, loc, svc]), &[]).is_empty());
+    }
+
+    #[test]
+    fn two_peers_with_the_same_network_are_an_error_but_nesting_is_fine() {
+        let peer = |n: &str, ips: &str| chunk(n, "wg_peer", vec![f("AllowedIPs", ips)]);
+        assert_eq!(
+            rules(
+                &project(vec![peer("a", "10.0.0.2/32"), peer("b", "10.0.0.2")]),
+                &[]
+            ),
+            ["wireguard-allowed-ips-duplicate"]
+        );
+        // Host bits are ignored: 10.0.0.5/24 and 10.0.0.9/24 are one network.
+        assert_eq!(
+            rules(
+                &project(vec![peer("a", "10.0.0.5/24"), peer("b", "10.0.0.9/24")]),
+                &[]
+            )
+            .len(),
+            1
+        );
+        // Longest-prefix routing makes a catch-all beside a host route valid.
+        assert!(rules(
+            &project(vec![peer("a", "0.0.0.0/0, ::/0"), peer("b", "10.0.0.2/32")]),
+            &[]
+        )
+        .is_empty());
+        // One peer repeating itself is its own business; references are skipped.
+        assert!(rules(&project(vec![peer("a", "10.0.0.2/32, 10.0.0.2/32")]), &[]).is_empty());
+        assert!(rules(&project(vec![peer("a", "${X}"), peer("b", "${X}")]), &[]).is_empty());
+    }
+
+    #[test]
+    fn a_disabled_peer_is_not_in_the_export_and_is_not_checked() {
+        let mut b = chunk("b", "wg_peer", vec![f("AllowedIPs", "10.0.0.2/32")]);
+        b["disabled"] = json!(true);
+        let a = chunk("a", "wg_peer", vec![f("AllowedIPs", "10.0.0.2/32")]);
+        assert!(rules(&project(vec![a, b]), &[]).is_empty());
+    }
+
+    #[test]
+    fn traefik_middleware_must_exist_unless_it_names_another_provider() {
+        let router = |m: &str| chunk("r", "traefik_router", vec![f("middlewares", m)]);
+        let mw = chunk("auth", "traefik_middleware", vec![f("type", "basicAuth")]);
+        assert_eq!(
+            rules(&project(vec![router("auth, gone"), mw.clone()]), &[]),
+            ["traefik-middleware-missing"]
+        );
+        assert!(rules(&project(vec![router("AUTH"), mw.clone()]), &[]).is_empty());
+        assert!(rules(&project(vec![router("sso@docker, api@internal")]), &[]).is_empty());
+    }
+
+    #[test]
+    fn an_ingress_needs_a_service_in_the_same_namespace_but_only_when_services_exist() {
+        let svc = chunk(
+            "s",
+            "k8s_service",
+            vec![f("name", "my-app"), f("namespace", "prod")],
+        );
+        let ing = |n: &str, ns: &str| {
+            chunk(
+                "i",
+                "k8s_ingress",
+                vec![f("serviceName", n), f("namespace", ns)],
+            )
+        };
+        assert!(rules(&project(vec![svc.clone(), ing("my-app", "prod")]), &[]).is_empty());
+        assert_eq!(
+            rules(&project(vec![svc.clone(), ing("my-app", "default")]), &[]),
+            ["k8s-ingress-service-missing"]
+        );
+        assert_eq!(
+            rules(&project(vec![svc, ing("other", "prod")]), &[]),
+            ["k8s-ingress-service-missing"]
+        );
+        assert!(rules(&project(vec![ing("anything", "prod")]), &[]).is_empty());
+    }
+
+    #[test]
+    fn a_compose_env_ref_must_resolve_to_a_vault_entry_or_an_env_file_key() {
+        let env = |v: &str| json!({"key": "DB_PASS", "value": v, "field_type": "env_var", "description": "env"});
+        let svc = |v: &str| chunk("web", "docker_service", vec![env(v)]);
+        assert_eq!(
+            rules(&project(vec![svc("${NOPE}")]), &["GitHub"]),
+            ["compose-env-ref-unresolved"]
+        );
+        assert!(rules(&project(vec![svc("${GitHub/key}")]), &["GitHub"]).is_empty());
+        assert!(rules(&project(vec![svc("${GITHUB_PROD}")]), &["GitHub"]).is_empty());
+        let envf = chunk("e", "env_file", vec![f("NOPE", "1")]);
+        assert!(rules(&project(vec![svc("${NOPE}"), envf]), &[]).is_empty());
+        assert!(rules(&project(vec![svc("${chunk:x/y}")]), &[]).is_empty());
+        assert!(rules(&project(vec![svc("plain")]), &[]).is_empty());
+    }
+
+    #[test]
+    fn a_pg_host_service_must_share_a_network_with_the_service_that_uses_it() {
+        let pg = chunk("p", "pg_connection", vec![f("host", "db")]);
+        let db = |nets: &str| chunk("db", "docker_service", vec![f("networks", nets)]);
+        let app = |nets: &str| {
+            chunk(
+                "app",
+                "docker_service",
+                vec![f("networks", nets), f("depends_on", "db")],
+            )
+        };
+        assert_eq!(
+            rules(&project(vec![pg.clone(), db("back"), app("front")]), &[]),
+            ["pg-host-network-unreachable"]
+        );
+        assert!(rules(
+            &project(vec![pg.clone(), db("back"), app("front, back")]),
+            &[]
+        )
+        .is_empty());
+        // Both on the implicit default network.
+        assert!(rules(&project(vec![pg.clone(), db(""), app("")]), &[]).is_empty());
+        // Nothing uses the db: nothing to say.
+        let idle = chunk("idle", "docker_service", vec![f("networks", "front")]);
+        assert!(rules(&project(vec![pg.clone(), db("back"), idle]), &[]).is_empty());
+        // network_mode opts out of comparison.
+        let host_mode = chunk(
+            "app",
+            "docker_service",
+            vec![f("network_mode", "host"), f("depends_on", "db")],
+        );
+        assert!(rules(&project(vec![pg, db("back"), host_mode]), &[]).is_empty());
+    }
+
+    #[test]
+    fn findings_carry_names_and_never_field_values_that_could_be_secret() {
+        let pg = chunk(
+            "p",
+            "pg_connection",
+            vec![
+                f("host", "db"),
+                json!({"key":"password","value":"hunter2-SECRET","field_type":"secret"}),
+            ],
+        );
+        let db = chunk("db", "docker_service", vec![f("networks", "back")]);
+        let app = chunk(
+            "app",
+            "docker_service",
+            vec![f("networks", "front"), f("depends_on", "db")],
+        );
+        let out = check_project(&project(vec![pg, db, app]), &[]);
+        let text =
+            serde_json::to_string(&out.iter().map(Finding::to_json).collect::<Vec<_>>()).unwrap();
+        assert!(!text.contains("hunter2"));
+    }
+
+    #[test]
+    fn nested_allowed_ips_are_a_warning_and_a_default_route_is_not_reported() {
+        let peer = |n: &str, ips: &str| chunk(n, "wg_peer", vec![f("AllowedIPs", ips)]);
+        assert_eq!(
+            rules(
+                &project(vec![peer("a", "10.0.0.0/24"), peer("b", "10.0.0.7/32")]),
+                &[]
+            ),
+            ["wireguard-allowed-ips-overlap"]
+        );
+        // Disjoint networks, and a catch-all beside host routes, are fine.
+        assert!(rules(
+            &project(vec![peer("a", "10.0.0.0/24"), peer("b", "10.0.1.7/32")]),
+            &[]
+        )
+        .is_empty());
+        assert!(rules(
+            &project(vec![peer("a", "0.0.0.0/0"), peer("b", "10.0.0.7/32")]),
+            &[]
+        )
+        .is_empty());
+        // Different families never nest.
+        assert!(rules(
+            &project(vec![peer("a", "10.0.0.0/8"), peer("b", "fd00::1/128")]),
+            &[]
+        )
+        .is_empty());
+        // IPv6 nesting.
+        assert_eq!(
+            rules(
+                &project(vec![peer("a", "fd00::/64"), peer("b", "fd00::5/128")]),
+                &[]
+            ),
+            ["wireguard-allowed-ips-overlap"]
+        );
+    }
+
+    #[test]
+    fn a_deployment_must_use_secrets_some_chunk_creates() {
+        let secret = chunk(
+            "app-secrets",
+            "k8s_secret",
+            vec![f("name", "app-secrets"), f("namespace", "prod")],
+        );
+        let dep = |env: &str, mounts: &str, ns: &str| {
+            chunk(
+                "web",
+                "k8s_deployment",
+                vec![
+                    f("secretEnv", env),
+                    f("secretMounts", mounts),
+                    f("namespace", ns),
+                ],
+            )
+        };
+        assert!(rules(
+            &project(vec![
+                secret.clone(),
+                dep("app-secrets", "app-secrets:/etc/a", "prod")
+            ]),
+            &[]
+        )
+        .is_empty());
+        assert_eq!(
+            rules(&project(vec![secret.clone(), dep("gone", "", "prod")]), &[]),
+            ["k8s-deployment-secret-missing"]
+        );
+        assert_eq!(
+            rules(
+                &project(vec![secret.clone(), dep("", "gone:/x", "prod")]),
+                &[]
+            ),
+            ["k8s-deployment-secret-missing"]
+        );
+        // Wrong namespace is a missing Secret.
+        assert_eq!(
+            rules(
+                &project(vec![secret.clone(), dep("app-secrets", "", "default")]),
+                &[]
+            ),
+            ["k8s-deployment-secret-missing"]
+        );
+        // Named twice, reported once. A malformed mount (no path) names nothing.
+        assert_eq!(
+            rules(
+                &project(vec![
+                    secret.clone(),
+                    dep("gone gone", "gone:/x, nopath:", "prod")
+                ]),
+                &[]
+            )
+            .len(),
+            1
+        );
+        // No k8s_secret chunk at all: another manifest set may create it.
+        assert!(rules(&project(vec![dep("gone", "gone:/x", "prod")]), &[]).is_empty());
+    }
+
+    #[test]
+    fn compose_substitution_tokens_anywhere_in_a_service_must_resolve() {
+        let svc = |fields: Vec<Value>| chunk("web", "docker_service", fields);
+        // An image tag reading ${TAG} that nothing sets.
+        assert_eq!(
+            rules(&project(vec![svc(vec![f("image", "app:${TAG}")])]), &[]),
+            ["compose-env-ref-unresolved"]
+        );
+        // Set by an env_file chunk, case-insensitively.
+        let envf = chunk("e", "env_file", vec![f("tag", "1")]);
+        assert!(rules(
+            &project(vec![svc(vec![f("image", "app:${TAG}")]), envf]),
+            &[]
+        )
+        .is_empty());
+        // Defaults, escapes and operators are the author's own fallback.
+        for v in [
+            "app:${TAG:-latest}",
+            "app:${TAG-latest}",
+            "$${TAG}",
+            "app:${TAG:?need it}",
+            "a:${TAG+x}",
+        ] {
+            assert!(
+                rules(&project(vec![svc(vec![f("image", v)])]), &[]).is_empty(),
+                "{v}"
+            );
+        }
+        // Two tokens in one value, one reported per unknown name.
+        assert_eq!(
+            rules(
+                &project(vec![svc(vec![f("command", "run ${A} ${B} ${A}")])]),
+                &[]
+            )
+            .len(),
+            2
+        );
+    }
+
+    #[test]
+    fn a_service_that_reads_the_pg_chunk_by_reference_is_a_consumer() {
+        let pg = chunk("primary", "pg_connection", vec![f("host", "db")]);
+        let db = chunk("db", "docker_service", vec![f("networks", "back")]);
+        let env = json!({"key":"DB","value":"${chunk:primary/host}","field_type":"env_var","description":"env"});
+        let app = chunk("app", "docker_service", vec![f("networks", "front"), env]);
+        let got = rules(&project(vec![pg, db, app]), &[]);
+        assert!(got.contains(&"pg-host-network-unreachable"), "{got:?}");
+    }
+}
