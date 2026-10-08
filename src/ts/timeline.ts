@@ -1,42 +1,10 @@
-/**
- * @file
- * The Secret Timeline tool pane — when every secret was created, when it
- * expires, when it is next due for rotation, and a calendar feed of all three.
- *
- * The vault has always known these dates; nothing ever showed them together.
- * "How old is this key?" was answerable only by expanding a card, and "what
- * lands next quarter?" was not answerable at all.
- *
- * # Two truths this pane is careful about
- *
- * **A missing creation date stays missing.** `created_at` only exists for
- * entries created after the field did, plus those `backfillCreatedAt()` could
- * date from an unambiguous audit row. For the rest this shows "unknown", or
- * "before <date>" when `version_history` proves the entry already existed then.
- * That bound is displayed, never stored — see `earliestEvidence()`.
- *
- * **An exported `.ics` leaves the vault.** It goes to Google Calendar, a phone,
- * a shared work calendar. It carries no secret values and no fingerprints, but
- * it does carry provider names, and "AWS root key" on a shared calendar is a
- * disclosure. The export confirms before writing, and the confirmation says
- * what travels.
- *
- * **The `.ics` bytes are built in exactly one place: `vault-core/src/calendar.rs`,
- * over IPC (`calendar_build_ics`).** There used to be a second implementation
- * here, pinned against the Rust one by a golden fixture — the twin-pair shape
- * every other format in this project uses. It drifted from the design the
- * moment it existed: a format implemented twice is a promise to keep two
- * things in agreement forever, and the promise is cheaper to keep by not
- * making it. The cost is the one the design accepted: exporting needs the
- * desktop app, and `initTimelinePane` says so rather than silently doing
- * nothing in a plain browser.
- */
-
 import { st, earliestEvidence, inTauri, RemoteVaultStore } from './state';
 import type { VaultEntry } from './types';
-import { esc, showToast, showConfirm, clipboardWrite } from './utils';
+import { showToast, showConfirm, clipboardWrite } from './utils';
 import { relativeTime } from './ui-qol';
 import { downloadText } from './import-export';
+import { invokeTauri } from './tauri';
+import { html, setHtml } from './html';
 
 /** Sort orders offered by the pane. */
 type SortKey = 'created-desc' | 'created-asc' | 'expires-asc' | 'provider';
@@ -47,12 +15,7 @@ type SortKey = 'created-desc' | 'created-asc' | 'expires-asc' | 'provider';
  * than by a shared type, since nothing here crosses a type boundary. */
 type EventKind = 'created' | 'expires' | 'rotation';
 
-const invoke = (cmd: string, args?: Record<string, unknown>) =>
-  (
-    window as unknown as {
-      __TAURI__?: { core?: { invoke?: (c: string, a?: unknown) => unknown } };
-    }
-  ).__TAURI__?.core?.invoke?.(cmd, args) as Promise<unknown> | undefined;
+const invoke = invokeTauri;
 
 /**
  * The date a rotation is next due, or null when the entry has no cadence.
@@ -203,35 +166,41 @@ export function renderTimeline(): void {
 
   if (summary) {
     const oldest = dated.map((e) => Date.parse(e.created_at!)).sort((a, b) => a - b)[0];
-    summary.innerHTML =
-      `<strong>${entries.length}</strong> secrets · ` +
-      `<strong>${dated.length}</strong> with a known creation date · ` +
-      `<strong>${expiring.length}</strong> with an expiry · ` +
-      `<strong>${rotating.length}</strong> on a rotation cadence` +
-      (oldest ? ` · oldest dated ${esc(relativeTime(new Date(oldest).toISOString()))}` : '');
+    setHtml(
+      summary,
+      html`<strong>${entries.length}</strong> secrets · <strong>${dated.length}</strong> with a known creation date ·
+        <strong>${expiring.length}</strong> with an expiry · <strong>${rotating.length}</strong> on a
+        rotation cadence${oldest ? ` · oldest dated ${relativeTime(new Date(oldest).toISOString())}` : ''}`,
+    );
   }
 
   if (!rows.length) {
-    body.innerHTML = `<tr><td colspan="5" class="tl-muted" style="padding:16px">No secrets in this vault yet.</td></tr>`;
+    setHtml(
+      body,
+      html`<tr>
+        <td colspan="5" class="tl-muted" style="padding:16px">No secrets in this vault yet.</td>
+      </tr>`,
+    );
     return;
   }
 
-  body.innerHTML = rows
-    .map((e) => {
+  setHtml(
+    body,
+    html`${rows.map((e) => {
       const created = createdCell(e);
       const exp = expiryCell(e);
       const rot = rotationCell(e);
       const label = [e.provider, e.key_id, e.account_name].filter(Boolean).join(' · ');
       const age = created.certainty === 'known' ? relativeTime(e.created_at as string) : '';
-      return `<tr>
-        <td>${esc(label)}</td>
-        <td class="${created.certainty === 'known' ? '' : 'tl-muted'}">${esc(created.text)}</td>
-        <td class="tl-muted">${esc(age)}</td>
-        <td class="${exp.cls}">${esc(exp.text)}</td>
-        <td class="${rot.cls}">${esc(rot.text)}</td>
+      return html`<tr>
+        <td>${label}</td>
+        <td class="${created.certainty === 'known' ? '' : 'tl-muted'}">${created.text}</td>
+        <td class="tl-muted">${age}</td>
+        <td class="${exp.cls}">${exp.text}</td>
+        <td class="${rot.cls}">${rot.text}</td>
       </tr>`;
-    })
-    .join('');
+    })}`,
+  );
 }
 
 /** Builds and downloads the `.ics`, after saying what will be in it. */
@@ -290,24 +259,19 @@ async function renderFeedList(): Promise<void> {
   if (!list || !(st.store instanceof RemoteVaultStore)) return;
   const feeds = await st.store.listCalendarFeeds();
   if (!feeds.length) {
-    list.innerHTML = `<li class="tl-muted">No feeds yet.</li>`;
+    setHtml(list, html`<li class="tl-muted">No feeds yet.</li>`);
     return;
   }
-  list.innerHTML = feeds
-    .map((f) => {
+  setHtml(
+    list,
+    html`${feeds.map((f) => {
       const revoked = !!f.revoked_at;
       const nameCls = revoked ? 'tl-feed-name tl-feed-revoked' : 'tl-feed-name';
       const kinds = Array.isArray(f.kinds) ? f.kinds.join(', ') : '';
-      return `<li>
-        <span class="${nameCls}">${esc(f.name || 'Untitled')} — ${esc(kinds)}</span>
-        ${
-          revoked
-            ? '<span class="tl-muted">revoked</span>'
-            : `<button class="btn btn-ghost btn-sm" type="button" data-action="tl-feed-revoke" data-id="${esc(String(f.id))}">Revoke</button>`
-        }
-      </li>`;
-    })
-    .join('');
+      return html`<li>
+        <span class="${nameCls}">${f.name || 'Untitled'} — ${kinds}</span>${revoked ? html`<span class="tl-muted">revoked</span>` : html`<button class="btn btn-ghost btn-sm" type="button" data-action="tl-feed-revoke" data-id="${String(f.id)}">Revoke</button>`}</li>`;
+    })}`,
+  );
   list.querySelectorAll<HTMLButtonElement>('[data-action="tl-feed-revoke"]').forEach((btn) => {
     btn.onclick = () => void revokeFeed(btn.dataset.id ?? '');
   });
