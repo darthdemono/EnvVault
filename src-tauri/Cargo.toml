@@ -42,6 +42,11 @@ hex               = "=0.4.3"
 # A3: where an export actually lands on disk (write_export_file), rather than
 # a WebKitGTK `<a download>` click the webview has no handler for.
 dirs              = "5"
+
+# Caps Lock from GDK's keymap (A4). Linux only: glib-sys needs pkg-config and the
+# GTK headers, which a Windows build has neither of, and the Windows path of
+# `caps_lock_state` calls user32 directly instead.
+[target.'cfg(target_os = "linux")'.dependencies]
 gtk               = { version = "0.18", default-features = false }
 
 # Deny warnings, per [workspace.lints.rust] at the repo root.
