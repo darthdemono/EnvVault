@@ -84,3 +84,16 @@ describe('secret-types registry', () => {
     expect(maskWholeFor('from_the_future')).toBe(false);
   });
 });
+
+import { LOCAL_SERVICE_PRESETS } from '../src/ts/modals';
+
+describe('local_service presets', () => {
+  it('only name schemes the auth model can send, with a parameter where one is needed', () => {
+    const schemes = new Set(['', 'header', 'basic', 'query', 'cookie']);
+    for (const p of LOCAL_SERVICE_PRESETS) {
+      expect(schemes.has(p.scheme), p.id).toBe(true);
+      if (p.scheme === 'header' || p.scheme === 'query') expect(p.param, p.id).not.toBe('');
+    }
+    expect(new Set(LOCAL_SERVICE_PRESETS.map((p) => p.id)).size).toBe(LOCAL_SERVICE_PRESETS.length);
+  });
+});
