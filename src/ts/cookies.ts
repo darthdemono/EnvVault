@@ -265,6 +265,60 @@ export function toCookieJson(cookies: Cookie[]): string {
   );
 }
 
+/** Playwright storageState; fail rather than silently lose sessionStorage or origin. */
+export function toPlaywrightStorageState(entry: VaultEntry): string {
+  const tokens = entry.storage_tokens ?? [];
+  if (tokens.some((token) => token.storage === 'session')) {
+    throw new Error('Playwright storageState cannot represent sessionStorage tokens');
+  }
+  const origin = (() => {
+    try {
+      const url = new URL(entry.api_url ?? '');
+      return url.protocol === 'http:' || url.protocol === 'https:' ? url : null;
+    } catch {
+      return null;
+    }
+  })();
+  const cookies = cookiesOf(entry).map((cookie) => {
+    const domain = cookie.domain || origin?.hostname;
+    if (!domain) {
+      throw new Error('Playwright storageState needs a session URL or a cookie domain');
+    }
+    return {
+      name: cookie.name,
+      value: cookie.value,
+      domain,
+      path: cookie.path || '/',
+      expires: cookie.expires || -1,
+      httpOnly: !!cookie.http_only,
+      secure: !!cookie.secure,
+      sameSite: 'Lax',
+    };
+  });
+  const localStorage = new Map<string, { name: string; value: string }[]>();
+  for (const token of tokens) {
+    let tokenOrigin: string;
+    try {
+      const url = new URL(token.origin);
+      if (url.protocol !== 'http:' && url.protocol !== 'https:') throw new Error();
+      tokenOrigin = url.origin;
+    } catch {
+      throw new Error(`Invalid storage-token origin: ${token.origin}`);
+    }
+    const values = localStorage.get(tokenOrigin) ?? [];
+    values.push({ name: token.key, value: token.value });
+    localStorage.set(tokenOrigin, values);
+  }
+  return JSON.stringify(
+    {
+      cookies,
+      origins: [...localStorage].map(([o, localStorage]) => ({ origin: o, localStorage })),
+    },
+    null,
+    2,
+  );
+}
+
 /** The cookie name with any `__Host-` / `__Secure-` prefix removed. */
 export function bareCookieName(name: string): string {
   return (name ?? '').replace(COOKIE_PREFIX_RE, '');
