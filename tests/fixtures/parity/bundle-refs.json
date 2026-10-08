@@ -1,0 +1,19 @@
+{
+  "_comment": "${bundle:Name...} reference resolution, asserted from src/ts/chunk-ops.ts and envv-cli/src/refs.rs. Phase 24.1 B-addressing.",
+  "entries": [
+    { "id": "bun-spotify", "provider": "Spotify", "secretType": "bundle", "bundle_primary": "m-web", "api_key": "", "extra_vars": [{ "key": "prefix", "value": ">" }] },
+    { "id": "m-web", "provider": "Spotify web", "bundle_id": "bun-spotify", "bundle_slot": "web", "api_key": "sp_dc_value" },
+    { "id": "m-api", "provider": "Spotify api", "bundle_id": "bun-spotify", "bundle_slot": "api", "api_key": "client-id-1", "api_secret": "client-secret-1" },
+    { "id": "bun-a1", "provider": "Twin", "secretType": "bundle", "api_key": "" },
+    { "id": "bun-a2", "provider": "twin", "secretType": "bundle", "api_key": "" }
+  ],
+  "cases": [
+    { "ref": "bundle:Spotify", "expect": "sp_dc_value", "why": "bare bundle resolves to bundle_primary" },
+    { "ref": "bundle:spotify/web", "expect": "sp_dc_value", "why": "slot resolves to the member's primary; name is case-insensitive" },
+    { "ref": "bundle:Spotify/api/SECRET", "expect": "client-secret-1", "why": "slot/field uses the alias table" },
+    { "ref": "bundle:Spotify/prefix", "expect": ">", "why": "a non-slot name is a bundle-local variable" },
+    { "ref": "bundle:Spotify/nope", "expect": null, "why": "unknown slot and local is unresolved" },
+    { "ref": "bundle:Spotify/api/id", "expect": null, "why": "deny-list still applies to member fields" },
+    { "ref": "bundle:Twin", "expect": null, "why": "two bundles with one name are ambiguous, never a guess" }
+  ]
+}
