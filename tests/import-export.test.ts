@@ -5,7 +5,7 @@
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { st, resetViewState } from '../src/ts/state';
-import { handleFileSelect, parseEnvFile } from '../src/ts/import-export';
+import { handleFileSelect, parseEnvFile, parsePythonAssignments } from '../src/ts/import-export';
 import { getFiltered } from '../src/ts/filters';
 import { loadRealIndexHtml, makeEntry, makeProject, makeVault, resetState } from './helpers';
 
@@ -151,11 +151,36 @@ describe('importing a vault', () => {
   it('leaves the vault untouched when the file is not a vault', async () => {
     const input = document.createElement('input');
     Object.defineProperty(input, 'files', {
-      value: [new File(['{"nope":1}'], 'bad.json', { type: 'application/json' })],
+      value: [new File(['not JSON'], 'bad.json', { type: 'application/json' })],
     });
     handleFileSelect(input);
     await new Promise((r) => setTimeout(r, 50));
     expect(st.vault.api_keys.map((e) => e.provider)).toEqual(['OldKey']);
+  });
+
+  it('imports flat JSON config values into the variable picker', async () => {
+    const input = document.createElement('input');
+    Object.defineProperty(input, 'files', {
+      value: [new File(['{"BOT_TOKEN":"secret","PORT":8080}'], 'bot.json')],
+    });
+    handleFileSelect(input);
+    await new Promise((r) => setTimeout(r, 50));
+    expect(
+      [...document.querySelectorAll('.env-import-name')].map((node) => node.textContent),
+    ).toEqual(['BOT_TOKEN', 'PORT']);
+  });
+
+  it('routes TOML through the native parser and opens the variable picker', async () => {
+    const invoke = vi.fn().mockResolvedValue([['BOT_TOKEN', 'secret']]);
+    (window as unknown as { __TAURI__: unknown }).__TAURI__ = { core: { invoke } };
+    const input = document.createElement('input');
+    Object.defineProperty(input, 'files', {
+      value: [new File(["token = 'secret'"], 'bot.toml', { type: 'application/toml' })],
+    });
+    handleFileSelect(input);
+    await new Promise((r) => setTimeout(r, 50));
+    expect(invoke).toHaveBeenCalledWith('parse_toml_import', { source: "token = 'secret'" });
+    expect(document.querySelector('.env-import-name')?.textContent).toBe('BOT_TOKEN');
   });
 });
 
@@ -195,5 +220,25 @@ describe('parseEnvFile', () => {
 
   it('ignores a line with no equals sign', () => {
     expect(parseEnvFile('JUST_A_NAME\nA=1')).toEqual([{ name: 'A', value: '1' }]);
+  });
+});
+
+describe('parsePythonAssignments', () => {
+  it('imports literal top-level assignments without evaluating Python', () => {
+    expect(
+      parsePythonAssignments(`
+# ignored
+TOKEN = "abc"
+CHANNEL_ID = 123456789012345678
+COLOUR = 0x800000
+FSTRING = f"https://discord.com/{TOKEN}"
+run(TOKEN)
+`),
+    ).toEqual([
+      { name: 'TOKEN', value: 'abc' },
+      { name: 'CHANNEL_ID', value: '123456789012345678' },
+      { name: 'COLOUR', value: '0x800000' },
+      { name: 'FSTRING', value: 'https://discord.com/{TOKEN}' },
+    ]);
   });
 });
