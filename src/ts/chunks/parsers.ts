@@ -8,14 +8,14 @@
  * not understand rather than failing the whole import.
  */
 
-import type { SecretChunk, ChunkField, ChunkFieldType, ChunkType } from '../types';
+import type { SecretChunk, ChunkFieldType, ChunkType } from '../types';
 export function parseApacheConf(text: string): SecretChunk[] {
   const chunks: SecretChunk[] = [];
   const lines = text.split(/\r?\n/);
   let cur: SecretChunk | null = null;
   let depth = 0;
-  let blockType = '';
-  let blockArg = '';
+  let blockType: string;
+  let blockArg: string;
 
   for (const raw of lines) {
     const line = raw.replace(/#.*$/, '').trim();
@@ -51,8 +51,6 @@ export function parseApacheConf(text: string): SecretChunk[] {
       depth = Math.max(0, depth - 1);
       if (depth === 0) {
         cur = null;
-        blockType = '';
-        blockArg = '';
       }
     } else if (cur && depth === 1) {
       const sp = line.split(/\s+/);
