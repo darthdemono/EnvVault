@@ -319,7 +319,7 @@
 }
 
 .seg-control button {
-  flex: 1;
+  flex: 1 0 auto; /* never narrower than its label */
   background: transparent;
   border: none;
   color: var(--text2);
