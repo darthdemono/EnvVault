@@ -12,6 +12,7 @@ import {
   closeSettings,
   applyPanelOrder,
   buildPanelOrderEditor,
+  buildSidebarOrderEditor,
 } from '../src/ts/settings-panel';
 import { loadRealIndexHtml } from './helpers';
 
@@ -150,6 +151,32 @@ describe('buttons inside the settings pane', () => {
     openSettings();
     expect(document.querySelector('.settings-tab[data-stab="remote"]')).toBeNull();
     expect(document.querySelector('.settings-tab-pane[data-spane="remote"]')).toBeNull();
+  });
+});
+
+describe('sidebar order controls', () => {
+  it('starts a WebKit-compatible drag with a transfer payload', () => {
+    openSettings();
+    buildSidebarOrderEditor();
+    const row = document.querySelector<HTMLElement>('#s-sidebar-sections [data-key="price"]')!;
+    const setData = vi.fn();
+    const event = new Event('dragstart', { bubbles: true }) as DragEvent;
+    Object.defineProperty(event, 'dataTransfer', { value: { setData, effectAllowed: '' } });
+    row.dispatchEvent(event);
+    expect(setData).toHaveBeenCalledWith('text/plain', 'price');
+  });
+
+  it('moves a section with Alt+Arrow for keyboard users', () => {
+    openSettings();
+    Settings.set('sidebarSections', ['all', 'price', 'env'] as any);
+    buildSidebarOrderEditor();
+    const button = document.querySelector<HTMLButtonElement>(
+      '#s-sidebar-sections [data-key="env"] [data-action="up"]',
+    )!;
+    button.dispatchEvent(
+      new KeyboardEvent('keydown', { bubbles: true, altKey: true, key: 'ArrowUp' }),
+    );
+    expect(Settings.get('sidebarSections')).toEqual(['all', 'env', 'price']);
   });
 });
 
