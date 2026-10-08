@@ -190,3 +190,18 @@ describe('token overlay', () => {
     expect(document.querySelector('.token-overlay-backdrop')).toBeNull();
   });
 });
+
+describe('strict write scoping toggle (Phase 33.4)', () => {
+  it('turning it on sends set_strict_write for that user', async () => {
+    const users = await import('../src/ts/users');
+    await users.renderUserDetail('u1');
+    const box = document.getElementById('strict-write-user') as HTMLInputElement;
+    expect(box).not.toBeNull();
+    expect(box.checked).toBe(false);
+    box.checked = true;
+    box.dispatchEvent(new Event('change', { bubbles: true }));
+    await new Promise((r) => setTimeout(r, 30));
+    const call = invoked.find((c) => c.cmd === 'set_strict_write');
+    expect(call?.args).toEqual({ subjectKind: 'user', subjectId: 'u1', strict: true });
+  });
+});
