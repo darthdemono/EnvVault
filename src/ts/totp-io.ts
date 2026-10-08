@@ -28,11 +28,9 @@ import { st, inTauri, persist, triggerRender } from './state';
 import { showToast, showConfirm } from './utils';
 import { downloadText } from './import-export';
 import type { VaultEntry } from './types';
+import { invokeTauri } from './tauri';
 
-const invoke = (cmd: string, args?: Record<string, unknown>) =>
-  (
-    window as unknown as { __TAURI__?: { core?: { invoke?: (c: string, a?: unknown) => unknown } } }
-  ).__TAURI__?.core?.invoke?.(cmd, args) as Promise<unknown> | undefined;
+const invoke = invokeTauri;
 
 /** One entry the importer declined, and why. Never carries a secret. */
 export interface SkippedImport {
