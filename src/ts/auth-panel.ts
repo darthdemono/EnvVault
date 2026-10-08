@@ -1,37 +1,6 @@
-/**
- * @file
- * The Authenticator screen — Phase 22.2's dedicated panel.
- *
- * ## Why this exists when the sidebar section already did
- *
- * Phase 22 put the authenticator in a `sidebar-section` inside the Secrets
- * panel and wrote down why: it is a filter over the secrets already in that
- * panel, not a new place to be, and a fifth activity-bar entry would add a
- * second navigation idiom for one feature.
- *
- * **That call is reversed here, deliberately and on request.** What changed is
- * the amount of surface: Phase 22.2 adds three kinds of seed, a counter that a
- * user advances by hand, and a next-code view. A sidebar row is one line high —
- * it can hold a label, a code and a ring, and it cannot hold a kind badge, a
- * counter, an Advance button and a second code without becoming unreadable.
- * Recording the reversal rather than quietly widening the row, because an
- * unwritten reversal is indistinguishable from having forgotten the reasoning.
- *
- * The sidebar section **stays** and is unchanged: it is still the fastest path
- * to one code, and it still filters the grid. This panel is the place you go to
- * manage them.
- *
- * ## What is not here
- *
- * No code generation. There is one HMAC in this project and it is Rust's
- * (`vault-core/src/totp.rs`); this asks over IPC exactly as the card does. And
- * no QR rendering — the CSP allows no external script, and relaxing it in order
- * to draw a *secret* is a poor trade.
- */
-
 import { st, Settings, inTauri, newEntryId } from './state';
 import type { VaultEntry } from './types';
-import { esc, escAttr, showToast, clipboardWrite } from './utils';
+import { showToast, clipboardWrite } from './utils';
 import {
   hasTotp,
   totpParamsOf,
@@ -43,6 +12,7 @@ import {
   type TotpKind,
 } from './totp';
 import { render } from './render';
+import { html, setHtml, type SafeHtml } from './html';
 
 /** Which kinds the panel is showing. Panel-local: it filters nothing else. */
 let kindFilter: 'all' | TotpKind = 'all';
@@ -80,42 +50,43 @@ const KIND_LABEL: Record<TotpKind, string> = {
  * markup — the ticker writes them, so a re-render cannot bake a live code into
  * the document.
  */
-function cardHtml(entry: VaultEntry, showNext: boolean): string {
+function cardHtml(entry: VaultEntry, showNext: boolean): SafeHtml {
   const id = entry.id ?? '';
   const params = totpParamsOf(entry);
   const label = entry.account_name ? `${entry.provider} · ${entry.account_name}` : entry.provider;
   const isHotp = params.kind === 'hotp';
-  return `<article class="auth-card" data-totp-for="${escAttr(id)}"${
-    showNext ? ' data-totp-next="1"' : ''
-  } data-totp-kind="${escAttr(params.kind)}">
+  return html`<article
+    class="auth-card"
+    data-totp-for="${id}"
+    ${showNext ? html` data-totp-next="1"` : ''}
+    data-totp-kind="${params.kind}"
+  >
     <header class="auth-card-head">
-      <span class="auth-card-name">${esc(label)}</span>
-      <span class="auth-kind-badge auth-kind-${escAttr(params.kind)}">${esc(
-        KIND_LABEL[params.kind],
-      )}</span>
+      <span class="auth-card-name">${label}</span>
+      <span class="auth-kind-badge auth-kind-${params.kind}">${KIND_LABEL[params.kind]}</span>
     </header>
-    <button class="auth-code-row" data-action="copy-totp"
-      aria-label="${escAttr('Copy the code for ' + label)}">
-      <span class="totp-code auth-code">— — —</span>
-      ${
-        isHotp
-          ? '<span class="totp-counter auth-counter" aria-hidden="true"></span>'
-          : '<span class="totp-countdown auth-ring"><i class="totp-countdown-fill"></i></span><span class="totp-secs auth-secs" aria-hidden="true"></span>'
-      }
-    </button>
-    <div class="auth-next-row"${showNext ? '' : ' hidden'}>
+    <button
+      class="auth-code-row"
+      data-action="copy-totp"
+      aria-label="${'Copy the code for ' + label}"
+    >
+      <span class="totp-code auth-code">— — —</span>${isHotp ? html`<span class="totp-counter auth-counter" aria-hidden="true"></span>` : html`<span class="totp-countdown auth-ring"><i class="totp-countdown-fill"></i></span><span class="totp-secs auth-secs" aria-hidden="true"></span>`}</button>
+    <div class="auth-next-row" ${showNext ? '' : ' hidden'}>
       <span class="auth-next-label">next</span>
       <span class="totp-next auth-next" hidden></span>
-    </div>
-    ${
+    </div>${
       isHotp
-        ? `<footer class="auth-card-foot">
-             <button class="btn btn-xs" data-auth-advance="${escAttr(id)}"
-               title="Move this seed to its next position. Reading a code never advances it.">Advance</button>
-           </footer>`
+        ? html`<footer class="auth-card-foot">
+            <button
+              class="btn btn-xs"
+              data-auth-advance="${id}"
+              title="Move this seed to its next position. Reading a code never advances it."
+            >
+              Advance
+            </button>
+          </footer>`
         : ''
-    }
-  </article>`;
+    }</article>`;
 }
 
 /**
@@ -147,17 +118,18 @@ export function renderAuthPanel(): void {
   const exportBtn = document.getElementById('auth-export-btn') as HTMLButtonElement | null;
   if (exportBtn) exportBtn.disabled = total === 0;
 
-  grid.innerHTML = rows.map((e) => cardHtml(e, showNext)).join('');
+  setHtml(grid, html`${rows.map((e) => cardHtml(e, showNext))}`);
   if (side) {
-    side.innerHTML = rows
-      .map(
+    setHtml(
+      side,
+      html`${rows.map(
         (e) =>
-          `<button class="auth-side-item" data-auth-focus="${escAttr(e.id ?? '')}">
-             <span class="auth-side-name">${esc(e.provider)}</span>
-             <span class="auth-side-kind">${esc(totpParamsOf(e).kind)}</span>
-           </button>`,
-      )
-      .join('');
+          html`<button class="auth-side-item" data-auth-focus="${e.id ?? ''}">
+            <span class="auth-side-name">${e.provider}</span>
+            <span class="auth-side-kind">${totpParamsOf(e).kind}</span>
+          </button>`,
+      )}`,
+    );
   }
 
   if (rows.length) startTotpTicker();
@@ -258,12 +230,13 @@ function populateAdd2faExisting(): void {
   const sel = document.getElementById('add2fa-existing') as HTMLSelectElement | null;
   if (!sel) return;
   const candidates = (st.vault?.api_keys ?? []).filter((e) => !hasTotp(e));
-  sel.innerHTML = candidates
-    .map((e) => {
+  setHtml(
+    sel,
+    html`${candidates.map((e) => {
       const label = e.account_name ? `${e.provider} · ${e.account_name}` : e.provider;
-      return `<option value="${escAttr(e.id ?? '')}">${esc(label)}</option>`;
-    })
-    .join('');
+      return html`<option value="${e.id ?? ''}">${label}</option>`;
+    })}`,
+  );
 }
 
 /** Live status line under the seed field — valid/invalid, never blocking
