@@ -1,8 +1,4 @@
-/**
- * @file
- * Render: sidebar, project tree, card grid, config view, copy-all button.
- */
-
+import { bundleSuggestions } from './bundle-scope';
 import type {
   VaultEntry,
   SecretType,
@@ -21,8 +17,10 @@ import {
   isSidebarSectionEnabled,
   persist,
   entryId,
+  clearAllFilters,
   saveViewState,
   quoteEnvValue,
+  findNameCollisions,
 } from './state';
 import { getFiltered, sorted, buildProjectTree, getDescendantProjectIds } from './filters';
 import { timeUntil } from './ui-qol';
@@ -31,10 +29,9 @@ import { normalizeRateLimit } from './ratelimit';
 import { poolsOf, poolBadgeInfo } from './pools';
 import { secretTypeLabel } from './secret-types';
 import { hasTotp, startTotpTicker, stopTotpTicker } from './totp';
+import { codeStatus } from './recovery-codes';
 import { renderComposite, renderErrorMessage } from './composite';
 import {
-  esc,
-  escAttr,
   maskKey,
   showToast,
   showConfirm,
@@ -48,7 +45,7 @@ import {
   delSVG,
   dupSVG,
 } from './utils';
-import { TYPE_CONFIG, showDropdown, markAsRotated, openModal } from './modals';
+import { TYPE_CONFIG, showDropdown, openModal } from './modals';
 import {
   renderChunkCard,
   renderDockerServicesCard,
@@ -74,6 +71,8 @@ import {
   pickFileText,
   openChunkEditModal,
   resolveFieldRef,
+  findEntryByRef,
+  isEntryFieldPublic,
   chunkToString,
   buildEnvLinkMatches,
   nginxCertDomains,
@@ -82,20 +81,33 @@ import {
   redundantCertKeyChunkIds,
 } from './chunk-ops';
 import type { EnvLinkMatch } from './chunk-ops';
+import type { ProjectTreeNode } from './filters';
 import { parseEnvFile } from './import-export';
+import { renderBundleComposite, resolveBundleTemplate } from './bundle-scope';
+import { html, raw, setHtml, type SafeHtml, type HtmlValue } from './html';
+import { mountConfigCheck } from './config-check';
+
+// Attribute fragment: a fixed literal, vouched for once rather than at each use.
+const PIN_BADGE = html`<span class="pin-badge" title="Pinned"
+  ><svg width="9" height="9" viewBox="0 0 24 24" fill="currentColor" stroke="none">
+    <path
+      d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24Z"
+    /></svg
+></span>`;
+const ARIA_CURRENT = raw(' aria-current="true"');
 
 // ── Project tree renderers ─────────────────────────────────────────────────
 
 export function renderProjectTree() {
   const container = document.getElementById('category-tree');
   if (!container) return;
-  container.innerHTML = '';
+  setHtml(container, '');
   renderUserCatTree(container, st.vault.user_categories || [], st.vault.api_keys);
 }
 
 function renderProjectList(container: HTMLElement, projects: Project[], all: VaultEntry[]) {
   const tree = buildProjectTree(projects.filter((p) => p.id !== 'Universal'));
-  function renderNode(node: any, depth: number) {
+  function renderNode(node: ProjectTreeNode, depth: number) {
     const nodeId: string = node.virtual ? 'virtual:' + node.name : node.id;
     const descendantIds = getDescendantProjectIds(nodeId);
     const count = all.filter(
@@ -115,25 +127,48 @@ function renderProjectList(container: HTMLElement, projects: Project[], all: Vau
       !node.virtual && node.project_type && node.project_type !== 'generic'
         ? // The lookup hits a fixed table, but the fallback prints the raw stored
           // value, which an imported vault controls.
-          ` <span class="badge badge-ptype">${esc(_ptLabels[node.project_type] ?? node.project_type)}</span>`
+          html` <span class="badge badge-ptype"
+            >${_ptLabels[node.project_type] ?? node.project_type}</span
+          >`
         : '';
     const row = document.createElement('div');
     row.className = 'sidebar-cat-row';
     row.style.paddingLeft = `${depth * 14}px`;
     if (node.virtual) {
-      row.innerHTML = `
-        <button class="sidebar-item${isActive ? ' active' : ''}"${isActive ? ' aria-current="true"' : ''} data-project-id="${escAttr(nodeId)}" style="color:var(--text3)">
-          <span class="sidebar-label" style="font-weight:600;font-size:10.5px;text-transform:uppercase;letter-spacing:.06em">${esc(displayName)}</span>
+      setHtml(
+        row,
+        html` <button
+          class="sidebar-item${isActive ? ' active' : ''}"
+          ${isActive ? ARIA_CURRENT : ''}
+          data-project-id="${nodeId}"
+          style="color:var(--text3)"
+        >
+          <span
+            class="sidebar-label"
+            style="font-weight:600;font-size:10.5px;text-transform:uppercase;letter-spacing:.06em"
+            >${displayName}</span
+          >
           <span class="sidebar-count">${count}</span>
-        </button>`;
+        </button>`,
+      );
     } else {
-      row.innerHTML = `
-        <button class="sidebar-item${isActive ? ' active' : ''}"${isActive ? ' aria-current="true"' : ''} data-project-id="${escAttr(nodeId)}">
-          <span class="sidebar-label">${esc(displayName)}${ptBadge}</span>
-          <span class="sidebar-count">${count}</span>
-        </button>
-        <button class="sidebar-cat-del rename-proj" data-project="${escAttr(node.id)}" title="Rename">✎</button>
-        <button class="sidebar-cat-del delete-proj" data-project="${escAttr(node.id)}" title="Delete">✕</button>`;
+      setHtml(
+        row,
+        html` <button
+            class="sidebar-item${isActive ? ' active' : ''}"
+            ${isActive ? ARIA_CURRENT : ''}
+            data-project-id="${nodeId}"
+          >
+            <span class="sidebar-label">${displayName}${ptBadge}</span>
+            <span class="sidebar-count">${count}</span>
+          </button>
+          <button class="sidebar-cat-del rename-proj" data-project="${node.id}" title="Rename">
+            ✎
+          </button>
+          <button class="sidebar-cat-del delete-proj" data-project="${node.id}" title="Delete">
+            ✕
+          </button>`,
+      );
     }
     container.appendChild(row);
     for (const child of node.children) renderNode(child, depth + 1);
@@ -158,20 +193,9 @@ function renderSidebar() {
   document.getElementById('count-conditional')!.textContent = String(
     all.filter((k) => k.price_type === 'conditional').length,
   );
-  const stTypes: SecretType[] = [
-    'api_key',
-    'password',
-    'env_var',
-    'connection_string',
-    'ssh_key',
-    'certificate',
-    'file_blob',
-  ];
-  stTypes.forEach((stType) => {
-    const el = document.getElementById(`count-st-${stType}`);
-    if (el)
-      el.textContent = String(all.filter((k) => (k.secretType || 'api_key') === stType).length);
-  });
+  // Per-type counts live in the type chip bar now (`renderTypeChipBar`,
+  // called from `renderGrid`) — see the removal note in index.html for why
+  // the old `#count-st-*` sidebar sub-list is gone.
 
   // Environment counts
   const envValues = ['production', 'staging', 'development', 'testing'] as const;
@@ -198,7 +222,7 @@ function renderSidebar() {
   });
 
   const catList = document.getElementById('project-list')!;
-  catList.innerHTML = '';
+  setHtml(catList, '');
   renderProjectList(catList, st.vault.projects || [], all);
 
   renderTagSection(all);
@@ -243,17 +267,23 @@ function renderPoolSection(all: VaultEntry[]) {
   if (section)
     section.style.display = isSidebarSectionEnabled('pools') && pools.size > 0 ? '' : 'none';
 
-  container.innerHTML = [...pools.entries()]
-    .map(([name, members]) => {
+  setHtml(
+    container,
+    html`${[...pools.entries()].map(([name, members]) => {
       const active = st.activePoolFilter === name;
-      return `<div class="sidebar-cat-row">
-        <button class="sidebar-item pool-filter-btn${active ? ' active' : ''}"${active ? ' aria-current="true"' : ''} data-pool="${escAttr(name)}" title="${escAttr(`${members.length} interchangeable credential${members.length === 1 ? '' : 's'}`)}">
-          <span class="pool-chip-sidebar">${esc(name)}</span>
+      return html`<div class="sidebar-cat-row">
+        <button
+          class="sidebar-item pool-filter-btn${active ? ' active' : ''}"
+          ${active ? ARIA_CURRENT : ''}
+          data-pool="${name}"
+          title="${`${members.length} interchangeable credential${members.length === 1 ? '' : 's'}`}"
+        >
+          <span class="pool-chip-sidebar">${name}</span>
           <span class="sidebar-count">${members.length}</span>
         </button>
       </div>`;
-    })
-    .join('');
+    })}`,
+  );
 }
 
 function renderPrefixSection(all: VaultEntry[]) {
@@ -267,43 +297,40 @@ function renderPrefixSection(all: VaultEntry[]) {
   if (section)
     section.style.display = isSidebarSectionEnabled('prefixes') && pfxMap.size > 0 ? '' : 'none';
 
-  container.innerHTML = [...pfxMap.entries()]
-    .sort((a, b) => a[0].localeCompare(b[0]))
-    .map(([pfx, count]) => {
-      const active = st.activePrefixFilter === pfx;
-      return `<div class="sidebar-cat-row">
-        <button class="sidebar-item prefix-filter-btn${active ? ' active' : ''}"${active ? ' aria-current="true"' : ''} data-prefix="${escAttr(pfx)}">
-          <span class="badge badge-prefix">${esc(pfx)}_</span>
-          <span class="sidebar-count">${count}</span>
-        </button>
-      </div>`;
-    })
-    .join('');
+  setHtml(
+    container,
+    html`${[...pfxMap.entries()]
+      .sort((a, b) => a[0].localeCompare(b[0]))
+      .map(([pfx, count]) => {
+        const active = st.activePrefixFilter === pfx;
+        return html`<div class="sidebar-cat-row">
+          <button
+            class="sidebar-item prefix-filter-btn${active ? ' active' : ''}"
+            ${active ? ARIA_CURRENT : ''}
+            data-prefix="${pfx}"
+          >
+            <span class="badge badge-prefix">${pfx}_</span>
+            <span class="sidebar-count">${count}</span>
+          </button>
+        </div>`;
+      })}`,
+  );
 }
-
-/** Human labels for the chip bar and the health scan's type badges (Phase
- * 24.2). Falls back to the raw string — a newer build's type is still
- * filterable/readable in an older one, just unlabelled. */
-export const TYPE_CHIP_LABELS: Record<string, string> = {
-  api_key: 'API Key',
-  password: 'Password',
-  certificate: 'Certificate',
-  env_var: 'Env Var',
-  connection_string: 'Connection',
-  ssh_key: 'SSH Key',
-  file_blob: 'File',
-  cookie: 'Web Session',
-  composite: 'Composite',
-  bundle: 'Bundle',
-};
 
 /**
  * The multi-toggle type chip bar above the grid (Phase 24.2).
  *
- * One chip per `SecretType` actually present, plus two virtual chips — 2FA
- * (carries a stored authenticator seed) and Pool (key-pool membership) —
- * neither of which is a `secretType` value on its own. OR-combined within the
- * bar, ANDed with every other active filter in `getFiltered()`.
+ * One chip per `SecretType` actually present, plus one virtual chip — 2FA
+ * (carries a stored authenticator seed), which is not a `secretType` value on
+ * its own. OR-combined within the bar, ANDed with every other active filter
+ * in `getFiltered()`.
+ *
+ * **Deliberately no "Pool" chip.** Key-pool membership already has its own
+ * sidebar section (`#sidebar-section-pools`, `activePoolFilter`) — the chip
+ * bar's whole reason to exist is covering what the sidebar does not (every
+ * secret type, and 2FA now that the old Authenticator sidebar section is
+ * gone). Adding a Pool chip here would be the exact same redundant-overlap
+ * this bar was built to remove from the sidebar, just in the other direction.
  *
  * Counts are computed over the **whole vault**, matching the sidebar's own
  * price/type counters — narrowing them by the currently active chips would
@@ -316,40 +343,43 @@ function renderTypeChipBar(all: VaultEntry[]) {
 
   const byType = new Map<string, number>();
   let totpCount = 0;
-  let poolCount = 0;
   for (const k of all) {
     const t = k.secretType || 'api_key';
     byType.set(t, (byType.get(t) ?? 0) + 1);
     if (k.totp_secret && k.totp_secret.trim() !== '') totpCount++;
-    if (typeof k.pool === 'string' && k.pool.trim() !== '') poolCount++;
   }
 
   // Bundle members (fields exist since Phase 24.1 step 2, no card yet) are a
   // real type on the entry — no special-casing needed here.
   const chips: { key: string; label: string; count: number }[] = [...byType.entries()]
     .sort((a, b) => b[1] - a[1])
-    .map(([type, count]) => ({ key: type, label: TYPE_CHIP_LABELS[type] ?? type, count }));
+    .map(([type, count]) => ({ key: type, label: secretTypeLabel(type), count }));
   if (totpCount) chips.push({ key: '__totp', label: '2FA', count: totpCount });
-  if (poolCount) chips.push({ key: '__pool', label: 'Pool', count: poolCount });
 
   // Nothing to choose between: one type, no seeds, no pools. A chip bar with a
   // single always-on chip is a control that cannot do anything.
   if (chips.length < 2) {
     bar.style.display = 'none';
-    bar.innerHTML = '';
+    setHtml(bar, '');
     return;
   }
 
   bar.style.display = '';
-  bar.innerHTML = chips
-    .map(({ key, label, count }) => {
+  setHtml(
+    bar,
+    html`${chips.map(({ key, label, count }) => {
       const active = st.activeTypeChips.has(key);
-      return `<button type="button" class="type-chip${active ? ' active' : ''}" aria-pressed="${active}" data-chip="${escAttr(key)}">
-        <span class="type-chip-label">${esc(label)}</span>
+      return html`<button
+        type="button"
+        class="type-chip${active ? ' active' : ''}"
+        aria-pressed="${active}"
+        data-chip="${key}"
+      >
+        <span class="type-chip-label">${label}</span>
         <span class="type-chip-count">${count}</span>
       </button>`;
-    })
-    .join('');
+    })}`,
+  );
 }
 
 function renderTagSection(all: VaultEntry[]) {
@@ -368,19 +398,25 @@ function renderTagSection(all: VaultEntry[]) {
   if (section)
     section.style.display = isSidebarSectionEnabled('tags') && tagMap.size > 0 ? '' : 'none';
 
-  container.innerHTML = [...tagMap.entries()]
-    .sort((a, b) => a[0].localeCompare(b[0]))
-    .map(([tag, count]) => {
-      const active = st.activeTagFilter === tag;
-      const style = tagColor(tag);
-      return `<div class="sidebar-cat-row">
-        <button class="sidebar-item tag-filter-btn${active ? ' active' : ''}"${active ? ' aria-current="true"' : ''} data-tag="${escAttr(tag)}">
-          <span class="tag-chip-sidebar" style="${style}">${esc(tag)}</span>
-          <span class="sidebar-count">${count}</span>
-        </button>
-      </div>`;
-    })
-    .join('');
+  setHtml(
+    container,
+    html`${[...tagMap.entries()]
+      .sort((a, b) => a[0].localeCompare(b[0]))
+      .map(([tag, count]) => {
+        const active = st.activeTagFilter === tag;
+        const style = tagColor(tag);
+        return html`<div class="sidebar-cat-row">
+          <button
+            class="sidebar-item tag-filter-btn${active ? ' active' : ''}"
+            ${active ? ARIA_CURRENT : ''}
+            data-tag="${tag}"
+          >
+            <span class="tag-chip-sidebar" style="${style}">${tag}</span>
+            <span class="sidebar-count">${count}</span>
+          </button>
+        </div>`;
+      })}`,
+  );
 }
 
 // The Authenticator *sidebar section* that used to live here was removed in
@@ -427,19 +463,42 @@ function renderUserCatTree(container: HTMLElement, cats: string[], all: VaultEnt
     row.className = 'sidebar-cat-row';
     row.style.paddingLeft = `${indent}px`;
     if (!node.real) {
-      row.innerHTML = `
-        <button class="sidebar-item${isActive ? ' active' : ''}"${isActive ? ' aria-current="true"' : ''} data-filter-type="category" data-filter-value="${escAttr(node.name)}" style="color:var(--text3)">
-          <span class="sidebar-label" style="font-weight:600;font-size:10.5px;text-transform:uppercase;letter-spacing:.06em">${esc(displayName)}</span>
+      setHtml(
+        row,
+        html` <button
+          class="sidebar-item${isActive ? ' active' : ''}"
+          ${isActive ? ARIA_CURRENT : ''}
+          data-filter-type="category"
+          data-filter-value="${node.name}"
+          style="color:var(--text3)"
+        >
+          <span
+            class="sidebar-label"
+            style="font-weight:600;font-size:10.5px;text-transform:uppercase;letter-spacing:.06em"
+            >${displayName}</span
+          >
           <span class="sidebar-count">${count}</span>
-        </button>`;
+        </button>`,
+      );
     } else {
-      row.innerHTML = `
-        <button class="sidebar-item${isActive ? ' active' : ''}"${isActive ? ' aria-current="true"' : ''} data-filter-type="category" data-filter-value="${escAttr(node.name)}">
-          <span class="sidebar-label">${esc(displayName)}</span>
-          <span class="sidebar-count">${count}</span>
-        </button>
-        <button class="sidebar-cat-del rename-cat" data-category="${escAttr(node.name)}" title="Rename">✎</button>
-        <button class="sidebar-cat-del delete-cat" data-category="${escAttr(node.name)}" title="Delete">✕</button>`;
+      setHtml(
+        row,
+        html` <button
+            class="sidebar-item${isActive ? ' active' : ''}"
+            ${isActive ? ARIA_CURRENT : ''}
+            data-filter-type="category"
+            data-filter-value="${node.name}"
+          >
+            <span class="sidebar-label">${displayName}</span>
+            <span class="sidebar-count">${count}</span>
+          </button>
+          <button class="sidebar-cat-del rename-cat" data-category="${node.name}" title="Rename">
+            ✎
+          </button>
+          <button class="sidebar-cat-del delete-cat" data-category="${node.name}" title="Delete">
+            ✕
+          </button>`,
+      );
     }
     container.appendChild(row);
     for (const child of node.children) renderCatNode(child, depth + 1);
@@ -505,7 +564,52 @@ function diffAndStashCopy(chunk: SecretChunk, snapshot: Record<string, string>) 
   }
   chunk.last_copied_snapshot = snapshot;
   chunk.last_copied_at = new Date().toISOString();
-  persist();
+  void persist();
+}
+
+/**
+ * "3 Spotify entries — bundle them?" Suggested, never automatic: one banner for
+ * the largest undismissed provider group, above the grid. Dismissal is per
+ * provider and persisted in settings.
+ */
+function renderBundleSuggestion(grid: HTMLElement): void {
+  let banner = document.getElementById('bundle-suggest');
+  const pick = Settings.get('groupBundles')
+    ? bundleSuggestions(st.vault.api_keys, Settings.get('dismissedBundleSuggestions') ?? []).sort(
+        (a, b) => b.entries.length - a.entries.length,
+      )[0]
+    : undefined;
+  if (!pick) {
+    banner?.remove();
+    return;
+  }
+  if (!banner) {
+    banner = document.createElement('div');
+    banner.id = 'bundle-suggest';
+    banner.className = 'bundle-suggest';
+    banner.setAttribute('role', 'status');
+    grid.parentElement?.insertBefore(banner, grid);
+  }
+  setHtml(
+    banner,
+    html`<span>${pick.entries.length} ${pick.provider} entries belong together. Bundle them?</span>
+      <button
+        type="button"
+        class="btn btn-ghost btn-sm"
+        data-action="bundle-suggest-accept"
+        data-provider="${pick.provider}"
+      >
+        Bundle them
+      </button>
+      <button
+        type="button"
+        class="btn btn-ghost btn-sm"
+        data-action="bundle-suggest-dismiss"
+        data-provider="${pick.provider}"
+      >
+        Not now
+      </button>`,
+  );
 }
 
 export function renderGrid() {
@@ -513,14 +617,28 @@ export function renderGrid() {
   renderTypeChipBar(st.vault.api_keys || []);
   const items = sorted(getFiltered());
   const grid = document.getElementById('card-grid')!;
+  const validBundleIds = new Set(
+    st.vault.api_keys
+      .filter((entry) => entry.secretType === 'bundle' && entry.id)
+      .map((entry) => entry.id!),
+  );
   // Derived here rather than only flipped on click: lock, import and vault
   // switch all reset st.allExpanded, and the button was left reading
   // "Collapse All" with nothing expanded.
   const expandBtn = document.getElementById('expand-all-btn');
   if (expandBtn) expandBtn.textContent = st.allExpanded ? 'Collapse All' : 'Expand All';
+  const secretCount = items.filter((entry) => entry.secretType !== 'bundle').length;
+  const visibleBundleIds = new Set<string>();
+  for (const entry of items) {
+    if (entry.secretType === 'bundle' && entry.id) visibleBundleIds.add(entry.id);
+    else if (entry.bundle_id && validBundleIds.has(entry.bundle_id))
+      visibleBundleIds.add(entry.bundle_id);
+  }
+  const bundleCount = visibleBundleIds.size;
   document.getElementById('result-count')!.textContent =
-    `${items.length} secret${items.length !== 1 ? 's' : ''}`;
+    `${secretCount} secret${secretCount !== 1 ? 's' : ''}${bundleCount ? ` · ${bundleCount} bundle${bundleCount !== 1 ? 's' : ''}` : ''}`;
   applyGridSettings();
+  renderBundleSuggestion(grid);
   // A2 (2026-09-14): the sidebar Authenticator section used to own the
   // ticker's start/stop; removing it left nothing driving the ticker for the
   // per-card 2FA row. The card grid is now what decides whether a seed is on
@@ -528,15 +646,96 @@ export function renderGrid() {
   if (items.some(hasTotp)) startTotpTicker();
   else stopTotpTicker();
   if (!items.length) {
-    grid.innerHTML = `<div class="empty-state"><svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg><p>No secrets found</p><small>${st.searchQ ? 'Try a different search' : 'Add a secret or import a backup'}</small></div>`;
+    setHtml(
+      grid,
+      html`<div class="empty-state">
+        <svg
+          width="40"
+          height="40"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.5"
+        >
+          <rect x="3" y="11" width="18" height="11" rx="2" />
+          <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+        </svg>
+        <p>No secrets found</p>
+        <small>${st.searchQ ? 'Try a different search' : 'Add a secret or import a backup'}</small>
+      </div>`,
+    );
     return;
   }
-  grid.innerHTML = '';
+  setHtml(grid, '');
   // One pass to map entry -> array position. `indexOf` per card made rendering
   // O(n²), which is invisible at 100 entries and very visible at a few thousand.
   const posOf = new Map<VaultEntry, number>();
   st.vault.api_keys.forEach((e, i) => posOf.set(e, i));
   const idxOf = (e: VaultEntry) => posOf.get(e) ?? -1;
+  if (Settings.get('groupBundles') && validBundleIds.size > 0) {
+    const bundles = new Map(
+      st.vault.api_keys.filter((e) => e.secretType === 'bundle' && e.id).map((e) => [e.id!, e]),
+    );
+    const consumed = new Set<string>();
+    const allMembers = new Map<string, VaultEntry[]>();
+    for (const member of st.vault.api_keys) {
+      const bundleId = member.bundle_id;
+      if (bundleId && bundles.has(bundleId)) {
+        const list = allMembers.get(bundleId) ?? [];
+        list.push(member);
+        allMembers.set(bundleId, list);
+      }
+    }
+    const fullPoolsOf = poolsOf(st.vault);
+    const plainPools = poolsOf({
+      api_keys: items.filter(
+        (e) => e.secretType !== 'bundle' && !(e.bundle_id && bundles.has(e.bundle_id)),
+      ),
+    });
+    const consumedPools = new Set<string>();
+    let animIdx = 0;
+    for (const entry of items) {
+      const bundleId = entry.secretType === 'bundle' ? entry.id : entry.bundle_id;
+      const bundle = bundleId ? bundles.get(bundleId) : undefined;
+      if (!bundle?.id) {
+        // A vault with one bundle used to stop collapsing pools altogether: this
+        // branch returns before the pool branch below ever runs, so every pooled
+        // key showed as its own card (found by the Phase 32.1 probe, which never
+        // saw a pool card in a vault that also held a bundle).
+        const poolName = typeof entry.pool === 'string' ? entry.pool.trim() : '';
+        const poolMembers = poolName ? plainPools.get(poolName) : undefined;
+        if (Settings.get('groupPools') && poolName && poolMembers && poolMembers.length >= 2) {
+          if (consumedPools.has(poolName)) continue;
+          consumedPools.add(poolName);
+          const partialMatch =
+            !!st.searchQ && poolMembers.length < (fullPoolsOf.get(poolName)?.length ?? 0);
+          grid.appendChild(buildPoolCard(poolName, poolMembers, idxOf, animIdx++, partialMatch));
+          continue;
+        }
+        grid.appendChild(buildCard(entry, idxOf(entry), animIdx++));
+        continue;
+      }
+      if (consumed.has(bundle.id)) continue;
+      consumed.add(bundle.id);
+      const visibleMembers = (allMembers.get(bundle.id) ?? []).filter((m) => items.includes(m));
+      const partial =
+        !items.includes(bundle) && visibleMembers.length < (allMembers.get(bundle.id)?.length ?? 0);
+      const shownMembers = items.includes(bundle)
+        ? (allMembers.get(bundle.id) ?? [])
+        : visibleMembers;
+      grid.appendChild(
+        buildBundleCard(
+          bundle,
+          shownMembers,
+          idxOf,
+          animIdx++,
+          partial,
+          allMembers.get(bundle.id) ?? [],
+        ),
+      );
+    }
+    return;
+  }
   if (Settings.get('groupByType')) {
     const GROUP_ORDER: SecretType[] = [
       'api_key',
@@ -598,6 +797,310 @@ export function renderGrid() {
   }
 }
 
+function buildBundleCard(
+  bundle: VaultEntry,
+  members: VaultEntry[],
+  idxOf: (entry: VaultEntry) => number,
+  animIdx: number,
+  forceExpanded: boolean,
+  scopeMembers: VaultEntry[],
+): HTMLElement {
+  const id = entryId(bundle);
+  const expanded = forceExpanded || st.expandedBundles.has(id);
+  const wrap = document.createElement('div');
+  wrap.className = `pool-card-wrap bundle-card-wrap${expanded ? ' expanded' : ''}`;
+  wrap.dataset.bundle = id;
+  const summary = document.createElement('div');
+  summary.className = 'pool-card-summary';
+  const primary = members.find((m) => m.id === bundle.bundle_primary) ?? members[0];
+  const collisions = findNameCollisions([bundle, ...members]);
+  const projectIds = [...new Set(scopeMembers.flatMap((member) => member.projectIds ?? []))].filter(
+    (projectId) => projectId !== 'Universal',
+  );
+  const projectNames = projectIds.map(
+    (projectId) => st.vault.projects.find((project) => project.id === projectId)?.name ?? projectId,
+  );
+  const categories = [...new Set(scopeMembers.flatMap((member) => member.categories ?? []))].sort();
+  const tags = [...new Set(scopeMembers.flatMap((member) => member.tags ?? []))].sort();
+  const unionChip = (label: string, values: string[]) =>
+    values.length
+      ? html`<span class="bundle-union" title="${`${label}: ${values.join(', ')}`}"
+          >${label}: ${values.slice(0, 3).join(', ')}${values.length > 3 ? ` +${values.length - 3}` : ''}</span
+        >`
+      : '';
+  setHtml(
+    summary,
+    html`
+      <button
+        type="button"
+        class="pool-card-expand"
+        data-action="bundle-toggle"
+        data-bundle="${id}"
+        aria-expanded="${expanded}"
+        title="${expanded ? 'Collapse' : 'Expand'} bundle"
+      >
+        ▸
+      </button>
+      <button
+        type="button"
+        class="btn btn-ghost btn-sm bundle-bulk-select"
+        data-action="bundle-bulk-toggle"
+        data-bundle="${id}"
+      >
+        Select visible members
+      </button>
+      <span class="pool-card-icon" aria-hidden="true">▣</span>
+      <span class="pool-card-name">${bundle.provider}</span>
+      <span class="pool-card-badge">bundle: ${members.length}</span>${collisions.length ? html`<span class="badge badge-warning bundle-collision" title="${collisions.map((collision) => `${collision.name}: ${collision.sources.map((source) => `${source.entry.provider}/${source.role || 'value'}`).join(', ')}`).join('\n')}">${collisions.length} name collision${collisions.length === 1 ? '' : 's'}</span>` : ''}
+      ${unionChip('Projects', projectNames)}${unionChip('Categories', categories)}${unionChip('Tags', tags)}
+      <button
+        type="button"
+        class="btn btn-ghost btn-sm"
+        data-action="edit"
+        data-idx="${idxOf(bundle)}"
+      >
+        Edit
+      </button>${primary ? html`<button type="button" class="btn btn-ghost btn-sm" data-action="copy-field" data-value="${primary.api_key || primary.api_secret || ''}">Copy ${primary.bundle_slot || primary.provider}</button>` : ''}
+      <button
+        type="button"
+        class="btn btn-ghost btn-sm"
+        data-action="bundle-export"
+        data-bundle="${id}"
+      >
+        Export all…
+      </button>
+      <button
+        type="button"
+        class="btn btn-ghost btn-sm"
+        data-action="bundle-dissolve"
+        data-bundle="${id}"
+      >
+        Dissolve
+      </button>
+      <button
+        type="button"
+        class="btn btn-ghost btn-sm"
+        data-action="bundle-delete-all"
+        data-bundle="${id}"
+      >
+        Delete bundle and members
+      </button>
+    `,
+  );
+  wrap.appendChild(summary);
+  const body = document.createElement('div');
+  body.className = 'pool-card-members';
+  body.hidden = !expanded;
+  if (bundle.extra_vars?.length) {
+    const locals = document.createElement('section');
+    locals.className = 'bundle-local-vars';
+    locals.setAttribute('aria-label', 'Bundle variables');
+    setHtml(
+      locals,
+      html`${bundle.extra_vars.map((v) => {
+        const resolved =
+          v.kind === 'template'
+            ? resolveBundleTemplate(bundle, scopeMembers, v.value, [], (reference) => {
+                const result = resolveFieldRef(`\${${reference}}`, true);
+                if (result.resolved === null) return null;
+                const slash = reference.indexOf('/');
+                const entry = findEntryByRef(slash < 0 ? reference : reference.slice(0, slash));
+                const isPublic = entry
+                  ? slash < 0
+                    ? entry.primary_public === true
+                    : isEntryFieldPublic(entry, reference.slice(slash + 1))
+                  : false;
+                return { value: result.resolved, secret: !isPublic };
+              })
+            : null;
+        const display = resolved
+          ? resolved.ok
+            ? resolved.value.secret || (v.public !== true && v.secret !== false)
+              ? maskKey(resolved.value.value)
+              : resolved.value.value
+            : html`<span class="text-warning" title="${resolved.error.kind}"
+                >Unresolved:
+                ${resolved.error.kind === 'unresolved' ? resolved.error.reference : resolved.error.kind === 'cycle' ? resolved.error.path.join(' → ') : resolved.error.kind === 'depth' ? resolved.error.reference : resolved.error.message}</span
+              >`
+          : v.secret || (v.public !== true && v.secret !== false)
+            ? maskKey(v.value)
+            : v.value;
+        return html`<div class="key-row">
+          <div class="key-label">${v.key}</div>
+          <div class="key-value">${display}
+            <button
+              type="button"
+              class="btn btn-ghost btn-sm"
+              data-action="bundle-var-remove"
+              data-bundle="${id}"
+              data-key="${v.key}"
+              aria-label="Remove ${v.key}"
+            >
+              ×
+            </button>
+          </div>
+        </div>`;
+      })}`,
+    );
+    body.appendChild(locals);
+  }
+  const sortedMembers = members
+    .slice()
+    .sort((a, b) => (a.bundle_order ?? 0) - (b.bundle_order ?? 0));
+  const activeMemberId =
+    sortedMembers.find((member) => member.id === st.bundleSlotTabs[id])?.id ??
+    sortedMembers.find((member) => member.id === bundle.bundle_primary)?.id ??
+    sortedMembers[0]?.id;
+  if (sortedMembers.length > 3) {
+    const tabs = document.createElement('div');
+    tabs.className = 'bundle-slot-tabs';
+    tabs.setAttribute('role', 'tablist');
+    tabs.setAttribute('aria-label', `${bundle.provider} slots`);
+    setHtml(
+      tabs,
+      html`${sortedMembers.map((member) => {
+        const selected = member.id === activeMemberId;
+        const label = member.version || member.bundle_slot || member.provider;
+        return html`<button
+          type="button"
+          role="tab"
+          class="btn btn-ghost btn-sm${selected ? ' active' : ''}"
+          data-action="bundle-slot-tab"
+          data-bundle="${id}"
+          data-member="${entryId(member)}"
+          aria-selected="${selected}"
+        >${label}</button>`;
+      })}`,
+    );
+    body.appendChild(tabs);
+  }
+  const consumedPools = new Set<string>();
+  const visibleMembers =
+    sortedMembers.length > 3
+      ? sortedMembers.filter((member) => member.id === activeMemberId)
+      : sortedMembers;
+  visibleMembers.forEach((member, i) => {
+    const poolName = typeof member.pool === 'string' ? member.pool.trim() : '';
+    const poolMembers = poolName
+      ? sortedMembers.filter((candidate) => candidate.pool?.trim() === poolName)
+      : [];
+    if (poolName && poolMembers.length > 1) {
+      if (consumedPools.has(poolName)) return;
+      consumedPools.add(poolName);
+      body.appendChild(buildPoolCard(poolName, poolMembers, idxOf, animIdx + i, false));
+      return;
+    }
+    const section = document.createElement('section');
+    section.className = 'bundle-member';
+    section.dataset.slot = member.bundle_slot || '';
+    const title = document.createElement('h4');
+    title.textContent = member.bundle_slot || member.provider;
+    const controls = document.createElement('div');
+    controls.className = 'bundle-member-controls';
+    setHtml(
+      controls,
+      html` <button
+          type="button"
+          class="btn btn-ghost btn-sm"
+          data-action="bundle-primary"
+          data-bundle="${id}"
+          data-member="${entryId(member)}"
+        >${bundle.bundle_primary === member.id ? 'Primary ✓' : 'Set primary'}</button>
+        <button
+          type="button"
+          class="btn btn-ghost btn-sm"
+          data-action="bundle-rename-slot"
+          data-bundle="${id}"
+          data-member="${entryId(member)}"
+          data-slot="${member.bundle_slot || ''}"
+        >
+          Rename slot
+        </button>
+        <button
+          type="button"
+          class="btn btn-ghost btn-sm"
+          data-action="bundle-order"
+          data-bundle="${id}"
+          data-member="${entryId(member)}"
+          data-direction="-1"
+          aria-label="Move ${member.bundle_slot || member.provider} up"
+        >
+          ↑
+        </button>
+        <button
+          type="button"
+          class="btn btn-ghost btn-sm"
+          data-action="bundle-order"
+          data-bundle="${id}"
+          data-member="${entryId(member)}"
+          data-direction="1"
+          aria-label="Move ${member.bundle_slot || member.provider} down"
+        >
+          ↓
+        </button>
+        <button
+          type="button"
+          class="btn btn-ghost btn-sm"
+          data-action="bundle-remove-member"
+          data-bundle="${id}"
+          data-member="${entryId(member)}"
+        >
+          Remove
+        </button>`,
+    );
+    section.append(title, controls, buildCard(member, idxOf(member), animIdx + i));
+    body.appendChild(section);
+  });
+  const controls = document.createElement('div');
+  controls.className = 'bundle-actions';
+  setHtml(
+    controls,
+    html` <button
+        type="button"
+        class="btn btn-ghost btn-sm"
+        data-action="bundle-add-member"
+        data-bundle="${id}"
+      >
+        Add member
+      </button>
+      <button
+        type="button"
+        class="btn btn-ghost btn-sm"
+        data-action="bundle-add-var"
+        data-bundle="${id}"
+      >
+        Add variable
+      </button>
+      <button
+        type="button"
+        class="btn btn-ghost btn-sm"
+        data-action="bundle-add-project"
+        data-bundle="${id}"
+      >
+        Assign project to members
+      </button>
+      <button
+        type="button"
+        class="btn btn-ghost btn-sm"
+        data-action="bundle-add-category"
+        data-bundle="${id}"
+      >
+        Assign category to members
+      </button>
+      <button
+        type="button"
+        class="btn btn-ghost btn-sm"
+        data-action="bundle-add-tag"
+        data-bundle="${id}"
+      >
+        Assign tag to members
+      </button>`,
+  );
+  body.appendChild(controls);
+  wrap.appendChild(body);
+  return wrap;
+}
+
 /**
  * One card for every entry sharing a key pool (Phase 24.2), collapsed by
  * default. Copy takes the pool cursor (`envv pool next`), which is why it is
@@ -624,15 +1127,43 @@ function buildPoolCard(
   const badgeId = `pool-card-badge-${animIdx}`;
   const summary = document.createElement('div');
   summary.className = 'pool-card-summary';
-  summary.innerHTML = `
-    <button type="button" class="pool-card-expand" data-action="pool-card-toggle" data-pool="${escAttr(poolName)}" aria-expanded="${expanded}" title="${expanded ? 'Collapse' : 'Expand'} pool">
-      <svg class="pool-card-chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 18 15 12 9 6"/></svg>
-    </button>
-    <span class="pool-card-icon" aria-hidden="true">⧉</span>
-    <span class="pool-card-name">${esc(poolName)}</span>
-    <span class="pool-card-badge" id="${escAttr(badgeId)}">pool: ${members.length}</span>
-    <button type="button" class="btn btn-ghost btn-sm pool-card-copy" data-action="pool-card-copy" data-pool="${escAttr(poolName)}" title="Copy the next available key and advance the cursor">Copy</button>
-  `;
+  setHtml(
+    summary,
+    html`
+      <button
+        type="button"
+        class="pool-card-expand"
+        data-action="pool-card-toggle"
+        data-pool="${poolName}"
+        aria-expanded="${expanded}"
+        title="${expanded ? 'Collapse' : 'Expand'} pool"
+      >
+        <svg
+          class="pool-card-chevron"
+          width="12"
+          height="12"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2.5"
+        >
+          <polyline points="9 18 15 12 9 6" />
+        </svg>
+      </button>
+      <span class="pool-card-icon" aria-hidden="true">⧉</span>
+      <span class="pool-card-name">${poolName}</span>
+      <span class="pool-card-badge" id="${badgeId}">pool: ${members.length}</span>
+      <button
+        type="button"
+        class="btn btn-ghost btn-sm pool-card-copy"
+        data-action="pool-card-copy"
+        data-pool="${poolName}"
+        title="Copy the next available key and advance the cursor"
+      >
+        Copy
+      </button>
+    `,
+  );
   wrap.appendChild(summary);
 
   const body = document.createElement('div');
@@ -664,17 +1195,21 @@ function buildCard(entry: VaultEntry, idx: number, animIdx: number): HTMLElement
   // server, or out of an imported backup — none of which this app controls.
   // `key_id` on the next line was already escaped for exactly that reason.
   const envBadge = entry.environment
-    ? `<span class="badge badge-env" data-env="${escAttr(entry.environment)}">${esc(entry.environment)}</span>`
+    ? html`<span class="badge badge-env" data-env="${entry.environment}"
+        >${entry.environment}</span
+      >`
     : '';
   const keyIdBadge = entry.key_id
-    ? `<span class="badge badge-keyid">${esc(entry.key_id)}</span>`
+    ? html`<span class="badge badge-keyid">${entry.key_id}</span>`
     : '';
   const typeBadge =
     entry.secretType && entry.secretType !== 'api_key'
-      ? `<span class="badge badge-keyid">${esc(secretTypeLabel(entry.secretType))}</span>`
+      ? html`<span class="badge badge-keyid">${secretTypeLabel(entry.secretType)}</span>`
       : '';
   const compromisedBadge = entry.compromised
-    ? `<span class="badge badge-compromised" title="Marked compromised — rotate immediately">⚠ LEAKED</span>`
+    ? html`<span class="badge badge-compromised" title="Marked compromised — rotate immediately"
+        >⚠ LEAKED</span
+      >`
     : '';
   const rotBadge = (() => {
     // A browser session shows no rotation badge (E13): rotating one means
@@ -685,7 +1220,11 @@ function buildCard(entry: VaultEntry, idx: number, animIdx: number): HTMLElement
     const dueMs = new Date(entry.last_rotated_at).getTime() + entry.rotation_days * 86_400_000;
     if (dueMs >= Date.now()) return '';
     const overdue = Math.floor((Date.now() - dueMs) / 86_400_000);
-    return `<span class="badge badge-rotation-due" title="Rotation cadence ${escAttr(entry.rotation_days)}d, overdue ${overdue}d">⟳ rotate</span>`;
+    return html`<span
+      class="badge badge-rotation-due"
+      title="Rotation cadence ${entry.rotation_days}d, overdue ${overdue}d"
+      >⟳ rotate</span
+    >`;
   })();
   // Per-field mask state: default from settings, overridden by any explicit
   // reveal the user has toggled. Previously this read the setting alone, so a
@@ -706,21 +1245,69 @@ function buildCard(entry: VaultEntry, idx: number, animIdx: number): HTMLElement
   // A composite's "value" is its rendered template, never `api_key` (which it
   // does not use). Rendered here, once, rather than in the template string
   // below, so a render error shows as text instead of breaking card markup.
+  const bundleParent = entry.bundle_id
+    ? st.vault.api_keys.find(
+        (candidate) => candidate.id === entry.bundle_id && candidate.secretType === 'bundle',
+      )
+    : undefined;
+  const resolveGlobal = (reference: string) => {
+    const result = resolveFieldRef(`\${${reference}}`, true);
+    if (result.resolved === null) return null;
+    const slash = reference.indexOf('/');
+    const sourceEntry = findEntryByRef(slash < 0 ? reference : reference.slice(0, slash));
+    const isPublic = sourceEntry
+      ? slash < 0
+        ? sourceEntry.primary_public === true
+        : isEntryFieldPublic(sourceEntry, reference.slice(slash + 1))
+      : false;
+    return { value: result.resolved, secret: !isPublic };
+  };
+  const scopedComposite =
+    entry.secretType === 'composite' && bundleParent
+      ? renderBundleComposite(
+          bundleParent,
+          st.vault.api_keys.filter((candidate) => candidate.bundle_id === bundleParent.id),
+          entry.composite_template || '',
+          entry.extra_vars || [],
+          entry.composite_kind || 'link',
+          resolveGlobal,
+        )
+      : null;
   const compositeRendered =
-    entry.secretType === 'composite'
+    entry.secretType === 'composite' && !bundleParent
       ? renderComposite(
           entry.composite_template || '',
           (entry.extra_vars || []).map((v) => ({ key: v.key, value: v.value })),
           entry.composite_kind || 'link',
         )
       : null;
-  const compositeValue = compositeRendered
-    ? compositeRendered.ok
-      ? compositeRendered.result.text
+  const compositeValue = scopedComposite
+    ? scopedComposite.ok
+      ? scopedComposite.value
       : ''
-    : '';
-  const compositeError =
-    compositeRendered && !compositeRendered.ok ? renderErrorMessage(compositeRendered.error) : '';
+    : compositeRendered
+      ? compositeRendered.ok
+        ? compositeRendered.result.text
+        : ''
+      : '';
+  const compositeError = scopedComposite
+    ? scopedComposite.ok
+      ? ''
+      : scopedComposite.error.kind === 'unresolved'
+        ? `Unresolved: ${scopedComposite.error.reference}`
+        : scopedComposite.error.kind === 'cycle'
+          ? `Cycle: ${scopedComposite.error.path.join(' → ')}`
+          : scopedComposite.error.kind === 'depth'
+            ? `Depth limit at ${scopedComposite.error.reference}`
+            : scopedComposite.error.kind === 'invalid'
+              ? scopedComposite.error.message
+              : renderErrorMessage(scopedComposite.error)
+    : compositeRendered && !compositeRendered.ok
+      ? renderErrorMessage(compositeRendered.error)
+      : '';
+  const compositeMask = scopedComposite?.ok ? (scopedComposite.secret ? hasMask : false) : hasMask;
+  const compositeActive = entry.secretType === 'composite';
+  const compositeOk = scopedComposite?.ok ?? compositeRendered?.ok ?? false;
   const secretMasked = masked('secret');
   const envFmt = Settings.get('defaultExportFormat');
   const envLabel = envFmt === 'yaml' ? 'YAML' : '.env';
@@ -741,16 +1328,16 @@ function buildCard(entry: VaultEntry, idx: number, animIdx: number): HTMLElement
   card.dataset.idx = String(idx);
 
   // Only http/https URLs are rendered as links — blocks javascript: and data: URIs.
-  const safeUrl = (raw: string | null | undefined): string => {
-    if (!raw) return '';
-    const trimmed = raw.trim();
+  const safeUrl = (url: string | null | undefined): SafeHtml | string => {
+    if (!url) return '';
+    const trimmed = url.trim();
     if (/^https?:\/\//i.test(trimmed))
-      return `<a href="${esc(trimmed)}" target="_blank" rel="noopener noreferrer">${esc(trimmed)}</a>`;
-    return esc(trimmed); // render as plain text if not http/https
+      return html`<a href="${trimmed}" target="_blank" rel="noopener noreferrer">${trimmed}</a>`;
+    return trimmed; // render as plain text if not http/https
   };
 
-  const metaRows: [string, string][] = [];
-  if (entry.version) metaRows.push(['Version', esc(entry.version)]);
+  const metaRows: [string, HtmlValue][] = [];
+  if (entry.version) metaRows.push(['Version', entry.version]);
   // Normalised rather than read straight off the entry: this card may be
   // rendering data written by an older build that only had the free-text field,
   // by a remote server, or by a restored backup. Every branch below escapes —
@@ -760,19 +1347,19 @@ function buildCard(entry: VaultEntry, idx: number, animIdx: number): HTMLElement
   if (rl.rate_limit_count != null && rl.rate_limit_period) {
     metaRows.push([
       'Rate Limit',
-      `${esc(rl.rate_limit_count)} <span class="meta-unit">per ${esc(rl.rate_limit_period)}</span>`,
+      html`${rl.rate_limit_count} <span class="meta-unit">per ${rl.rate_limit_period}</span>`,
     ]);
   } else if (rl.rate_limit_note) {
     // A limit nobody could express as a number and a window. Shown as the user
     // wrote it, because that text is the only description of it that exists.
-    metaRows.push(['Rate Limit', esc(rl.rate_limit_note)]);
+    metaRows.push(['Rate Limit', rl.rate_limit_note]);
   }
-  if (entry.purpose) metaRows.push(['Purpose', esc(entry.purpose)]);
-  if (entry.pool) metaRows.push(['Key Pool', esc(entry.pool)]);
-  if (entry.expires_at) metaRows.push(['Expires', esc(entry.expires_at)]);
+  if (entry.purpose) metaRows.push(['Purpose', entry.purpose]);
+  if (entry.pool) metaRows.push(['Key Pool', entry.pool]);
+  if (entry.expires_at) metaRows.push(['Expires', entry.expires_at]);
   if (entry.api_url) metaRows.push(['API URL', safeUrl(entry.api_url)]);
   if (entry.callback_url) metaRows.push(['Callback', safeUrl(entry.callback_url)]);
-  if (entry.details) metaRows.push(['Details', esc(entry.details)]);
+  if (entry.details) metaRows.push(['Details', entry.details]);
 
   // Reverse "used by" — chunk fields that reference this entry via ${ref}.
   const uses = [
@@ -790,10 +1377,11 @@ function buildCard(entry: VaultEntry, idx: number, animIdx: number): HTMLElement
       })
       .map(
         (u) =>
-          `<span class="usedby-badge" title="${escAttr(`${u.chunk} · ${u.field}`)}">${esc(u.project)} · ${esc(u.field)}</span>`,
-      )
-      .join('');
-    metaRows.push(['Used by', `<div class="usedby-row">${chips}</div>`]);
+          html`<span class="usedby-badge" title="${`${u.chunk} · ${u.field}`}"
+            >${u.project} · ${u.field}</span
+          >`,
+      );
+    metaRows.push(['Used by', html`<div class="usedby-row">${chips}</div>`]);
   }
 
   const projectBadges =
@@ -803,88 +1391,374 @@ function buildCard(entry: VaultEntry, idx: number, animIdx: number): HTMLElement
         const proj = st.vault.projects.find((p) => p.id === pid);
         if (!proj) return '';
         const leaf = proj.name.includes('/') ? proj.name.split('/').pop()! : proj.name;
-        return `<span class="badge badge-keyid" style="background:var(--accent-dim)" title="${escAttr(proj.name)}">${esc(leaf)}</span>`;
-      })
-      .join('') || '';
+        return html`<span
+          class="badge badge-keyid"
+          style="background:var(--accent-dim)"
+          title="${proj.name}"
+          >${leaf}</span
+        >`;
+      }) ?? '';
 
-  card.innerHTML = `
-    <div class="bulk-checkbox" data-action="bulk-toggle" data-idx="${idx}" role="checkbox" tabindex="0"
-      aria-checked="${st.bulkSelected.has(eid)}" aria-label="${escAttr('Select ' + entry.provider)}"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 20 4 15"/></svg></div>
-    <div class="card-head" data-action="copy-env" data-idx="${idx}">
-      <div class="provider-icon-wrap" data-action="icon" data-idx="${idx}">
-        ${iconHTML(entry.provider, entry.custom_icon)}
+  setHtml(
+    card,
+    html` <div
+        class="bulk-checkbox"
+        data-action="bulk-toggle"
+        data-idx="${idx}"
+        role="checkbox"
+        tabindex="0"
+        aria-checked="${st.bulkSelected.has(eid)}"
+        aria-label="${'Select ' + entry.provider}"
+      >
+        <svg
+          width="12"
+          height="12"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="3"
+        >
+          <polyline points="20 6 9 20 4 15" />
+        </svg>
       </div>
-      <div class="card-meta">
-        <div class="card-provider">
-          <span class="card-provider-name" title="${escAttr(entry.provider)}">${esc(entry.provider)}</span>
-          ${entry.pinned ? `<span class="pin-badge" title="Pinned"><svg width="9" height="9" viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24Z"/></svg></span>` : ''}
-          <span class="badge badge-price" data-price="${escAttr(pt)}">${esc(pt)}</span>
-          ${envBadge}${keyIdBadge}${typeBadge}${expiry}${compromisedBadge}${rotBadge}${entry.env_prefixes?.length ? entry.env_prefixes.map((p) => `<span class="badge badge-prefix" title="Env prefix">${esc(p)}_</span>`).join('') : ''}
+      <div class="card-head" data-action="copy-env" data-idx="${idx}">
+        <div
+          class="provider-icon-wrap"
+          data-action="icon"
+          data-idx="${idx}"
+          role="button"
+          tabindex="0"
+          aria-label="${'Change icon for ' + entry.provider}"
+        >${iconHTML(entry.provider, entry.custom_icon)}</div>
+        <div class="card-meta">
+          <div class="card-provider">
+            <span class="card-provider-name" title="${entry.provider}">${entry.provider}</span>${entry.pinned ? PIN_BADGE : ''}
+            <span class="badge badge-price" data-price="${pt}">${pt}</span>${envBadge}${keyIdBadge}${typeBadge}${expiry}${compromisedBadge}${rotBadge}${entry.env_prefixes?.length ? entry.env_prefixes.map((p) => html`<span class="badge badge-prefix" title="Env prefix">${p}_</span>`) : ''}</div>
+          <div class="card-account">${entry.account_name || entry.username || entry.email || ''}</div>
+          <div class="card-projects">${projectBadges}</div>
         </div>
-        <div class="card-account">${esc(entry.account_name || entry.username || entry.email || '')}</div>
-        <div class="card-projects">${projectBadges}</div>
-      </div>
-      <button class="card-chevron" data-action="toggle" data-idx="${idx}"
-        aria-expanded="${isExp}" aria-label="${escAttr((isExp ? 'Collapse ' : 'Expand ') + entry.provider)}"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg></button>
-    </div>
-    ${entry.api_description ? `<div class="card-apidesc">${esc(entry.api_description)}</div>` : ''}
-    <div class="card-body">
-      <div class="key-section">
-        ${
-          compositeRendered
-            ? compositeRendered.ok
-              ? `<div class="key-row"><div class="key-label">VALUE</div><div class="key-value${hasMask ? '' : ' revealed'}" id="kv-key-${idx}" data-action="copy-field" data-value="${escAttr(compositeValue)}" title="${escAttr(entry.composite_template || '')}">${hasMask ? maskKey(compositeValue) : esc(compositeValue)}</div><div class="key-actions"><button class="icon-btn sm${hasMask ? '' : ' active'}" id="reveal-key-${idx}" data-action="reveal" data-field="key" data-idx="${idx}" data-value="${escAttr(compositeValue)}" aria-pressed="${!hasMask}" aria-label="${escAttr('Reveal value for ' + entry.provider)}">${eyeSVG}</button><button class="icon-btn sm" data-action="copy-field" data-value="${escAttr(compositeValue)}" aria-label="${escAttr('Copy value for ' + entry.provider)}">${copySVG}</button></div></div>
-                 <div class="key-row"><div class="key-label">TEMPLATE</div><div class="key-value revealed mono" style="font-size:11px;opacity:.7" title="${escAttr(entry.composite_template || '')}">${esc(entry.composite_template || '')}</div></div>`
-              : `<div class="key-row"><div class="key-label">VALUE</div><div class="key-value revealed" style="color:var(--danger,#e07070)">${esc(compositeError)}</div></div>
-                 <div class="key-row"><div class="key-label">TEMPLATE</div><div class="key-value revealed mono" style="font-size:11px;opacity:.7">${esc(entry.composite_template || '')}</div></div>`
-            : `<div class="key-row">
-          <div class="key-label">${(TYPE_CONFIG[entry.secretType || 'api_key']?.keyLabel || 'API Key').toUpperCase()}</div>
-          <div class="key-value${hasMask ? '' : ' revealed'}" id="kv-key-${idx}" data-action="copy-field" data-value="${escAttr(entry.api_key)}">${hasMask ? maskKey(entry.api_key) : esc(entry.api_key)}</div>
-          <div class="key-actions">
-            <button class="icon-btn sm${hasMask ? '' : ' active'}" id="reveal-key-${idx}" data-action="reveal" data-field="key" data-idx="${idx}" data-value="${escAttr(entry.api_key)}" aria-pressed="${!hasMask}" aria-label="${escAttr('Reveal value for ' + entry.provider)}">${eyeSVG}</button>
-            <button class="icon-btn sm" data-action="copy-field" data-value="${escAttr(entry.api_key)}" aria-label="${escAttr('Copy value for ' + entry.provider)}">${copySVG}</button>
-          </div>
-        </div>`
+        <button
+          class="card-chevron"
+          data-action="toggle"
+          data-idx="${idx}"
+          aria-expanded="${isExp}"
+          aria-label="${(isExp ? 'Collapse ' : 'Expand ') + entry.provider}"
+        >
+          <svg
+            width="12"
+            height="12"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2.5"
+          >
+            <polyline points="6 9 12 15 18 9" />
+          </svg>
+        </button>
+      </div>${entry.api_description ? html`<div class="card-apidesc">${entry.api_description}</div>` : ''}
+      <div class="card-body">
+        <div class="key-section">${
+          compositeActive
+            ? compositeOk
+              ? html`<div class="key-row">
+                    <div class="key-label">VALUE</div>
+                    <div
+                      class="key-value${compositeMask ? '' : ' revealed'}"
+                      id="kv-key-${idx}"
+                      data-action="copy-field"
+                      data-value="${compositeValue}"
+                      title="${entry.composite_template || ''}"
+                    >${compositeMask ? maskKey(compositeValue) : compositeValue}</div>
+                    <div class="key-actions">
+                      <button
+                        class="icon-btn sm${compositeMask ? '' : ' active'}"
+                        id="reveal-key-${idx}"
+                        data-action="reveal"
+                        data-field="key"
+                        data-idx="${idx}"
+                        data-value="${compositeValue}"
+                        aria-pressed="${!compositeMask}"
+                        aria-label="${'Reveal value for ' + entry.provider}"
+                      >${eyeSVG}</button
+                      ><button
+                        class="icon-btn sm"
+                        data-action="copy-field"
+                        data-value="${compositeValue}"
+                        aria-label="${'Copy value for ' + entry.provider}"
+                      >${copySVG}</button>
+                    </div>
+                  </div>
+                  <div class="key-row">
+                    <div class="key-label">TEMPLATE</div>
+                    <div
+                      class="key-value revealed mono"
+                      style="font-size:11px;opacity:.7"
+                      title="${entry.composite_template || ''}"
+                    >${entry.composite_template || ''}</div>
+                  </div>`
+              : html`<div class="key-row">
+                    <div class="key-label">VALUE</div>
+                    <div class="key-value revealed" style="color:var(--danger,#e07070)">${compositeError}</div>
+                  </div>
+                  <div class="key-row">
+                    <div class="key-label">TEMPLATE</div>
+                    <div class="key-value revealed mono" style="font-size:11px;opacity:.7">${entry.composite_template || ''}</div>
+                  </div>`
+            : html`<div class="key-row">
+                <div class="key-label">${(TYPE_CONFIG[entry.secretType || 'api_key']?.keyLabel || 'API Key').toUpperCase()}</div>
+                <div
+                  class="key-value${hasMask ? '' : ' revealed'}"
+                  id="kv-key-${idx}"
+                  data-action="copy-field"
+                  data-value="${entry.api_key}"
+                >${hasMask ? maskKey(entry.api_key) : entry.api_key}</div>
+                <div class="key-actions">
+                  <button
+                    class="icon-btn sm${hasMask ? '' : ' active'}"
+                    id="reveal-key-${idx}"
+                    data-action="reveal"
+                    data-field="key"
+                    data-idx="${idx}"
+                    data-value="${entry.api_key}"
+                    aria-pressed="${!hasMask}"
+                    aria-label="${'Reveal value for ' + entry.provider}"
+                  >${eyeSVG}</button>
+                  <button
+                    class="icon-btn sm"
+                    data-action="copy-field"
+                    data-value="${entry.api_key}"
+                    aria-label="${'Copy value for ' + entry.provider}"
+                  >${copySVG}</button>
+                </div>
+              </div>`
         }
-        ${entry.api_secret ? `<div class="key-row"><div class="key-label">SECRET</div><div class="key-value${secretMasked ? '' : ' revealed'}" id="kv-secret-${idx}" data-action="copy-field" data-value="${escAttr(entry.api_secret)}">${secretMasked ? maskKey(entry.api_secret) : esc(entry.api_secret)}</div><div class="key-actions"><button class="icon-btn sm${secretMasked ? '' : ' active'}" id="reveal-secret-${idx}" data-action="reveal" data-field="secret" data-idx="${idx}" data-value="${escAttr(entry.api_secret)}" aria-pressed="${!secretMasked}" aria-label="${escAttr('Reveal secret for ' + entry.provider)}">${eyeSVG}</button><button class="icon-btn sm" data-action="copy-field" data-value="${escAttr(entry.api_secret)}" aria-label="${escAttr('Copy secret for ' + entry.provider)}">${copySVG}</button></div></div>` : ''}
+          ${
+            entry.api_secret
+              ? html`<div class="key-row">
+                <div class="key-label">SECRET</div>
+                <div
+                  class="key-value${secretMasked ? '' : ' revealed'}"
+                  id="kv-secret-${idx}"
+                  data-action="copy-field"
+                  data-value="${entry.api_secret}"
+                >${secretMasked ? maskKey(entry.api_secret) : entry.api_secret}</div>
+                <div class="key-actions">
+                  <button
+                    class="icon-btn sm${secretMasked ? '' : ' active'}"
+                    id="reveal-secret-${idx}"
+                    data-action="reveal"
+                    data-field="secret"
+                    data-idx="${idx}"
+                    data-value="${entry.api_secret}"
+                    aria-pressed="${!secretMasked}"
+                    aria-label="${'Reveal secret for ' + entry.provider}"
+                  >${eyeSVG}</button
+                  ><button
+                    class="icon-btn sm"
+                    data-action="copy-field"
+                    data-value="${entry.api_secret}"
+                    aria-label="${'Copy secret for ' + entry.provider}"
+                  >${copySVG}</button>
+                </div>
+              </div>`
+              : ''
+          }
+          ${
+            entry.username
+              ? html`<div class="key-row">
+                <div class="key-label">USERNAME</div>
+                <div class="key-value" data-action="copy-field" data-value="${entry.username}">${entry.username}</div>
+                <button
+                  class="icon-btn sm"
+                  data-action="copy-field"
+                  data-value="${entry.username}"
+                  aria-label="Copy username"
+                >${copySVG}</button>
+              </div>`
+              : ''
+          }
+          ${
+            entry.email
+              ? html`<div class="key-row">
+                <div class="key-label">EMAIL</div>
+                <div class="key-value" data-action="copy-field" data-value="${entry.email}">${entry.email}</div>
+                <button
+                  class="icon-btn sm"
+                  data-action="copy-field"
+                  data-value="${entry.email}"
+                  aria-label="Copy email"
+                >${copySVG}</button>
+              </div>`
+              : ''
+          }
+          ${
+            entry.extra_vars?.some((xv) => xv.key)
+              ? html`<section
+                class="key-group key-vars"
+                role="group"
+                aria-label="${`Variables (${entry.extra_vars.filter((xv) => xv.key).length})`}"
+              >
+                <div class="key-group-title">
+                  Variables (${entry.extra_vars.filter((xv) => xv.key).length})
+                </div>${entry.extra_vars
+                  .filter((xv) => xv.key)
+                  .map((xv) => {
+                    const display = xv.secret ? maskKey(xv.value) : xv.value;
+                    return html`<div class="key-row">
+                      <div class="key-label">${xv.key.toUpperCase()}</div>
+                      <div
+                        class="key-value${xv.secret ? '' : ' revealed'}"
+                        data-action="copy-field"
+                        data-value="${xv.value}"
+                      >${display}</div>
+                      <button
+                        class="icon-btn sm"
+                        data-action="copy-field"
+                        data-value="${xv.value}"
+                        aria-label="${'Copy ' + xv.key}"
+                      >${copySVG}</button>
+                    </div>`;
+                  })}</section>`
+              : ''
+          }
+          ${
+            entry.secretType === 'recovery_codes'
+              ? (() => {
+                  const { total, remaining } = codeStatus(entry);
+                  return html`<div class="key-row">
+                  <div class="key-label">UNUSED</div>
+                  <div class="key-value revealed${remaining <= 2 && total > 0 ? ' key-low' : ''}">${remaining} of ${total}</div>
+                  <button
+                    class="btn btn-ghost btn-sm"
+                    data-action="codes-use"
+                    data-idx="${idx}"
+                    ${remaining ? '' : 'disabled'}
+                  >
+                    Mark next used
+                  </button>
+                </div>`;
+                })()
+              : ''
+          }
+          ${
+            hasTotp(entry)
+              ? html`<section
+                class="key-group key-second-factor"
+                role="group"
+                aria-label="Second factor"
+              >
+                <div class="key-group-title">Second factor</div>
+                <div class="key-row totp-key-row" data-totp-for="${entry.id ?? ''}">
+                  <div class="key-label">2FA</div>
+                  <div class="key-value revealed totp-code" data-action="copy-totp">— — —</div>
+                  <span class="totp-countdown"><i class="totp-countdown-fill"></i></span
+                  ><span class="totp-secs" aria-hidden="true"></span
+                  ><button
+                    class="icon-btn sm"
+                    data-action="copy-totp"
+                    aria-label="${'Copy the authenticator code for ' + entry.provider}"
+                  >${copySVG}</button>
+                </div>
+              </section>`
+              : ''
+          }</div>${entry.scopes?.length ? html`<div class="scopes-row">${entry.scopes.map((s) => html`<span class="scope-pill">${s}</span>`)}</div>` : ''}
         ${
-          hasTotp(entry)
-            ? `<div class="key-row totp-key-row" data-totp-for="${escAttr(entry.id ?? '')}"><div class="key-label">2FA</div><div class="key-value revealed totp-code" data-action="copy-totp">— — —</div><span class="totp-countdown"><i class="totp-countdown-fill"></i></span><span class="totp-secs" aria-hidden="true"></span><button class="icon-btn sm" data-action="copy-totp" aria-label="${escAttr('Copy the authenticator code for ' + entry.provider)}">${copySVG}</button></div>`
+          entry.description
+            ? html`<div class="desc-section">
+              <button class="desc-toggle" data-action="toggle-desc" aria-expanded="false">
+                <svg
+                  width="10"
+                  height="10"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2.5"
+                >
+                  <polyline points="9 18 15 12 9 6" /></svg
+                >General Description
+              </button>
+              <div class="desc-content">${entry.description}</div>
+            </div>`
             : ''
         }
-        ${entry.username ? `<div class="key-row"><div class="key-label">USERNAME</div><div class="key-value" data-action="copy-field" data-value="${escAttr(entry.username)}">${esc(entry.username)}</div><button class="icon-btn sm" data-action="copy-field" data-value="${escAttr(entry.username)}" aria-label="Copy username">${copySVG}</button></div>` : ''}
-        ${entry.email ? `<div class="key-row"><div class="key-label">EMAIL</div><div class="key-value" data-action="copy-field" data-value="${escAttr(entry.email)}">${esc(entry.email)}</div><button class="icon-btn sm" data-action="copy-field" data-value="${escAttr(entry.email)}" aria-label="Copy email">${copySVG}</button></div>` : ''}
-        ${(entry.extra_vars || [])
-          .filter((xv) => xv.key)
-          .map((xv) => {
-            const display = xv.secret ? maskKey(xv.value) : esc(xv.value);
-            return `<div class="key-row"><div class="key-label">${esc(xv.key.toUpperCase())}</div><div class="key-value${xv.secret ? '' : ' revealed'}" data-action="copy-field" data-value="${escAttr(xv.value)}">${display}</div><button class="icon-btn sm" data-action="copy-field" data-value="${escAttr(xv.value)}" aria-label="${escAttr('Copy ' + xv.key)}">${copySVG}</button></div>`;
-          })
-          .join('')}
-      </div>
-      ${entry.scopes?.length ? `<div class="scopes-row">${entry.scopes.map((s) => `<span class="scope-pill">${esc(s)}</span>`).join('')}</div>` : ''}
-      ${entry.description ? `<div class="desc-section"><button class="desc-toggle" data-action="toggle-desc" aria-expanded="false"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 18 15 12 9 6"/></svg>General Description</button><div class="desc-content">${esc(entry.description)}</div></div>` : ''}
-      ${metaRows.length ? `<div class="meta-section">${metaRows.map(([k, v]) => `<div class="meta-row"><span class="meta-key">${k}</span><span class="meta-val">${v}</span></div>`).join('')}</div>` : ''}
-      ${entry.categories?.length ? `<div class="cat-pills">${entry.categories.map((c) => `<span class="cat-pill">${esc(c)}</span>`).join('')}</div>` : ''}
-      ${entry.last_rotated_at ? `<div class="meta-section"><div class="meta-row"><span class="meta-key">Last Rotated</span><span class="meta-val" style="color:var(--text2)">${esc(entry.last_rotated_at)}</span> ${rotationAgeBadge(entry)}</div></div>` : ''}
-    </div>
-    ${entry.tags?.length ? `<div class="card-tags">${entry.tags.map((t) => `<span class="tag-chip-card" style="${tagColor(t)}">${esc(t)}</span>`).join('')}</div>` : ''}
-    <div class="card-foot">
-      <button class="env-copy-btn" id="env-btn-${idx}" data-action="copy-env" data-idx="${idx}" aria-label="${escAttr('Copy ' + entry.provider + ' as ' + envLabel)}">${copySVG}<span class="env-format-badge">${envLabel}</span><span id="env-label-${idx}">${primaryEnvName(entry)}</span></button>
-      <button class="icon-btn sm env-copy-caret" data-action="copy-env-menu" data-idx="${idx}" title="Copy as…" aria-label="${escAttr('Copy ' + entry.provider + ' as…')}" aria-haspopup="true">▾</button>
-      ${
-        // A session has no rotation to record — rotating one means logging in
-        // again in a browser (E13) — so the button is the one that *is*
-        // actionable for it.
-        entry.secretType === 'cookie'
-          ? `<button class="icon-btn sm" data-action="verify" data-idx="${idx}" title="${escAttr(entry.last_verified_at ? 'Last verified ' + entry.last_verified_at : 'Never verified — open the site and confirm you are still signed in')}" aria-label="${escAttr('Mark ' + entry.provider + ' as still signed in')}" style="font-size:11px;gap:3px;">✓</button>`
-          : `<button class="icon-btn sm" data-action="rotate" data-idx="${idx}" title="Mark as rotated" aria-label="${escAttr('Mark ' + entry.provider + ' as rotated')}" style="font-size:11px;gap:3px;">↺</button>`
-      }
-      <button class="icon-btn sm${entry.pinned ? ' pin-btn active' : ' pin-btn'}" data-action="pin" data-idx="${idx}" title="${entry.pinned ? 'Unpin' : 'Pin to top'}" aria-pressed="${!!entry.pinned}" aria-label="${escAttr((entry.pinned ? 'Unpin ' : 'Pin ') + entry.provider)}"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="17" x2="12" y2="22"/><path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24Z"/></svg></button>
-      <button class="icon-btn sm" data-action="duplicate" data-idx="${idx}" title="Duplicate" aria-label="${escAttr('Duplicate ' + entry.provider)}">${dupSVG}</button>
-      <button class="icon-btn sm" data-action="edit" data-idx="${idx}" title="Edit" aria-label="${escAttr('Edit ' + entry.provider)}">${editSVG}</button>
-      <button class="icon-btn sm danger" data-action="delete" data-idx="${idx}" title="Delete" aria-label="${escAttr('Delete ' + entry.provider)}">${delSVG}</button>
-    </div>`;
+        ${metaRows.length ? html`<div class="meta-section">${metaRows.map(([k, v]) => html`<div class="meta-row"><span class="meta-key">${k}</span><span class="meta-val">${v}</span></div>`)}</div>` : ''}
+        ${entry.categories?.length ? html`<div class="cat-pills">${entry.categories.map((c) => html`<span class="cat-pill">${c}</span>`)}</div>` : ''}
+        ${
+          entry.last_rotated_at
+            ? html`<div class="meta-section">
+              <div class="meta-row">
+                <span class="meta-key">Last Rotated</span
+                ><span class="meta-val" style="color:var(--text2)">${entry.last_rotated_at}</span>${rotationAgeBadge(entry)}</div>
+            </div>`
+            : ''
+        }</div>${entry.tags?.length ? html`<div class="card-tags">${entry.tags.map((t) => html`<span class="tag-chip-card" style="${tagColor(t)}">${t}</span>`)}</div>` : ''}
+      <div class="card-foot">
+        <button
+          class="env-copy-btn"
+          id="env-btn-${idx}"
+          data-action="copy-env"
+          data-idx="${idx}"
+          aria-label="${'Copy ' + entry.provider + ' as ' + envLabel}"
+        >${copySVG}<span class="env-format-badge">${envLabel}</span
+          ><span id="env-label-${idx}">${primaryEnvName(entry)}</span>
+        </button>
+        <button
+          class="icon-btn sm env-copy-caret"
+          data-action="copy-env-menu"
+          data-idx="${idx}"
+          title="Copy as…"
+          aria-label="${'Copy ' + entry.provider + ' as…'}"
+          aria-haspopup="true"
+        >
+          ▾
+        </button>${entry.secretType === 'cookie' ? html`<button class="icon-btn sm" data-action="verify" data-idx="${idx}" title="${entry.last_verified_at ? 'Last verified ' + entry.last_verified_at : 'Never verified — open the site and confirm you are still signed in'}" aria-label="${'Mark ' + entry.provider + ' as still signed in'}" style="font-size:11px;gap:3px;">✓</button>` : html`<button class="icon-btn sm" data-action="rotate" data-idx="${idx}" title="Mark as rotated" aria-label="${'Mark ' + entry.provider + ' as rotated'}" style="font-size:11px;gap:3px;">↺</button>`}
+        <button
+          class="icon-btn sm${entry.pinned ? ' pin-btn active' : ' pin-btn'}"
+          data-action="pin"
+          data-idx="${idx}"
+          title="${entry.pinned ? 'Unpin' : 'Pin to top'}"
+          aria-pressed="${!!entry.pinned}"
+          aria-label="${(entry.pinned ? 'Unpin ' : 'Pin ') + entry.provider}"
+        >
+          <svg
+            width="11"
+            height="11"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          >
+            <line x1="12" y1="17" x2="12" y2="22" />
+            <path
+              d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24Z"
+            />
+          </svg>
+        </button>
+        <button
+          class="icon-btn sm"
+          data-action="duplicate"
+          data-idx="${idx}"
+          title="Duplicate"
+          aria-label="${'Duplicate ' + entry.provider}"
+        >${dupSVG}</button>
+        <button
+          class="icon-btn sm"
+          data-action="edit"
+          data-idx="${idx}"
+          title="Edit"
+          aria-label="${'Edit ' + entry.provider}"
+        >${editSVG}</button>
+        <button
+          class="icon-btn sm danger"
+          data-action="delete"
+          data-idx="${idx}"
+          title="Delete"
+          aria-label="${'Delete ' + entry.provider}"
+        >${delSVG}</button>
+      </div>`,
+  );
   return card;
 }
 
@@ -897,12 +1771,12 @@ function getExpiryBorderClass(entry: VaultEntry): string {
   return ' expiry-safe';
 }
 
-function rotationAgeBadge(entry: VaultEntry): string {
+function rotationAgeBadge(entry: VaultEntry): SafeHtml | '' {
   if (!entry.last_rotated_at) return '';
   const days = Math.round((Date.now() - new Date(entry.last_rotated_at).getTime()) / 86400000);
   const cls = days < 30 ? ' fresh' : '';
   const label = days === 0 ? 'today' : days === 1 ? '1d ago' : `${days}d ago`;
-  return `<span class="rotation-age-badge${cls}">${label}</span>`;
+  return html`<span class="rotation-age-badge${cls}">${label}</span>`;
 }
 
 const TAG_COLORS = [
@@ -932,7 +1806,7 @@ function tagColor(tag: string): string {
  * says. That setting exists to tune how far ahead a *long-lived* credential
  * warns; a credential dying within the hour is not a matter of taste.
  */
-function expiryBadge(entry: VaultEntry): string {
+function expiryBadge(entry: VaultEntry): SafeHtml | '' {
   if (!Settings.get('showExpiryWarning') || !entry.expires_at) return '';
   const words = timeUntil(entry.expires_at);
   if (!words) return '';
@@ -940,9 +1814,11 @@ function expiryBadge(entry: VaultEntry): string {
   const then = Date.parse(bareDate ? `${entry.expires_at.trim()}T23:59:59` : entry.expires_at);
   const secs = (then - Date.now()) / 1000;
   if (secs <= 0)
-    return `<span class="badge badge-expiry-expired" title="${escAttr(entry.expires_at)}">${esc(words)}</span>`;
+    return html`<span class="badge badge-expiry-expired" title="${entry.expires_at}"
+      >${words}</span
+    >`;
   if (secs < 86400 || secs / 86400 <= Settings.get('expiryWarningDays'))
-    return `<span class="badge badge-expiry-warn" title="${escAttr(entry.expires_at)}">${esc(words)}</span>`;
+    return html`<span class="badge badge-expiry-warn" title="${entry.expires_at}">${words}</span>`;
   return '';
 }
 
@@ -961,18 +1837,32 @@ function renderConfigView(project: Project) {
 
   const header = document.createElement('div');
   header.className = 'config-view-header';
-  header.innerHTML = `
-    <div class="config-view-header-meta">
-      <span class="config-view-title">${esc(project.name)}</span>
-      <span class="config-type-badge">${esc(typeLabel)}</span>
-      ${project.description ? `<span style="font-size:11px;color:var(--text3)">${esc(project.description)}</span>` : ''}
-    </div>
-    <div class="config-view-header-btns">
-      <button class="btn btn-ghost btn-sm" data-action="import-env-chunk" data-project-id="${escAttr(project.id)}">Import .env</button>
-      ${makeConfigViewHeaderBtns(project)}
-    </div>
-  `;
+  setHtml(
+    header,
+    html`
+      <div class="config-view-header-meta">
+        <span class="config-view-title">${project.name}</span>
+        <span class="config-type-badge">${typeLabel}</span>${project.description ? html`<span style="font-size:11px;color:var(--text3)">${project.description}</span>` : ''}</div>
+      <div class="config-view-header-btns">
+        <button
+          class="btn btn-ghost btn-sm"
+          data-action="import-env-chunk"
+          data-project-id="${project.id}"
+        >
+          Import .env
+        </button>${makeConfigViewHeaderBtns(project)}</div>
+    `,
+  );
   wrapper.appendChild(header);
+
+  // Phase 29: cross-chunk findings, painted when Rust answers.
+  const checkHost = document.createElement('section');
+  checkHost.className = 'config-check';
+  checkHost.hidden = true;
+  checkHost.setAttribute('role', 'region');
+  checkHost.setAttribute('aria-label', 'Config checks');
+  wrapper.appendChild(checkHost);
+  void mountConfigCheck(project, checkHost);
 
   const chunks = project.chunks || [];
   const typeChunks = chunks.filter((c) => c.chunk_type !== 'env_file');
@@ -1039,7 +1929,7 @@ function renderConfigView(project: Project) {
         hdrC.textContent = 'TLS Certificates';
         rightCol.appendChild(hdrC);
         const certWrap = document.createElement('div');
-        certWrap.innerHTML = certDomains.map((d) => renderNginxCertCard(d)).join('');
+        setHtml(certWrap, html`${certDomains.map((d) => renderNginxCertCard(d))}`);
         rightCol.appendChild(certWrap);
         if (redundantIds.size) {
           const cleanup = document.createElement('button');
@@ -1148,440 +2038,371 @@ function renderConfigView(project: Project) {
     wrapper.appendChild(empty);
   }
 
-  grid.innerHTML = '';
+  setHtml(grid, '');
   grid.appendChild(wrapper);
 
-  wrapper.addEventListener('click', async (e) => {
-    const el = (e.target as HTMLElement).closest<HTMLElement>('[data-action]');
-    if (!el) return;
-    const action = el.dataset.action!;
-    const projId = el.dataset.projectId!;
-    const chunkId = el.dataset.chunkId;
+  wrapper.addEventListener('click', (e) => {
+    void (async () => {
+      const el = (e.target as HTMLElement).closest<HTMLElement>('[data-action]');
+      if (!el) return;
+      const action = el.dataset.action!;
+      const projId = el.dataset.projectId!;
+      const chunkId = el.dataset.chunkId;
 
-    if (action === 'chunk-copy') {
-      clipboardWrite(el.dataset.value || '').then(() => showToast('Copied ✓', 'ok', 1500));
-      return;
-    }
-
-    // Auto-linked cert: create a stub certificate entry for a referenced domain.
-    if (action === 'create-cert-stub') {
-      const domain = el.dataset.domain || '';
-      if (!domain) return;
-      ensureCertForDomain(domain, projId);
-      persist();
-      showToast(`Created certificate entry for ${domain} — paste the PEMs`, 'ok');
-      render();
-      return;
-    }
-
-    // Auto-linked cert: open the matched certificate entry in the edit modal.
-    if (action === 'edit-cert-entry') {
-      const provider = el.dataset.provider || '';
-      const idx = st.vault.api_keys.findIndex(
-        (en) => en.secretType === 'certificate' && en.provider === provider,
-      );
-      if (idx < 0) {
-        showToast('Certificate entry not found', 'err');
+      if (action === 'chunk-copy') {
+        void clipboardWrite(el.dataset.value || '').then(() => showToast('Copied ✓', 'ok', 1500));
         return;
       }
-      openModal('Edit Secret', idx);
-      return;
-    }
 
-    // Delete nginx_key chunks that duplicate a shown cert entry (the cert card is canonical).
-    if (action === 'remove-redundant-cert-chunks') {
-      const p = st.vault.projects.find((pr) => pr.id === el.dataset.projectId);
-      if (!p) return;
-      const ids = new Set(redundantCertKeyChunkIds(p));
-      if (!ids.size) return;
-      p.chunks = (p.chunks || []).filter((c) => !ids.has(c.id));
-      persist();
-      showToast(`Removed ${ids.size} duplicate key-file chunk${ids.size > 1 ? 's' : ''}`, 'ok');
-      render();
-      return;
-    }
-
-    // Click a ${ref} badge → jump to the linked vault entry in the secrets panel.
-    if (action === 'jump-ref') {
-      const ref = el.dataset.ref || '';
-      const provPart = ref.includes('/') ? ref.slice(0, ref.indexOf('/')) : ref;
-      let i = st.vault.api_keys.findIndex((en) => en.provider === provPart);
-      if (i < 0 && provPart.includes('_')) {
-        const us = provPart.lastIndexOf('_');
-        const p = provPart.slice(0, us),
-          k = provPart.slice(us + 1);
-        i = st.vault.api_keys.findIndex((en) => en.provider === p && en.key_id === k);
-      }
-      if (i < 0) {
-        showToast(`No vault entry matches "${ref}"`, 'err');
+      // Auto-linked cert: create a stub certificate entry for a referenced domain.
+      if (action === 'create-cert-stub') {
+        const domain = el.dataset.domain || '';
+        if (!domain) return;
+        ensureCertForDomain(domain, projId);
+        void persist();
+        showToast(`Created certificate entry for ${domain} — paste the PEMs`, 'ok');
+        render();
         return;
       }
-      switchPanel('secrets');
-      st.expanded.add(entryId(st.vault.api_keys[i]));
-      render();
-      setTimeout(() => {
-        const cardEl = document.querySelector<HTMLElement>(`#card-grid [data-idx="${i}"]`);
-        cardEl?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-        cardEl?.classList.add('flash-highlight');
-        setTimeout(() => cardEl?.classList.remove('flash-highlight'), 1500);
-      }, 80);
-      return;
-    }
 
-    const proj = st.vault.projects.find((p) => p.id === projId);
-    if (!proj) return;
-
-    if (action === 'edit-chunk') {
-      const chunk = proj.chunks?.find((c) => c.id === chunkId);
-      if (chunk) openChunkEditModal(proj, chunk);
-      return;
-    }
-
-    if (action === 'copy-chunk-full') {
-      const chunk = proj.chunks?.find((c) => c.id === chunkId);
-      if (chunk) {
-        clipboardWrite(chunkToString(chunk)).then(() => showToast('Copied ✓', 'ok', 1500));
-      }
-      return;
-    }
-
-    if (action === 'copy-chunk-raw') {
-      const chunk = proj.chunks?.find((c) => c.id === chunkId);
-      if (chunk) {
-        const envF = chunk.fields.filter(
-          (f) =>
-            f.description === 'env' ||
-            f.field_type === 'env_var' ||
-            chunk.chunk_type === 'env_file',
+      // Auto-linked cert: open the matched certificate entry in the edit modal.
+      if (action === 'edit-cert-entry') {
+        const provider = el.dataset.provider || '';
+        const idx = st.vault.api_keys.findIndex(
+          (en) => en.secretType === 'certificate' && en.provider === provider,
         );
-        const snapshot: Record<string, string> = {};
-        const text = envF
-          .map((f) => {
-            const { resolved } = resolveFieldRef(f.value, false);
-            const v = resolved ?? f.value;
-            snapshot[f.key] = v;
-            return `${f.key}=${v}`;
-          })
-          .join('\n');
-        clipboardWrite(text).then(() => diffAndStashCopy(chunk, snapshot));
-      }
-      return;
-    }
-
-    if (action === 'copy-chunk-env') {
-      const chunk = proj.chunks?.find((c) => c.id === chunkId);
-      if (chunk) {
-        const envF = chunk.fields.filter(
-          (f) => f.description === 'env' || f.field_type === 'env_var',
-        );
-        const snapshot: Record<string, string> = {};
-        const text = envF
-          .map((f) => {
-            const v = resolveFieldRef(f.value, true).resolved ?? f.value;
-            snapshot[f.key] = v;
-            return `${f.key}=${v}`;
-          })
-          .join('\n');
-        clipboardWrite(text).then(() => diffAndStashCopy(chunk, snapshot));
-      }
-      return;
-    }
-
-    if (action === 'delete-chunk') {
-      if (
-        !(await showConfirm(`Delete chunk "${proj.chunks?.find((c) => c.id === chunkId)?.name}"?`))
-      )
+        if (idx < 0) {
+          showToast('Certificate entry not found', 'err');
+          return;
+        }
+        openModal('Edit Secret', idx);
         return;
-      proj.chunks = (proj.chunks || []).filter((c) => c.id !== chunkId);
-      persist();
-      render();
-      return;
-    }
+      }
 
-    if (action === 'chunk-up' || action === 'chunk-down') {
-      const _cks = proj.chunks || [];
-      const _ci = _cks.findIndex((c) => c.id === chunkId);
-      if (_ci < 0) return;
-      if (action === 'chunk-up' && _ci > 0) [_cks[_ci - 1], _cks[_ci]] = [_cks[_ci], _cks[_ci - 1]];
-      if (action === 'chunk-down' && _ci < _cks.length - 1)
-        [_cks[_ci], _cks[_ci + 1]] = [_cks[_ci + 1], _cks[_ci]];
-      proj.chunks = _cks;
-      persist();
-      render();
-      return;
-    }
+      // Delete nginx_key chunks that duplicate a shown cert entry (the cert card is canonical).
+      if (action === 'remove-redundant-cert-chunks') {
+        const p = st.vault.projects.find((pr) => pr.id === el.dataset.projectId);
+        if (!p) return;
+        const ids = new Set(redundantCertKeyChunkIds(p));
+        if (!ids.size) return;
+        p.chunks = (p.chunks || []).filter((c) => !ids.has(c.id));
+        void persist();
+        showToast(`Removed ${ids.size} duplicate key-file chunk${ids.size > 1 ? 's' : ''}`, 'ok');
+        render();
+        return;
+      }
 
-    if (action === 'dup-chunk') {
-      const _src = proj.chunks?.find((c) => c.id === chunkId);
-      if (!_src) return;
-      const _dup = {
-        ..._src,
-        id: crypto.randomUUID(),
-        name: _src.name + ' (copy)',
-        fields: _src.fields.map((f) => ({ ...f })),
-      };
-      if (!proj.chunks) proj.chunks = [];
-      const _ci2 = proj.chunks.findIndex((c) => c.id === chunkId);
-      proj.chunks.splice(_ci2 + 1, 0, _dup);
-      persist();
-      render();
-      showToast(`Duplicated "${_src.name}"`, 'ok');
-      return;
-    }
+      // Click a ${ref} badge → jump to the linked vault entry in the secrets panel.
+      if (action === 'jump-ref') {
+        const ref = el.dataset.ref || '';
+        const provPart = ref.includes('/') ? ref.slice(0, ref.indexOf('/')) : ref;
+        let i = st.vault.api_keys.findIndex((en) => en.provider === provPart);
+        if (i < 0 && provPart.includes('_')) {
+          const us = provPart.lastIndexOf('_');
+          const p = provPart.slice(0, us),
+            k = provPart.slice(us + 1);
+          i = st.vault.api_keys.findIndex((en) => en.provider === p && en.key_id === k);
+        }
+        if (i < 0) {
+          showToast(`No vault entry matches "${ref}"`, 'err');
+          return;
+        }
+        revealEntry(st.vault.api_keys[i]);
+        return;
+      }
 
-    if (action === 'add-wg-peer') {
-      const newPeer = {
-        id: crypto.randomUUID(),
-        name: `Peer ${(proj.chunks || []).filter((c) => c.chunk_type === 'wg_peer').length + 1}`,
-        chunk_type: 'wg_peer' as const,
-        fields: [
-          { key: 'PublicKey', value: '', field_type: 'var' as const },
-          { key: 'AllowedIPs', value: '', field_type: 'var' as const },
-          { key: 'Endpoint', value: '', field_type: 'var' as const },
-          { key: 'PersistentKeepalive', value: '', field_type: 'var' as const },
-          { key: 'PresharedKey', value: '', field_type: 'secret' as const, secret: true },
-        ],
-      };
-      if (!proj.chunks) proj.chunks = [];
-      proj.chunks.push(newPeer);
-      persist();
-      render();
-      return;
-    }
+      const proj = st.vault.projects.find((p) => p.id === projId);
+      if (!proj) return;
 
-    if (action === 'add-docker-service') {
-      const n = (proj.chunks || []).filter((c) => c.chunk_type === 'docker_service').length + 1;
-      if (!proj.chunks) proj.chunks = [];
-      proj.chunks.push({
-        id: crypto.randomUUID(),
-        name: `service-${n}`,
-        chunk_type: 'docker_service',
-        fields: [],
-      });
-      persist();
-      render();
-      return;
-    }
+      if (action === 'edit-chunk') {
+        const chunk = proj.chunks?.find((c) => c.id === chunkId);
+        if (chunk) openChunkEditModal(proj, chunk);
+        return;
+      }
 
-    if (action === 'add-docker-network') {
-      const name = await showPrompt('Network name:', 'my-network');
-      if (!name) return;
-      if (!proj.chunks) proj.chunks = [];
-      const nc = proj.chunks.find((c) => c.chunk_type === 'docker_network');
-      if (nc) {
-        nc.fields.push({ key: name, value: '', field_type: 'var' });
-      } else {
+      if (action === 'copy-chunk-full') {
+        const chunk = proj.chunks?.find((c) => c.id === chunkId);
+        if (chunk) {
+          void clipboardWrite(chunkToString(chunk)).then(() => showToast('Copied ✓', 'ok', 1500));
+        }
+        return;
+      }
+
+      if (action === 'copy-chunk-raw') {
+        const chunk = proj.chunks?.find((c) => c.id === chunkId);
+        if (chunk) {
+          const envF = chunk.fields.filter(
+            (f) =>
+              f.description === 'env' ||
+              f.field_type === 'env_var' ||
+              chunk.chunk_type === 'env_file',
+          );
+          const snapshot: Record<string, string> = {};
+          const text = envF
+            .map((f) => {
+              const { resolved } = resolveFieldRef(f.value, false);
+              const v = resolved ?? f.value;
+              snapshot[f.key] = v;
+              return `${f.key}=${v}`;
+            })
+            .join('\n');
+          void clipboardWrite(text).then(() => diffAndStashCopy(chunk, snapshot));
+        }
+        return;
+      }
+
+      if (action === 'delete-chunk') {
+        if (
+          !(await showConfirm(
+            `Delete chunk "${proj.chunks?.find((c) => c.id === chunkId)?.name}"?`,
+          ))
+        )
+          return;
+        proj.chunks = (proj.chunks || []).filter((c) => c.id !== chunkId);
+        void persist();
+        render();
+        return;
+      }
+
+      if (action === 'chunk-up' || action === 'chunk-down') {
+        const _cks = proj.chunks || [];
+        const _ci = _cks.findIndex((c) => c.id === chunkId);
+        if (_ci < 0) return;
+        // The config view lists chunks grouped by type (the Interface, then the
+        // peers), so a move has to swap with the nearest chunk of the SAME type.
+        // Swapping with a neighbour of another type reorders the stored array and
+        // the exported file while the screen stays exactly as it was: a button
+        // that changed the data and showed nothing (found by the Phase 32.1
+        // probe on wireguard, docker and ssh_config).
+        const step = action === 'chunk-up' ? -1 : 1;
+        let _cj = _ci + step;
+        while (_cj >= 0 && _cj < _cks.length && _cks[_cj].chunk_type !== _cks[_ci].chunk_type)
+          _cj += step;
+        if (_cj < 0 || _cj >= _cks.length) {
+          showToast(step < 0 ? 'Already first of its kind' : 'Already last of its kind', '', 1500);
+          return;
+        }
+        [_cks[_ci], _cks[_cj]] = [_cks[_cj], _cks[_ci]];
+        proj.chunks = _cks;
+        void persist();
+        render();
+        return;
+      }
+
+      if (action === 'dup-chunk') {
+        const _src = proj.chunks?.find((c) => c.id === chunkId);
+        if (!_src) return;
+        const _dup = {
+          ..._src,
+          id: crypto.randomUUID(),
+          name: _src.name + ' (copy)',
+          fields: _src.fields.map((f) => ({ ...f })),
+        };
+        if (!proj.chunks) proj.chunks = [];
+        const _ci2 = proj.chunks.findIndex((c) => c.id === chunkId);
+        proj.chunks.splice(_ci2 + 1, 0, _dup);
+        void persist();
+        render();
+        showToast(`Duplicated "${_src.name}"`, 'ok');
+        return;
+      }
+
+      if (action === 'add-wg-peer') {
+        const newPeer = {
+          id: crypto.randomUUID(),
+          name: `Peer ${(proj.chunks || []).filter((c) => c.chunk_type === 'wg_peer').length + 1}`,
+          chunk_type: 'wg_peer' as const,
+          fields: [
+            { key: 'PublicKey', value: '', field_type: 'var' as const },
+            { key: 'AllowedIPs', value: '', field_type: 'var' as const },
+            { key: 'Endpoint', value: '', field_type: 'var' as const },
+            { key: 'PersistentKeepalive', value: '', field_type: 'var' as const },
+            { key: 'PresharedKey', value: '', field_type: 'secret' as const, secret: true },
+          ],
+        };
+        if (!proj.chunks) proj.chunks = [];
+        proj.chunks.push(newPeer);
+        void persist();
+        render();
+        return;
+      }
+
+      if (action === 'add-docker-service') {
+        const n = (proj.chunks || []).filter((c) => c.chunk_type === 'docker_service').length + 1;
+        if (!proj.chunks) proj.chunks = [];
         proj.chunks.push({
           id: crypto.randomUUID(),
-          name: 'networks',
-          chunk_type: 'docker_network',
-          fields: [{ key: name, value: '', field_type: 'var' }],
+          name: `service-${n}`,
+          chunk_type: 'docker_service',
+          fields: [],
         });
+        void persist();
+        render();
+        return;
       }
-      persist();
-      render();
-      return;
-    }
 
-    if (action === 'add-docker-volume') {
-      const name = await showPrompt('Volume name:', 'my-volume');
-      if (!name) return;
-      if (!proj.chunks) proj.chunks = [];
-      const vc = proj.chunks.find((c) => c.chunk_type === 'docker_volume');
-      if (vc) {
-        vc.fields.push({ key: name, value: '', field_type: 'var' });
-      } else {
-        proj.chunks.push({
-          id: crypto.randomUUID(),
-          name: 'volumes',
-          chunk_type: 'docker_volume',
-          fields: [{ key: name, value: '', field_type: 'var' }],
-        });
+      if (action === 'add-docker-network') {
+        const name = await showPrompt('Network name:', 'my-network');
+        if (!name) return;
+        if (!proj.chunks) proj.chunks = [];
+        const nc = proj.chunks.find((c) => c.chunk_type === 'docker_network');
+        if (nc) {
+          nc.fields.push({ key: name, value: '', field_type: 'var' });
+        } else {
+          proj.chunks.push({
+            id: crypto.randomUUID(),
+            name: 'networks',
+            chunk_type: 'docker_network',
+            fields: [{ key: name, value: '', field_type: 'var' }],
+          });
+        }
+        void persist();
+        render();
+        return;
       }
-      persist();
-      render();
-      return;
-    }
 
-    if (action === 'export-wg') {
-      const conf = exportWireGuard(proj);
-      showDropdown(el, [
-        {
-          label: 'Copy wg0.conf',
-          fn: () => clipboardWrite(conf).then(() => showToast('Copied ✓', 'ok')),
-        },
-        {
-          label: 'Download wg0.conf',
-          // A3: was a blob-anchor click with no download handler behind it in
-          // Tauri — `saveFile` actually writes the bytes now.
-          fn: () =>
-            void saveFile(conf, `${proj.name}.conf`).then((res) =>
-              showToast(
-                res.ok
-                  ? res.path
-                    ? `Downloaded to ${res.path}`
-                    : 'Downloaded'
-                  : `Failed: ${res.error}`,
-                res.ok ? 'ok' : 'error',
-              ),
-            ),
-        },
-      ]);
-      return;
-    }
-
-    if (action === 'export-docker') {
-      const { yaml, envFile } = exportDockerCompose(proj);
-      showDropdown(el, [
-        {
-          label: 'Copy YAML',
-          fn: () => clipboardWrite(yaml).then(() => showToast('Copied YAML ✓', 'ok')),
-        },
-        {
-          label: 'Copy .env',
-          fn: () => clipboardWrite(envFile).then(() => showToast('Copied .env ✓', 'ok')),
-        },
-        {
-          label: 'Download YAML',
-          // A3: `saveFile` writes real bytes; the old blob-anchor click had no
-          // download handler behind it in Tauri's webview.
-          fn: () =>
-            void saveFile(yaml, 'docker-compose.yml').then((res) =>
-              showToast(
-                res.ok
-                  ? res.path
-                    ? `Downloaded to ${res.path}`
-                    : 'Downloaded'
-                  : `Failed: ${res.error}`,
-                res.ok ? 'ok' : 'error',
-              ),
-            ),
-        },
-        {
-          label: 'Download .env',
-          fn: () =>
-            void saveFile(envFile, `${proj.name}.env`).then((res) =>
-              showToast(
-                res.ok
-                  ? res.path
-                    ? `Downloaded to ${res.path}`
-                    : 'Downloaded'
-                  : `Failed: ${res.error}`,
-                res.ok ? 'ok' : 'error',
-              ),
-            ),
-        },
-      ]);
-      return;
-    }
-
-    if (action === 'export-docker-services') {
-      const yaml = exportServicesSection(proj);
-      if (yaml) clipboardWrite(yaml).then(() => showToast('Services YAML copied ✓', 'ok', 1800));
-      else showToast('No services to copy', '', 1500);
-      return;
-    }
-
-    if (action === 'import-wg') {
-      const doImportWg = async (text: string) => {
-        const parsed = parseWgConf(text);
-        if (!parsed.length) {
-          showToast('No WireGuard sections found', 'err');
-          return;
+      if (action === 'add-docker-volume') {
+        const name = await showPrompt('Volume name:', 'my-volume');
+        if (!name) return;
+        if (!proj.chunks) proj.chunks = [];
+        const vc = proj.chunks.find((c) => c.chunk_type === 'docker_volume');
+        if (vc) {
+          vc.fields.push({ key: name, value: '', field_type: 'var' });
+        } else {
+          proj.chunks.push({
+            id: crypto.randomUUID(),
+            name: 'volumes',
+            chunk_type: 'docker_volume',
+            fields: [{ key: name, value: '', field_type: 'var' }],
+          });
         }
-        if (
-          proj.chunks?.length &&
-          !(await showConfirm(
-            `Replace ${proj.chunks.length} existing chunk(s) with ${parsed.length} imported sections?`,
-          ))
-        )
-          return;
-        proj.chunks = parsed;
-        persist();
+        void persist();
         render();
-        showToast(`Imported ${parsed.length} sections ✓`, 'ok');
-      };
-      showDropdown(el, [
-        {
-          label: 'Import from file',
-          fn: () => pickFileText('text/plain,.conf', (text) => doImportWg(text)),
-        },
-        {
-          label: 'Paste wg0.conf text…',
-          fn: async () => {
-            const text = await showPromptLarge('Paste wg0.conf contents:', '');
-            if (text) doImportWg(text);
+        return;
+      }
+
+      if (action === 'export-wg') {
+        const conf = exportWireGuard(proj);
+        showDropdown(el, [
+          {
+            label: 'Copy wg0.conf',
+            fn: () => clipboardWrite(conf).then(() => showToast('Copied ✓', 'ok')),
           },
-        },
-      ]);
-      return;
-    }
-
-    if (action === 'import-docker') {
-      const doImportDocker = async (text: string) => {
-        const parsed = parseDockerCompose(text);
-        if (!parsed.length) {
-          showToast('No services/networks/volumes found', 'err');
-          return;
-        }
-        if (
-          proj.chunks?.length &&
-          !(await showConfirm(
-            `Replace ${proj.chunks.length} existing chunk(s) with ${parsed.length} imported chunks?`,
-          ))
-        )
-          return;
-        proj.chunks = parsed;
-        persist();
-        render();
-        showToast(`Imported ${parsed.length} chunks ✓`, 'ok');
-      };
-      showDropdown(el, [
-        {
-          label: 'Import from file',
-          fn: () => pickFileText('text/plain,text/yaml,.yaml,.yml', (text) => doImportDocker(text)),
-        },
-        {
-          label: 'Paste YAML…',
-          fn: async () => {
-            const text = await showPromptLarge('Paste docker-compose.yml contents:', '');
-            if (text) doImportDocker(text);
+          {
+            label: 'Download wg0.conf',
+            // A3: was a blob-anchor click with no download handler behind it in
+            // Tauri — `saveFile` actually writes the bytes now.
+            fn: () =>
+              void saveFile(conf, `${proj.name}.conf`).then((res) =>
+                showToast(
+                  res.ok
+                    ? res.path
+                      ? `Downloaded to ${res.path}`
+                      : 'Downloaded'
+                    : `Failed: ${res.error}`,
+                  res.ok ? 'ok' : 'error',
+                ),
+              ),
           },
-        },
-      ]);
-      return;
-    }
+        ]);
+        return;
+      }
 
-    if (action === 'import-ssh') {
-      pickFileText('', async (text) => {
-        const parsed = parseSshConfig(text);
-        if (!parsed.length) {
-          showToast('No Host blocks found in file', 'err');
-          return;
-        }
-        if (
-          proj.chunks?.length &&
-          !(await showConfirm(
-            `Replace ${proj.chunks.length} existing chunk(s) with ${parsed.length} imported host blocks?`,
-          ))
-        )
-          return;
-        proj.chunks = parsed;
-        persist();
-        render();
-        showToast(`Imported ${parsed.length} host blocks ✓`, 'ok');
-      });
-      return;
-    }
+      if (action === 'export-docker') {
+        const { yaml, envFile } = exportDockerCompose(proj);
+        showDropdown(el, [
+          {
+            label: 'Copy YAML',
+            fn: () => clipboardWrite(yaml).then(() => showToast('Copied YAML ✓', 'ok')),
+          },
+          {
+            label: 'Copy .env',
+            fn: () => clipboardWrite(envFile).then(() => showToast('Copied .env ✓', 'ok')),
+          },
+          {
+            label: 'Download YAML',
+            // A3: `saveFile` writes real bytes; the old blob-anchor click had no
+            // download handler behind it in Tauri's webview.
+            fn: () =>
+              void saveFile(yaml, 'docker-compose.yml').then((res) =>
+                showToast(
+                  res.ok
+                    ? res.path
+                      ? `Downloaded to ${res.path}`
+                      : 'Downloaded'
+                    : `Failed: ${res.error}`,
+                  res.ok ? 'ok' : 'error',
+                ),
+              ),
+          },
+          {
+            label: 'Download .env',
+            fn: () =>
+              void saveFile(envFile, `${proj.name}.env`).then((res) =>
+                showToast(
+                  res.ok
+                    ? res.path
+                      ? `Downloaded to ${res.path}`
+                      : 'Downloaded'
+                    : `Failed: ${res.error}`,
+                  res.ok ? 'ok' : 'error',
+                ),
+              ),
+          },
+        ]);
+        return;
+      }
 
-    if (action === 'import-nginx') {
-      const doImportNginx = async (text: string, merge: boolean) => {
-        const parsed = parseNginxConf(text);
-        if (!parsed.length) {
-          showToast('No server/upstream blocks found', 'err');
-          return;
-        }
-        if (!merge) {
+      if (action === 'export-docker-services') {
+        const yaml = exportServicesSection(proj);
+        if (yaml)
+          void clipboardWrite(yaml).then(() => showToast('Services YAML copied ✓', 'ok', 1800));
+        else showToast('No services to copy', '', 1500);
+        return;
+      }
+
+      if (action === 'import-wg') {
+        const doImportWg = async (text: string) => {
+          const parsed = parseWgConf(text);
+          if (!parsed.length) {
+            showToast('No WireGuard sections found', 'err');
+            return;
+          }
+          if (
+            proj.chunks?.length &&
+            !(await showConfirm(
+              `Replace ${proj.chunks.length} existing chunk(s) with ${parsed.length} imported sections?`,
+            ))
+          )
+            return;
+          proj.chunks = parsed;
+          void persist();
+          render();
+          showToast(`Imported ${parsed.length} sections ✓`, 'ok');
+        };
+        showDropdown(el, [
+          {
+            label: 'Import from file',
+            fn: () => pickFileText('text/plain,.conf', (text) => doImportWg(text)),
+          },
+          {
+            label: 'Paste wg0.conf text…',
+            fn: async () => {
+              const text = await showPromptLarge('Paste wg0.conf contents:', '');
+              if (text) void doImportWg(text);
+            },
+          },
+        ]);
+        return;
+      }
+
+      if (action === 'import-docker') {
+        const doImportDocker = async (text: string) => {
+          const parsed = parseDockerCompose(text);
+          if (!parsed.length) {
+            showToast('No services/networks/volumes found', 'err');
+            return;
+          }
           if (
             proj.chunks?.length &&
             !(await showConfirm(
@@ -1590,674 +2411,767 @@ function renderConfigView(project: Project) {
           )
             return;
           proj.chunks = parsed;
-        } else {
-          if (!proj.chunks) proj.chunks = [];
-          proj.chunks.push(...parsed);
-        }
-        persist();
-        render();
-        // Surface any SSL cert domains found so user can add them to vault
-        const certDomains = new Set<string>();
-        for (const chunk of parsed) {
-          for (const field of chunk.fields) {
-            if (field.field_type === 'cert') {
-              const m = /\/live\/([^/]+)\//.exec(field.value);
-              if (m) certDomains.add(m[1]);
+          void persist();
+          render();
+          showToast(`Imported ${parsed.length} chunks ✓`, 'ok');
+        };
+        showDropdown(el, [
+          {
+            label: 'Import from file',
+            fn: () =>
+              pickFileText('text/plain,text/yaml,.yaml,.yml', (text) => doImportDocker(text)),
+          },
+          {
+            label: 'Paste YAML…',
+            fn: async () => {
+              const text = await showPromptLarge('Paste docker-compose.yml contents:', '');
+              if (text) void doImportDocker(text);
+            },
+          },
+        ]);
+        return;
+      }
+
+      if (action === 'import-ssh') {
+        pickFileText('', async (text) => {
+          const parsed = parseSshConfig(text);
+          if (!parsed.length) {
+            showToast('No Host blocks found in file', 'err');
+            return;
+          }
+          if (
+            proj.chunks?.length &&
+            !(await showConfirm(
+              `Replace ${proj.chunks.length} existing chunk(s) with ${parsed.length} imported host blocks?`,
+            ))
+          )
+            return;
+          proj.chunks = parsed;
+          void persist();
+          render();
+          showToast(`Imported ${parsed.length} host blocks ✓`, 'ok');
+        });
+        return;
+      }
+
+      if (action === 'import-nginx') {
+        const doImportNginx = async (text: string, merge: boolean) => {
+          const parsed = parseNginxConf(text);
+          if (!parsed.length) {
+            showToast('No server/upstream blocks found', 'err');
+            return;
+          }
+          if (!merge) {
+            if (
+              proj.chunks?.length &&
+              !(await showConfirm(
+                `Replace ${proj.chunks.length} existing chunk(s) with ${parsed.length} imported chunks?`,
+              ))
+            )
+              return;
+            proj.chunks = parsed;
+          } else {
+            if (!proj.chunks) proj.chunks = [];
+            proj.chunks.push(...parsed);
+          }
+          void persist();
+          render();
+          // Surface any SSL cert domains found so user can add them to vault
+          const certDomains = new Set<string>();
+          for (const chunk of parsed) {
+            for (const field of chunk.fields) {
+              if (field.field_type === 'cert') {
+                const m = /\/live\/([^/]+)\//.exec(field.value);
+                if (m) certDomains.add(m[1]);
+              }
             }
           }
-        }
-        const certNote =
-          certDomains.size > 0
-            ? ` — SSL cert domains: ${[...certDomains].join(', ')} (add certificate vault entries to auto-link)`
-            : '';
-        showToast(`Imported ${parsed.length} chunks ✓${certNote}`, 'ok');
-      };
-      const hasExisting = (proj.chunks?.length ?? 0) > 0;
-      showDropdown(el, [
-        {
-          label: 'Import from file',
-          fn: () => pickFileText('text/plain,.conf,.nginx', (text) => doImportNginx(text, false)),
-        },
-        {
-          label: 'Paste nginx config…',
-          fn: async () => {
-            const text = await showPromptLarge('Paste nginx site config:', '');
-            if (text) doImportNginx(text, false);
-          },
-        },
-        ...(hasExisting
-          ? [
-              {
-                label: 'Append to existing',
-                fn: () =>
-                  pickFileText('text/plain,.conf,.nginx', (text) => doImportNginx(text, true)),
-              },
-            ]
-          : []),
-      ]);
-      return;
-    }
-
-    if (action === 'export-env-chunk') {
-      const chunk = proj.chunks?.find((c) => c.id === chunkId);
-      if (!chunk) return;
-      const dotenv = chunk.fields
-        .filter((f) => f.key && f.value !== undefined)
-        // Quoted (E1). An unresolved reference is left raw rather than escaped
-        // into an unrecognisable literal — see `export_project_env` in the CLI.
-        .map((f) => {
-          const r = resolveFieldRef(f.value, true);
-          return r.resolved === null || r.unresolved
-            ? `${f.key}=${f.value}`
-            : `${f.key}=${quoteEnvValue(r.resolved)}`;
-        })
-        .join('\n');
-      showDropdown(el, [
-        {
-          label: 'Copy .env',
-          fn: () => clipboardWrite(dotenv).then(() => showToast('Copied ✓', 'ok')),
-        },
-        {
-          label: 'Download .env',
-          fn: () =>
-            void saveFile(dotenv, `${chunk.name}.env`).then((res) =>
-              showToast(
-                res.ok
-                  ? res.path
-                    ? `Downloaded to ${res.path}`
-                    : 'Downloaded'
-                  : `Failed: ${res.error}`,
-                res.ok ? 'ok' : 'error',
-              ),
-            ),
-        },
-      ]);
-      return;
-    }
-
-    if (action === 'link-env-chunk') {
-      const chunk = proj.chunks?.find((c) => c.id === chunkId);
-      if (chunk) openEnvLinkModal(proj, chunk);
-      return;
-    }
-
-    if (action === 'import-env-chunk') {
-      const doImportEnv = (text: string, filename: string) => {
-        const vars = parseEnvFile(text);
-        if (!vars.length) {
-          showToast('No variables found in .env', 'err');
-          return;
-        }
-        const isSecretKey = (name: string) => /pass(word)?|secret|key|token|cred/i.test(name);
-        const toFields = (v: { name: string; value: string }) => {
-          const isRef = /^\$\{.+\}$/.test(v.value);
-          const isSec = !isRef && isSecretKey(v.name) && v.value !== '';
-          const ft: ChunkFieldType = isRef ? 'env_var' : isSec ? 'secret' : 'var';
-          return { key: v.name, value: v.value, field_type: ft, secret: isSec };
+          const certNote =
+            certDomains.size > 0
+              ? ` — SSL cert domains: ${[...certDomains].join(', ')} (add certificate vault entries to auto-link)`
+              : '';
+          showToast(`Imported ${parsed.length} chunks ✓${certNote}`, 'ok');
         };
-        const chunkName = filename.replace(/\.env$/, '').replace(/\.$/, '') || 'env-file';
-        if (!proj.chunks) proj.chunks = [];
-        const existing = proj.chunks.find(
-          (c) => c.chunk_type === 'env_file' && c.name === chunkName,
-        );
-        if (existing) {
-          existing.fields = vars.map(toFields);
-        } else {
-          proj.chunks.push({
-            id: crypto.randomUUID(),
-            name: chunkName,
-            chunk_type: 'env_file',
-            fields: vars.map(toFields),
-          });
-        }
-        persist();
-        render();
-        showToast(`Imported ${vars.length} vars into "${chunkName}" ✓`, 'ok');
-      };
-      showDropdown(el, [
-        {
-          label: 'Import from file',
-          fn: () =>
-            pickFileText('text/plain,.env', (text, filename) => doImportEnv(text, filename)),
-        },
-        {
-          label: 'Paste .env text…',
-          fn: async () => {
-            const text = await showPromptLarge('Paste .env contents:', '');
-            if (text) doImportEnv(text, 'env-file');
+        const hasExisting = (proj.chunks?.length ?? 0) > 0;
+        showDropdown(el, [
+          {
+            label: 'Import from file',
+            fn: () => pickFileText('text/plain,.conf,.nginx', (text) => doImportNginx(text, false)),
           },
-        },
-      ]);
-      return;
-    }
+          {
+            label: 'Paste nginx config…',
+            fn: async () => {
+              const text = await showPromptLarge('Paste nginx site config:', '');
+              if (text) void doImportNginx(text, false);
+            },
+          },
+          ...(hasExisting
+            ? [
+                {
+                  label: 'Append to existing',
+                  fn: () =>
+                    pickFileText('text/plain,.conf,.nginx', (text) => doImportNginx(text, true)),
+                },
+              ]
+            : []),
+        ]);
+        return;
+      }
 
-    const addChunkFns: Partial<Record<string, () => any>> = {
-      'add-nginx-server': () => ({
-        id: crypto.randomUUID(),
-        name: `server-${(proj.chunks || []).filter((c) => c.chunk_type === 'nginx_server').length + 1}`,
-        chunk_type: 'nginx_server',
-        fields: [
-          { key: 'listen', value: '80', field_type: 'var' },
-          { key: 'server_name', value: '', field_type: 'var' },
-          { key: 'root', value: '/var/www/html', field_type: 'var' },
-        ],
-      }),
-      'add-nginx-upstream': () => ({
-        id: crypto.randomUUID(),
-        name: `upstream-${(proj.chunks || []).filter((c) => c.chunk_type === 'nginx_upstream').length + 1}`,
-        chunk_type: 'nginx_upstream',
-        fields: [{ key: 'server', value: 'app:8080', field_type: 'list' }],
-      }),
-      'add-nginx-location': () => ({
-        id: crypto.randomUUID(),
-        name: `location-${(proj.chunks || []).filter((c) => c.chunk_type === 'nginx_location').length + 1}`,
-        chunk_type: 'nginx_location',
-        fields: [
-          { key: 'path', value: '/', field_type: 'var' },
-          { key: 'proxy_pass', value: '', field_type: 'var' },
-        ],
-      }),
-      // 'add-nginx-key' handled separately below (needs dropdown + file picker)
-      'add-k8s-deployment': () => ({
-        id: crypto.randomUUID(),
-        name: 'Deployment',
-        chunk_type: 'k8s_deployment',
-        fields: [
-          { key: 'name', value: 'my-app', field_type: 'var' },
-          { key: 'namespace', value: 'default', field_type: 'var' },
-          { key: 'image', value: 'nginx:latest', field_type: 'var' },
-          { key: 'replicas', value: '1', field_type: 'var' },
-          { key: 'containerPort', value: '80', field_type: 'var' },
-        ],
-      }),
-      'add-k8s-service': () => ({
-        id: crypto.randomUUID(),
-        name: 'Service',
-        chunk_type: 'k8s_service',
-        fields: [
-          { key: 'name', value: 'my-app', field_type: 'var' },
-          { key: 'namespace', value: 'default', field_type: 'var' },
-          { key: 'port', value: '80', field_type: 'var' },
-          { key: 'targetPort', value: '80', field_type: 'var' },
-          { key: 'type', value: 'ClusterIP', field_type: 'var' },
-        ],
-      }),
-      'add-k8s-configmap': () => ({
-        id: crypto.randomUUID(),
-        name: 'ConfigMap',
-        chunk_type: 'k8s_configmap',
-        fields: [
-          { key: 'name', value: 'my-config', field_type: 'var' },
-          { key: 'namespace', value: 'default', field_type: 'var' },
-        ],
-      }),
-      'add-k8s-secret': () => ({
-        id: crypto.randomUUID(),
-        name: 'Secret',
-        chunk_type: 'k8s_secret',
-        fields: [
-          { key: 'name', value: 'my-secret', field_type: 'var' },
-          { key: 'namespace', value: 'default', field_type: 'var' },
-        ],
-      }),
-      'add-k8s-ingress': () => ({
-        id: crypto.randomUUID(),
-        name: 'Ingress',
-        chunk_type: 'k8s_ingress',
-        fields: [
-          { key: 'name', value: 'my-ingress', field_type: 'var' },
-          { key: 'namespace', value: 'default', field_type: 'var' },
-          { key: 'host', value: 'example.com', field_type: 'var' },
-          { key: 'serviceName', value: 'my-app', field_type: 'var' },
-          { key: 'servicePort', value: '80', field_type: 'var' },
-        ],
-      }),
-      'add-ssh-host': () => ({
-        id: crypto.randomUUID(),
-        name: `host-${(proj.chunks || []).filter((c) => c.chunk_type === 'ssh_host').length + 1}`,
-        chunk_type: 'ssh_host',
-        fields: [
-          { key: 'HostName', value: '', field_type: 'var' },
-          { key: 'User', value: '', field_type: 'var' },
-          { key: 'Port', value: '22', field_type: 'var' },
-          { key: 'IdentityFile', value: '~/.ssh/id_ed25519', field_type: 'var' },
-          { key: 'ServerAliveInterval', value: '60', field_type: 'var' },
-        ],
-      }),
-      'add-traefik-router': () => ({
-        id: crypto.randomUUID(),
-        name: `router-${(proj.chunks || []).filter((c) => c.chunk_type === 'traefik_router').length + 1}`,
-        chunk_type: 'traefik_router',
-        fields: [
-          { key: 'entryPoints', value: 'websecure', field_type: 'list' },
-          { key: 'rule', value: '', field_type: 'var' },
-          { key: 'service', value: '', field_type: 'var' },
-        ],
-      }),
-      'add-traefik-service': () => ({
-        id: crypto.randomUUID(),
-        name: `service-${(proj.chunks || []).filter((c) => c.chunk_type === 'traefik_service').length + 1}`,
-        chunk_type: 'traefik_service',
-        fields: [
-          { key: 'url', value: '', field_type: 'var' },
-          { key: 'passHostHeader', value: 'true', field_type: 'var' },
-        ],
-      }),
-      'add-traefik-middleware': () => ({
-        id: crypto.randomUUID(),
-        name: `middleware-${(proj.chunks || []).filter((c) => c.chunk_type === 'traefik_middleware').length + 1}`,
-        chunk_type: 'traefik_middleware',
-        fields: [{ key: 'type', value: 'redirectScheme', field_type: 'var' }],
-      }),
-      'add-apache-vhost': () => ({
-        id: crypto.randomUUID(),
-        name: `VirtualHost-${(proj.chunks || []).filter((c) => c.chunk_type === 'apache_vhost').length + 1}`,
-        chunk_type: 'apache_vhost' as const,
-        fields: [
-          { key: 'ServerName', value: 'example.com', field_type: 'var' as const },
-          { key: 'DocumentRoot', value: '/var/www/html', field_type: 'var' as const },
-        ],
-      }),
-      'add-apache-directory': () => ({
-        id: crypto.randomUUID(),
-        name: `/var/www/html`,
-        chunk_type: 'apache_directory' as const,
-        fields: [
-          { key: 'path', value: '/var/www/html', field_type: 'var' as const },
-          { key: 'AllowOverride', value: 'All', field_type: 'var' as const },
-          { key: 'Require', value: 'all granted', field_type: 'var' as const },
-        ],
-      }),
-      'add-haproxy-frontend': () => ({
-        id: crypto.randomUUID(),
-        name: `frontend-${(proj.chunks || []).filter((c) => c.chunk_type === 'haproxy_frontend').length + 1}`,
-        chunk_type: 'haproxy_frontend' as const,
-        fields: [
-          { key: 'bind', value: '*:80', field_type: 'port' as const },
-          { key: 'mode', value: 'http', field_type: 'var' as const },
-          { key: 'default_backend', value: 'app', field_type: 'var' as const },
-        ],
-      }),
-      'add-haproxy-backend': () => ({
-        id: crypto.randomUUID(),
-        name: `backend-${(proj.chunks || []).filter((c) => c.chunk_type === 'haproxy_backend').length + 1}`,
-        chunk_type: 'haproxy_backend' as const,
-        fields: [
-          { key: 'mode', value: 'http', field_type: 'var' as const },
-          { key: 'balance', value: 'roundrobin', field_type: 'var' as const },
-          { key: 'server', value: 'app1 127.0.0.1:8080 check', field_type: 'endpoint' as const },
-        ],
-      }),
-      'add-ansible-vars': () => ({
-        id: crypto.randomUUID(),
-        name: `vars-${(proj.chunks || []).filter((c) => c.chunk_type === 'ansible_vars').length + 1}`,
-        chunk_type: 'ansible_vars' as const,
-        fields: [{ key: 'example_var', value: 'example_value', field_type: 'var' as const }],
-      }),
-      'add-ansible-task': () => ({
-        id: crypto.randomUUID(),
-        name: `task-${(proj.chunks || []).filter((c) => c.chunk_type === 'ansible_task').length + 1}`,
-        chunk_type: 'ansible_task' as const,
-        fields: [
-          { key: 'name', value: 'My task', field_type: 'var' as const },
-          { key: 'module', value: 'ansible.builtin.debug', field_type: 'var' as const },
-          { key: 'msg', value: 'Hello world', field_type: 'var' as const },
-        ],
-      }),
-      'add-pg-connection': () => ({
-        id: crypto.randomUUID(),
-        name: `db-${(proj.chunks || []).filter((c) => c.chunk_type === 'pg_connection').length + 1}`,
-        chunk_type: 'pg_connection' as const,
-        fields: [
-          { key: 'host', value: 'localhost', field_type: 'var' as const },
-          { key: 'port', value: '5432', field_type: 'port' as const },
-          { key: 'dbname', value: '', field_type: 'var' as const },
-          { key: 'user', value: '', field_type: 'var' as const },
-          { key: 'password', value: '', field_type: 'secret' as const, secret: true },
-          { key: 'sslmode', value: 'require', field_type: 'var' as const },
-        ],
-      }),
-      'add-pg-role': () => ({
-        id: crypto.randomUUID(),
-        name: `role-${(proj.chunks || []).filter((c) => c.chunk_type === 'pg_role').length + 1}`,
-        chunk_type: 'pg_role' as const,
-        fields: [
-          { key: 'rolname', value: '', field_type: 'var' as const },
-          { key: 'rolpassword', value: '', field_type: 'secret' as const, secret: true },
-          { key: 'rolcanlogin', value: 'true', field_type: 'var' as const },
-        ],
-      }),
-    };
-    if (action in addChunkFns) {
-      if (!proj.chunks) proj.chunks = [];
-      proj.chunks.push(addChunkFns[action]!());
-      persist();
-      render();
-      return;
-    }
+      if (action === 'export-env-chunk') {
+        const chunk = proj.chunks?.find((c) => c.id === chunkId);
+        if (!chunk) return;
+        const dotenv = chunk.fields
+          .filter((f) => f.key && f.value !== undefined)
+          // Quoted (E1). An unresolved reference is left raw rather than escaped
+          // into an unrecognisable literal — see `export_project_env` in the CLI.
+          .map((f) => {
+            const r = resolveFieldRef(f.value, true);
+            return r.resolved === null || r.unresolved
+              ? `${f.key}=${f.value}`
+              : `${f.key}=${quoteEnvValue(r.resolved)}`;
+          })
+          .join('\n');
+        showDropdown(el, [
+          {
+            label: 'Copy .env',
+            fn: () => clipboardWrite(dotenv).then(() => showToast('Copied ✓', 'ok')),
+          },
+          {
+            label: 'Download .env',
+            fn: () =>
+              void saveFile(dotenv, `${chunk.name}.env`).then((res) =>
+                showToast(
+                  res.ok
+                    ? res.path
+                      ? `Downloaded to ${res.path}`
+                      : 'Downloaded'
+                    : `Failed: ${res.error}`,
+                  res.ok ? 'ok' : 'error',
+                ),
+              ),
+          },
+        ]);
+        return;
+      }
 
-    if (action === 'add-nginx-key') {
-      const makeKeyChunk = (keyType: 'fullchain' | 'privkey', path = '', content = '') => ({
-        id: crypto.randomUUID(),
-        name: path
-          ? path
-              .split('/')
-              .pop()!
-              .replace(/\.pem$/i, '')
-          : `key-${(proj.chunks || []).filter((c) => c.chunk_type === 'nginx_key').length + 1}`,
-        chunk_type: 'nginx_key' as const,
-        fields: [
-          { key: 'path', value: path, field_type: 'var' as const },
-          { key: 'key_type', value: keyType, field_type: 'var' as const },
-          { key: 'content', value: content, field_type: 'cert' as const },
-        ],
-      });
-      const doImportKey = (keyType: 'fullchain' | 'privkey') =>
-        pickFileText('.pem,.crt,.key,.cer', (text, name) => {
-          const pem = text.trim();
-          const domains = nginxCertDomains(proj);
-          if (domains.length === 1) {
-            // Single domain → store in that domain's cert entry. No redundant nginx_key chunk.
-            const entry = ensureCertForDomain(domains[0], proj.id);
-            if (keyType === 'fullchain') entry.certificate_data = pem;
-            else entry.cert_key_data = pem;
-            persist();
-            render();
-            showToast(`Imported ${name} into ${domains[0]} certificate ✓`, 'ok');
-          } else {
-            // No single domain to attach to → fall back to a standalone key-file chunk.
-            if (!proj.chunks) proj.chunks = [];
-            proj.chunks.push(makeKeyChunk(keyType, name, pem));
-            persist();
-            render();
-            showToast(`Imported ${name} ✓`, 'ok');
+      if (action === 'link-env-chunk') {
+        const chunk = proj.chunks?.find((c) => c.id === chunkId);
+        if (chunk) openEnvLinkModal(proj, chunk);
+        return;
+      }
+
+      if (action === 'import-env-chunk') {
+        const doImportEnv = (text: string, filename: string) => {
+          const vars = parseEnvFile(text);
+          if (!vars.length) {
+            showToast('No variables found in .env', 'err');
+            return;
           }
+          const isSecretKey = (name: string) => /pass(word)?|secret|key|token|cred/i.test(name);
+          const toFields = (v: { name: string; value: string }) => {
+            const isRef = /^\$\{.+\}$/.test(v.value);
+            const isSec = !isRef && isSecretKey(v.name) && v.value !== '';
+            const ft: ChunkFieldType = isRef ? 'env_var' : isSec ? 'secret' : 'var';
+            return { key: v.name, value: v.value, field_type: ft, secret: isSec };
+          };
+          const chunkName = filename.replace(/\.env$/, '').replace(/\.$/, '') || 'env-file';
+          if (!proj.chunks) proj.chunks = [];
+          const existing = proj.chunks.find(
+            (c) => c.chunk_type === 'env_file' && c.name === chunkName,
+          );
+          if (existing) {
+            existing.fields = vars.map(toFields);
+          } else {
+            proj.chunks.push({
+              id: crypto.randomUUID(),
+              name: chunkName,
+              chunk_type: 'env_file',
+              fields: vars.map(toFields),
+            });
+          }
+          void persist();
+          render();
+          showToast(`Imported ${vars.length} vars into "${chunkName}" ✓`, 'ok');
+        };
+        showDropdown(el, [
+          {
+            label: 'Import from file',
+            fn: () =>
+              pickFileText('text/plain,.env', (text, filename) => doImportEnv(text, filename)),
+          },
+          {
+            label: 'Paste .env text…',
+            fn: async () => {
+              const text = await showPromptLarge('Paste .env contents:', '');
+              if (text) doImportEnv(text, 'env-file');
+            },
+          },
+        ]);
+        return;
+      }
+
+      const addChunkFns: Partial<Record<string, () => SecretChunk>> = {
+        'add-nginx-server': () => ({
+          id: crypto.randomUUID(),
+          name: `server-${(proj.chunks || []).filter((c) => c.chunk_type === 'nginx_server').length + 1}`,
+          chunk_type: 'nginx_server',
+          fields: [
+            { key: 'listen', value: '80', field_type: 'var' },
+            { key: 'server_name', value: '', field_type: 'var' },
+            { key: 'root', value: '/var/www/html', field_type: 'var' },
+          ],
+        }),
+        'add-nginx-upstream': () => ({
+          id: crypto.randomUUID(),
+          name: `upstream-${(proj.chunks || []).filter((c) => c.chunk_type === 'nginx_upstream').length + 1}`,
+          chunk_type: 'nginx_upstream',
+          fields: [{ key: 'server', value: 'app:8080', field_type: 'list' }],
+        }),
+        'add-nginx-location': () => ({
+          id: crypto.randomUUID(),
+          name: `location-${(proj.chunks || []).filter((c) => c.chunk_type === 'nginx_location').length + 1}`,
+          chunk_type: 'nginx_location',
+          fields: [
+            { key: 'path', value: '/', field_type: 'var' },
+            { key: 'proxy_pass', value: '', field_type: 'var' },
+          ],
+        }),
+        // 'add-nginx-key' handled separately below (needs dropdown + file picker)
+        'add-k8s-deployment': () => ({
+          id: crypto.randomUUID(),
+          name: 'Deployment',
+          chunk_type: 'k8s_deployment',
+          fields: [
+            { key: 'name', value: 'my-app', field_type: 'var' },
+            { key: 'namespace', value: 'default', field_type: 'var' },
+            { key: 'image', value: 'nginx:latest', field_type: 'var' },
+            { key: 'replicas', value: '1', field_type: 'var' },
+            { key: 'containerPort', value: '80', field_type: 'var' },
+          ],
+        }),
+        'add-k8s-service': () => ({
+          id: crypto.randomUUID(),
+          name: 'Service',
+          chunk_type: 'k8s_service',
+          fields: [
+            { key: 'name', value: 'my-app', field_type: 'var' },
+            { key: 'namespace', value: 'default', field_type: 'var' },
+            { key: 'port', value: '80', field_type: 'var' },
+            { key: 'targetPort', value: '80', field_type: 'var' },
+            { key: 'type', value: 'ClusterIP', field_type: 'var' },
+          ],
+        }),
+        'add-k8s-configmap': () => ({
+          id: crypto.randomUUID(),
+          name: 'ConfigMap',
+          chunk_type: 'k8s_configmap',
+          fields: [
+            { key: 'name', value: 'my-config', field_type: 'var' },
+            { key: 'namespace', value: 'default', field_type: 'var' },
+          ],
+        }),
+        'add-k8s-secret': () => ({
+          id: crypto.randomUUID(),
+          name: 'Secret',
+          chunk_type: 'k8s_secret',
+          fields: [
+            { key: 'name', value: 'my-secret', field_type: 'var' },
+            { key: 'namespace', value: 'default', field_type: 'var' },
+          ],
+        }),
+        'add-k8s-ingress': () => ({
+          id: crypto.randomUUID(),
+          name: 'Ingress',
+          chunk_type: 'k8s_ingress',
+          fields: [
+            { key: 'name', value: 'my-ingress', field_type: 'var' },
+            { key: 'namespace', value: 'default', field_type: 'var' },
+            { key: 'host', value: 'example.com', field_type: 'var' },
+            { key: 'serviceName', value: 'my-app', field_type: 'var' },
+            { key: 'servicePort', value: '80', field_type: 'var' },
+          ],
+        }),
+        'add-ssh-host': () => ({
+          id: crypto.randomUUID(),
+          name: `host-${(proj.chunks || []).filter((c) => c.chunk_type === 'ssh_host').length + 1}`,
+          chunk_type: 'ssh_host',
+          fields: [
+            { key: 'HostName', value: '', field_type: 'var' },
+            { key: 'User', value: '', field_type: 'var' },
+            { key: 'Port', value: '22', field_type: 'var' },
+            { key: 'IdentityFile', value: '~/.ssh/id_ed25519', field_type: 'var' },
+            { key: 'ServerAliveInterval', value: '60', field_type: 'var' },
+          ],
+        }),
+        'add-traefik-router': () => ({
+          id: crypto.randomUUID(),
+          name: `router-${(proj.chunks || []).filter((c) => c.chunk_type === 'traefik_router').length + 1}`,
+          chunk_type: 'traefik_router',
+          fields: [
+            { key: 'entryPoints', value: 'websecure', field_type: 'list' },
+            { key: 'rule', value: '', field_type: 'var' },
+            { key: 'service', value: '', field_type: 'var' },
+          ],
+        }),
+        'add-traefik-service': () => ({
+          id: crypto.randomUUID(),
+          name: `service-${(proj.chunks || []).filter((c) => c.chunk_type === 'traefik_service').length + 1}`,
+          chunk_type: 'traefik_service',
+          fields: [
+            { key: 'url', value: '', field_type: 'var' },
+            { key: 'passHostHeader', value: 'true', field_type: 'var' },
+          ],
+        }),
+        'add-traefik-middleware': () => ({
+          id: crypto.randomUUID(),
+          name: `middleware-${(proj.chunks || []).filter((c) => c.chunk_type === 'traefik_middleware').length + 1}`,
+          chunk_type: 'traefik_middleware',
+          fields: [{ key: 'type', value: 'redirectScheme', field_type: 'var' }],
+        }),
+        'add-apache-vhost': () => ({
+          id: crypto.randomUUID(),
+          name: `VirtualHost-${(proj.chunks || []).filter((c) => c.chunk_type === 'apache_vhost').length + 1}`,
+          chunk_type: 'apache_vhost' as const,
+          fields: [
+            { key: 'ServerName', value: 'example.com', field_type: 'var' as const },
+            { key: 'DocumentRoot', value: '/var/www/html', field_type: 'var' as const },
+          ],
+        }),
+        'add-apache-directory': () => ({
+          id: crypto.randomUUID(),
+          name: `/var/www/html`,
+          chunk_type: 'apache_directory' as const,
+          fields: [
+            { key: 'path', value: '/var/www/html', field_type: 'var' as const },
+            { key: 'AllowOverride', value: 'All', field_type: 'var' as const },
+            { key: 'Require', value: 'all granted', field_type: 'var' as const },
+          ],
+        }),
+        'add-haproxy-frontend': () => ({
+          id: crypto.randomUUID(),
+          name: `frontend-${(proj.chunks || []).filter((c) => c.chunk_type === 'haproxy_frontend').length + 1}`,
+          chunk_type: 'haproxy_frontend' as const,
+          fields: [
+            { key: 'bind', value: '*:80', field_type: 'port' as const },
+            { key: 'mode', value: 'http', field_type: 'var' as const },
+            { key: 'default_backend', value: 'app', field_type: 'var' as const },
+          ],
+        }),
+        'add-haproxy-backend': () => ({
+          id: crypto.randomUUID(),
+          name: `backend-${(proj.chunks || []).filter((c) => c.chunk_type === 'haproxy_backend').length + 1}`,
+          chunk_type: 'haproxy_backend' as const,
+          fields: [
+            { key: 'mode', value: 'http', field_type: 'var' as const },
+            { key: 'balance', value: 'roundrobin', field_type: 'var' as const },
+            { key: 'server', value: 'app1 127.0.0.1:8080 check', field_type: 'endpoint' as const },
+          ],
+        }),
+        'add-ansible-vars': () => ({
+          id: crypto.randomUUID(),
+          name: `vars-${(proj.chunks || []).filter((c) => c.chunk_type === 'ansible_vars').length + 1}`,
+          chunk_type: 'ansible_vars' as const,
+          fields: [{ key: 'example_var', value: 'example_value', field_type: 'var' as const }],
+        }),
+        'add-ansible-task': () => ({
+          id: crypto.randomUUID(),
+          name: `task-${(proj.chunks || []).filter((c) => c.chunk_type === 'ansible_task').length + 1}`,
+          chunk_type: 'ansible_task' as const,
+          fields: [
+            { key: 'name', value: 'My task', field_type: 'var' as const },
+            { key: 'module', value: 'ansible.builtin.debug', field_type: 'var' as const },
+            { key: 'msg', value: 'Hello world', field_type: 'var' as const },
+          ],
+        }),
+        'add-pg-connection': () => ({
+          id: crypto.randomUUID(),
+          name: `db-${(proj.chunks || []).filter((c) => c.chunk_type === 'pg_connection').length + 1}`,
+          chunk_type: 'pg_connection' as const,
+          fields: [
+            { key: 'host', value: 'localhost', field_type: 'var' as const },
+            { key: 'port', value: '5432', field_type: 'port' as const },
+            { key: 'dbname', value: '', field_type: 'var' as const },
+            { key: 'user', value: '', field_type: 'var' as const },
+            { key: 'password', value: '', field_type: 'secret' as const, secret: true },
+            { key: 'sslmode', value: 'require', field_type: 'var' as const },
+          ],
+        }),
+        'add-pg-role': () => ({
+          id: crypto.randomUUID(),
+          name: `role-${(proj.chunks || []).filter((c) => c.chunk_type === 'pg_role').length + 1}`,
+          chunk_type: 'pg_role' as const,
+          fields: [
+            { key: 'rolname', value: '', field_type: 'var' as const },
+            { key: 'rolpassword', value: '', field_type: 'secret' as const, secret: true },
+            { key: 'rolcanlogin', value: 'true', field_type: 'var' as const },
+          ],
+        }),
+      };
+      if (action in addChunkFns) {
+        if (!proj.chunks) proj.chunks = [];
+        proj.chunks.push(addChunkFns[action]!());
+        void persist();
+        render();
+        return;
+      }
+
+      if (action === 'add-nginx-key') {
+        const makeKeyChunk = (keyType: 'fullchain' | 'privkey', path = '', content = '') => ({
+          id: crypto.randomUUID(),
+          name: path
+            ? path
+                .split('/')
+                .pop()!
+                .replace(/\.pem$/i, '')
+            : `key-${(proj.chunks || []).filter((c) => c.chunk_type === 'nginx_key').length + 1}`,
+          chunk_type: 'nginx_key' as const,
+          fields: [
+            { key: 'path', value: path, field_type: 'var' as const },
+            { key: 'key_type', value: keyType, field_type: 'var' as const },
+            { key: 'content', value: content, field_type: 'cert' as const },
+          ],
         });
-      showDropdown(el, [
-        { label: 'Import fullchain.pem', fn: () => doImportKey('fullchain') },
-        { label: 'Import privkey.pem', fn: () => doImportKey('privkey') },
-        {
-          label: 'Blank key file',
-          fn: () => {
-            if (!proj.chunks) proj.chunks = [];
-            proj.chunks.push(makeKeyChunk('fullchain'));
-            persist();
-            render();
-          },
-        },
-      ]);
-      return;
-    }
-
-    if (action === 'import-nginx-key-file') {
-      const chunk = proj.chunks?.find((c) => c.id === chunkId);
-      if (!chunk) return;
-      pickFileText('.pem,.crt,.key,.cer', (text, name) => {
-        const isPrivkey =
-          /privkey|private[-_.]?key/i.test(name) && !/cert|chain|fullchain/i.test(name);
-        const ktF = chunk.fields.find((f) => f.key === 'key_type');
-        if (ktF) ktF.value = isPrivkey ? 'privkey' : 'fullchain';
-        else
-          chunk.fields.unshift({
-            key: 'key_type',
-            value: isPrivkey ? 'privkey' : 'fullchain',
-            field_type: 'var',
+        const doImportKey = (keyType: 'fullchain' | 'privkey') =>
+          pickFileText('.pem,.crt,.key,.cer', (text, name) => {
+            const pem = text.trim();
+            const domains = nginxCertDomains(proj);
+            if (domains.length === 1) {
+              // Single domain → store in that domain's cert entry. No redundant nginx_key chunk.
+              const entry = ensureCertForDomain(domains[0], proj.id);
+              if (keyType === 'fullchain') entry.certificate_data = pem;
+              else entry.cert_key_data = pem;
+              void persist();
+              render();
+              showToast(`Imported ${name} into ${domains[0]} certificate ✓`, 'ok');
+            } else {
+              // No single domain to attach to → fall back to a standalone key-file chunk.
+              if (!proj.chunks) proj.chunks = [];
+              proj.chunks.push(makeKeyChunk(keyType, name, pem));
+              void persist();
+              render();
+              showToast(`Imported ${name} ✓`, 'ok');
+            }
           });
-        const cF = chunk.fields.find((f) => f.key === 'content');
-        if (cF) cF.value = text.trim();
-        else chunk.fields.push({ key: 'content', value: text.trim(), field_type: 'cert' });
-        persist();
-        render();
-        showToast(`Imported ${name} ✓`, 'ok');
-      });
-      return;
-    }
-
-    // A3: real bytes on disk via `saveFile`, not a blob-anchor click WebKitGTK
-    // has no download handler for.
-    const dlText = (content: string, filename: string) => {
-      void saveFile(content, filename).then((res) =>
-        showToast(
-          res.ok ? (res.path ? `Downloaded to ${res.path}` : 'Downloaded') : `Failed: ${res.error}`,
-          res.ok ? 'ok' : 'error',
-        ),
-      );
-    };
-
-    if (action === 'export-nginx') {
-      const conf = exportNginx(proj);
-      showDropdown(el, [
-        {
-          label: 'Copy nginx.conf',
-          fn: () => clipboardWrite(conf).then(() => showToast('Copied ✓', 'ok')),
-        },
-        {
-          label: 'Download nginx.conf',
-          fn: () => {
-            dlText(conf, 'nginx.conf');
-            showToast('Downloaded', 'ok');
+        showDropdown(el, [
+          { label: 'Import fullchain.pem', fn: () => doImportKey('fullchain') },
+          { label: 'Import privkey.pem', fn: () => doImportKey('privkey') },
+          {
+            label: 'Blank key file',
+            fn: () => {
+              if (!proj.chunks) proj.chunks = [];
+              proj.chunks.push(makeKeyChunk('fullchain'));
+              void persist();
+              render();
+            },
           },
-        },
-      ]);
-      return;
-    }
+        ]);
+        return;
+      }
 
-    if (action === 'export-k8s') {
-      const yamlContent = exportK8s(proj);
-      showDropdown(el, [
-        {
-          label: 'Copy YAML',
-          fn: () => clipboardWrite(yamlContent).then(() => showToast('Copied ✓', 'ok')),
-        },
-        {
-          label: 'Download manifests.yaml',
-          fn: () => {
-            dlText(yamlContent, `${proj.name}-manifests.yaml`);
-            showToast('Downloaded', 'ok');
-          },
-        },
-      ]);
-      return;
-    }
+      if (action === 'import-nginx-key-file') {
+        const chunk = proj.chunks?.find((c) => c.id === chunkId);
+        if (!chunk) return;
+        pickFileText('.pem,.crt,.key,.cer', (text, name) => {
+          const isPrivkey =
+            /privkey|private[-_.]?key/i.test(name) && !/cert|chain|fullchain/i.test(name);
+          const ktF = chunk.fields.find((f) => f.key === 'key_type');
+          if (ktF) ktF.value = isPrivkey ? 'privkey' : 'fullchain';
+          else
+            chunk.fields.unshift({
+              key: 'key_type',
+              value: isPrivkey ? 'privkey' : 'fullchain',
+              field_type: 'var',
+            });
+          const cF = chunk.fields.find((f) => f.key === 'content');
+          if (cF) cF.value = text.trim();
+          else chunk.fields.push({ key: 'content', value: text.trim(), field_type: 'cert' });
+          void persist();
+          render();
+          showToast(`Imported ${name} ✓`, 'ok');
+        });
+        return;
+      }
 
-    if (action === 'export-ssh') {
-      const conf = exportSshConfig(proj);
-      showDropdown(el, [
-        {
-          label: 'Copy config',
-          fn: () => clipboardWrite(conf).then(() => showToast('Copied ✓', 'ok')),
-        },
-        {
-          label: 'Download config',
-          fn: () => {
-            dlText(conf, 'config');
-            showToast('Downloaded', 'ok');
-          },
-        },
-      ]);
-      return;
-    }
-
-    if (action === 'export-traefik') {
-      const yamlContent = exportTraefik(proj);
-      showDropdown(el, [
-        {
-          label: 'Copy traefik.yaml',
-          fn: () => clipboardWrite(yamlContent).then(() => showToast('Copied ✓', 'ok')),
-        },
-        {
-          label: 'Download traefik.yaml',
-          fn: () => {
-            dlText(yamlContent, 'traefik.yaml');
-            showToast('Downloaded', 'ok');
-          },
-        },
-      ]);
-      return;
-    }
-
-    if (action === 'import-apache') {
-      const doImport = async (text: string, merge: boolean) => {
-        const parsed = parseApacheConf(text);
-        if (!parsed.length) {
-          showToast('No VirtualHost/Directory blocks found', 'err');
-          return;
-        }
-        if (
-          !merge &&
-          proj.chunks?.length &&
-          !(await showConfirm(`Replace ${proj.chunks.length} existing chunk(s)?`))
-        )
-          return;
-        if (merge) {
-          if (!proj.chunks) proj.chunks = [];
-          proj.chunks.push(...parsed);
-        } else proj.chunks = parsed;
-        persist();
-        render();
-        showToast(`Imported ${parsed.length} chunks ✓`, 'ok');
+      // A3: real bytes on disk via `saveFile`, not a blob-anchor click WebKitGTK
+      // has no download handler for.
+      const dlText = (content: string, filename: string) => {
+        void saveFile(content, filename).then((res) =>
+          showToast(
+            res.ok
+              ? res.path
+                ? `Downloaded to ${res.path}`
+                : 'Downloaded'
+              : `Failed: ${res.error}`,
+            res.ok ? 'ok' : 'error',
+          ),
+        );
       };
-      showDropdown(el, [
-        {
-          label: 'Import from file',
-          fn: () => pickFileText('text/plain,.conf', (t) => doImport(t, false)),
-        },
-        {
-          label: 'Paste config…',
-          fn: async () => {
-            const t = await showPromptLarge('Paste Apache config:', '');
-            if (t) doImport(t, false);
-          },
-        },
-        ...(proj.chunks?.length
-          ? [
-              {
-                label: 'Append to existing',
-                fn: () => pickFileText('text/plain,.conf', (t) => doImport(t, true)),
-              },
-            ]
-          : []),
-      ]);
-      return;
-    }
 
-    if (action === 'export-apache') {
-      const conf = exportApache(proj);
-      showDropdown(el, [
-        {
-          label: 'Copy config',
-          fn: () => clipboardWrite(conf).then(() => showToast('Copied ✓', 'ok')),
-        },
-        {
-          label: 'Download config',
-          fn: () => {
-            dlText(conf, `${proj.name}.conf`);
-            showToast('Downloaded', 'ok');
+      if (action === 'export-nginx') {
+        const conf = exportNginx(proj);
+        showDropdown(el, [
+          {
+            label: 'Copy nginx.conf',
+            fn: () => clipboardWrite(conf).then(() => showToast('Copied ✓', 'ok')),
           },
-        },
-      ]);
-      return;
-    }
+          {
+            label: 'Download nginx.conf',
+            fn: () => {
+              dlText(conf, 'nginx.conf');
+              showToast('Downloaded', 'ok');
+            },
+          },
+        ]);
+        return;
+      }
 
-    if (action === 'import-haproxy') {
-      const doImport = async (text: string, merge: boolean) => {
-        const parsed = parseHaproxyConf(text);
-        if (!parsed.length) {
-          showToast('No sections found', 'err');
-          return;
-        }
-        if (
-          !merge &&
-          proj.chunks?.length &&
-          !(await showConfirm(`Replace ${proj.chunks.length} existing chunk(s)?`))
-        )
-          return;
-        if (merge) {
-          if (!proj.chunks) proj.chunks = [];
-          proj.chunks.push(...parsed);
-        } else proj.chunks = parsed;
-        persist();
-        render();
-        showToast(`Imported ${parsed.length} chunks ✓`, 'ok');
-      };
-      showDropdown(el, [
-        {
-          label: 'Import from file',
-          fn: () => pickFileText('text/plain,.cfg', (t) => doImport(t, false)),
-        },
-        {
-          label: 'Paste config…',
-          fn: async () => {
-            const t = await showPromptLarge('Paste HAProxy config:', '');
-            if (t) doImport(t, false);
+      if (action === 'export-k8s') {
+        const yamlContent = exportK8s(proj);
+        showDropdown(el, [
+          {
+            label: 'Copy YAML',
+            fn: () => clipboardWrite(yamlContent).then(() => showToast('Copied ✓', 'ok')),
           },
-        },
-        ...(proj.chunks?.length
-          ? [
-              {
-                label: 'Append to existing',
-                fn: () => pickFileText('text/plain,.cfg', (t) => doImport(t, true)),
-              },
-            ]
-          : []),
-      ]);
-      return;
-    }
+          {
+            label: 'Download manifests.yaml',
+            fn: () => {
+              dlText(yamlContent, `${proj.name}-manifests.yaml`);
+              showToast('Downloaded', 'ok');
+            },
+          },
+        ]);
+        return;
+      }
 
-    if (action === 'export-haproxy') {
-      const conf = exportHaproxy(proj);
-      showDropdown(el, [
-        {
-          label: 'Copy haproxy.cfg',
-          fn: () => clipboardWrite(conf).then(() => showToast('Copied ✓', 'ok')),
-        },
-        {
-          label: 'Download haproxy.cfg',
-          fn: () => {
-            dlText(conf, 'haproxy.cfg');
-            showToast('Downloaded', 'ok');
+      if (action === 'export-ssh') {
+        const conf = exportSshConfig(proj);
+        showDropdown(el, [
+          {
+            label: 'Copy config',
+            fn: () => clipboardWrite(conf).then(() => showToast('Copied ✓', 'ok')),
           },
-        },
-      ]);
-      return;
-    }
+          {
+            label: 'Download config',
+            fn: () => {
+              dlText(conf, 'config');
+              showToast('Downloaded', 'ok');
+            },
+          },
+        ]);
+        return;
+      }
 
-    if (action === 'export-ansible') {
-      const yamlContent = exportAnsible(proj);
-      showDropdown(el, [
-        {
-          label: 'Copy YAML',
-          fn: () => clipboardWrite(yamlContent).then(() => showToast('Copied ✓', 'ok')),
-        },
-        {
-          label: 'Download playbook.yml',
-          fn: () => {
-            dlText(yamlContent, 'playbook.yml');
-            showToast('Downloaded', 'ok');
+      if (action === 'export-traefik') {
+        const yamlContent = exportTraefik(proj);
+        showDropdown(el, [
+          {
+            label: 'Copy traefik.yaml',
+            fn: () => clipboardWrite(yamlContent).then(() => showToast('Copied ✓', 'ok')),
           },
-        },
-      ]);
-      return;
-    }
+          {
+            label: 'Download traefik.yaml',
+            fn: () => {
+              dlText(yamlContent, 'traefik.yaml');
+              showToast('Downloaded', 'ok');
+            },
+          },
+        ]);
+        return;
+      }
 
-    if (action === 'export-postgres') {
-      const pgpass = exportPostgres(proj);
-      showDropdown(el, [
-        {
-          label: 'Copy .pgpass',
-          fn: () => clipboardWrite(pgpass).then(() => showToast('Copied ✓', 'ok')),
-        },
-        {
-          label: 'Download .pgpass',
-          fn: () => {
-            dlText(pgpass, '.pgpass');
-            showToast('Downloaded', 'ok');
+      if (action === 'import-apache') {
+        const doImport = async (text: string, merge: boolean) => {
+          const parsed = parseApacheConf(text);
+          if (!parsed.length) {
+            showToast('No VirtualHost/Directory blocks found', 'err');
+            return;
+          }
+          if (
+            !merge &&
+            proj.chunks?.length &&
+            !(await showConfirm(`Replace ${proj.chunks.length} existing chunk(s)?`))
+          )
+            return;
+          if (merge) {
+            if (!proj.chunks) proj.chunks = [];
+            proj.chunks.push(...parsed);
+          } else proj.chunks = parsed;
+          void persist();
+          render();
+          showToast(`Imported ${parsed.length} chunks ✓`, 'ok');
+        };
+        showDropdown(el, [
+          {
+            label: 'Import from file',
+            fn: () => pickFileText('text/plain,.conf', (t) => doImport(t, false)),
           },
-        },
-      ]);
-      return;
-    }
+          {
+            label: 'Paste config…',
+            fn: async () => {
+              const t = await showPromptLarge('Paste Apache config:', '');
+              if (t) void doImport(t, false);
+            },
+          },
+          ...(proj.chunks?.length
+            ? [
+                {
+                  label: 'Append to existing',
+                  fn: () => pickFileText('text/plain,.conf', (t) => doImport(t, true)),
+                },
+              ]
+            : []),
+        ]);
+        return;
+      }
+
+      if (action === 'export-apache') {
+        const conf = exportApache(proj);
+        showDropdown(el, [
+          {
+            label: 'Copy config',
+            fn: () => clipboardWrite(conf).then(() => showToast('Copied ✓', 'ok')),
+          },
+          {
+            label: 'Download config',
+            fn: () => {
+              dlText(conf, `${proj.name}.conf`);
+              showToast('Downloaded', 'ok');
+            },
+          },
+        ]);
+        return;
+      }
+
+      if (action === 'import-haproxy') {
+        const doImport = async (text: string, merge: boolean) => {
+          const parsed = parseHaproxyConf(text);
+          if (!parsed.length) {
+            showToast('No sections found', 'err');
+            return;
+          }
+          if (
+            !merge &&
+            proj.chunks?.length &&
+            !(await showConfirm(`Replace ${proj.chunks.length} existing chunk(s)?`))
+          )
+            return;
+          if (merge) {
+            if (!proj.chunks) proj.chunks = [];
+            proj.chunks.push(...parsed);
+          } else proj.chunks = parsed;
+          void persist();
+          render();
+          showToast(`Imported ${parsed.length} chunks ✓`, 'ok');
+        };
+        showDropdown(el, [
+          {
+            label: 'Import from file',
+            fn: () => pickFileText('text/plain,.cfg', (t) => doImport(t, false)),
+          },
+          {
+            label: 'Paste config…',
+            fn: async () => {
+              const t = await showPromptLarge('Paste HAProxy config:', '');
+              if (t) void doImport(t, false);
+            },
+          },
+          ...(proj.chunks?.length
+            ? [
+                {
+                  label: 'Append to existing',
+                  fn: () => pickFileText('text/plain,.cfg', (t) => doImport(t, true)),
+                },
+              ]
+            : []),
+        ]);
+        return;
+      }
+
+      if (action === 'export-haproxy') {
+        const conf = exportHaproxy(proj);
+        showDropdown(el, [
+          {
+            label: 'Copy haproxy.cfg',
+            fn: () => clipboardWrite(conf).then(() => showToast('Copied ✓', 'ok')),
+          },
+          {
+            label: 'Download haproxy.cfg',
+            fn: () => {
+              dlText(conf, 'haproxy.cfg');
+              showToast('Downloaded', 'ok');
+            },
+          },
+        ]);
+        return;
+      }
+
+      if (action === 'export-ansible') {
+        const yamlContent = exportAnsible(proj);
+        showDropdown(el, [
+          {
+            label: 'Copy YAML',
+            fn: () => clipboardWrite(yamlContent).then(() => showToast('Copied ✓', 'ok')),
+          },
+          {
+            label: 'Download playbook.yml',
+            fn: () => {
+              dlText(yamlContent, 'playbook.yml');
+              showToast('Downloaded', 'ok');
+            },
+          },
+        ]);
+        return;
+      }
+
+      if (action === 'export-postgres') {
+        const pgpass = exportPostgres(proj);
+        showDropdown(el, [
+          {
+            label: 'Copy .pgpass',
+            fn: () => clipboardWrite(pgpass).then(() => showToast('Copied ✓', 'ok')),
+          },
+          {
+            label: 'Download .pgpass',
+            fn: () => {
+              dlText(pgpass, '.pgpass');
+              showToast('Downloaded', 'ok');
+            },
+          },
+        ]);
+        return;
+      }
+    })();
   });
+}
+
+/**
+ * Brings one entry's card into view from anywhere: a `${ref}` badge in the config
+ * view, a health-scan finding. Both used to expand the card and repaint, which
+ * shows nothing when a project, search or tag filter is hiding the entry, or
+ * when the config view (which replaces the card grid) is what is on screen: the
+ * Phase 32.2 probe found the badge's click had no visible effect for exactly
+ * that reason. So if the entry is not in the filtered set, the filters go.
+ * Addressed by id (invariant 1); the card is looked up fresh after the repaint.
+ */
+export function revealEntry(entry: VaultEntry): void {
+  const id = entryId(entry);
+  switchPanel('secrets');
+  const inView = getFiltered().includes(entry);
+  const onConfigView = st.currentSelectedProjectIds[0] !== 'Universal';
+  if (!inView || onConfigView) clearAllFilters();
+  st.expanded.add(id);
+  // A collapsed pool card hides its members; expand it too, or the card this
+  // promises to show stays behind the summary.
+  if (typeof entry.pool === 'string' && entry.pool.trim()) st.expandedPools.add(entry.pool.trim());
+  render();
+  setTimeout(() => {
+    const idx = st.vault.api_keys.findIndex((e) => entryId(e) === id);
+    const cardEl = document.querySelector<HTMLElement>(`#card-grid [data-idx="${idx}"]`);
+    cardEl?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    cardEl?.classList.add('flash-highlight');
+    setTimeout(() => cardEl?.classList.remove('flash-highlight'), 1500);
+  }, 80);
 }
 
 // ── Top-level render ───────────────────────────────────────────────────────
@@ -2287,6 +3201,14 @@ export function render() {
   updateCopyAllBtn();
 }
 
+/** A chip's display label — the one place this mapping lives, shared by the
+ * "Copy All" button and the active-filter summary below. `secretTypeLabel`
+ * already handles every real `SecretType`; `__totp` is the only token that
+ * needs a name of its own. */
+function chipLabel(chip: string): string {
+  return chip === '__totp' ? '2FA' : secretTypeLabel(chip);
+}
+
 /**
  * Every filter currently narrowing the grid, as human-readable labels.
  *
@@ -2301,7 +3223,8 @@ export function activeFilterLabels(): string[] {
   if (st.activeTagFilter) out.push(`tag: ${st.activeTagFilter}`);
   if (st.activePrefixFilter) out.push(`prefix: ${st.activePrefixFilter}`);
   if (st.activePoolFilter) out.push(`pool: ${st.activePoolFilter}`);
-  if (st.activeTypeChips.size) out.push(`type: ${[...st.activeTypeChips].join(', ')}`);
+  if (st.activeTypeChips.size)
+    out.push(`type: ${[...st.activeTypeChips].map(chipLabel).join(', ')}`);
   if (st.searchQ) out.push(`search: ${st.searchQ}`);
   const proj = st.currentSelectedProjectIds.filter((id) => id !== 'Universal');
   proj.forEach((id) => {
@@ -2332,26 +3255,20 @@ export function updateCopyAllBtn() {
   wrap.style.display = items.length ? 'flex' : 'none';
   const btn = document.getElementById('copy-all-btn')!;
   const projectFiltered = (st.currentSelectedProjectIds[0] ?? 'Universal') !== 'Universal';
-  const ST_LABELS: Record<string, string> = {
-    api_key: 'API Keys',
-    password: 'Passwords',
-    env_var: 'Env Vars',
-    connection_string: 'Connections',
-    ssh_key: 'SSH Keys',
-    certificate: 'Certificates',
-    file_blob: 'File Blobs',
-  };
+  const chips = [...st.activeTypeChips];
   const label =
     st.filter.type === 'category'
       ? `Copy "${st.filter.value}"`
       : st.filter.type === 'price'
         ? `Copy ${st.filter.value}`
-        : st.filter.type === 'secret_type'
-          ? `Copy ${ST_LABELS[st.filter.value] || st.filter.value}`
-          : projectFiltered
-            ? 'Copy Category'
-            : 'Copy All';
-  btn.innerHTML = `${copySVG} ${label}`;
+        : chips.length === 1
+          ? `Copy ${chipLabel(chips[0])}`
+          : chips.length > 1
+            ? `Copy ${chips.length} types`
+            : projectFiltered
+              ? 'Copy Category'
+              : 'Copy All';
+  setHtml(btn, html`${copySVG} ${label}`);
 }
 
 // Register render as the global render function
@@ -2362,42 +3279,56 @@ setRenderFn(render);
 let _envLinkProj: import('./types').Project | null = null;
 let _envLinkChunk: import('./types').SecretChunk | null = null;
 
-function _renderEnvLinkRow(m: EnvLinkMatch): string {
+function _renderEnvLinkRow(m: EnvLinkMatch): SafeHtml {
   if (m.alreadyLinked) {
-    return `<div class="env-link-row env-link-row--linked">
-      <span class="env-link-key">${esc(m.key)}</span>
-      <span class="env-link-badge env-link-badge--linked" title="Linked to ${esc(m.existingRef || '')}">→ ${esc(m.existingRef || '')} ✓</span>
+    return html`<div class="env-link-row env-link-row--linked">
+      <span class="env-link-key">${m.key}</span>
+      <span class="env-link-badge env-link-badge--linked" title="Linked to ${m.existingRef || ''}"
+        >→ ${m.existingRef || ''} ✓</span
+      >
     </div>`;
   }
   if (m.match) {
     const { entry, ref, field, confidence } = m.match;
-    return `<div class="env-link-row env-link-row--match" data-key="${escAttr(m.key)}" data-ref="${escAttr(ref)}">
+    return html`<div class="env-link-row env-link-row--match" data-key="${m.key}" data-ref="${ref}">
       <label class="env-link-check-label">
-        <input type="checkbox" class="env-link-cb" checked>
-        <span class="env-link-key">${esc(m.key)}</span>
+        <input type="checkbox" class="env-link-cb" checked />
+        <span class="env-link-key">${m.key}</span>
       </label>
-      <span class="env-link-badge env-link-badge--vault">→ ${esc(entry.provider)} / ${esc(field)} <span class="env-link-conf">${confidence}%</span></span>
+      <span class="env-link-badge env-link-badge--vault"
+        >→ ${entry.provider} / ${field} <span class="env-link-conf">${confidence}%</span></span
+      >
     </div>`;
   }
   if (m.suggestCreate) {
     const { provider, keyId, secretType } = m.suggestCreate;
     const typeOpts = (
       ['api_key', 'password', 'connection_string', 'env_var', 'ssh_key'] as SecretType[]
-    )
-      .map((t) => `<option value="${t}"${t === secretType ? ' selected' : ''}>${t}</option>`)
-      .join('');
-    return `<div class="env-link-row env-link-row--create" data-key="${escAttr(m.key)}" data-key-id="${escAttr(keyId || '')}">
+    ).map((t) => html`<option value="${t}" ${t === secretType ? ' selected' : ''}>${t}</option>`);
+    return html`<div
+      class="env-link-row env-link-row--create"
+      data-key="${m.key}"
+      data-key-id="${keyId || ''}"
+    >
       <label class="env-link-check-label">
-        <input type="checkbox" class="env-link-cb">
-        <span class="env-link-key">${esc(m.key)}</span>
+        <input type="checkbox" class="env-link-cb" />
+        <span class="env-link-key">${m.key}</span>
       </label>
       <span class="env-link-badge env-link-badge--new">New:</span>
-      <input class="form-input env-link-name-input" value="${escAttr(provider)}" placeholder="provider name" style="width:130px;height:24px;padding:2px 6px;font-size:11px">
-      <select class="form-input env-link-type-select" style="width:130px;height:24px;padding:2px 4px;font-size:11px">${typeOpts}</select>
+      <input
+        class="form-input env-link-name-input"
+        value="${provider}"
+        placeholder="provider name"
+        style="width:130px;height:24px;padding:2px 6px;font-size:11px"
+      />
+      <select
+        class="form-input env-link-type-select"
+        style="width:130px;height:24px;padding:2px 4px;font-size:11px"
+      >${typeOpts}</select>
     </div>`;
   }
-  return `<div class="env-link-row env-link-row--skip">
-    <span class="env-link-key">${esc(m.key)}</span>
+  return html`<div class="env-link-row env-link-row--skip">
+    <span class="env-link-key">${m.key}</span>
     <span class="env-link-badge" style="color:var(--text3)">empty — skip</span>
   </div>`;
 }
@@ -2412,7 +3343,7 @@ export function openEnvLinkModal(
   const sub = document.getElementById('env-link-subtitle');
   if (sub) sub.textContent = `${chunk.name} — ${matches.length} fields`;
   const list = document.getElementById('env-link-list');
-  if (list) list.innerHTML = matches.map(_renderEnvLinkRow).join('');
+  if (list) setHtml(list, html`${matches.map(_renderEnvLinkRow)}`);
   document.getElementById('env-link-overlay')?.classList.add('open');
 }
 
@@ -2507,7 +3438,7 @@ export function applyEnvLink() {
     showToast('Nothing selected', '', 1500);
     return;
   }
-  persist();
+  void persist();
   render();
   closeEnvLinkModal();
   showToast(`${linked} linked, ${created} created ✓`, 'ok');
