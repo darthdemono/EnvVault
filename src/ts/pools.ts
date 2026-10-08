@@ -1,32 +1,11 @@
-/**
- * @file
- * The Key Pools tool pane.
- *
- * A pool is several interchangeable credentials for one service, held so a rate
- * limit on one does not stop the work. Membership is a field on the entry
- * (`pool`) and lives in the vault; the *swap state* — which key is next, which
- * are cooling, how often each has been used — does not.
- *
- * That state is `pools.json` in the per-user state directory, written by both
- * this app and the `envv` CLI. The app's data directory and the CLI's default
- * resolve to the same `io.envvault`, so a key reported rate limited from CI
- * shows as cooling here within one refresh. See `vault-core/src/pool.rs` for
- * why it is not in the vault: `save_vault` appends an audit row per update and
- * is a compare-and-swap, so putting a read-path counter there would grow the
- * hash chain without bound and turn concurrent reads into write conflicts.
- *
- * Outside Tauri — a browser dev server, or the test suite — there is no state
- * file to read. The pane still renders membership from the vault and says so,
- * rather than showing zeros that look like real counts.
- */
-
 import { st, inTauri } from './state';
 import type { VaultEntry } from './types';
-import { esc, escAttr, showToast, showConfirm } from './utils';
+import { showToast, showConfirm } from './utils';
 import { relativeTime } from './ui-qol';
+import { invokeTauri } from './tauri';
+import { html, setHtml } from './html';
 
-const invoke = (cmd: string, args?: Record<string, unknown>) =>
-  (window as any).__TAURI__?.core?.invoke?.(cmd, args) as Promise<any> | undefined;
+const invoke = invokeTauri;
 
 /** Default cooldown offered by the button, matching the CLI's `--for` default. */
 const DEFAULT_COOLDOWN_MIN = 15;
@@ -99,21 +78,22 @@ export async function renderPoolsPane(): Promise<void> {
 
   const pools = poolsOf(st.vault ?? {});
   if (pools.size === 0) {
-    host.innerHTML = `
-      <div class="empty-state">
+    setHtml(
+      host,
+      html` <div class="empty-state">
         <p>No key pools yet.</p>
         <p class="tool-note">
           Put two or more credentials for one service in a pool by setting
-          <strong>Key Pool</strong> on each of them in the edit form, then swap between
-          them with <code>envv get --pool &lt;name&gt;</code> or
-          <code>envv exec --pool &lt;name&gt;</code>.
+          <strong>Key Pool</strong> on each of them in the edit form, then swap between them with
+          <code>envv get --pool &lt;name&gt;</code> or <code>envv exec --pool &lt;name&gt;</code>.
         </p>
         <p class="tool-note">
           Membership is explicit on purpose. Two keys for the same provider do not pool
-          automatically, because a command refusing an ambiguous match is what stops it
-          acting on a credential you did not mean.
+          automatically, because a command refusing an ambiguous match is what stops it acting on a
+          credential you did not mean.
         </p>
-      </div>`;
+      </div>`,
+    );
     return;
   }
 
@@ -145,90 +125,62 @@ export async function renderPoolsPane(): Promise<void> {
     }
   }
 
-  const rows = [...pools.entries()]
-    .map(([name, members], poolIdx) => {
-      const byCk = states.get(name);
-      const memberRows = members
-        .map((e, i) => {
-          const s = byCk ? [...byCk.values()][i] : undefined;
-          const cooling = s?.cooling ?? false;
-          const until = s?.cooling_until ?? null;
-          const usage = stateAvailable ? `${s?.uses ?? 0}` : '—';
-          const lastUsed = s?.last_used_at ? relativeTime(s.last_used_at) : 'never';
-          return `
-            <tr class="${cooling ? 'pool-row-cooling' : ''}">
-              <td class="pool-member">${esc(label(e))}</td>
-              <td class="pool-uses mono">${esc(usage)}</td>
-              <td class="pool-last mono">${esc(lastUsed)}</td>
-              <td class="pool-status">
-                ${
-                  cooling
-                    ? `<span class="badge badge-cooling" title="Skipped by envv get --pool until ${escAttr(
-                        until ?? '',
-                      )}">cooling</span>`
-                    : `<span class="pool-ok">available</span>`
-                }
-              </td>
-              <td class="pool-actions">
-                ${
-                  stateAvailable
-                    ? cooling
-                      ? `<button class="btn btn-sm" data-pool-action="clear" data-pool="${escAttr(
-                          name,
-                        )}" data-member="${escAttr(String(i))}">Clear</button>`
-                      : `<button class="btn btn-sm" data-pool-action="limit" data-pool="${escAttr(
-                          name,
-                        )}" data-member="${escAttr(String(i))}">Mark limited</button>`
-                    : ''
-                }
-              </td>
-            </tr>`;
-        })
-        .join('');
+  const rows = [...pools.entries()].map(([name, members], poolIdx) => {
+    const byCk = states.get(name);
+    const memberRows = members.map((e, i) => {
+      const s = byCk ? [...byCk.values()][i] : undefined;
+      const cooling = s?.cooling ?? false;
+      const until = s?.cooling_until ?? null;
+      const usage = stateAvailable ? `${s?.uses ?? 0}` : '—';
+      const lastUsed = s?.last_used_at ? relativeTime(s.last_used_at) : 'never';
+      return html` <tr class="${cooling ? 'pool-row-cooling' : ''}">
+        <td class="pool-member">${label(e)}</td>
+        <td class="pool-uses mono">${usage}</td>
+        <td class="pool-last mono">${lastUsed}</td>
+        <td class="pool-status">${cooling ? html`<span class="badge badge-cooling" title="Skipped by envv get --pool until ${until ?? ''}">cooling</span>` : html`<span class="pool-ok">available</span>`}</td>
+        <td class="pool-actions">${stateAvailable ? (cooling ? html`<button class="btn btn-sm" data-pool-action="clear" data-pool="${name}" data-member="${String(i)}">Clear</button>` : html`<button class="btn btn-sm" data-pool-action="limit" data-pool="${name}" data-member="${String(i)}">Mark limited</button>`) : ''}</td>
+      </tr>`;
+    });
 
-      const coolingCount = byCk ? [...byCk.values()].filter((s) => s.cooling).length : 0;
-      return `
-        <section class="pool-card" data-pool-index="${poolIdx}">
-          <header class="pool-card-header">
-            <h4 class="mono">${esc(name)}</h4>
-            <span class="pool-summary">
-              ${members.length} key${members.length === 1 ? '' : 's'}${
-                stateAvailable && coolingCount
-                  ? ` · <span class="pool-cooling-count">${coolingCount} cooling</span>`
-                  : ''
-              }
-            </span>
-            ${
-              stateAvailable
-                ? `<button class="btn btn-sm" data-pool-action="reset" data-pool="${escAttr(
-                    name,
-                  )}">Reset</button>`
-                : ''
-            }
-          </header>
-          <table class="pool-table">
-            <thead>
-              <tr><th>Key</th><th>Uses</th><th>Last used</th><th>Status</th><th></th></tr>
-            </thead>
-            <tbody>${memberRows}</tbody>
-          </table>
-        </section>`;
-    })
-    .join('');
+    const coolingCount = byCk ? [...byCk.values()].filter((s) => s.cooling).length : 0;
+    return html` <section class="pool-card" data-pool-index="${poolIdx}">
+      <header class="pool-card-header">
+        <h4 class="mono">${name}</h4>
+        <span class="pool-summary">${members.length}
+          key${members.length === 1 ? '' : 's'}${stateAvailable && coolingCount ? html` · <span class="pool-cooling-count">${coolingCount} cooling</span>` : ''}</span>${stateAvailable ? html`<button class="btn btn-sm" data-pool-action="reset" data-pool="${name}">Reset</button>` : ''}</header>
+      <table class="pool-table">
+        <thead>
+          <tr>
+            <th>Key</th>
+            <th>Uses</th>
+            <th>Last used</th>
+            <th>Status</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>${memberRows}</tbody>
+      </table>
+    </section>`;
+  });
 
   const footer = !inTauri
-    ? `<p class="tool-note">Swap state is read from the CLI's <code>pools.json</code>, which is only
-       available in the desktop app. Membership above is from the vault and is correct;
-       use counts and cooldowns are not shown.</p>`
+    ? html`<p class="tool-note">
+        Swap state is read from the CLI's <code>pools.json</code>, which is only
+        available in the desktop app. Membership above is from the vault and is correct; use counts and cooldowns are
+        not shown.
+      </p>`
     : !stateAvailable
-      ? `<p class="tool-note">Could not read <code>pools.json</code>. Membership is from the vault and is
-         correct; use counts and cooldowns are unavailable.</p>`
-      : `<p class="tool-note">Counts and cooldowns live in
-         <code>${esc(statePath || 'pools.json')}</code> — per machine, outside the vault and
-         outside backups, and shared with the <code>envv</code> CLI. Resetting affects this
-         machine only.</p>`;
+      ? html`<p class="tool-note">
+          Could not read <code>pools.json</code>. Membership is from the vault and is correct; use
+          counts and cooldowns are unavailable.
+        </p>`
+      : html`<p class="tool-note">
+          Counts and cooldowns live in <code>${statePath || 'pools.json'}</code> — per machine,
+          outside the vault and outside backups, and shared with the <code>envv</code> CLI.
+          Resetting affects this machine only.
+        </p>`;
 
-  host.innerHTML = rows + footer;
+  setHtml(host, html`${rows}${footer}`);
 }
 
 /**
