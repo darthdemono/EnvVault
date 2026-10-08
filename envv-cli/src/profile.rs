@@ -73,8 +73,8 @@ impl Default for CopyOpts {
         Self {
             profile: Profile::Basic,
             metadata: MetadataStyle::Comment,
-            case: None,
-            include_prefix: false,
+            case: crate::envfile::export_naming().0,
+            include_prefix: crate::envfile::export_naming().1,
         }
     }
 }
