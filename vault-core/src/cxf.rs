@@ -22,12 +22,9 @@
 //!
 //! An `Item` with **one** credential becomes a plain entry. An `Item` with
 //! **several** becomes a Phase 24.1 bundle: one `secretType: "bundle"` parent
-//! entry (`provider` = the item's title) plus one member entry per credential,
-//! each carrying `bundle_id` back to the parent and `bundle_slot` set to the
-//! credential's CXF type. The bundle *card* is not built yet (24.1 landed the
-//! fields, not the UI), so an imported multi-credential item is correct data
-//! that nothing renders specially until that lands — the same "shape now,
-//! behaviour later" the fields themselves shipped under.
+//! plus one member per non-`custom-fields` credential. CXF custom fields become
+//! the bundle's local variables, so they can participate in scoped templates
+//! rather than appearing as a fake member.
 //!
 //! A `totp` credential never becomes its own entry: it is Phase 22's stored
 //! seed, a field *on* whichever entry the rest of the item produced, matching
@@ -213,6 +210,45 @@ fn custom_fields_credential(entry: &Value) -> CxfCredential {
     CxfCredential::CustomFields { fields }
 }
 
+/// CXF has no bundle-level fields; this extension preserves parent locals.
+const BUNDLE_LOCAL_ESCAPE: &str = "__envvault_local__";
+
+fn encode_bundle_local_name(name: &str) -> String {
+    if name == "_envvault_type"
+        || name == "_envvault_bundle"
+        || name.starts_with(BUNDLE_LOCAL_ESCAPE)
+    {
+        format!("{BUNDLE_LOCAL_ESCAPE}{name}")
+    } else {
+        name.to_string()
+    }
+}
+
+fn decode_bundle_local_name(name: &str) -> &str {
+    name.strip_prefix(BUNDLE_LOCAL_ESCAPE).unwrap_or(name)
+}
+
+fn bundle_locals_credential(entry: Option<&Value>) -> CxfCredential {
+    let mut fields = vec![CxfField {
+        name: "_envvault_bundle".into(),
+        value: "true".into(),
+        field_type: None,
+    }];
+    if let Some(vars) = entry
+        .and_then(|value| value.get("extra_vars"))
+        .and_then(Value::as_array)
+    {
+        fields.extend(vars.iter().filter_map(|var| {
+            Some(CxfField {
+                name: encode_bundle_local_name(var.get("key")?.as_str()?),
+                value: var.get("value")?.as_str()?.to_string(),
+                field_type: None,
+            })
+        }));
+    }
+    CxfCredential::CustomFields { fields }
+}
+
 /// One entry's non-TOTP credential, native where a mapping exists in
 /// `secret_types.json`, `custom-fields` otherwise.
 fn native_credential(entry: &Value) -> CxfCredential {
@@ -301,13 +337,14 @@ fn item_from_entry(entry: &Value) -> CxfItem {
 /// members, not a value in `api_key`.
 pub fn export(entries: &[Value]) -> CxfDocument {
     let mut bundles: std::collections::BTreeMap<String, Vec<&Value>> = Default::default();
-    let mut bundle_titles: std::collections::HashMap<String, String> = Default::default();
+    let mut bundle_parents: std::collections::HashMap<String, &Value> = Default::default();
     let mut standalone = Vec::new();
 
     for e in entries {
         if s(e, "secretType").as_deref() == Some("bundle") {
             if let Some(id) = s(e, "id") {
-                bundle_titles.insert(id, s(e, "provider").unwrap_or_default());
+                bundle_parents.insert(id.clone(), e);
+                bundles.entry(id).or_default();
             }
             continue;
         }
@@ -319,7 +356,9 @@ pub fn export(entries: &[Value]) -> CxfDocument {
 
     let mut items: Vec<CxfItem> = standalone.iter().map(|e| item_from_entry(e)).collect();
     for (bundle_id, members) in bundles {
-        let mut credentials = Vec::new();
+        let mut credentials = vec![bundle_locals_credential(
+            bundle_parents.get(&bundle_id).copied(),
+        )];
         for m in &members {
             credentials.push(native_credential(m));
             if has_totp(m) {
@@ -328,9 +367,9 @@ pub fn export(entries: &[Value]) -> CxfDocument {
         }
         items.push(CxfItem {
             id: bundle_id.clone(),
-            title: bundle_titles
+            title: bundle_parents
                 .get(&bundle_id)
-                .cloned()
+                .and_then(|parent| s(parent, "provider"))
                 .unwrap_or_else(|| "Bundle".to_string()),
             subtitle: None,
             favorite: false,
@@ -357,6 +396,12 @@ fn entries_from_item(item: &CxfItem, mut new_id: impl FnMut() -> String, now: &s
         .credentials
         .iter()
         .find(|c| matches!(c, CxfCredential::Totp { .. }));
+    let is_bundle = non_totp.iter().any(|credential| match credential {
+        CxfCredential::CustomFields { fields } => fields
+            .iter()
+            .any(|field| field.name == "_envvault_bundle" && field.value == "true"),
+        _ => false,
+    });
 
     let apply_totp = |entry: &mut Value| {
         if let Some(CxfCredential::Totp {
@@ -389,7 +434,7 @@ fn entries_from_item(item: &CxfItem, mut new_id: impl FnMut() -> String, now: &s
         return vec![entry];
     }
 
-    if non_totp.len() == 1 {
+    if non_totp.len() == 1 && !is_bundle {
         let mut entry = entry_from_credential(&new_id(), &item.title, non_totp[0], now);
         apply_totp(&mut entry);
         return vec![entry];
@@ -399,6 +444,23 @@ fn entries_from_item(item: &CxfItem, mut new_id: impl FnMut() -> String, now: &s
     // attaches to the first member — CXF gives no stronger signal for which
     // login it belongs to, and the alternative is dropping it.
     let bundle_id = new_id();
+    let mut members = Vec::new();
+    let mut local_vars = Vec::new();
+    for credential in non_totp {
+        match credential {
+            CxfCredential::CustomFields { fields } => local_vars.extend(
+                fields
+                    .iter()
+                    .filter(|field| {
+                        field.name != "_envvault_type" && field.name != "_envvault_bundle"
+                    })
+                    .map(|field| {
+                        json!({ "key": decode_bundle_local_name(&field.name), "value": field.value })
+                    }),
+            ),
+            _ => members.push(credential),
+        }
+    }
     let mut out = vec![json!({
         "id": bundle_id,
         "provider": item.title,
@@ -408,10 +470,10 @@ fn entries_from_item(item: &CxfItem, mut new_id: impl FnMut() -> String, now: &s
         "categories": [],
         "scopes": [],
         "projectIds": ["Universal"],
-        "extra_vars": [],
+        "extra_vars": local_vars,
         "created_at": now,
     })];
-    for (i, cred) in non_totp.iter().enumerate() {
+    for (i, cred) in members.iter().enumerate() {
         let mut member = entry_from_credential(&new_id(), &item.title, cred, now);
         member["bundle_id"] = json!(bundle_id);
         member["bundle_slot"] = json!(cxf_credential_kind(cred));
@@ -665,13 +727,59 @@ mod tests {
     }
 
     #[test]
+    fn cxf_custom_fields_become_bundle_locals_not_a_member() {
+        let doc = CxfDocument {
+            items: vec![CxfItem {
+                id: "item-1".into(),
+                title: "Discord bot".into(),
+                subtitle: None,
+                favorite: false,
+                tags: vec![],
+                scope: None,
+                credentials: vec![
+                    CxfCredential::ApiKey {
+                        key: "bot-token".into(),
+                        username: None,
+                        key_type: Some("api_key".into()),
+                        url: None,
+                        expiry_date: None,
+                    },
+                    CxfCredential::CustomFields {
+                        fields: vec![
+                            CxfField {
+                                name: "application_id".into(),
+                                value: "9007199254740993".into(),
+                                field_type: Some("text".into()),
+                            },
+                            CxfField {
+                                name: "_envvault_type".into(),
+                                value: "api_key".into(),
+                                field_type: None,
+                            },
+                        ],
+                    },
+                ],
+            }],
+        };
+        let imported = import(&doc, ids(), "2026-01-01T00:00:00Z");
+        assert_eq!(imported.len(), 2, "bundle parent plus actual credential");
+        assert_eq!(imported[0]["secretType"], "bundle");
+        assert_eq!(imported[0]["extra_vars"][0]["key"], "application_id");
+        assert_eq!(imported[0]["extra_vars"][0]["value"], "9007199254740993");
+        assert_eq!(imported[1]["bundle_id"], imported[0]["id"]);
+    }
+
+    #[test]
     fn parsing_junk_bytes_refuses_rather_than_panics() {
         assert!(parse(b"{not json").is_err());
     }
 
     #[test]
     fn exporting_a_bundle_and_reimporting_keeps_membership() {
-        let bundle = json!({ "id": "b1", "provider": "Spotify", "secretType": "bundle" });
+        let bundle = json!({
+            "id": "b1", "provider": "Spotify", "secretType": "bundle",
+            "extra_vars": [{ "key": "region", "value": "eu-west" }],
+        });
         let m1 = json!({
             "id": "m1", "provider": "Spotify", "secretType": "password",
             "api_key": "pw", "bundle_id": "b1",
@@ -682,8 +790,29 @@ mod tests {
         });
         let doc = export(&[bundle, m1, m2]);
         assert_eq!(doc.items.len(), 1);
-        assert_eq!(doc.items[0].credentials.len(), 2);
+        assert_eq!(doc.items[0].credentials.len(), 3);
         let imported = import(&doc, ids(), "2026-01-01T00:00:00Z");
         assert_eq!(imported.len(), 3);
+        assert_eq!(imported[0]["extra_vars"][0]["key"], "region");
+        assert_eq!(imported[0]["extra_vars"][0]["value"], "eu-west");
+    }
+
+    #[test]
+    fn empty_bundle_with_locals_round_trips_as_a_bundle() {
+        let bundle = json!({
+            "id": "b1", "provider": "Discord", "secretType": "bundle",
+            "extra_vars": [
+                { "key": "guild_id", "value": "123" },
+                { "key": "_envvault_bundle", "value": "true" },
+            ],
+        });
+        let doc = export(&[bundle]);
+        assert_eq!(doc.items[0].credentials.len(), 1);
+        let imported = import(&doc, ids(), "2026-01-01T00:00:00Z");
+        assert_eq!(imported.len(), 1);
+        assert_eq!(imported[0]["secretType"], "bundle");
+        assert_eq!(imported[0]["extra_vars"][0]["key"], "guild_id");
+        assert_eq!(imported[0]["extra_vars"][1]["key"], "_envvault_bundle");
+        assert_eq!(imported[0]["extra_vars"][1]["value"], "true");
     }
 }
