@@ -245,6 +245,17 @@
       "value": "sha256:0a1b/c.d-e_f@g",
       "written": "sha256:0a1b/c.d-e_f@g"
     },
+    {
+      "why": "an emoji is not in the bare set, so it is quoted, and survives as itself (A9: it must reach a .env intact)",
+      "value": "🔑 key",
+      "written": "\"🔑 key\""
+    },
+    {
+      "why": "a combined emoji (ZWJ sequence) is one value, never split by the quoter",
+      "value": "👩‍💻",
+      "written": "\"👩‍💻\""
+    },
+    { "why": "a lone non-ASCII letter forces quotes too", "value": "naïve", "written": "\"naïve\"" },
     { "why": "a space forces quotes", "value": "hello world", "written": "\"hello world\"" },
     {
       "why": "a trailing space would otherwise be eaten by the parser's trim",
