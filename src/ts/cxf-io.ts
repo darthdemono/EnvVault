@@ -15,11 +15,9 @@
 import { st, inTauri, persist, triggerRender } from './state';
 import { showToast, showConfirm, saveFile } from './utils';
 import type { VaultEntry } from './types';
+import { invokeTauri } from './tauri';
 
-const invoke = (cmd: string, args?: Record<string, unknown>) =>
-  (
-    window as unknown as { __TAURI__?: { core?: { invoke?: (c: string, a?: unknown) => unknown } } }
-  ).__TAURI__?.core?.invoke?.(cmd, args) as Promise<unknown> | undefined;
+const invoke = invokeTauri;
 
 /**
  * Parse a CXF document's text into entries ready to append. Never touches
