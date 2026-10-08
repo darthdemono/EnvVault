@@ -17,9 +17,9 @@
 
 use envv_cli::error::{CliError, CliResult};
 use envv_cli::{
-    access, agentio, backup, chunks, cxf_cmd, data, doctor, enrich, entries, envfile, exec,
-    feed_cmd, fmt, gen, import_vaults, out, pool, projects, render, scan, session, uid_cmd,
-    users_cmd,
+    access, agentio, backup, bundle_cmd, check_cmd, chunks, cxf_cmd, data, doctor, emit_cmd,
+    enrich, entries, envfile, exec, feed_cmd, fmt, gen, import_vaults, oauth_cmd, out, pool,
+    projects, render, scan, session, session_cmd, shield, uid_cmd, users_cmd,
 };
 use vault_core::calendar;
 
@@ -130,6 +130,16 @@ struct Cli {
     /// Emit a machine-readable envelope on stdout: {"ok":true,"command":…,"data":…}.
     #[arg(long, global = true)]
     json: bool,
+
+    /// Case of generated variable names in copies and exports: upper (default),
+    /// preserve, or lower. The CLI side of the app's "copy case" setting.
+    #[arg(long, global = true, env = "ENVV_ENV_CASE", value_parser = ["upper", "preserve", "lower"])]
+    env_case: Option<String>,
+
+    /// Put the entry's first env prefix in front of generated names in copies and
+    /// exports. The CLI side of the app's "include consumer prefix" setting.
+    #[arg(long, global = true, env = "ENVV_ENV_PREFIX")]
+    env_prefix: bool,
 
     /// Print real secret values instead of `sha256:…` fingerprints.
     ///
@@ -405,6 +415,53 @@ enum Commands {
     },
     /// List every tag in the vault with its entry count.
     Tags,
+    /// Write a credential in the file its tool reads: `.npmrc`, `pypirc`,
+    /// Docker `config.json`, a DSN, libpq variables, a Wi-Fi QR string.
+    ///
+    /// With no `--as`, lists the formats the entry's type offers. The output
+    /// holds the credential, so it follows `export`'s rule: refused to stdout
+    /// unless `--reveal`, written 0600 by `--out`.
+    Emit {
+        entry: String,
+        #[arg(long = "as")]
+        format: Option<String>,
+        #[arg(long, short = 'o')]
+        out: Option<std::path::PathBuf>,
+    },
+    /// Compare two entries field by field. Secrets show as fingerprints unless
+    /// `--reveal`, so equal and different are answerable without reading either.
+    Diff { a: String, b: String },
+    /// Entry presets for common services: list them or show what one pre-fills.
+    Template {
+        #[command(subcommand)]
+        cmd: envv_cli::template_cmd::TemplateCmd,
+    },
+    /// Delete the local vault and its salt (the app's Settings -> Reset).
+    ///
+    /// Needs no password, since it exists for when the password is lost. Asks for
+    /// confirmation, refuses without a terminal unless `--yes`, and honours
+    /// `--dry-run`. A `.v1.bak` backup is left alone.
+    ResetVault,
+    /// The signed provider catalogue `enrich` reads before its compiled table.
+    Catalogue {
+        #[command(subcommand)]
+        cmd: envv_cli::catalogue_cmd::CatalogueCmd,
+    },
+    /// OAuth clients: exchange a refresh token for a new access token.
+    Oauth {
+        #[command(subcommand)]
+        cmd: OauthCmd,
+    },
+    /// Single-use recovery codes: status, the next one, and marking one used.
+    Codes {
+        #[command(subcommand)]
+        cmd: CodesCmd,
+    },
+    /// Bundles: one card for several entries that belong together.
+    Bundle {
+        #[command(subcommand)]
+        cmd: BundleCmd,
+    },
     /// Generators: secrets, passwords, certificates, SSH keys.
     Gen {
         #[command(subcommand)]
@@ -415,6 +472,19 @@ enum Commands {
         #[command(subcommand)]
         cmd: BackupCmd,
     },
+    /// Cross-chunk checks on a project's config: an nginx proxy_pass to a service
+    /// that is not defined, two WireGuard peers claiming one network, a Traefik
+    /// middleware that does not exist, and three more. Prints names, never values.
+    Check {
+        /// Project to check. Defaults to `envv use` / $ENVV_PROJECT, else every project.
+        project: Option<String>,
+        /// Exit 10 when a finding at this severity or worse exists (for CI).
+        #[arg(long, value_parser = ["error", "warning"])]
+        fail_on: Option<String>,
+        /// Emit JSON instead of a table.
+        #[arg(long)]
+        json: bool,
+    },
     /// Health scan — weak, expiring, duplicated and stale-reference secrets.
     Scan {
         /// Lowest severity to report: high, med, low (default: low = everything).
@@ -423,6 +493,12 @@ enum Commands {
         /// Emit JSON instead of a table.
         #[arg(long)]
         json: bool,
+        /// Scan a file or directory for plaintext values held by this vault.
+        #[arg(long, value_name = "PATH")]
+        exposed: Option<PathBuf>,
+        /// Write an exposure report here. Required with --exposed.
+        #[arg(long, short = 'o', requires = "exposed")]
+        out: Option<PathBuf>,
     },
     /// Where this CLI is pointed and what the vault holds.
     Status,
@@ -523,6 +599,15 @@ enum Commands {
         /// Do not inherit this process's environment (PATH is kept).
         #[arg(long)]
         clean: bool,
+        /// The command to run, after `--`.
+        #[arg(last = true, required = true)]
+        argv: Vec<String>,
+    },
+    /// Run a command while replacing known vault values in its text output.
+    ///
+    /// Explicit only: it changes a program's stdout and stderr, so scripts keep
+    /// their normal output unless they deliberately choose this wrapper.
+    Shield {
         /// The command to run, after `--`.
         #[arg(last = true, required = true)]
         argv: Vec<String>,
@@ -638,6 +723,31 @@ enum CookieCmd {
         provider: String,
         #[arg(long, short = 'o')]
         out: Option<std::path::PathBuf>,
+    },
+    /// Import a DevTools capture into a web-session entry.
+    ///
+    /// `--from curl` (DevTools "Copy as cURL", bash or cmd), `powershell`, `har`,
+    /// `set-cookie`, `firefox` (a profile's `cookies.sqlite`) or `auto`. FILE is
+    /// `-` for stdin. Only the chosen origin's cookies and headers are kept; an
+    /// `Authorization` header and other hosts' cookies are dropped and reported by
+    /// name. Without `--entry` this is a preview and writes nothing. Chrome is
+    /// refused by name: its cookies are not readable from outside the browser.
+    Import {
+        file: String,
+        #[arg(long, default_value = "auto")]
+        from: String,
+        /// Scope a HAR to one origin (required when it touches several).
+        #[arg(long)]
+        origin: Option<String>,
+        /// Host to read from a Firefox `cookies.sqlite`.
+        #[arg(long)]
+        host: Option<String>,
+        /// Write into this web-session entry (preview only when omitted).
+        #[arg(long)]
+        entry: Option<String>,
+        /// Create the entry if it does not exist.
+        #[arg(long)]
+        create: bool,
     },
 }
 
@@ -829,6 +939,10 @@ enum EntryCmd {
         /// Do nothing if an entry with this provider already exists.
         #[arg(long)]
         if_missing: bool,
+        /// Pre-fill from a preset (see `envv template ls`); explicit flags override
+        /// it. Not `--template`: that flag is a composite's `{part}` template.
+        #[arg(long)]
+        preset: Option<String>,
     },
     /// Change fields on an existing entry.
     Set {
@@ -1192,6 +1306,55 @@ enum ChunkCmd {
 }
 
 #[derive(Subcommand)]
+enum OauthCmd {
+    /// Refresh an `oauth_client` entry's access token at its `token_url`.
+    ///
+    /// ONLINE: sends the refresh token and client secret to that URL (https only;
+    /// no redirects). If the issuer rotates the refresh token, the new one is
+    /// stored in the vault before anything is reported.
+    Refresh { entry: String },
+}
+
+#[derive(Subcommand)]
+enum CodesCmd {
+    /// How many codes are left. Prints no codes.
+    Status { entry: String },
+    /// The next unused code. Reading does not consume it; `use` does.
+    Next { entry: String },
+    /// Mark a code used (the first unused one when CODE is omitted).
+    Use { entry: String, code: Option<String> },
+}
+
+#[derive(Subcommand)]
+enum BundleCmd {
+    /// List bundles with their member slots and local variable names.
+    Ls,
+    /// Create a bundle; each `--member SLOT=ENTRY` joins an existing entry.
+    New {
+        name: String,
+        #[arg(long = "member")]
+        members: Vec<String>,
+        /// Import a Python config module as bundle-local variables (assignment
+        /// subset only; nothing is executed).
+        #[arg(long)]
+        import: Option<PathBuf>,
+    },
+    /// Add an existing entry to a bundle under a slot name.
+    Add {
+        bundle: String,
+        entry: String,
+        #[arg(long)]
+        slot: String,
+    },
+    /// Detach the member in a slot; the entry itself is kept.
+    Remove { bundle: String, slot: String },
+    /// Return every member to the grid. Deletes nothing.
+    Dissolve { bundle: String },
+    /// Delete the bundle AND all of its member entries.
+    Delete { bundle: String },
+}
+
+#[derive(Subcommand)]
 enum CategoryCmd {
     Ls,
     Add {
@@ -1522,6 +1685,22 @@ fn main() {
         }
         _ => {}
     }
+    // Nor do the preset listings: compiled-in public reference data.
+    if let Commands::Template { cmd } = &cli.command {
+        finish(envv_cli::template_cmd::run(cmd));
+        return;
+    }
+    // Nor does a reset: it exists for the vault whose password is gone.
+    if matches!(&cli.command, Commands::ResetVault) {
+        access::set_paths(cli.db_path.clone(), cli.salt_path.clone());
+        finish(envv_cli::reset_cmd::run(cli.yes, cli.dry_run));
+        return;
+    }
+    // Nor does the catalogue: public reference data, no vault involved.
+    if let Commands::Catalogue { cmd } = &cli.command {
+        finish(envv_cli::catalogue_cmd::run(cmd));
+        return;
+    }
     // Neither do the generators, unless they are asked to save into the vault.
     if let Commands::Gen {
         cmd: GenCmd::Sources,
@@ -1556,6 +1735,12 @@ fn main() {
 
 fn run(cli: &Cli) -> CliResult {
     access::set_paths(cli.db_path.clone(), cli.salt_path.clone());
+    envv_cli::envfile::set_naming(
+        cli.env_case
+            .as_deref()
+            .map(envv_cli::envfile::NameCase::parse),
+        cli.env_prefix,
+    );
 
     // A compose `.env` supplies both halves of a local server connection, and an
     // explicit flag always wins over it.
@@ -2195,6 +2380,9 @@ fn dispatch(cli: &Cli, a: &Access) -> CliResult {
     match &cli.command {
         Commands::Completions { .. }
         | Commands::Describe
+        | Commands::Catalogue { .. }
+        | Commands::ResetVault
+        | Commands::Template { .. }
         | Commands::Login
         | Commands::Whoami
         | Commands::Sessions
@@ -2283,6 +2471,24 @@ fn dispatch(cli: &Cli, a: &Access) -> CliResult {
             CookieCmd::Json { provider, out } => {
                 entries::cmd_cookie(a, provider, "json", out.as_deref())
             }
+            CookieCmd::Import {
+                file,
+                from,
+                origin,
+                host,
+                entry,
+                create,
+            } => session_cmd::import(
+                a,
+                &session_cmd::ImportArgs {
+                    from,
+                    file,
+                    origin: origin.as_deref(),
+                    host: host.as_deref(),
+                    entry: entry.as_deref(),
+                    create: *create,
+                },
+            ),
         },
         Commands::Curl { provider, out, url } => {
             entries::cmd_curl(a, provider, url.first().map(String::as_str), out.as_deref())
@@ -2449,6 +2655,13 @@ fn dispatch(cli: &Cli, a: &Access) -> CliResult {
             }
             Ok(())
         }
+        Commands::Shield { argv } => {
+            let code = shield::run(a, argv)?;
+            if code != 0 {
+                std::process::exit(code);
+            }
+            Ok(())
+        }
         Commands::Render {
             template,
             out,
@@ -2555,7 +2768,8 @@ fn dispatch(cli: &Cli, a: &Access) -> CliResult {
                 provider,
                 fields,
                 if_missing,
-            } => entries::cmd_add(a, provider, fields, *if_missing),
+                preset,
+            } => entries::cmd_add(a, provider, fields, *if_missing, preset.as_deref()),
             EntryCmd::Set {
                 provider,
                 fields,
@@ -2667,6 +2881,35 @@ fn dispatch(cli: &Cli, a: &Access) -> CliResult {
 
         Commands::Tags => entries::cmd_tags(a),
 
+        Commands::Emit { entry, format, out } => {
+            emit_cmd::emit(a, entry, format.as_deref(), out.as_deref())
+        }
+        Commands::Oauth { cmd } => match cmd {
+            OauthCmd::Refresh { entry } => oauth_cmd::refresh(a, entry, yes),
+        },
+        Commands::Codes { cmd } => match cmd {
+            CodesCmd::Status { entry } => emit_cmd::codes_status(a, entry),
+            CodesCmd::Next { entry } => emit_cmd::codes_next(a, entry),
+            CodesCmd::Use { entry, code } => emit_cmd::codes_use(a, entry, code.as_deref()),
+        },
+
+        Commands::Bundle { cmd } => match cmd {
+            BundleCmd::Ls => bundle_cmd::ls(a),
+            BundleCmd::New {
+                name,
+                members,
+                import,
+            } => bundle_cmd::new(a, name, members, import.as_deref()),
+            BundleCmd::Add {
+                bundle,
+                entry,
+                slot,
+            } => bundle_cmd::add(a, bundle, entry, slot),
+            BundleCmd::Remove { bundle, slot } => bundle_cmd::remove(a, bundle, slot),
+            BundleCmd::Dissolve { bundle } => bundle_cmd::dissolve(a, bundle, yes),
+            BundleCmd::Delete { bundle } => bundle_cmd::delete(a, bundle, yes),
+        },
+
         Commands::Gen { cmd } => match cmd {
             GenCmd::Cert {
                 common_name,
@@ -2690,7 +2933,7 @@ fn dispatch(cli: &Cli, a: &Access) -> CliResult {
                     generate_format: "base64url".into(),
                     ..Default::default()
                 };
-                entries::cmd_add(a, provider, &fields, false)
+                entries::cmd_add(a, provider, &fields, false, None)
             }
             GenCmd::Ssh { comment, save_as } => {
                 let v = gen::ssh_keypair(comment, &gen::current())?;
@@ -2709,7 +2952,7 @@ fn dispatch(cli: &Cli, a: &Access) -> CliResult {
                     generate_format: "base64url".into(),
                     ..Default::default()
                 };
-                entries::cmd_add(a, provider, &fields, false)
+                entries::cmd_add(a, provider, &fields, false, None)
             }
             // The offline generators were handled before the vault was opened.
             _ => Ok(()),
@@ -2751,7 +2994,21 @@ fn dispatch(cli: &Cli, a: &Access) -> CliResult {
                 timeout_secs: *timeout,
             },
         ),
-        Commands::Scan { severity, json } => scan::cmd_scan(a, severity, *json),
+        Commands::Diff { a: left, b: right } => envv_cli::diff_cmd::run(a, left, right),
+        Commands::Check {
+            project,
+            fail_on,
+            json,
+        } => check_cmd::run(a, project.as_deref(), fail_on.as_deref(), *json),
+        Commands::Scan {
+            severity,
+            json,
+            exposed,
+            out,
+        } => match exposed {
+            Some(path) => scan::cmd_exposed(a, path, out.as_deref()),
+            None => scan::cmd_scan(a, severity, *json),
+        },
         Commands::ImportVault {
             vendor,
             file,
