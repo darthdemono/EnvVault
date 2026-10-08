@@ -1,8 +1,3 @@
-/**
- * @file
- * Remote Vaults panel — manage and connect to multiple remote envv-server instances.
- */
-
 import type { RemoteVaultConfig } from './types';
 import {
   st,
@@ -16,9 +11,11 @@ import {
   resetViewState,
   triggerRender,
 } from './state';
-import { esc, escAttr, showToast, showConfirm, showPasswordPrompt, showPrompt } from './utils';
+import { showToast, showConfirm, showPasswordPrompt, showPrompt, errorMessage } from './utils';
 import { relativeTime } from './ui-qol';
 import { refreshLanPanel } from './lan';
+import { invokeTauri, isTauri } from './tauri';
+import { html, setHtml } from './html';
 
 /**
  * Authenticate as a sub-user, asking for a second-factor code only if one is
@@ -59,16 +56,18 @@ let _pingInterval: ReturnType<typeof setInterval> | null = null;
 
 function startPing() {
   stopPing();
-  _pingInterval = setInterval(async () => {
-    // Delegate to the store: it owns the session token and routes through the
-    // TLS-pinning proxy. This used to hand-build a request reading a `_token`
-    // field that does not exist (the field is `token`), so every ping went out
-    // as `Bearer ` and was rejected — the keep-alive never kept anything alive.
-    if (!(st.store instanceof RemoteVaultStore)) {
-      stopPing();
-      return;
-    }
-    await (st.store as RemoteVaultStore).ping();
+  _pingInterval = setInterval(() => {
+    void (async () => {
+      // Delegate to the store: it owns the session token and routes through the
+      // TLS-pinning proxy. This used to hand-build a request reading a `_token`
+      // field that does not exist (the field is `token`), so every ping went out
+      // as `Bearer ` and was rejected — the keep-alive never kept anything alive.
+      if (!(st.store instanceof RemoteVaultStore)) {
+        stopPing();
+        return;
+      }
+      await (st.store as RemoteVaultStore).ping();
+    })();
   }, 90_000);
 }
 
@@ -110,13 +109,12 @@ function formatFingerprint(fp: string): string {
  * server is not reachable.
  */
 export async function acquireFingerprint(url: string): Promise<string | null> {
-  const invoke = (window as any).__TAURI__?.core?.invoke;
-  if (!invoke || !url.startsWith('https://')) return null;
+  if (!isTauri() || !url.startsWith('https://')) return null;
   let fp: string;
   try {
-    fp = await invoke('probe_cert_fingerprint', { url });
-  } catch (e: any) {
-    showToast(`Could not reach ${url}: ${e?.message ?? e}`, 'err', 4000);
+    fp = await invokeTauri<string>('probe_cert_fingerprint', { url });
+  } catch (e) {
+    showToast(`Could not reach ${url}: ${errorMessage(e)}`, 'err', 4000);
     return null;
   }
   const ok = await showConfirm(
@@ -204,35 +202,46 @@ export function renderRemotePanel() {
   const saved = getSaved();
   const activeId = st.activeRemoteId;
 
-  sidebar.innerHTML = saved.length
-    ? saved
-        .map(
-          (cfg) => `
-    <button class="remote-list-item${activeId === cfg.id ? ' active' : ''}" data-remote-id="${escAttr(cfg.id)}">
-      <span class="remote-item-icon">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z"/>
-        </svg>
-      </span>
-      <span class="remote-item-info">
-        <span class="remote-item-name">${esc(cfg.name)}</span>
-        <span class="remote-item-url">${esc(cfg.url)}</span>
-        <span class="remote-item-seen">${esc(relativeTime(cfg.lastConnectedAt))}</span>
-      </span>
-      ${activeId === cfg.id ? '<span class="remote-connected-dot" title="Connected"></span>' : ''}
-    </button>
-  `,
-        )
-        .join('')
-    : '<div class="users-empty">No saved remotes.<br>Add one below.</div>';
+  setHtml(
+    sidebar,
+    saved.length
+      ? html`${saved.map(
+          (cfg) => html`
+            <button
+              class="remote-list-item${activeId === cfg.id ? ' active' : ''}"
+              data-remote-id="${cfg.id}"
+            >
+              <span class="remote-item-icon">
+                <svg
+                  width="14"
+                  height="14"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                >
+                  <path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z" />
+                </svg>
+              </span>
+              <span class="remote-item-info">
+                <span class="remote-item-name">${cfg.name}</span>
+                <span class="remote-item-url">${cfg.url}</span>
+                <span class="remote-item-seen">${relativeTime(cfg.lastConnectedAt)}</span>
+              </span>${activeId === cfg.id ? html`<span class="remote-connected-dot" title="Connected"></span>` : ''}</button>
+          `,
+        )}`
+      : html`<div class="users-empty">No saved remotes.<br />Add one below.</div>`,
+  );
 
   if (workspace) {
     if (activeId) {
       const cfg = saved.find((c) => c.id === activeId);
       if (cfg) renderRemoteDetail(cfg, workspace);
     } else {
-      workspace.innerHTML =
-        '<div class="users-detail-empty">Select a remote vault or add a new one.</div>';
+      setHtml(
+        workspace,
+        html`<div class="users-detail-empty">Select a remote vault or add a new one.</div>`,
+      );
     }
   }
 }
@@ -241,85 +250,104 @@ function renderRemoteDetail(cfg: RemoteVaultConfig, ws: HTMLElement) {
   const isConnected =
     st.store instanceof RemoteVaultStore && (st.store as RemoteVaultStore).baseUrl === cfg.url;
 
-  ws.innerHTML = `
-    <div class="users-detail">
-      <div class="users-detail-header">
-        <div class="users-detail-avatar" style="background:${isConnected ? 'var(--accent-dim)' : 'var(--surface3)'};color:${isConnected ? 'var(--accent)' : 'var(--text3)'}">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
-            <path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z"/>
-          </svg>
-        </div>
-        <div class="users-detail-meta">
-          <div class="users-detail-name">
-            ${esc(cfg.name)}
-            ${isConnected ? '<span class="user-badge" style="background:rgba(79,201,126,.15);color:#4fc97e">Connected</span>' : '<span class="user-badge token-badge">Disconnected</span>'}
+  setHtml(
+    ws,
+    html`
+      <div class="users-detail">
+        <div class="users-detail-header">
+          <div
+            class="users-detail-avatar"
+            style="background:${isConnected ? 'var(--accent-dim)' : 'var(--surface3)'};color:${isConnected ? 'var(--accent)' : 'var(--text3)'}"
+          >
+            <svg
+              width="20"
+              height="20"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.8"
+            >
+              <path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z" />
+            </svg>
           </div>
-          <div class="users-detail-sub">${esc(cfg.url)} · ${cfg.username ? esc(cfg.username) : 'owner (master password)'}</div>
+          <div class="users-detail-meta">
+            <div class="users-detail-name">${cfg.name}
+              ${isConnected ? html`<span class="user-badge" style="background:rgba(79,201,126,.15);color:#4fc97e">Connected</span>` : html`<span class="user-badge token-badge">Disconnected</span>`}</div>
+            <div class="users-detail-sub">${cfg.url} · ${cfg.username ? cfg.username : 'owner (master password)'}</div>
+          </div>
+          <div class="users-detail-actions">${isConnected ? html`<button class="btn btn-xs danger" id="remote-disconnect-btn">Disconnect</button>` : html`<button class="btn btn-xs btn-accent" id="remote-connect-btn">Connect</button>`}
+            <button class="btn btn-xs btn-ghost" id="remote-delete-btn">Remove</button>
+          </div>
         </div>
-        <div class="users-detail-actions">
-          ${
-            isConnected
-              ? `<button class="btn btn-xs danger" id="remote-disconnect-btn">Disconnect</button>`
-              : `<button class="btn btn-xs btn-accent" id="remote-connect-btn">Connect</button>`
-          }
-          <button class="btn btn-xs btn-ghost" id="remote-delete-btn">Remove</button>
-        </div>
-      </div>
 
-      <section class="users-section">
-        <div class="users-section-head"><span>Connection Details</span></div>
-        <div class="remote-detail-fields">
-          <div class="remote-field-row">
-            <span class="remote-field-label">Name</span>
-            <input class="tool-input remote-edit-field" id="re-name" value="${escAttr(cfg.name)}">
+        <section class="users-section">
+          <div class="users-section-head"><span>Connection Details</span></div>
+          <div class="remote-detail-fields">
+            <div class="remote-field-row">
+              <span class="remote-field-label">Name</span>
+              <input class="tool-input remote-edit-field" id="re-name" value="${cfg.name}" />
+            </div>
+            <div class="remote-field-row">
+              <span class="remote-field-label">URL</span>
+              <input
+                class="tool-input remote-edit-field"
+                id="re-url"
+                value="${cfg.url}"
+                placeholder="http://localhost:8743"
+              />
+            </div>
+            <div class="remote-field-row">
+              <span class="remote-field-label">Username</span>
+              <input
+                class="tool-input remote-edit-field"
+                id="re-username"
+                value="${cfg.username}"
+                placeholder="leave blank = owner master-password"
+              />
+            </div>
+            <div style="display:flex;gap:6px;margin-top:8px">
+              <button class="btn btn-xs accent" id="re-save-btn">Save Changes</button>
+              <button class="btn btn-xs btn-ghost" id="re-test-btn">Test Connection</button>
+              <span
+                id="re-test-status"
+                style="font-size:11px;color:var(--text3);align-self:center"
+              ></span>
+            </div>
           </div>
-          <div class="remote-field-row">
-            <span class="remote-field-label">URL</span>
-            <input class="tool-input remote-edit-field" id="re-url" value="${escAttr(cfg.url)}" placeholder="http://localhost:8743">
-          </div>
-          <div class="remote-field-row">
-            <span class="remote-field-label">Username</span>
-            <input class="tool-input remote-edit-field" id="re-username" value="${escAttr(cfg.username)}" placeholder="leave blank = owner master-password">
-          </div>
-          <div style="display:flex;gap:6px;margin-top:8px">
-            <button class="btn btn-xs accent" id="re-save-btn">Save Changes</button>
-            <button class="btn btn-xs btn-ghost" id="re-test-btn">Test Connection</button>
-            <span id="re-test-status" style="font-size:11px;color:var(--text3);align-self:center"></span>
-          </div>
-        </div>
-      </section>
+        </section>
 
-      ${
-        isConnected
-          ? `
-      <section class="users-section">
-        <div class="users-section-head"><span>Vault Status</span></div>
-        <div id="remote-status-area" class="remote-status-area">
-          <button class="btn btn-xs btn-ghost" id="remote-refresh-status-btn">Refresh Status</button>
-        </div>
-      </section>`
-          : ''
-      }
-    </div>
-  `;
+        ${
+          isConnected
+            ? html` <section class="users-section">
+              <div class="users-section-head"><span>Vault Status</span></div>
+              <div id="remote-status-area" class="remote-status-area">
+                <button class="btn btn-xs btn-ghost" id="remote-refresh-status-btn">
+                  Refresh Status
+                </button>
+              </div>
+            </section>`
+            : ''
+        }</div>
+    `,
+  );
 
   // Bindings
   document
     .getElementById('remote-connect-btn')
-    ?.addEventListener('click', () => connectRemote(cfg));
+    ?.addEventListener('click', () => void connectRemote(cfg));
   document
     .getElementById('remote-disconnect-btn')
     ?.addEventListener('click', () => disconnectRemote());
   document
     .getElementById('remote-delete-btn')
-    ?.addEventListener('click', () => deleteRemote(cfg.id));
+    ?.addEventListener('click', () => void deleteRemote(cfg.id));
   document.getElementById('re-save-btn')?.addEventListener('click', () => saveRemoteEdits(cfg.id));
-  document.getElementById('re-test-btn')?.addEventListener('click', () => testRemote(cfg));
+  document.getElementById('re-test-btn')?.addEventListener('click', () => void testRemote(cfg));
   document
     .getElementById('remote-refresh-status-btn')
-    ?.addEventListener('click', () => refreshRemoteStatus(cfg));
+    ?.addEventListener('click', () => void refreshRemoteStatus(cfg));
 
-  if (isConnected) refreshRemoteStatus(cfg);
+  if (isConnected) void refreshRemoteStatus(cfg);
 }
 
 // ── Connect / Disconnect ──────────────────────────────────────────────────────
@@ -441,8 +469,8 @@ async function connectRemote(cfg: RemoteVaultConfig) {
     startPing();
     renderRemotePanel();
     await _finishInitFn();
-  } catch (e: any) {
-    showToast('Connection failed: ' + (e?.message ?? e), 'err');
+  } catch (e) {
+    showToast('Connection failed: ' + errorMessage(e), 'err');
   }
 }
 
@@ -523,7 +551,7 @@ async function deleteRemote(id: string) {
   renderRemotePanel();
 }
 
-async function saveRemoteEdits(id: string) {
+function saveRemoteEdits(id: string) {
   const name = (document.getElementById('re-name') as HTMLInputElement).value.trim();
   const url = (document.getElementById('re-url') as HTMLInputElement).value
     .trim()
@@ -592,32 +620,46 @@ async function refreshRemoteStatus(cfg: RemoteVaultConfig) {
   try {
     // Same reasoning as testRemote(): proxy-aware, fingerprint-aware.
     const body = await new RemoteVaultStore(cfg.url, cfg.certFingerprint).getStatus();
-    area.innerHTML = `
-      <div class="remote-status-grid">
-        <div class="remote-status-item">
-          <span class="remote-status-label">Server</span>
-          <span class="remote-status-val ok">Online</span>
+    setHtml(
+      area,
+      html`
+        <div class="remote-status-grid">
+          <div class="remote-status-item">
+            <span class="remote-status-label">Server</span>
+            <span class="remote-status-val ok">Online</span>
+          </div>
+          <div class="remote-status-item">
+            <span class="remote-status-label">Vault</span>
+            <span class="remote-status-val ${body.vault_exists ? 'ok' : 'warn'}"
+              >${body.vault_exists ? 'Exists' : 'Not created'}</span
+            >
+          </div>
+          <div class="remote-status-item">
+            <span class="remote-status-label">State</span>
+            <span class="remote-status-val ${body.unlocked ? 'ok' : 'warn'}"
+              >${body.unlocked ? 'Unlocked' : 'Locked'}</span
+            >
+          </div>
         </div>
-        <div class="remote-status-item">
-          <span class="remote-status-label">Vault</span>
-          <span class="remote-status-val ${body.vault_exists ? 'ok' : 'warn'}">${body.vault_exists ? 'Exists' : 'Not created'}</span>
-        </div>
-        <div class="remote-status-item">
-          <span class="remote-status-label">State</span>
-          <span class="remote-status-val ${body.unlocked ? 'ok' : 'warn'}">${body.unlocked ? 'Unlocked' : 'Locked'}</span>
-        </div>
-      </div>
-      <button class="btn btn-xs btn-ghost" id="remote-refresh-status-btn" style="margin-top:8px">Refresh</button>
-    `;
+        <button class="btn btn-xs btn-ghost" id="remote-refresh-status-btn" style="margin-top:8px">
+          Refresh
+        </button>
+      `,
+    );
     document
       .getElementById('remote-refresh-status-btn')
-      ?.addEventListener('click', () => refreshRemoteStatus(cfg));
+      ?.addEventListener('click', () => void refreshRemoteStatus(cfg));
   } catch {
-    area.innerHTML = `<div class="remote-status-err">Could not reach server.</div>
-      <button class="btn btn-xs btn-ghost" id="remote-refresh-status-btn" style="margin-top:6px">Retry</button>`;
+    setHtml(
+      area,
+      html`<div class="remote-status-err">Could not reach server.</div>
+        <button class="btn btn-xs btn-ghost" id="remote-refresh-status-btn" style="margin-top:6px">
+          Retry
+        </button>`,
+    );
     document
       .getElementById('remote-refresh-status-btn')
-      ?.addEventListener('click', () => refreshRemoteStatus(cfg));
+      ?.addEventListener('click', () => void refreshRemoteStatus(cfg));
   }
 }
 
@@ -627,12 +669,23 @@ function openAddRemoteForm() {
   const ws = document.getElementById('remote-detail-host');
   if (!ws) return;
 
-  ws.innerHTML = `
-    <div class="users-detail">
-      <div class="users-detail-header" style="border-bottom:1px solid var(--border);padding-bottom:16px">
+  setHtml(
+    ws,
+    html` <div class="users-detail">
+      <div
+        class="users-detail-header"
+        style="border-bottom:1px solid var(--border);padding-bottom:16px"
+      >
         <div class="users-detail-avatar" style="background:var(--surface3)">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
-            <path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z"/>
+          <svg
+            width="20"
+            height="20"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.8"
+          >
+            <path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z" />
           </svg>
         </div>
         <div class="users-detail-meta">
@@ -643,26 +696,51 @@ function openAddRemoteForm() {
       <section class="users-section">
         <div class="users-section-head"><span>Server Details</span></div>
         <div class="create-user-form">
-          <label class="user-form-label">Display Name
-            <input id="add-remote-name" class="tool-input user-form-field" placeholder="Production Vault" autocomplete="off">
+          <label class="user-form-label"
+            >Display Name
+            <input
+              id="add-remote-name"
+              class="tool-input user-form-field"
+              placeholder="Production Vault"
+              autocomplete="off"
+            />
           </label>
-          <label class="user-form-label">Server URL
-            <input id="add-remote-url" class="tool-input user-form-field" placeholder="http://localhost:8743" type="url" autocomplete="off">
+          <label class="user-form-label"
+            >Server URL
+            <input
+              id="add-remote-url"
+              class="tool-input user-form-field"
+              placeholder="http://localhost:8743"
+              type="url"
+              autocomplete="off"
+            />
           </label>
           <label class="user-form-label">
             Username
-            <span class="form-label-hint">leave blank to authenticate as vault owner (master password)</span>
-            <input id="add-remote-username" class="tool-input user-form-field" placeholder="alice" autocomplete="off" spellcheck="false">
+            <span class="form-label-hint"
+              >leave blank to authenticate as vault owner (master password)</span
+            >
+            <input
+              id="add-remote-username"
+              class="tool-input user-form-field"
+              placeholder="alice"
+              autocomplete="off"
+              spellcheck="false"
+            />
           </label>
           <div class="create-user-actions">
             <button class="btn btn-sm btn-accent" id="add-remote-confirm">Save Remote</button>
             <button class="btn btn-sm btn-ghost" id="add-remote-test">Test Connection</button>
             <button class="btn btn-sm btn-ghost" id="add-remote-cancel">Cancel</button>
-            <span id="add-test-status" style="font-size:11px;color:var(--text3);align-self:center"></span>
+            <span
+              id="add-test-status"
+              style="font-size:11px;color:var(--text3);align-self:center"
+            ></span>
           </div>
         </div>
       </section>
-    </div>`;
+    </div>`,
+  );
 
   (document.getElementById('add-remote-name') as HTMLInputElement)?.focus();
 
@@ -689,29 +767,34 @@ function openAddRemoteForm() {
     renderRemotePanel();
   });
 
-  document.getElementById('add-remote-test')!.addEventListener('click', async () => {
-    const url = (document.getElementById('add-remote-url') as HTMLInputElement).value
-      .trim()
-      .replace(/\/$/, '');
-    const statusEl = document.getElementById('add-test-status');
-    if (!url) {
-      showToast('Enter a URL first', 'err');
-      return;
-    }
-    if (statusEl) statusEl.textContent = 'Testing…';
-    try {
-      const probe = new RemoteVaultStore(url);
-      const body = await probe.getStatus();
-      let msg = body.vault_exists ? '✓ Reachable' : '✓ Reachable (no vault yet)';
-      if (body.cert_fingerprint) msg += ` · TLS ✓`;
-      if (statusEl) statusEl.textContent = msg;
-    } catch {
-      if (statusEl) statusEl.textContent = '✗ Unreachable';
-    }
+  document.getElementById('add-remote-test')!.addEventListener('click', () => {
+    void (async () => {
+      const url = (document.getElementById('add-remote-url') as HTMLInputElement).value
+        .trim()
+        .replace(/\/$/, '');
+      const statusEl = document.getElementById('add-test-status');
+      if (!url) {
+        showToast('Enter a URL first', 'err');
+        return;
+      }
+      if (statusEl) statusEl.textContent = 'Testing…';
+      try {
+        const probe = new RemoteVaultStore(url);
+        const body = await probe.getStatus();
+        let msg = body.vault_exists ? '✓ Reachable' : '✓ Reachable (no vault yet)';
+        if (body.cert_fingerprint) msg += ` · TLS ✓`;
+        if (statusEl) statusEl.textContent = msg;
+      } catch {
+        if (statusEl) statusEl.textContent = '✗ Unreachable';
+      }
+    })();
   });
 
   document.getElementById('add-remote-cancel')!.addEventListener('click', () => {
-    ws.innerHTML = '<div class="users-detail-empty">Select a remote vault or add a new one.</div>';
+    setHtml(
+      ws,
+      html`<div class="users-detail-empty">Select a remote vault or add a new one.</div>`,
+    );
   });
 }
 
