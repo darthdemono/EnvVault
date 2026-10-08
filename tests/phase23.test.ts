@@ -18,7 +18,12 @@ import {
   Exporter,
 } from '../src/ts/state';
 import { isFileShaped, fileContentsOf, fileEnvLine } from '../src/ts/file-cred';
-import { cookiesOf, cookiesToExtraVars, parseAnyCookies } from '../src/ts/cookies';
+import {
+  cookiesOf,
+  cookiesToExtraVars,
+  parseAnyCookies,
+  toPlaywrightStorageState,
+} from '../src/ts/cookies';
 import { timeUntil } from '../src/ts/ui-qol';
 import type { VaultEntry } from '../src/ts/types';
 
@@ -101,6 +106,41 @@ describe('step 5 — cookies', () => {
     const rows = cookiesToExtraVars(parseAnyCookies('a=1; b=2'));
     expect(rows.every((r) => r.secret)).toBe(true);
     expect(rows.some((r) => r.public)).toBe(false);
+  });
+
+  it('writes cookie and localStorage state in Playwright format', () => {
+    const state = JSON.parse(
+      toPlaywrightStorageState(
+        entry({
+          secretType: 'cookie',
+          api_url: 'https://app.example.test/path',
+          extra_vars: [{ key: 'sid', value: 'secret', attrs: { path: '/', secure: true } }],
+          storage_tokens: [
+            { origin: 'https://app.example.test/path', storage: 'local', key: 'token', value: 'x' },
+          ],
+        }),
+      ),
+    );
+    expect(state.cookies[0]).toMatchObject({
+      name: 'sid',
+      value: 'secret',
+      domain: 'app.example.test',
+      path: '/',
+      secure: true,
+    });
+    expect(state.origins).toEqual([
+      { origin: 'https://app.example.test', localStorage: [{ name: 'token', value: 'x' }] },
+    ]);
+  });
+
+  it('refuses Playwright export that would silently omit sessionStorage', () => {
+    expect(() =>
+      toPlaywrightStorageState(
+        entry({
+          storage_tokens: [{ origin: 'https://x.test', storage: 'session', key: 'k', value: 'v' }],
+        }),
+      ),
+    ).toThrow(/cannot represent sessionStorage/);
   });
 });
 
