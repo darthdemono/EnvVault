@@ -168,6 +168,10 @@ export function makeK8sStarterChunks(): SecretChunk[] {
         { key: 'image', value: 'nginx:latest', field_type: 'var' },
         { key: 'replicas', value: '1', field_type: 'var' },
         { key: 'containerPort', value: '80', field_type: 'var' },
+        // Secrets this Deployment consumes (Phase 29): `secretEnv` is a list of
+        // Secret names, `secretMounts` a list of `secret:/mount/path`.
+        { key: 'secretEnv', value: '', field_type: 'list' },
+        { key: 'secretMounts', value: '', field_type: 'list' },
       ],
     },
     {
