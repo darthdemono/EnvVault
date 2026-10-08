@@ -33,7 +33,7 @@ function registrySlugs(): string[] {
 
 describe('nothing reaches the network', () => {
   it('renders a known provider as a self-contained data: URI', () => {
-    const html = iconHTML('GitHub');
+    const html = String(iconHTML('GitHub'));
     expect(html).toContain('src="data:image/svg+xml,');
     // The SVG's own xmlns is an http URL, but it is inside the data: URI and
     // percent-encoded, so it is markup rather than a request. What must not
@@ -100,18 +100,18 @@ describe('unknown slugs degrade to a letter, not a broken image', () => {
   it('falls back for a registry slug with no bundled path', () => {
     // `slack` is in the registry and was removed from simple-icons upstream.
     expect(getIconSlug('Slack')).toBe('slack');
-    const html = iconHTML('Slack');
+    const html = String(iconHTML('Slack'));
     expect(html).toContain('si-fallback');
     expect(html).not.toContain('<img');
   });
 
   it('never emits an <img> with an empty src', () => {
-    const html = iconHTML('Slack');
+    const html = String(iconHTML('Slack'));
     expect(html).not.toContain('src=""');
   });
 
   it('still falls back for a provider that matches no slug at all', () => {
-    expect(iconHTML('Zzzzz Not A Real Provider')).toContain('si-fallback');
+    expect(String(iconHTML('Zzzzz Not A Real Provider'))).toContain('si-fallback');
   });
 });
 
@@ -119,13 +119,13 @@ describe('the data URI is well formed', () => {
   it('escapes the fill colour so the URI is not truncated at a fragment', () => {
     // An unencoded `#e4e4e4` would end the URI at the `#`, leaving an SVG with
     // no closing tag — which renders as nothing, silently.
-    const html = iconHTML('GitHub');
+    const html = String(iconHTML('GitHub'));
     expect(html).toContain('%23e4e4e4');
     expect(html).not.toContain('#e4e4e4');
   });
 
   it('round-trips back to valid SVG containing the bundled path', () => {
-    const html = iconHTML('GitHub');
+    const html = String(iconHTML('GitHub'));
     const src = /src="([^"]+)"/.exec(html)![1];
     const svg = decodeURIComponent(src.replace('data:image/svg+xml,', ''));
     expect(svg.startsWith('<svg')).toBe(true);
