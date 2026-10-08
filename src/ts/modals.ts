@@ -1,8 +1,3 @@
-/**
- * @file
- * Modals, dropdowns, card interactions, and form helpers.
- */
-
 import type { VaultEntry, SecretType } from './types';
 import { renderComposite, renderErrorMessage, type CompositeKind } from './composite';
 import {
@@ -10,7 +5,6 @@ import {
   Settings,
   triggerRender,
   Exporter,
-  dotenvKey,
   persist,
   entryId,
   newEntryId,
@@ -22,21 +16,19 @@ import {
   entryHasPayload,
 } from './state';
 import {
-  esc,
-  escAttr,
   maskKey,
   showToast,
   showConfirm,
   clipboardWrite,
-  eyeSVG,
-  copySVG,
-  dupSVG,
-  editSVG,
-  delSVG,
+  errorMessage,
+  showPromptLarge,
 } from './utils';
 import { iconHTML, openIconPicker, iconPicker, setIconField, readIconField } from './icons';
 import { renameProviderRefs } from './chunk-ops';
 import { normalizeRateLimit } from './ratelimit';
+import { invokeTauri, isTauri } from './tauri';
+import { emittersFor } from './secret-types';
+import { showWifiQr } from './wifi-qr';
 import { buildCopyText, type CopyProfile, type MetadataStyle } from './copy-profile';
 import { authHeaderFor, curlFor } from './auth-request';
 import { isFileShaped, fileContentsOf, fileEnvLine } from './file-cred';
@@ -49,13 +41,28 @@ import {
   toCookieHeader,
   toCookiesTxt,
   toCookieJson,
+  toPlaywrightStorageState,
 } from './cookies';
-import { parseTotpSeed, TOTP_DEFAULTS } from './totp';
+import { parseTotpSeed, normalizeB32, TOTP_DEFAULTS } from './totp';
+import {
+  referencesToBundleMember,
+  renameBundleLocalRefs,
+  renameBundleRefs,
+  resolveBundleTemplate,
+} from './bundle-scope';
+import {
+  generateRandomBytes,
+  generatePassword,
+  guardEntropy,
+  generateApiKeyPattern,
+  generateHash,
+} from './generators';
 import {
   presets as sessionPresets,
   findPreset as findSessionPreset,
   deriveHeaders as deriveSessionHeaders,
 } from './session-presets';
+import { html, setHtml, type HtmlValue } from './html';
 
 /**
  * Rate-limit text the structured count/period pair cannot express, carried from
@@ -83,9 +90,12 @@ export function applySchemaTooltips() {
 
 export function buildCatChips(selected: string[] = []) {
   const wrap = document.getElementById('f-categories')!;
-  wrap.innerHTML = '';
+  setHtml(wrap, '');
   if (!st.vault.user_categories.length) {
-    wrap.innerHTML = `<span style="font-size:10px;color:var(--text3)">No categories — add in sidebar</span>`;
+    setHtml(
+      wrap,
+      html`<span style="font-size:10px;color:var(--text3)">No categories — add in sidebar</span>`,
+    );
     return;
   }
   st.vault.user_categories.forEach((cat) => {
@@ -344,6 +354,8 @@ export function dynamicSecretFields() {
   // field is how a stored value becomes unreachable (invariant 7).
   const uaGroup = document.getElementById('f-user-agent-group');
   if (uaGroup) uaGroup.style.display = type === 'cookie' ? 'flex' : 'none';
+  const storageTokensGroup = document.getElementById('f-storage-tokens-group');
+  if (storageTokensGroup) storageTokensGroup.style.display = type === 'cookie' ? 'flex' : 'none';
   // The mount path is the delivery half of a file-shaped credential (E17): the
   // types whose payload is a file, plus `file_blob`, which held a path and never
   // the file.
@@ -358,7 +370,7 @@ export function dynamicSecretFields() {
   if (rotationGroup instanceof HTMLElement)
     rotationGroup.style.display = type === 'cookie' ? 'none' : '';
 
-  if (providerLabel) providerLabel.innerHTML = `${cfg.providerLabel} <span class="req">*</span>`;
+  if (providerLabel) setHtml(providerLabel, html`${cfg.providerLabel} <span class="req">*</span>`);
   if (providerInput) providerInput.placeholder = cfg.providerPlaceholder;
   const keyInput = document.getElementById('f-key') as HTMLInputElement | null;
   if (keyInput && showKey) keyInput.placeholder = cfg.keyPlaceholder;
@@ -392,9 +404,12 @@ function refreshRequiredMarker(
   const totp_secret =
     (document.getElementById('f-totp') as HTMLInputElement | null)?.value.trim() || undefined;
   const optional = primaryIsOptional({ secretType: type, extra_vars, totp_secret } as VaultEntry);
-  labelEl.innerHTML = optional
-    ? `${label} <span class="opt">optional</span>`
-    : `${label} <span class="req">*</span>`;
+  setHtml(
+    labelEl,
+    optional
+      ? html`${label} <span class="opt">optional</span>`
+      : html`${label} <span class="req">*</span>`,
+  );
   if (keyInput) {
     if (optional) keyInput.removeAttribute('aria-required');
     else keyInput.setAttribute('aria-required', 'true');
@@ -422,6 +437,7 @@ export function formToEntry(base?: VaultEntry): VaultEntry {
     const el = document.getElementById(id) as HTMLInputElement | HTMLSelectElement | null;
     return el?.value?.trim?.() ?? fallback;
   };
+  const baseVars = new Map((base?.extra_vars ?? []).map((variable) => [variable.key, variable]));
 
   const scopes = getVal('f-scopes')
     .split(',')
@@ -460,6 +476,9 @@ export function formToEntry(base?: VaultEntry): VaultEntry {
     auth_scheme: (getVal('f-auth-scheme') as VaultEntry['auth_scheme']) || undefined,
     auth_param: getVal('f-auth-param') || undefined,
     user_agent: getVal('f-user-agent') || undefined,
+    ...(secretType === 'cookie'
+      ? { storage_tokens: parseStorageTokens(getVal('f-storage-tokens')) }
+      : {}),
     mount_path: getVal('f-mount-path') || undefined,
     composite_template: secretType === 'composite' ? getVal('f-template') || undefined : undefined,
     composite_kind:
@@ -528,30 +547,35 @@ export function formToEntry(base?: VaultEntry): VaultEntry {
     extra_vars: (() => {
       const rows = [...document.querySelectorAll<HTMLElement>('#f-extra-vars-list .extra-var-row')];
       const result = rows
-        .map((row) => ({
-          key: row.querySelector<HTMLInputElement>('.extra-var-key')?.value.trim() || '',
-          value: row.querySelector<HTMLInputElement>('.extra-var-value')?.value.trim() || '',
-          secret: row.querySelector<HTMLInputElement>('.extra-var-secret')?.checked || false,
-          public: row.querySelector<HTMLInputElement>('.extra-var-public')?.checked || undefined,
-          // Cookie attributes have no input of their own — nobody hand-types an
-          // expiry in Unix seconds — so they ride on the row from the paste
-          // parser and are carried through here. Without this they would be lost
-          // on the first edit and `cookies.txt` would start refusing.
-          attrs: (() => {
-            try {
-              return row.dataset.cookieAttrs
-                ? (JSON.parse(row.dataset.cookieAttrs) as VaultEntry['extra_vars'] extends
-                    (infer R)[] | undefined
-                    ? R extends { attrs?: infer A }
-                      ? A
-                      : never
-                    : never)
-                : undefined;
-            } catch {
-              return undefined;
-            }
-          })(),
-        }))
+        .map((row) => {
+          const key = row.querySelector<HTMLInputElement>('.extra-var-key')?.value.trim() || '';
+          const prior = baseVars.get(key) ?? baseVars.get(row.dataset.originalKey ?? '');
+          return {
+            ...prior,
+            key,
+            value: row.querySelector<HTMLInputElement>('.extra-var-value')?.value.trim() || '',
+            secret: row.querySelector<HTMLInputElement>('.extra-var-secret')?.checked || false,
+            public: row.querySelector<HTMLInputElement>('.extra-var-public')?.checked || undefined,
+            // Cookie attributes have no input of their own — nobody hand-types an
+            // expiry in Unix seconds — so they ride on the row from the paste
+            // parser and are carried through here. Without this they would be lost
+            // on the first edit and `cookies.txt` would start refusing.
+            attrs: (() => {
+              try {
+                return row.dataset.cookieAttrs
+                  ? (JSON.parse(row.dataset.cookieAttrs) as VaultEntry['extra_vars'] extends
+                      (infer R)[] | undefined
+                      ? R extends { attrs?: infer A }
+                        ? A
+                        : never
+                      : never)
+                  : prior?.attrs;
+              } catch {
+                return undefined;
+              }
+            })(),
+          };
+        })
         .filter((v) => v.key);
       return result.length ? result : undefined;
     })(),
@@ -564,6 +588,33 @@ export function formToEntry(base?: VaultEntry): VaultEntry {
       return parts.length ? parts : undefined;
     })(),
   };
+}
+
+function parseStorageTokens(raw: string): NonNullable<VaultEntry['storage_tokens']> {
+  if (!raw.trim()) return [];
+  const parsed: unknown = JSON.parse(raw);
+  if (!Array.isArray(parsed)) throw new Error('Browser storage tokens must be a JSON array');
+  return parsed.map((item) => {
+    if (!item || typeof item !== 'object') throw new Error('Invalid browser storage token');
+    const { origin, storage, key, value } = item as Record<string, unknown>;
+    if (
+      typeof origin !== 'string' ||
+      typeof key !== 'string' ||
+      !key ||
+      typeof value !== 'string' ||
+      (storage !== 'local' && storage !== 'session')
+    )
+      throw new Error('Invalid browser storage token');
+    let url: URL;
+    try {
+      url = new URL(origin);
+    } catch {
+      throw new Error('Token origin must be an exact http(s) origin');
+    }
+    if ((url.protocol !== 'http:' && url.protocol !== 'https:') || url.origin !== origin)
+      throw new Error('Token origin must be an exact http(s) origin');
+    return { origin, storage, key, value };
+  });
 }
 
 /**
@@ -669,10 +720,26 @@ export function refreshTotpStatus(): void {
     if (params) params.hidden = false;
     return;
   }
-  // A pasted URI is split in place, so the field always holds the bare seed and
-  // the parameters are visible and editable rather than buried in a query
-  // string the user cannot see the end of.
-  if (raw !== parsed.secret) {
+  // Bug 7 (2026-09-15): "some 2FA codes are wrong" traced to this condition.
+  // It used to be `raw !== parsed.secret` — true only when the parser had to
+  // *rewrite* the input (an otpauth:// URI split apart, or a seed typed with
+  // stray spaces/case normalised away). A seed pasted already in its final,
+  // normalised form never took this branch, so replacing an entry's seed with
+  // an unrelated one left the algorithm/digits/period/kind selects showing
+  // whatever the *previous* seed's form session had put there — silently
+  // applying a stranger's algorithm to a fresh secret, which produces six
+  // confident, wrong digits with nothing on screen explaining why.
+  //
+  // The correct question is "did the seed *value* change since we last read
+  // it", tracked on the input itself so it survives across renders. Every
+  // real algorithm/digits/period/kind change for THIS secret (whether from an
+  // `otpauth://` URI or the true bare-seed default of SHA1/6/30) is applied
+  // exactly once, right when the secret changes — and only then, so a value
+  // the user set by hand afterwards (and left the seed alone) is never
+  // clobbered by a later, unrelated re-render of this same status line.
+  const secretChanged = input.dataset.totpLastSecret !== parsed.secret;
+  if (secretChanged) {
+    input.dataset.totpLastSecret = parsed.secret;
     input.value = parsed.secret;
     setSelect('f-totp-algorithm', parsed.algorithm);
     setNumber('f-totp-digits', parsed.digits);
@@ -849,6 +916,8 @@ export function fillForm(entry: Partial<VaultEntry>) {
   (document.getElementById('f-auth-scheme') as HTMLSelectElement).value = entry.auth_scheme || '';
   (document.getElementById('f-auth-param') as HTMLInputElement).value = entry.auth_param || '';
   (document.getElementById('f-user-agent') as HTMLInputElement).value = entry.user_agent || '';
+  const storageTokens = document.getElementById('f-storage-tokens') as HTMLTextAreaElement | null;
+  if (storageTokens) storageTokens.value = JSON.stringify(entry.storage_tokens ?? [], null, 2);
   (document.getElementById('f-mount-path') as HTMLInputElement).value = entry.mount_path || '';
   const fTemplate = document.getElementById('f-template') as HTMLTextAreaElement | null;
   if (fTemplate) fTemplate.value = entry.composite_template || '';
@@ -872,7 +941,16 @@ export function fillForm(entry: Partial<VaultEntry>) {
     rlNote.hidden = !pendingRateLimitNote;
   }
   const fTotp = document.getElementById('f-totp') as HTMLInputElement | null;
-  if (fTotp) fTotp.value = entry.totp_secret || '';
+  if (fTotp) {
+    fTotp.value = entry.totp_secret || '';
+    // Bug 7 (2026-09-15): this entry's own params (or the absent-field
+    // defaults, for a new entry) are what `refreshTotpStatus` must treat as
+    // "already applied" — see the comment there. Setting it here, before that
+    // function ever runs for this opening, is what stops it re-deriving
+    // params from the bare seed alone (which can only ever produce SHA1/6/30,
+    // never what this entry actually has stored).
+    fTotp.dataset.totpLastSecret = normalizeB32(fTotp.value);
+  }
   setSelect('f-totp-kind', entry.totp_kind || TOTP_DEFAULTS.kind);
   setNumber('f-totp-counter', entry.totp_counter ?? TOTP_DEFAULTS.counter);
   setSelect('f-totp-algorithm', entry.totp_algorithm || TOTP_DEFAULTS.algorithm);
@@ -894,9 +972,10 @@ export function fillForm(entry: Partial<VaultEntry>) {
   setIconField(document.getElementById('f-icon') as HTMLInputElement | null, entry.custom_icon);
   const tagsInput = document.getElementById('f-tags-input') as HTMLInputElement | null;
   if (tagsInput) tagsInput.value = (entry.tags || []).join(' ');
-  document.getElementById('f-icon-preview')!.innerHTML = entry.custom_icon
-    ? iconHTML('', entry.custom_icon)
-    : '';
+  setHtml(
+    document.getElementById('f-icon-preview')!,
+    entry.custom_icon ? iconHTML('', entry.custom_icon) : '',
+  );
   const stVal = entry.secretType || 'api_key';
   const stSelect = document.getElementById('f-secret-type') as HTMLSelectElement;
   stSelect.value = stVal;
@@ -922,9 +1001,10 @@ export function fillForm(entry: Partial<VaultEntry>) {
   }
   const extraList = document.getElementById('f-extra-vars-list');
   if (extraList) {
-    extraList.innerHTML = '';
+    setHtml(extraList, '');
     for (const xv of entry.extra_vars || []) {
       const row = _makeExtraVarRow(xv.key, xv.value, xv.secret, xv.public);
+      row.dataset.originalKey = xv.key;
       if (xv.attrs) row.dataset.cookieAttrs = JSON.stringify(xv.attrs);
       extraList.appendChild(row);
     }
@@ -937,12 +1017,19 @@ export function fillForm(entry: Partial<VaultEntry>) {
 export function populateProjectSelect() {
   const container = document.getElementById('f-project')!;
   const cats = st.vault.projects.filter((p) => p.id !== 'Universal');
-  container.innerHTML = cats
-    .map(
+  setHtml(
+    container,
+    html`${cats.map(
       (p) =>
-        `<div class="project-pick-item" role="option" aria-selected="false" tabindex="-1" data-value="${escAttr(p.id)}">${esc(p.name)}</div>`,
-    )
-    .join('');
+        html`<div
+          class="project-pick-item"
+          role="option"
+          aria-selected="false"
+          tabindex="-1"
+          data-value="${p.id}"
+        >${p.name}</div>`,
+    )}`,
+  );
   const items = Array.from(container.querySelectorAll<HTMLElement>('.project-pick-item'));
   const toggle = (item: HTMLElement) => {
     const on = item.classList.toggle('selected');
@@ -1109,10 +1196,143 @@ function refreshCookieSplit(): void {
     : `${jar.length} cookie${jar.length === 1 ? '' : 's'}, with domain and path`;
 }
 
+interface SessionCapture {
+  origin: string | null;
+  cookies: {
+    name: string;
+    value: string;
+    domain: string | null;
+    path: string | null;
+    secure: boolean;
+    http_only: boolean;
+    expires: number;
+  }[];
+  headers: [string, string][];
+  user_agent: string | null;
+  dropped: string[];
+}
+
+/** Fills the form from a parsed capture. Replaces the cookie rows (pressing it
+ * twice must not duplicate them) and never touches a field the capture lacks. */
+function applySessionCapture(cap: SessionCapture): void {
+  const list = document.getElementById('f-extra-vars-list');
+  if (!list) return;
+  setHtml(list, '');
+  for (const c of cap.cookies) {
+    const row = _makeExtraVarRow(c.name, c.value, true, false);
+    const attrs: Record<string, unknown> = {};
+    if (c.domain) attrs.domain = c.domain;
+    if (c.path) attrs.path = c.path;
+    if (c.secure) attrs.secure = true;
+    if (c.http_only) attrs.http_only = true;
+    if (c.expires) attrs.expires = c.expires;
+    if (Object.keys(attrs).length) row.dataset.cookieAttrs = JSON.stringify(attrs);
+    list.appendChild(row);
+  }
+  const ua = document.getElementById('f-user-agent') as HTMLInputElement | null;
+  if (ua && cap.user_agent) ua.value = cap.user_agent;
+  const url = document.getElementById('f-apiurl') as HTMLInputElement | null;
+  if (url && cap.origin && !url.value) url.value = cap.origin;
+  dynamicSecretFields();
+}
+
+/**
+ * How the common self-hosted apps want their API key (Phase 24.5,
+ * `local_service`). Only conventions that are stable and widely documented are
+ * listed; Jellyfin's `Authorization: MediaBrowser Token="…"` carries a value
+ * template the `auth_scheme` model cannot express, so it is deliberately absent
+ * rather than approximated.
+ */
+export const LOCAL_SERVICE_PRESETS: { id: string; label: string; scheme: string; param: string }[] =
+  [
+    {
+      id: 'arr',
+      label: 'Sonarr / Radarr / Lidarr / Prowlarr (X-Api-Key)',
+      scheme: 'header',
+      param: 'X-Api-Key',
+    },
+    { id: 'plex', label: 'Plex (X-Plex-Token header)', scheme: 'header', param: 'X-Plex-Token' },
+    {
+      id: 'homeassistant',
+      label: 'Home Assistant (long-lived bearer token)',
+      scheme: '',
+      param: '',
+    },
+  ];
+
+let _localPresetBound = false;
+
+function wireLocalServicePreset(): void {
+  const group = document.getElementById('f-local-preset-group');
+  const select = document.getElementById('f-local-preset') as HTMLSelectElement | null;
+  const type = document.getElementById('f-secret-type') as HTMLSelectElement | null;
+  if (!group || !select || !type) return;
+  if (select.options.length <= 1) {
+    for (const p of LOCAL_SERVICE_PRESETS) select.add(new Option(p.label, p.id));
+  }
+  const show = () => {
+    group.style.display = type.value === 'local_service' ? '' : 'none';
+  };
+  show();
+  if (_localPresetBound) return;
+  _localPresetBound = true;
+  type.addEventListener('change', show);
+  select.addEventListener('change', () => {
+    const preset = LOCAL_SERVICE_PRESETS.find((p) => p.id === select.value);
+    if (!preset) return;
+    (document.getElementById('f-auth-scheme') as HTMLSelectElement).value = preset.scheme;
+    (document.getElementById('f-auth-param') as HTMLInputElement).value = preset.param;
+  });
+}
+
+let _captureBound = false;
+
+function wireCaptureImport(): void {
+  const group = document.getElementById('f-capture-group');
+  const type = document.getElementById('f-secret-type') as HTMLSelectElement | null;
+  const show = () => {
+    if (group) group.style.display = type?.value === 'cookie' ? 'flex' : 'none';
+  };
+  show();
+  if (!_captureBound) {
+    _captureBound = true;
+    type?.addEventListener('change', show);
+  }
+  const btn = document.getElementById('f-capture-btn');
+  if (!btn) return;
+  btn.onclick = () => {
+    void (async () => {
+      if (!isTauri()) {
+        showToast('Importing a capture needs the desktop app (or `envv cookie import`)', 'err');
+        return;
+      }
+      const raw = await showPromptLarge('Paste a cURL command, HAR, or Set-Cookie lines');
+      if (!raw?.trim()) return;
+      try {
+        const cap = await invokeTauri<SessionCapture>('session_capture_parse', {
+          text: raw,
+          origin: null,
+        });
+        applySessionCapture(cap);
+        // S12: say what was left out, by name. Values are never listed.
+        showToast(
+          `Imported ${cap.cookies.length} cookie${cap.cookies.length === 1 ? '' : 's'}${cap.dropped.length ? `. Dropped: ${cap.dropped.join('; ')}` : ''}`,
+          cap.dropped.length ? 'err' : 'ok',
+          cap.dropped.length ? 8000 : undefined,
+        );
+      } catch (err) {
+        showToast(`Capture import failed: ${errorMessage(err)}`, 'err', 6000);
+      }
+    })();
+  };
+}
+
 let _cookieSplitBound = false;
 
 /** Assignment-guarded (invariant 9): `openModal` runs on every open. */
 function wireCookieSplit(): void {
+  wireCaptureImport();
+  wireLocalServicePreset();
   if (_cookieSplitBound) return;
   _cookieSplitBound = true;
   document.getElementById('f-key')?.addEventListener('input', refreshCookieSplit);
@@ -1122,13 +1342,16 @@ function wireCookieSplit(): void {
     btn.onclick = () => {
       const raw = (document.getElementById('f-key') as HTMLInputElement).value;
       const jar = parseAnyCookies(raw);
-      if (!jar.length) return;
+      if (!jar.length) {
+        showToast('No cookies found in the value field', 'err', 1800);
+        return;
+      }
       const list = document.getElementById('f-extra-vars-list');
       if (!list) return;
       // Replaces the rows rather than appending: pressing this twice on one jar
       // must not produce every cookie twice, and the rows it would duplicate are
       // the ones it just wrote.
-      list.innerHTML = '';
+      setHtml(list, '');
       for (const xv of cookiesToExtraVars(jar)) {
         const row = _makeExtraVarRow(xv.key, xv.value, true, false);
         // The attributes ride on the row so a later save carries them; they have
@@ -1220,7 +1443,10 @@ function wireSessionPreset(): void {
     void (async () => {
       const select = document.getElementById('f-session-preset') as HTMLSelectElement | null;
       const preset = findSessionPreset(select?.value ?? '');
-      if (!preset) return;
+      if (!preset) {
+        showToast('Pick a provider preset first', 'err', 1800);
+        return;
+      }
       const entry = formToEntry();
       const headers = await deriveSessionHeaders(entry, preset, entry.api_url ?? undefined);
       if (!headers.length) {
@@ -1231,6 +1457,271 @@ function wireSessionPreset(): void {
       await clipboardWrite(text);
       showToast(`Copied ${headers.length} header${headers.length === 1 ? '' : 's'} ✓`, 'ok');
     })();
+  });
+}
+
+let _extraVarsAddBound = false;
+
+/**
+ * Wires the "+ Add variable" button and the delegated key-input listener that
+ * refreshes the required-marker (A5).
+ *
+ * **Bug fix (2026-09-15):** this used to be bound only inside `openAdd()`'s
+ * `_draftBound` guard, which conflated "bind the draft auto-save listeners"
+ * with "bind the add-variable button" — two unrelated concerns sharing one
+ * flag. Since `_draftBound` is set only by `openAdd`, a session whose first
+ * modal was an **edit** (double-clicking an existing card, the ordinary way
+ * to attach extra variables to something already saved) got a button with no
+ * click handler at all: clicking it did nothing, silently, for the rest of
+ * that edit and every edit after it until `openAdd()` happened to run once.
+ * Reported as "make a template, then can't add variables — have to restart".
+ *
+ * Moved here and called from `openModal()`, the one function both `openAdd`
+ * and `openEdit` already funnel through, with its own guard so it still binds
+ * exactly once per page load (invariant 9).
+ */
+function wireExtraVarsAdd(): void {
+  if (_extraVarsAddBound) return;
+  _extraVarsAddBound = true;
+  document.getElementById('f-extra-vars-add')?.addEventListener('click', () => {
+    const row = _makeExtraVarRow();
+    document.getElementById('f-extra-vars-list')?.appendChild(row);
+    row.querySelector<HTMLInputElement>('.extra-var-key')?.focus();
+    dynamicSecretFields(); // A5: a fresh row has no key yet, so this is a no-op until one is typed
+  });
+  // A5: typing a variable's key can turn the primary value optional (or back)
+  // for an `env_var` entry — delegated so it covers every row, present and future.
+  document.getElementById('f-extra-vars-list')?.addEventListener('input', (e) => {
+    if ((e.target as HTMLElement).classList.contains('extra-var-key')) dynamicSecretFields();
+  });
+}
+
+let _genPopoverDocListenersBound = false;
+
+/**
+ * Wires the generator popover beside the primary-value field's Generate
+ * button (A8, 2026-09-15 — "Inject unreachable while the form is open").
+ *
+ * The Tools panel's four generators sit behind the modal overlay: reaching
+ * them while the form is open hits the backdrop and closes the form first,
+ * so "generate in Tools, Inject into the open form" was two mutually
+ * exclusive states. This popover is the same generators — `generators.ts`,
+ * moved out of `tools.ts` so there is one implementation of each rather than
+ * a form-shaped copy — reachable without leaving the form.
+ *
+ * `Use` writes the primary value field, the only field a Generate button has
+ * ever targeted here (`quickGenerate`, on the plain button beside this
+ * caret). Extending generation to the secret field or a named variable is
+ * future scope: neither has a Generate button today, so there is nothing
+ * this popover would be replacing there.
+ *
+ * Assigned, not added (invariant 9). `openModal` runs on every open, and this
+ * is called every time — like `wireTotpField`, not like `wireExtraVarsAdd`:
+ * every listener here is a property assignment (`.onclick =`, not
+ * `addEventListener`), which overwrites rather than stacks, so re-running the
+ * whole function on each open is safe and is in fact what keeps it correctly
+ * bound to `#f-key-generate-caret` and friends — the *same* static nodes on
+ * every open in the real app, but genuinely different nodes from one test to
+ * the next (`loadRealIndexHtml()` replaces the document per test). A one-shot
+ * guard here would bind once to whichever DOM happened to exist at the first
+ * call and silently do nothing on every open after — which is exactly the
+ * bug this function shipped with the first time it was written, caught by
+ * its own tests rather than by hand.
+ *
+ * The two `document`-level listeners (outside-click, Escape) are the
+ * exception: those genuinely must bind only once — `addEventListener` on
+ * `document` would stack one pair per form open, each pair closing the
+ * popover redundantly, forever. They are guarded by `_genPopoverDocListenersBound`
+ * and, because that guard means they cannot be *rebound* on later opens, they
+ * re-query `#f-gen-popover`/`#f-key-generate-caret` by id inside the handler
+ * rather than closing over the nodes captured at first bind — so they still
+ * find the right element after any later DOM replacement.
+ */
+function wireGeneratorPopover(): void {
+  const caret = document.getElementById('f-key-generate-caret') as HTMLButtonElement | null;
+  const popover = document.getElementById('f-gen-popover');
+  const fKey = document.getElementById('f-key') as HTMLInputElement | null;
+  const output = document.getElementById('gp-output');
+  const useBtn = document.getElementById('gp-use-btn') as HTMLButtonElement | null;
+  const copyBtn = document.getElementById('gp-copy-btn') as HTMLButtonElement | null;
+  const genBtn = document.getElementById('gp-generate-btn') as HTMLButtonElement | null;
+  if (!caret || !popover || !fKey || !output || !useBtn || !copyBtn || !genBtn) return;
+
+  let genBytes = 32;
+  let activeTab = 'bytes';
+  let lastValue = '';
+
+  const setOutput = (v: string) => {
+    lastValue = v;
+    output.textContent = v;
+    useBtn.disabled = !v;
+    copyBtn.disabled = !v;
+  };
+
+  const close = () => {
+    popover.hidden = true;
+    caret.setAttribute('aria-expanded', 'false');
+  };
+  const open = () => {
+    popover.hidden = false;
+    caret.setAttribute('aria-expanded', 'true');
+    setOutput('');
+  };
+
+  caret.onclick = (e) => {
+    e.stopPropagation();
+    if (popover.hidden) open();
+    else close();
+  };
+
+  if (!_genPopoverDocListenersBound) {
+    _genPopoverDocListenersBound = true;
+    document.addEventListener('click', (e) => {
+      const p = document.getElementById('f-gen-popover');
+      const c = document.getElementById('f-key-generate-caret');
+      if (!p || p.hidden) return;
+      if (e.target === c || p.contains(e.target as Node)) return;
+      p.hidden = true;
+      c?.setAttribute('aria-expanded', 'false');
+    });
+    document.addEventListener('keydown', (e) => {
+      if (e.key !== 'Escape') return;
+      const p = document.getElementById('f-gen-popover');
+      const c = document.getElementById('f-key-generate-caret') as HTMLElement | null;
+      if (!p || p.hidden) return;
+      p.hidden = true;
+      c?.setAttribute('aria-expanded', 'false');
+      c?.focus();
+    });
+  }
+
+  // ── Tabs ──
+  const tabs = Array.from(popover.querySelectorAll<HTMLButtonElement>('.gen-tab-btn'));
+  const panes = Array.from(popover.querySelectorAll<HTMLElement>('.gen-tab-pane'));
+  tabs.forEach((btn) => {
+    btn.onclick = () => {
+      activeTab = btn.dataset.genTab!;
+      tabs.forEach((b) => {
+        const on = b === btn;
+        b.classList.toggle('active', on);
+        b.setAttribute('aria-selected', String(on));
+      });
+      panes.forEach((p) => {
+        p.hidden = p.dataset.genPane !== activeTab;
+      });
+      setOutput('');
+    };
+  });
+
+  // ── Secret-bytes byte-length toggle ──
+  popover.querySelectorAll<HTMLButtonElement>('.gen-byte-btn').forEach((btn) => {
+    btn.onclick = () => {
+      popover.querySelectorAll('.gen-byte-btn').forEach((b) => b.classList.remove('active'));
+      btn.classList.add('active');
+      genBytes = parseInt(btn.dataset.bytes!, 10);
+    };
+  });
+
+  // ── Password length display ──
+  const pwLength = document.getElementById('gp-pw-length') as HTMLInputElement | null;
+  const pwLenDisplay = document.getElementById('gp-pw-len-display');
+  if (pwLength) {
+    pwLength.oninput = () => {
+      if (pwLenDisplay) pwLenDisplay.textContent = pwLength.value;
+    };
+  }
+
+  genBtn.onclick = () => {
+    void (async () => {
+      if (activeTab === 'bytes') {
+        const fmt = (document.getElementById('gp-bytes-format') as HTMLSelectElement).value as
+          'hex' | 'base64' | 'base64url';
+        const out = guardEntropy(
+          () => generateRandomBytes(genBytes, fmt),
+          (m) => showToast(m, 'err'),
+        );
+        if (out !== undefined) setOutput(out);
+      } else if (activeTab === 'password') {
+        const upper = (document.getElementById('gp-pw-upper') as HTMLInputElement).checked;
+        const lower = (document.getElementById('gp-pw-lower') as HTMLInputElement).checked;
+        const digits = (document.getElementById('gp-pw-digits') as HTMLInputElement).checked;
+        const symbols = (document.getElementById('gp-pw-symbols') as HTMLInputElement).checked;
+        const noAmbig = (document.getElementById('gp-pw-noambig') as HTMLInputElement).checked;
+        const length = parseInt(
+          (document.getElementById('gp-pw-length') as HTMLInputElement).value,
+          10,
+        );
+        const pwd = guardEntropy(
+          () => generatePassword({ length, upper, lower, digits, symbols, noAmbig }),
+          (m) => showToast(m, 'err'),
+        );
+        if (pwd === undefined) return;
+        if (pwd === null) {
+          showToast('Select at least one character set', 'err');
+          return;
+        }
+        setOutput(pwd);
+      } else if (activeTab === 'apikey') {
+        const pattern = (document.getElementById('gp-ak-pattern') as HTMLSelectElement)
+          .value as Parameters<typeof generateApiKeyPattern>[0];
+        const out = guardEntropy(
+          () => generateApiKeyPattern(pattern),
+          (m) => showToast(m, 'err'),
+        );
+        if (out !== undefined) setOutput(out);
+      } else if (activeTab === 'hash') {
+        const input = (document.getElementById('gp-hash-input') as HTMLTextAreaElement).value;
+        const algo = (document.getElementById('gp-hash-algo') as HTMLSelectElement)
+          .value as Parameters<typeof generateHash>[1];
+        const fmt = (document.getElementById('gp-hash-fmt') as HTMLSelectElement)
+          .value as Parameters<typeof generateHash>[2];
+        setOutput(await generateHash(input, algo, fmt));
+      }
+    })();
+  };
+
+  copyBtn.onclick = () => {
+    if (lastValue) void clipboardWrite(lastValue);
+  };
+  useBtn.onclick = () => {
+    if (!lastValue) return;
+    fKey.value = lastValue;
+    // The name preview and every other listener on this field only ever hear
+    // about a change through a real event — setting `.value` alone leaves
+    // them showing what was there before.
+    fKey.dispatchEvent(new Event('input', { bubbles: true }));
+    close();
+    fKey.focus();
+    showToast('Generated value applied', 'ok');
+  };
+}
+
+/**
+ * Closes the popover and clears its output. Called on every form open —
+ * unlike `wireGeneratorPopover`, which binds its handlers once, this must run
+ * every time or a value generated for one entry would still be sitting there,
+ * one click from being applied to the next entry this form opens on.
+ */
+function resetGeneratorPopover(): void {
+  const popover = document.getElementById('f-gen-popover');
+  if (popover) popover.hidden = true;
+  document.getElementById('f-key-generate-caret')?.setAttribute('aria-expanded', 'false');
+  const output = document.getElementById('gp-output');
+  if (output) output.textContent = '';
+  const useBtn = document.getElementById('gp-use-btn') as HTMLButtonElement | null;
+  const copyBtn = document.getElementById('gp-copy-btn') as HTMLButtonElement | null;
+  if (useBtn) useBtn.disabled = true;
+  if (copyBtn) copyBtn.disabled = true;
+  // Matches `wireGeneratorPopover`'s fresh `activeTab = 'bytes'` on every
+  // call — without this the DOM would still show whichever tab was last
+  // clicked while the closure believes it is back on the first one.
+  popover?.querySelectorAll<HTMLButtonElement>('.gen-tab-btn').forEach((b) => {
+    const on = b.dataset.genTab === 'bytes';
+    b.classList.toggle('active', on);
+    b.setAttribute('aria-selected', String(on));
+  });
+  popover?.querySelectorAll<HTMLElement>('.gen-tab-pane').forEach((p) => {
+    p.hidden = p.dataset.genPane !== 'bytes';
   });
 }
 
@@ -1283,6 +1774,9 @@ export function openModal(title: string, idx: number) {
   refreshCookieSplit();
   wireSessionPreset();
   refreshSessionPresetUI();
+  wireExtraVarsAdd();
+  wireGeneratorPopover();
+  resetGeneratorPopover();
   document.getElementById('modal-overlay')!.classList.add('open');
   (document.getElementById('f-provider') as HTMLInputElement).focus();
   populateProjectSelect();
@@ -1303,13 +1797,29 @@ function _makeExtraVarRow(key = '', value = '', secret = false, isPublic = false
   // "public" is the opt-out from redaction, not a display toggle: `extra_vars`
   // are masked by default everywhere (Phase 23, E5), and this is how a client
   // id, a region or an account SID says it is safe to print.
-  row.innerHTML = `
-    <input class="form-input mono extra-var-key" placeholder="KEY" value="${escAttr(key)}">
-    <input class="form-input mono extra-var-value" placeholder="value" value="${escAttr(value)}"${secret ? ' type="password"' : ''}>
-    <label class="extra-var-secret-label" title="Mask value in UI"><input type="checkbox" class="extra-var-secret"${secret ? ' checked' : ''}> secret</label>
-    <label class="extra-var-secret-label" title="Safe to print — opts this value out of redaction in the CLI and in copies. Use it for client ids, regions and account SIDs, never for the secret beside them."><input type="checkbox" class="extra-var-public"${isPublic ? ' checked' : ''}> public</label>
-    <button type="button" class="icon-btn sm extra-var-remove" title="Remove">×</button>
-  `;
+  setHtml(
+    row,
+    html`
+      <input class="form-input mono extra-var-key" placeholder="KEY" value="${key}" />
+      <input
+        class="form-input mono extra-var-value"
+        placeholder="value"
+        value="${value}"
+        ${secret ? html` type="password"` : ''}
+      />
+      <label class="extra-var-secret-label" title="Mask value in UI"
+        ><input type="checkbox" class="extra-var-secret" ${secret ? ' checked' : ''} />
+        secret</label
+      >
+      <label
+        class="extra-var-secret-label"
+        title="Safe to print — opts this value out of redaction in the CLI and in copies. Use it for client ids, regions and account SIDs, never for the secret beside them."
+        ><input type="checkbox" class="extra-var-public" ${isPublic ? ' checked' : ''} />
+        public</label
+      >
+      <button type="button" class="icon-btn sm extra-var-remove" title="Remove">×</button>
+    `,
+  );
   const inp = row.querySelector<HTMLInputElement>('.extra-var-value')!;
   row.querySelector<HTMLInputElement>('.extra-var-secret')!.addEventListener('change', (ev) => {
     inp.type = (ev.target as HTMLInputElement).checked ? 'password' : 'text';
@@ -1446,10 +1956,12 @@ export function openAdd(e?: Event) {
   // Restore draft if available (item 11)
   const draft = sessionStorage.getItem(DRAFT_KEY);
   try {
-    const parsed = draft ? JSON.parse(draft) : null;
+    const parsed: unknown = draft ? JSON.parse(draft) : null;
     if (parsed) {
-      fillForm(parsed);
-      buildCatChips(parsed.categories || []);
+      const draftEntry =
+        typeof parsed === 'object' && parsed !== null ? (parsed as Partial<VaultEntry>) : {};
+      fillForm(draftEntry);
+      buildCatChips(draftEntry.categories || []);
     } else {
       fillForm({});
       buildCatChips([]);
@@ -1460,22 +1972,14 @@ export function openAdd(e?: Event) {
   }
   openModal('Add Secret', -1);
   // Bind auto-save draft listeners once — the overlay and its inputs are permanent DOM nodes.
+  // (The add-variable button used to be wired here too; it moved to
+  // `wireExtraVarsAdd()`, called from `openModal()`, so it binds regardless of
+  // whether Add or Edit opens the form first — see that function's doc.)
   if (!_draftBound) {
     const overlay = document.getElementById('modal-overlay')!;
     overlay.querySelectorAll('input, textarea, select').forEach((el) => {
       el.addEventListener('input', _saveDraft);
       el.addEventListener('change', _saveDraft);
-    });
-    document.getElementById('f-extra-vars-add')?.addEventListener('click', () => {
-      const row = _makeExtraVarRow();
-      document.getElementById('f-extra-vars-list')?.appendChild(row);
-      row.querySelector<HTMLInputElement>('.extra-var-key')?.focus();
-      dynamicSecretFields(); // A5: a fresh row has no key yet, so this is a no-op until one is typed
-    });
-    // A5: typing a variable's key can turn the primary value optional (or back)
-    // for an `env_var` entry — delegated so it covers every row, present and future.
-    document.getElementById('f-extra-vars-list')?.addEventListener('input', (e) => {
-      if ((e.target as HTMLElement).classList.contains('extra-var-key')) dynamicSecretFields();
     });
     _draftBound = true;
   }
@@ -1511,9 +2015,35 @@ export async function saveModal() {
     const old = idx >= 0 ? st.vault.api_keys[idx] : undefined;
     const entry = formToEntry(old);
     const t = entry.secretType || 'api_key';
+    if (t === 'bundle') {
+      const members = st.vault.api_keys.filter((member) => member.bundle_id === entry.id);
+      for (const variable of entry.extra_vars ?? []) {
+        if (variable.kind !== 'template') continue;
+        const result = resolveBundleTemplate(entry, members, `{${variable.key}}`);
+        if (!result.ok && result.error.kind === 'cycle') {
+          showToast(`Bundle template cycle: ${result.error.path.join(' → ')}`, 'err', 5000);
+          return;
+        }
+      }
+    }
     if (!entry.provider) {
       showToast(`${TYPE_CONFIG[t]?.providerLabel || 'Provider'} is required`, 'err');
       return;
+    }
+    if (t === 'crypto_wallet' && entry.api_key && isTauri()) {
+      // A mistyped word is otherwise discovered when the funds are needed. The
+      // check is a warning, not a gate: another wordlist or a non-BIP39 seed is
+      // legitimate, and the error never echoes a word.
+      try {
+        await invokeTauri('bip39_validate', { mnemonic: entry.api_key });
+      } catch (err) {
+        if (
+          !(await showConfirm(
+            `This recovery phrase does not validate (${errorMessage(err)}). Save anyway?`,
+          ))
+        )
+          return;
+      }
     }
     if (t === 'certificate' && !entry.certificate_data) {
       showToast('Certificate data is required', 'err');
@@ -1621,6 +2151,38 @@ export async function saveModal() {
         ...entry,
         id: old.id ?? newEntryId(),
       };
+      if (old.secretType === 'bundle') {
+        const renamed = new Map<string, string>();
+        document
+          .querySelectorAll<HTMLElement>('#f-extra-vars-list .extra-var-row[data-original-key]')
+          .forEach((row) => {
+            const before = row.dataset.originalKey ?? '';
+            const after = row.querySelector<HTMLInputElement>('.extra-var-key')?.value.trim() ?? '';
+            if (before && after && before !== after) renamed.set(before, after);
+          });
+        const bundleWithOldName = { ...st.vault.api_keys[idx], provider: old.provider };
+        for (const [before, after] of renamed) {
+          const moved = renameBundleLocalRefs(
+            st.vault.api_keys,
+            st.vault.projects,
+            bundleWithOldName,
+            before,
+            after,
+          );
+          if (moved)
+            showToast(`Updated ${moved} bundle reference${moved === 1 ? '' : 's'}`, 'ok', 2500);
+        }
+      }
+      if (old.secretType === 'bundle' && old.provider !== entry.provider) {
+        const moved = renameBundleRefs(
+          st.vault.api_keys,
+          st.vault.projects,
+          old.provider,
+          entry.provider,
+        );
+        if (moved)
+          showToast(`Updated ${moved} bundle reference${moved === 1 ? '' : 's'}`, 'ok', 2500);
+      }
       // Chunk references address entries by provider name, so a rename has to
       // carry them or every `${Provider/field}` pointing here goes stale.
       if (old.provider !== entry.provider || (old.key_id ?? '') !== (entry.key_id ?? '')) {
@@ -1635,12 +2197,12 @@ export async function saveModal() {
         created_at: new Date().toISOString(),
       });
     }
-    persist();
+    void persist();
     closeModal();
     document.getElementById('load-banner')!.style.display = 'none';
     triggerRender();
-  } catch (err: any) {
-    showToast('Save failed: ' + (err?.message || err), 'err', 4000);
+  } catch (err) {
+    showToast('Save failed: ' + errorMessage(err), 'err', 4000);
   }
 }
 
@@ -1664,7 +2226,7 @@ export function markAsRotated(idx: number) {
     version_history: history,
     compromised: false,
   };
-  persist();
+  void persist();
   triggerRender();
   showToast(
     `Rotated ${today}${entry.compromised ? ' — compromised flag cleared' : ''}`,
@@ -1687,19 +2249,64 @@ export function duplicateKey(e: Event, idx: number) {
     last_rotated_at: undefined,
   };
   st.vault.api_keys.splice(idx + 1, 0, copy);
-  persist();
+  void persist();
   triggerRender();
   showToast('Duplicated ✓', 'ok');
 }
 
+export async function confirmBundleMemberReferenceBreakage(member: VaultEntry): Promise<boolean> {
+  if (!member.bundle_id) return true;
+  const bundle = st.vault.api_keys.find(
+    (entry) => entry.id === member.bundle_id && entry.secretType === 'bundle',
+  );
+  if (!bundle) return true;
+  const sites = referencesToBundleMember(bundle, member, st.vault.api_keys, st.vault.projects);
+  if (!sites.length) return true;
+  const detail = sites.map((site) => `• ${site.label}: ${site.template}`).join('\n');
+  if (
+    !(await showConfirm(
+      `Removing this bundle member will break ${sites.length} template reference(s):\n\n${detail}\n\nContinue?`,
+    ))
+  )
+    return false;
+  const stillPresent = referencesToBundleMember(
+    bundle,
+    member,
+    st.vault.api_keys,
+    st.vault.projects,
+  );
+  const confirmed = new Set(sites.map((site) => `${site.label}\0${site.template}`));
+  if (stillPresent.some((site) => !confirmed.has(`${site.label}\0${site.template}`))) {
+    showToast('Bundle references changed while confirming; review them and try again', 'err');
+    return false;
+  }
+  return true;
+}
+
 export function deleteKey(e: Event, idx: number) {
+  const removed = st.vault.api_keys[idx];
+  if (!removed) return;
+  if (removed.bundle_id) {
+    void (async () => {
+      if (!(await confirmBundleMemberReferenceBreakage(removed))) return;
+      const currentIdx = removed.id
+        ? st.vault.api_keys.findIndex((entry) => entry.id === removed.id)
+        : st.vault.api_keys.indexOf(removed);
+      if (currentIdx >= 0) deleteKeyNow(e, currentIdx);
+    })();
+    return;
+  }
+  deleteKeyNow(e, idx);
+}
+
+function deleteKeyNow(e: Event, idx: number) {
   e.stopPropagation();
   const removed = st.vault.api_keys.splice(idx, 1)[0];
   // Anchor the undo to the identity of the entry that followed, not to a raw
   // index. Deleting a second entry before undoing the first shifted every
   // higher position, so the restore landed in the wrong slot.
   const anchorId = st.vault.api_keys[idx]?.id ?? null;
-  persist();
+  void persist();
   if (removed?.id) {
     st.expanded.delete(removed.id);
     // Reveal state is keyed by entry id. Left behind, it both grows unbounded
@@ -1711,7 +2318,7 @@ export function deleteKey(e: Event, idx: number) {
   pushUndo(`Deleted "${removed.provider}"`, () => {
     const at = anchorId ? st.vault.api_keys.findIndex((k) => k.id === anchorId) : -1;
     st.vault.api_keys.splice(at >= 0 ? at : st.vault.api_keys.length, 0, removed);
-    persist();
+    void persist();
     triggerRender();
   });
 }
@@ -1760,7 +2367,7 @@ export function injectIntoForm(value: string) {
 }
 
 export async function quickGenerate() {
-  const invoke = (window as any).__TAURI__?.core?.invoke?.bind((window as any).__TAURI__?.core);
+  const invoke = isTauri() ? invokeTauri : undefined;
   const typeEl = document.getElementById('f-secret-type') as HTMLSelectElement | null;
   const type = typeEl?.value || 'api_key';
 
@@ -1786,7 +2393,7 @@ export async function quickGenerate() {
       return;
     }
     try {
-      const result: { public_key: string; private_key: string } = await invoke(
+      const result = await invoke<{ public_key: string; private_key: string }>(
         'generate_ssh_keypair',
         { comment: '' },
       );
@@ -1808,7 +2415,7 @@ export async function quickGenerate() {
       return;
     }
     try {
-      const result: { cert_pem: string; key_pem: string } = await invoke('generate_certificate', {
+      const result = await invoke<{ cert_pem: string; key_pem: string }>('generate_certificate', {
         commonName: 'localhost',
         validityDays: 365,
       });
@@ -1922,7 +2529,7 @@ export function doCopyEnv(e: Event, idx: number, profile?: CopyProfile | 'value'
     label = `.env (${p})`;
   }
 
-  clipboardWrite(text).then(() => {
+  void clipboardWrite(text).then(() => {
     const btn = document.getElementById(`env-btn-${idx}`);
     btn?.classList.add('env-copied');
     setTimeout(() => btn?.classList.remove('env-copied'), 1600);
@@ -2000,6 +2607,77 @@ export function openCopyEnvMenu(e: Event, idx: number) {
             : []),
         ]
       : []),
+    // Per-type output files (Phase 24.5): a registry token as the `.npmrc` it
+    // belongs in, a database as its DSN. Produced by Rust — one implementation
+    // — so a browser tab, which has no Rust, offers none.
+    ...(isTauri() && emittersFor(entry.secretType).length
+      ? [
+          '---' as const,
+          ...emittersFor(entry.secretType).map((format) => ({
+            label: `Copy as ${format}`,
+            fn: async () => {
+              try {
+                copy(await invokeTauri<string>('type_emit', { entry, format }), format);
+              } catch (err) {
+                showToast(errorMessage(err), 'err', 6000);
+              }
+            },
+          })),
+        ]
+      : []),
+    ...(isTauri() && entry.secretType === 'wifi'
+      ? [
+          {
+            label: 'Show Wi-Fi QR code…',
+            fn: async () => {
+              try {
+                const uri = await invokeTauri<string>('type_emit', { entry, format: 'wifi-uri' });
+                showWifiQr(uri, entry.provider);
+              } catch (err) {
+                showToast(errorMessage(err), 'err', 6000);
+              }
+            },
+          },
+        ]
+      : []),
+    // OAuth: an online act, so it confirms and names the host first. The new
+    // refresh token is persisted BEFORE anything is shown (a rotating issuer has
+    // already invalidated the old one).
+    ...(isTauri() && entry.secretType === 'oauth_client'
+      ? [
+          '---' as const,
+          {
+            label: 'Refresh access token…',
+            fn: async () => {
+              const url = entry.extra_vars?.find((v) => v.key === 'token_url')?.value ?? '';
+              const host = /^https?:\/\/([^/]+)/.exec(url)?.[1] ?? 'the issuer';
+              if (
+                !(await showConfirm(
+                  `Send this entry's refresh token and client secret to ${host}?`,
+                ))
+              )
+                return;
+              try {
+                const res = await invokeTauri<{ entry: VaultEntry; rotated: boolean }>(
+                  'oauth_refresh',
+                  { entry },
+                );
+                const at = st.vault.api_keys.findIndex((e) => e.id === entry.id);
+                if (at < 0) return;
+                st.vault.api_keys[at] = res.entry;
+                await persist();
+                triggerRender();
+                showToast(
+                  res.rotated ? 'Refreshed; the new refresh token was saved first' : 'Refreshed',
+                  'ok',
+                );
+              } catch (err) {
+                showToast(errorMessage(err), 'err', 6000);
+              }
+            },
+          },
+        ]
+      : []),
     // The cookie forms, on a cookie entry only: five more rows on every card
     // would bury the four that apply to everything.
     ...(entry.secretType === 'cookie'
@@ -2027,6 +2705,16 @@ export function openCopyEnvMenu(e: Event, idx: number) {
             label: 'Cookie JSON (back into a browser)',
             fn: () => copy(toCookieJson(cookiesOf(entry)), 'cookie JSON'),
           },
+          {
+            label: 'Playwright storageState JSON',
+            fn: () => {
+              try {
+                copy(toPlaywrightStorageState(entry), 'Playwright storageState');
+              } catch (err) {
+                showToast((err as Error).message, 'err', 7000);
+              }
+            },
+          },
         ]
       : []),
   ]);
@@ -2041,7 +2729,7 @@ export function openIconPickerFor(idx: number) {
   const entry = st.vault.api_keys[idx];
   openIconPicker(undefined, undefined, (slug) => {
     st.vault.api_keys[idx] = { ...st.vault.api_keys[idx], custom_icon: slug || undefined };
-    persist();
+    void persist();
     triggerRender();
   });
   iconPicker.selected = entry.custom_icon || null;
@@ -2052,12 +2740,13 @@ export function openIconPickerFor(idx: number) {
 // ── Dropdown ──────────────────────────────────────────────────────────────
 
 export interface DropdownItem {
-  label: string;
-  fn: () => void;
+  /** Plain text is escaped; pass `html`...`` for markup. */
+  label: HtmlValue;
+  fn: () => void | Promise<void>;
   active?: boolean;
 }
 
-const _dropdownCallbacks = new Map<number, () => void>();
+const _dropdownCallbacks = new Map<number, DropdownItem['fn']>();
 let _dropdownItemId = 0;
 let _ddCleanup: (() => void) | null = null;
 
@@ -2081,16 +2770,15 @@ export function showDropdown(anchorEl: HTMLElement, items: (DropdownItem | '---'
   const r = anchorEl.getBoundingClientRect();
   _dropdownCallbacks.clear();
 
-  dd.innerHTML = items
-    .map((item) => {
-      if (item === '---') return '<div class="dropdown-sep"></div>';
+  setHtml(
+    dd,
+    html`${items.map((item) => {
+      if (item === '---') return html`<div class="dropdown-sep"></div>`;
       const id = _dropdownItemId++;
       _dropdownCallbacks.set(id, item.fn);
-      // Labels from callers are already escaped or are static strings — render as-is.
-      // Callers that include user data (e.g. entry.provider) must pre-escape with esc().
-      return `<div class="dropdown-item${item.active ? ' active' : ''}" data-ddid="${id}">${item.label}</div>`;
-    })
-    .join('');
+      return html`<div class="dropdown-item${item.active ? ' active' : ''}" data-ddid="${id}">${item.label}</div>`;
+    })}`,
+  );
 
   dd.style.cssText = `display:block;top:${r.bottom + 6}px;right:${document.documentElement.clientWidth - r.right}px;left:auto`;
 
@@ -2101,7 +2789,7 @@ export function showDropdown(anchorEl: HTMLElement, items: (DropdownItem | '---'
       const id = parseInt(item.dataset.ddid!);
       const fn = _dropdownCallbacks.get(id);
       _ddClose();
-      if (fn) fn();
+      if (fn) void fn();
     }
   };
 
@@ -2128,14 +2816,15 @@ export function showContextMenu(x: number, y: number, items: (DropdownItem | '--
   }
 
   _dropdownCallbacks.clear();
-  dd.innerHTML = items
-    .map((item) => {
-      if (item === '---') return '<div class="dropdown-sep"></div>';
+  setHtml(
+    dd,
+    html`${items.map((item) => {
+      if (item === '---') return html`<div class="dropdown-sep"></div>`;
       const id = _dropdownItemId++;
       _dropdownCallbacks.set(id, item.fn);
-      return `<div class="dropdown-item${item.active ? ' active' : ''}" data-ddid="${id}">${item.label}</div>`;
-    })
-    .join('');
+      return html`<div class="dropdown-item${item.active ? ' active' : ''}" data-ddid="${id}">${item.label}</div>`;
+    })}`,
+  );
   dd.style.cssText = `display:block;top:${y}px;left:${x}px;right:auto`;
   requestAnimationFrame(() => {
     const r = dd.getBoundingClientRect();
@@ -2147,7 +2836,7 @@ export function showContextMenu(x: number, y: number, items: (DropdownItem | '--
     if (item) {
       const fn = _dropdownCallbacks.get(parseInt(item.dataset.ddid!));
       _ddClose();
-      fn?.();
+      void fn?.();
     }
   };
   const close = (e: MouseEvent) => {
