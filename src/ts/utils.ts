@@ -1,9 +1,17 @@
 /** Pure utilities — no state, no DOM side effects on module load. */
+import { invokeTauri, isTauri } from './tauri';
+import { raw } from './html';
 
 /** Escape for HTML *text* content. */
 export function esc(s: unknown): string {
   if (s == null) return '';
-  return String(s)
+  const text =
+    typeof s === 'string'
+      ? s
+      : typeof s === 'number' || typeof s === 'boolean' || typeof s === 'bigint'
+        ? String(s)
+        : (JSON.stringify(s) ?? '');
+  return text
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
@@ -23,12 +31,22 @@ export function esc(s: unknown): string {
  */
 export function escAttr(s: unknown): string {
   if (s == null) return '';
-  return String(s)
+  const text =
+    typeof s === 'string'
+      ? s
+      : typeof s === 'number' || typeof s === 'boolean' || typeof s === 'bigint'
+        ? String(s)
+        : (JSON.stringify(s) ?? '');
+  return text
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;');
+}
+
+export function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 export function maskKey(val: string): string {
@@ -276,17 +294,13 @@ export async function saveFile(
   suggestedName: string,
   mime = 'text/plain',
 ): Promise<{ ok: true; path: string | null } | { ok: false; error: string }> {
-  const invoke = (
-    window as unknown as {
-      __TAURI__?: { core?: { invoke?: (c: string, a?: unknown) => unknown } };
-    }
-  ).__TAURI__?.core?.invoke;
-  if (invoke) {
+  if (isTauri()) {
     try {
-      const path = (await invoke('write_export_file', {
+      const path = await invokeTauri<string>('write_export_file', {
         filename: suggestedName,
         content,
-      })) as string;
+      });
+      if (typeof path !== 'string') return { ok: false, error: 'Export did not return a path' };
       return { ok: true, path };
     } catch (e) {
       return { ok: false, error: e instanceof Error ? e.message : String(e) };
@@ -318,7 +332,7 @@ export function execCopy(text: string): Promise<void> {
       document.execCommand('copy');
       resolve();
     } catch (e) {
-      reject(e);
+      reject(e instanceof Error ? e : new Error(errorMessage(e)));
     } finally {
       document.body.removeChild(ta);
     }
@@ -326,8 +340,18 @@ export function execCopy(text: string): Promise<void> {
 }
 
 // ── SVGs ───────────────────────────────────────────────────────────────────
-export const eyeSVG = `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>`;
-export const copySVG = `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>`;
-export const editSVG = `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>`;
-export const delSVG = `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6M9 6V4h6v2"/></svg>`;
-export const dupSVG = `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="1" y="1" width="13" height="13" rx="2"/><path d="M8 8h13v13H8z"/></svg>`;
+export const eyeSVG = raw(
+  `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>`,
+);
+export const copySVG = raw(
+  `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>`,
+);
+export const editSVG = raw(
+  `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>`,
+);
+export const delSVG = raw(
+  `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6M9 6V4h6v2"/></svg>`,
+);
+export const dupSVG = raw(
+  `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="1" y="1" width="13" height="13" rx="2"/><path d="M8 8h13v13H8z"/></svg>`,
+);
