@@ -1,21 +1,10 @@
-/**
- * @file
- * Audit log viewer — reads the append-only, hash-chained `vault_audit`
- * table and lets the user verify that the chain is intact.
- *
- * The backend has written this chain since Phase 3 but nothing ever displayed
- * it, so the tamper-evidence it provides was invisible. Each row stores
- * `entry_hash = SHA256("action|provider|timestamp|prev_hash")` with the literal
- * string `genesis` standing in for the first row's absent predecessor — mirror
- * of `compute_audit_hash` in `vault-core/src/lib.rs`.
- */
-
 import type { AuditRow } from './types';
 import { st, RemoteVaultStore } from './state';
-import { esc, showToast, clipboardWrite } from './utils';
+import { showToast, clipboardWrite, errorMessage } from './utils';
+import { invokeTauri } from './tauri';
+import { html, setHtml } from './html';
 
-const invoke = (cmd: string, args?: Record<string, unknown>) =>
-  (window as any).__TAURI__?.core?.invoke?.(cmd, args) as Promise<any> | undefined;
+const invoke = invokeTauri;
 
 /** Rows from the last successful load, newest-first (as the backend returns them). */
 let _rows: AuditRow[] = [];
@@ -35,7 +24,7 @@ async function loadRows(): Promise<AuditRow[]> {
   if (st.store instanceof RemoteVaultStore) {
     return (await (st.store as RemoteVaultStore).getAuditLog()) as AuditRow[];
   }
-  return (await invoke('get_audit_log')) ?? [];
+  return (await invoke<AuditRow[]>('get_audit_log')) ?? [];
 }
 
 /** Hex SHA-256 of a UTF-8 string, matching the Rust side byte for byte. */
@@ -154,7 +143,7 @@ export function resetAuditPanel(): void {
   _rows = [];
   _userNames = new Map();
   const out = document.getElementById('audit-results');
-  if (out) out.innerHTML = '';
+  if (out) setHtml(out, '');
   const countEl = document.getElementById('audit-count');
   if (countEl) countEl.textContent = '';
   const status = document.getElementById('audit-status');
@@ -165,9 +154,18 @@ async function loadUserNames(): Promise<void> {
   try {
     const users =
       st.store instanceof RemoteVaultStore
-        ? await (st.store as RemoteVaultStore).api('/api/users')
-        : await invoke('list_users');
-    _userNames = new Map((users ?? []).map((u: any) => [u.id, u.username]));
+        ? await (st.store as RemoteVaultStore).api<unknown>('/api/users')
+        : await invoke<unknown>('list_users');
+    if (!Array.isArray(users)) return;
+    _userNames = new Map(
+      users.flatMap((user) => {
+        if (typeof user !== 'object' || user === null) return [];
+        const { id, username } = user as Record<string, unknown>;
+        return typeof id === 'string' && typeof username === 'string'
+          ? [[id, username] as const]
+          : [];
+      }),
+    );
   } catch {
     /* not permitted to list users — fall back to raw ids */
   }
@@ -184,32 +182,43 @@ function render(rows: AuditRow[]) {
   countEl.textContent = rows.length ? `${rows.length} entries` : '';
 
   if (!rows.length) {
-    out.innerHTML = `<div class="health-ok">No audit entries yet — the log fills as you add, edit and delete secrets.</div>`;
+    setHtml(
+      out,
+      html`<div class="health-ok">
+        No audit entries yet — the log fills as you add, edit and delete secrets.
+      </div>`,
+    );
     return;
   }
 
-  out.innerHTML = `
-    <table class="audit-table">
+  setHtml(
+    out,
+    html` <table class="audit-table">
       <thead>
-        <tr><th>#</th><th>Action</th><th>Target</th><th>By</th><th>When</th><th>Details</th><th>Hash</th></tr>
+        <tr>
+          <th>#</th>
+          <th>Action</th>
+          <th>Target</th>
+          <th>By</th>
+          <th>When</th>
+          <th>Details</th>
+          <th>Hash</th>
+        </tr>
       </thead>
-      <tbody>
-        ${rows
-          .map(
-            (r) => `
-          <tr>
-            <td class="audit-id">${esc(r.id)}</td>
-            <td><span class="audit-action ${ACTION_CLASS[r.action] ?? ''}">${esc(r.action)}</span></td>
-            <td class="audit-target">${esc(r.entry_provider ?? '—')}</td>
-            <td class="audit-actor" title="${esc(r.actor ?? '')}">${esc(actorLabel(r.actor))}</td>
-            <td class="audit-ts">${esc(r.timestamp)}</td>
-            <td class="audit-details">${esc(r.details ?? '')}</td>
-            <td class="audit-hash" title="${esc(r.entry_hash ?? '')}">${esc((r.entry_hash ?? '—').slice(0, 12))}</td>
-          </tr>`,
-          )
-          .join('')}
-      </tbody>
-    </table>`;
+      <tbody>${rows.map(
+        (r) =>
+          html` <tr>
+              <td class="audit-id">${r.id}</td>
+              <td><span class="audit-action ${ACTION_CLASS[r.action] ?? ''}">${r.action}</span></td>
+              <td class="audit-target">${r.entry_provider ?? '—'}</td>
+              <td class="audit-actor" title="${r.actor ?? ''}">${actorLabel(r.actor)}</td>
+              <td class="audit-ts">${r.timestamp}</td>
+              <td class="audit-details">${r.details ?? ''}</td>
+              <td class="audit-hash" title="${r.entry_hash ?? ''}">${(r.entry_hash ?? '—').slice(0, 12)}</td>
+            </tr>`,
+      )}</tbody>
+    </table>`,
+  );
 }
 
 function setStatus(msg: string, type: 'ok' | 'err' | 'warn') {
@@ -220,33 +229,37 @@ function setStatus(msg: string, type: 'ok' | 'err' | 'warn') {
 }
 
 export function initAuditPanel() {
-  document.getElementById('audit-refresh')?.addEventListener('click', async () => {
-    try {
-      await loadUserNames();
-      _rows = await loadRows();
-      render(_rows);
-      setStatus(`Loaded ${_rows.length} entries.`, 'ok');
-    } catch (e: any) {
-      setStatus(`Could not load audit log: ${e?.message ?? e}`, 'err');
-    }
-  });
-
-  document.getElementById('audit-verify')?.addEventListener('click', async () => {
-    if (!_rows.length) {
+  document.getElementById('audit-refresh')?.addEventListener('click', () => {
+    void (async () => {
       try {
+        await loadUserNames();
         _rows = await loadRows();
         render(_rows);
-      } catch (e: any) {
-        setStatus(`Could not load audit log: ${e?.message ?? e}`, 'err');
-        return;
+        setStatus(`Loaded ${_rows.length} entries.`, 'ok');
+      } catch (e) {
+        setStatus(`Could not load audit log: ${errorMessage(e)}`, 'err');
       }
-    }
-    setStatus('Verifying…', 'warn');
-    const result = await verifyChain(_rows);
-    setStatus(
-      result.ok ? `✓ Chain intact — ${result.reason}` : `✗ Chain broken — ${result.reason}`,
-      result.ok ? 'ok' : 'err',
-    );
+    })();
+  });
+
+  document.getElementById('audit-verify')?.addEventListener('click', () => {
+    void (async () => {
+      if (!_rows.length) {
+        try {
+          _rows = await loadRows();
+          render(_rows);
+        } catch (e) {
+          setStatus(`Could not load audit log: ${errorMessage(e)}`, 'err');
+          return;
+        }
+      }
+      setStatus('Verifying…', 'warn');
+      const result = await verifyChain(_rows);
+      setStatus(
+        result.ok ? `✓ Chain intact — ${result.reason}` : `✗ Chain broken — ${result.reason}`,
+        result.ok ? 'ok' : 'err',
+      );
+    })();
   });
 
   document.getElementById('audit-export')?.addEventListener('click', () => {
@@ -254,7 +267,7 @@ export function initAuditPanel() {
       showToast('Load the log first', 'err');
       return;
     }
-    clipboardWrite(JSON.stringify(_rows, null, 2)).then(() =>
+    void clipboardWrite(JSON.stringify(_rows, null, 2)).then(() =>
       showToast('Audit log copied ✓', 'ok', 1500),
     );
   });
