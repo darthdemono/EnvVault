@@ -16,8 +16,10 @@ export function getDescendantProjectIds(projectId: string): string[] {
     .map((p) => p.id);
 }
 
-export function buildProjectTree(projects: Project[]): any[] {
-  const byName = new Map<string, any>();
+export type ProjectTreeNode = Project & { children: ProjectTreeNode[]; virtual: boolean };
+
+export function buildProjectTree(projects: Project[]): ProjectTreeNode[] {
+  const byName = new Map<string, ProjectTreeNode>();
   for (const p of projects) byName.set(p.name, { ...p, children: [], virtual: false });
   for (const p of projects) {
     const parts = p.name.split('/');
@@ -33,14 +35,13 @@ export function buildProjectTree(projects: Project[]): any[] {
         });
     }
   }
-  const tree: any[] = [];
+  const tree: ProjectTreeNode[] = [];
   for (const [name, node] of byName) {
     const parts = name.split('/');
     if (parts.length === 1) tree.push(node);
     else byName.get(parts.slice(0, -1).join('/'))!.children.push(node);
   }
-  for (const [, node] of byName)
-    node.children.sort((a: any, b: any) => a.name.localeCompare(b.name));
+  for (const [, node] of byName) node.children.sort((a, b) => a.name.localeCompare(b.name));
   tree.sort((a, b) => a.name.localeCompare(b.name));
   return tree;
 }
@@ -107,7 +108,7 @@ export function getFiltered(): VaultEntry[] {
         k.description,
         k.details,
         ...(k.categories || []),
-        ...((k as any).tags || []),
+        ...(k.tags ?? []),
       ]
         .join(' ')
         .toLowerCase();
@@ -133,15 +134,18 @@ export function getFiltered(): VaultEntry[] {
       const pfx = st.filter.value + '/';
       return (k.categories || []).some((c) => c === st.filter.value || c.startsWith(pfx));
     }
-    if (st.filter.type === 'secret_type') return (k.secretType || 'api_key') === st.filter.value;
-    // Phase 24.2's type chip bar — multi-toggle, OR-combined within itself,
-    // ANDed with everything else here like every other filter dimension. The
-    // two virtual chips are seed-carrying and pool-membership, neither of
-    // which is a `secretType` value on its own.
+    // Phase 24.2's type chip bar replaced the old single-select sidebar
+    // sub-list (`st.filter.type === 'secret_type'`) — multi-toggle,
+    // OR-combined within itself, ANDed with everything else here like every
+    // other filter dimension. `__totp` is the one virtual chip: a seed is a
+    // field on any entry type rather than a type of its own. There is
+    // deliberately no `__pool` chip — key-pool filtering already lives in the
+    // sidebar's Key Pools section (`activePoolFilter`, checked above), and a
+    // second control for the same thing is exactly the redundancy this bar
+    // exists to remove, not add.
     if (st.activeTypeChips.size) {
       const matches = [...st.activeTypeChips].some((chip) => {
         if (chip === '__totp') return !!k.totp_secret && k.totp_secret.trim() !== '';
-        if (chip === '__pool') return typeof k.pool === 'string' && k.pool.trim() !== '';
         return (k.secretType || 'api_key') === chip;
       });
       if (!matches) return false;
