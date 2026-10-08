@@ -34,7 +34,11 @@ RUN cargo build --release -p envv-server 2>&1 | grep -v "^warning" || true
 # secret-types.json (Phase 24.5) is `include_str!`'d from vault-core/src at a
 # repo-root-relative path — without it here the build fails past the stub
 # stage with "couldn't read vault-core/src/../../secret-types.json".
-COPY secret-types.json ./
+#
+# Phase 31/33 added two more: secret-templates.json (templates.rs) and the BIP39
+# wordlist under vault-core/data (type_emit.rs), both `include_str!`'d.
+COPY secret-types.json secret-templates.json ./
+COPY vault-core/data vault-core/data
 COPY vault-core/src vault-core/src
 COPY envv-server/src envv-server/src
 
