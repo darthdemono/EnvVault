@@ -1,19 +1,12 @@
-/**
- * @file
- * Lock / unlock vault: lockVault, resetLock, showUnlockModal.
- */
-
 import {
   st,
   TauriVaultStore,
   RemoteVaultStore,
-  LocalVaultStore,
-  inTauri,
   Settings,
   triggerRender,
   resetViewState,
 } from './state';
-import { showToast, showConfirm, esc } from './utils';
+import { showToast, errorMessage } from './utils';
 import {
   upsertSavedRemote,
   findSavedRemote,
@@ -31,6 +24,7 @@ import {
   wirePasswordStrength,
   relativeTime,
 } from './ui-qol';
+import { html, type HtmlValue } from './html';
 
 let _finishInitFn: () => Promise<void> = async () => {};
 let _warnTimer: ReturnType<typeof setTimeout> | null = null;
@@ -149,16 +143,16 @@ export function showRelockScreen(reason: 'auto' | 'manual' | 'visibility' | 'swi
       overlay.classList.remove('open');
       await _finishInitFn();
       resetLock();
-    } catch (err: any) {
+    } catch (err) {
       submitBtn.disabled = false;
       submitBtn.textContent = 'Unlock';
-      showErr(err?.message ?? 'Wrong password');
+      showErr(err instanceof Error ? err.message : 'Wrong password');
     }
   }
 
   submitBtn.onclick = doUnlock;
   pwField.onkeydown = (e) => {
-    if (e.key === 'Enter') doUnlock();
+    if (e.key === 'Enter') void doUnlock();
   };
 }
 
@@ -194,7 +188,7 @@ export function resetLock() {
     }, warnMs);
   }
 
-  st.lockTimer = setTimeout(() => lockVault('auto'), ms);
+  st.lockTimer = setTimeout(() => void lockVault('auto'), ms);
   if (lockStatus) lockStatus.textContent = `Auto-lock: ${mins}min`;
 
   // Bind activity listeners once — any mouse or keyboard event resets the timer.
@@ -230,7 +224,7 @@ export function recentServers() {
   return [...(Settings.get('remoteSaved') ?? [])].sort((a, b) => at(b) - at(a));
 }
 
-export async function showUnlockModal(isFirstRun: boolean) {
+export function showUnlockModal(isFirstRun: boolean) {
   // The shell is hidden until boot has decided what to show (see `html.booting`
   // in base.css). This is one of the two states it can end in; the other is
   // `finishInit()`.
@@ -311,7 +305,7 @@ export async function showUnlockModal(isFirstRun: boolean) {
   if (recentBtn && serverField) {
     recentBtn.onclick = () => {
       const servers = recentServers();
-      const items: ({ label: string; active: boolean; fn: () => void } | '---')[] = [
+      const items: ({ label: HtmlValue; active: boolean; fn: () => void } | '---')[] = [
         {
           label: '&nbsp;&nbsp;Local Vault',
           active: !serverField.value,
@@ -326,10 +320,8 @@ export async function showUnlockModal(isFirstRun: boolean) {
       if (servers.length) items.push('---');
       servers.forEach((cfg) => {
         items.push({
-          label:
-            `<div>${esc(cfg.name)}</div>` +
-            `<div style="font-size:10px;color:var(--text3);margin-top:2px">` +
-            `${esc(cfg.url)} · ${esc(relativeTime(cfg.lastConnectedAt))}</div>`,
+          label: html`<div>${cfg.name}</div>
+            <div style="font-size:10px;color:var(--text3);margin-top:2px">${cfg.url} · ${relativeTime(cfg.lastConnectedAt)}</div>`,
           active: serverField.value.replace(/\/$/, '') === cfg.url,
           fn: () => {
             serverField.value = cfg.url;
@@ -342,7 +334,7 @@ export async function showUnlockModal(isFirstRun: boolean) {
       if (!servers.length) {
         items.push('---');
         items.push({
-          label: '<span style="color:var(--text3)">No servers connected yet</span>',
+          label: html`<span style="color:var(--text3)">No servers connected yet</span>`,
           active: false,
           fn: () => {},
         });
@@ -415,10 +407,10 @@ export async function showUnlockModal(isFirstRun: boolean) {
         document.getElementById('header')!.style.display = '';
         renderRemotePanel();
         await _finishInitFn();
-      } catch (err: any) {
+      } catch (err) {
         submitBtn.disabled = false;
         submitBtn.textContent = 'Connect';
-        showErr(err?.message || String(err) || 'Connection failed');
+        showErr(errorMessage(err) || 'Connection failed');
       }
       return;
     }
@@ -445,19 +437,19 @@ export async function showUnlockModal(isFirstRun: boolean) {
       overlay.classList.remove('open');
       document.getElementById('header')!.style.display = '';
       await _finishInitFn();
-    } catch (err: any) {
+    } catch (err) {
       submitBtn.disabled = false;
       submitBtn.textContent = isFirstRun ? 'Create Vault' : 'Unlock';
-      showErr(err?.message || String(err) || 'Wrong password');
+      showErr(errorMessage(err) || 'Wrong password');
     }
   }
 
   submitBtn.onclick = doUnlock;
   pwField.onkeydown = (e) => {
-    if (e.key === 'Enter') doUnlock();
+    if (e.key === 'Enter') void doUnlock();
   };
   confirmField.onkeydown = (e) => {
-    if (e.key === 'Enter') doUnlock();
+    if (e.key === 'Enter') void doUnlock();
   };
 
   // reset_vault removed from UI — delete vault data via CLI or by removing
