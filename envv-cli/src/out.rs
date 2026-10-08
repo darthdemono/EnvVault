@@ -243,6 +243,22 @@ fn is_public_field(name: &str) -> bool {
         || PUBLIC_FIELDS_24_1.contains(&name)
 }
 
+/// Whether one of the two fixed value slots is deliberately public.
+///
+/// This is shared by the redacted display and by the outward redaction engine:
+/// a client id explicitly marked public must not become a shield pattern.
+fn public_slot(entry: &Value, is_cookie: bool, field: &str) -> bool {
+    if is_cookie {
+        return false;
+    }
+    let flag = match field {
+        "api_key" => "primary_public",
+        "api_secret" => "secret_public",
+        _ => return false,
+    };
+    entry.get(flag).and_then(|v| v.as_bool()).unwrap_or(false)
+}
+
 /// Redact a single vault entry for JSON output. Returns it unchanged when
 /// `--reveal` is in force.
 pub fn redact_entry(entry: &Value) -> Value {
@@ -255,19 +271,8 @@ pub fn redact_entry(entry: &Value) -> Value {
     // OAuth client id lives in `api_key` and is printed in the issuer's own
     // documentation; masking it protects nothing and stops an agent building an
     // auth URL. The flag is per value and per entry — never per type.
-    let public_slot = |field: &str| -> bool {
-        if is_cookie {
-            return false;
-        }
-        let flag = match field {
-            "api_key" => "primary_public",
-            "api_secret" => "secret_public",
-            _ => return false,
-        };
-        entry.get(flag).and_then(|v| v.as_bool()).unwrap_or(false)
-    };
     for f in SECRET_FIELDS {
-        if public_slot(f) {
+        if public_slot(entry, is_cookie, f) {
             continue;
         }
         if let Some(v) = e.get(f).and_then(|v| v.as_str()) {
@@ -391,6 +396,55 @@ pub fn redact_entry(entry: &Value) -> Value {
 
 pub fn redact_entries(entries: &[Value]) -> Vec<Value> {
     entries.iter().map(redact_entry).collect()
+}
+
+/// Every string value this build treats as private in an entry.
+///
+/// The outward matcher follows the same fail-closed policy as a redacted
+/// listing. A new private field then cannot leak through `envv shield` or evade
+/// `envv scan --exposed` while the ordinary listing still masks it.
+pub fn secret_values(entry: &Value) -> Vec<String> {
+    let is_cookie = entry.get("secretType").and_then(|v| v.as_str()) == Some("cookie");
+    let mut values = Vec::new();
+
+    for field in SECRET_FIELDS {
+        if !public_slot(entry, is_cookie, field) {
+            if let Some(value) = entry.get(field).and_then(|v| v.as_str()) {
+                values.push(value.to_string());
+            }
+        }
+    }
+    if let Some(fields) = entry.as_object() {
+        values.extend(fields.iter().filter_map(|(field, value)| {
+            (value.is_string()
+                && !is_public_field(field)
+                && !SECRET_FIELDS.contains(&field.as_str()))
+            .then(|| value.as_str().map(str::to_string))
+            .flatten()
+        }));
+    }
+    if let Some(vars) = entry.get("extra_vars").and_then(|v| v.as_array()) {
+        values.extend(vars.iter().filter_map(|var| {
+            let is_public =
+                !is_cookie && var.get("public").and_then(|v| v.as_bool()).unwrap_or(false);
+            (!is_public)
+                .then(|| {
+                    var.get("value")
+                        .and_then(|v| v.as_str())
+                        .map(str::to_string)
+                })
+                .flatten()
+        }));
+    }
+    if let Some(history) = entry.get("version_history").and_then(|v| v.as_array()) {
+        values.extend(history.iter().filter_map(|entry| {
+            entry
+                .get("value")
+                .and_then(|value| value.as_str())
+                .map(str::to_string)
+        }));
+    }
+    values
 }
 
 /// True when a chunk field holds secret material.
