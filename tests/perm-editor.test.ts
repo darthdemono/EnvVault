@@ -7,7 +7,7 @@
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { st } from '../src/ts/state';
-import { permEditorHtml, wirePermEditor } from '../src/ts/perm-editor';
+import { permEditorHtml, wirePermEditor, type PermPreviewContext } from '../src/ts/perm-editor';
 import { parse } from '../src/ts/permex';
 import { loadRealIndexHtml, makeEntry, makeProject, makeVault, resetState } from './helpers';
 
@@ -22,10 +22,11 @@ const readBox = () => $('t-expr-read') as HTMLTextAreaElement;
 function mount(
   exprs = { read: '', write: '' },
   onSave: (e: { read: string; write: string }) => Promise<void> = async () => {},
+  context: PermPreviewContext = {},
 ) {
   document.body.innerHTML = `<div id="host"></div>`;
-  $('host').innerHTML = permEditorHtml('t', exprs);
-  wirePermEditor('t', onSave);
+  $('host').innerHTML = String(permEditorHtml('t', exprs));
+  wirePermEditor('t', onSave, context);
 }
 
 /** Pick a field + value in the builder and press Insert. */
@@ -163,6 +164,18 @@ describe('live validation', () => {
     ($('t-expr-write') as HTMLTextAreaElement).value = 'tag:dev';
     readBox().dispatchEvent(new Event('input'));
     expect($('t-preview').textContent).toBe('Effective read (read OR write): 2 of 3');
+  });
+
+  it('includes the assigned class when previewing an individual rule', () => {
+    mount({ read: 'project:*', write: '' }, async () => {}, {
+      classExprs: { read: 'tag:prod', write: '' },
+    });
+    expect($('t-status-read').textContent).toBe('Valid — matches 1 of 3 entries.');
+  });
+
+  it('narrows strict writes before displaying their match count', () => {
+    mount({ read: '', write: 'tag:prod OR tag:dev' }, async () => {}, { strictWrite: true });
+    expect($('t-status-write').textContent).toBe('Valid — matches 0 of 3 entries.');
   });
 });
 
