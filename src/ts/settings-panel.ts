@@ -1,8 +1,3 @@
-/**
- * @file
- * Settings panel: themes, sidebar order, panel order, remote config, open/save/close.
- */
-
 import type { AppSettings, VaultEntry } from './types';
 import {
   Settings,
@@ -12,8 +7,10 @@ import {
   applyUsersPanelVisibility,
   type EnvNameCase,
 } from './state';
-import { showToast } from './utils';
+import { saveFile, showConfirm, showPasswordPrompt, showToast } from './utils';
 import { buildCopyText, type CopyProfile, type MetadataStyle } from './copy-profile';
+import { html, setHtml } from './html';
+import { inTauri, invokeTauri } from './tauri';
 
 // ── Theme definitions ──────────────────────────────────────────────────────
 
@@ -35,7 +32,7 @@ const THEMES = [
 export function buildThemeSwatches() {
   const wrap = document.getElementById('theme-swatches')!;
   if (!wrap) return;
-  wrap.innerHTML = '';
+  setHtml(wrap, '');
   THEMES.forEach((t) => {
     const sw = document.createElement('div');
     sw.className = `theme-swatch${Settings.get('theme') === t.id ? ' active' : ''}`;
@@ -52,7 +49,9 @@ export function buildThemeSwatches() {
 
 // ── Sidebar order editor ──────────────────────────────────────────────────
 
-const SIDEBAR_SECTION_DEFS = [
+type SidebarSection = AppSettings['sidebarSections'][number];
+
+const SIDEBAR_SECTION_DEFS: { key: SidebarSection; label: string }[] = [
   { key: 'all', label: 'All Secrets' },
   { key: 'price', label: 'Price Types' },
   { key: 'env', label: 'Environment' },
@@ -63,7 +62,7 @@ const SIDEBAR_SECTION_DEFS = [
   { key: 'prefixes', label: 'Env Prefixes' },
 ];
 // `authenticator` removed here in A2 (2026-09-14) — see state.ts's migration note.
-const DEFAULT_SIDEBAR_SECTIONS = [
+const DEFAULT_SIDEBAR_SECTIONS: AppSettings['sidebarSections'] = [
   'all',
   'price',
   'env',
@@ -77,8 +76,8 @@ const DEFAULT_SIDEBAR_SECTIONS = [
 export function buildSidebarOrderEditor() {
   const container = document.getElementById('s-sidebar-sections');
   if (!container) return;
-  const sections = [...(Settings.get('sidebarSections') || DEFAULT_SIDEBAR_SECTIONS)] as string[];
-  container.innerHTML = '';
+  const sections = [...(Settings.get('sidebarSections') || DEFAULT_SIDEBAR_SECTIONS)];
+  setHtml(container, '');
 
   sections.forEach((sKey, i) => {
     const def = SIDEBAR_SECTION_DEFS.find((d) => d.key === sKey);
@@ -90,14 +89,23 @@ export function buildSidebarOrderEditor() {
     if (sKey !== 'all') row.draggable = true;
     const isFirst = i === 0,
       isLast = i === sections.length - 1;
-    row.innerHTML = `
-      <span class="sidebar-order-grip" title="Drag to reorder">⠿</span>
-      <span class="sidebar-order-label">${def.label}</span>
-      <div class="sidebar-order-btns">
-        <button class="btn-xs" data-action="up" ${isFirst ? 'disabled' : ''}>▲</button>
-        <button class="btn-xs" data-action="down" ${isLast ? 'disabled' : ''}>▼</button>
-        <button class="btn-xs" data-action="${sKey === 'all' ? 'locked' : 'remove'}" ${sKey === 'all' ? 'disabled' : ''} title="${sKey === 'all' ? 'Always visible' : 'Hide'}">✕</button>
-      </div>`;
+    setHtml(
+      row,
+      html` <span class="sidebar-order-grip" title="Drag to reorder">⠿</span>
+        <span class="sidebar-order-label">${def.label}</span>
+        <div class="sidebar-order-btns">
+          <button class="btn-xs" data-action="up" ${isFirst ? 'disabled' : ''}>▲</button>
+          <button class="btn-xs" data-action="down" ${isLast ? 'disabled' : ''}>▼</button>
+          <button
+            class="btn-xs"
+            data-action="${sKey === 'all' ? 'locked' : 'remove'}"
+            ${sKey === 'all' ? 'disabled' : ''}
+            title="${sKey === 'all' ? 'Always visible' : 'Hide'}"
+          >
+            ✕
+          </button>
+        </div>`,
+    );
     container.appendChild(row);
   });
 
@@ -105,12 +113,16 @@ export function buildSidebarOrderEditor() {
     const row = document.createElement('div');
     row.className = 'sidebar-order-row sidebar-order-hidden';
     row.dataset.key = def.key;
-    row.innerHTML = `<span class="sidebar-order-label sidebar-order-dim">${def.label}</span><button class="btn-xs" data-action="add">+ Show</button>`;
+    setHtml(
+      row,
+      html`<span class="sidebar-order-label sidebar-order-dim">${def.label}</span
+        ><button class="btn-xs" data-action="add">+ Show</button>`,
+    );
     container.appendChild(row);
   });
 
-  const commit = (secs: string[]) => {
-    Settings.set('sidebarSections', secs as any);
+  const commit = (secs: AppSettings['sidebarSections']) => {
+    Settings.set('sidebarSections', secs);
     applySidebarOrder();
     triggerRender(); // recompute data-gated tags/prefixes visibility
     buildSidebarOrderEditor();
@@ -121,8 +133,8 @@ export function buildSidebarOrderEditor() {
     if (!btn) return;
     const action = btn.dataset.action!;
     const rowEl = btn.closest<HTMLElement>('[data-key]')!;
-    const key = rowEl.dataset.key!;
-    const secs = [...(Settings.get('sidebarSections') || DEFAULT_SIDEBAR_SECTIONS)] as string[];
+    const key = rowEl.dataset.key! as SidebarSection;
+    const secs = [...(Settings.get('sidebarSections') || DEFAULT_SIDEBAR_SECTIONS)];
     const idx = secs.indexOf(key);
     if (action === 'up' && idx > 0) {
       [secs[idx - 1], secs[idx]] = [secs[idx], secs[idx - 1]];
@@ -137,15 +149,19 @@ export function buildSidebarOrderEditor() {
   };
 
   // ── Drag-and-drop reorder (VSCodium-style) ──
-  let dragKey: string | null = null;
+  let dragKey: SidebarSection | null = null;
   container.ondragstart = (e) => {
     const row = (e.target as HTMLElement).closest<HTMLElement>(
       '.sidebar-order-row[draggable="true"]',
     );
     if (!row) return;
-    dragKey = row.dataset.key!;
+    dragKey = row.dataset.key! as SidebarSection;
     row.classList.add('dragging');
-    e.dataTransfer!.effectAllowed = 'move';
+    // WebKitGTK refuses to start an HTML drag without a payload.  Chromium
+    // accepts the old effectAllowed-only version, which made this look wired
+    // everywhere except the shipped desktop app.
+    e.dataTransfer?.setData('text/plain', dragKey);
+    if (e.dataTransfer) e.dataTransfer.effectAllowed = 'move';
   };
   container.ondragend = () => {
     container
@@ -166,20 +182,33 @@ export function buildSidebarOrderEditor() {
     e.preventDefault();
     const over = (e.target as HTMLElement).closest<HTMLElement>('.sidebar-order-row');
     if (!dragKey || !over) return;
-    const targetKey = over.dataset.key!;
+    const targetKey = over.dataset.key! as SidebarSection;
     if (
       targetKey === dragKey ||
       targetKey === 'all' ||
       over.classList.contains('sidebar-order-hidden')
     )
       return;
-    const secs = [...(Settings.get('sidebarSections') || DEFAULT_SIDEBAR_SECTIONS)] as string[];
+    const secs = [...(Settings.get('sidebarSections') || DEFAULT_SIDEBAR_SECTIONS)];
     const from = secs.indexOf(dragKey);
     let to = secs.indexOf(targetKey);
     if (from < 0 || to < 0) return;
     secs.splice(from, 1);
     to = secs.indexOf(targetKey); // recompute after removal
     secs.splice(to, 0, dragKey); // insert before the drop target
+    commit(secs);
+  };
+  container.onkeydown = (e) => {
+    if (!e.altKey || (e.key !== 'ArrowUp' && e.key !== 'ArrowDown')) return;
+    const row = (e.target as HTMLElement).closest<HTMLElement>('.sidebar-order-row[data-key]');
+    const key = row?.dataset.key as SidebarSection | undefined;
+    if (!key || key === 'all' || row?.classList.contains('sidebar-order-hidden')) return;
+    const secs = [...(Settings.get('sidebarSections') || DEFAULT_SIDEBAR_SECTIONS)];
+    const from = secs.indexOf(key);
+    const to = from + (e.key === 'ArrowUp' ? -1 : 1);
+    if (from < 1 || to < 1 || to >= secs.length) return;
+    e.preventDefault();
+    [secs[from], secs[to]] = [secs[to], secs[from]];
     commit(secs);
   };
 }
@@ -199,7 +228,7 @@ export function buildPanelOrderEditor() {
   ];
 
   const order = [...(Settings.get('panelOrder') || ALL_PANELS.map((p) => p.key))];
-  container.innerHTML = '';
+  setHtml(container, '');
 
   order.forEach((pKey, i) => {
     const def = ALL_PANELS.find((p) => p.key === pKey);
@@ -209,13 +238,22 @@ export function buildPanelOrderEditor() {
     row.dataset.key = pKey;
     const isFirst = i === 0,
       isLast = i === order.length - 1;
-    row.innerHTML = `
-      <span class="sidebar-order-label">${def.label}</span>
-      <div class="sidebar-order-btns">
-        <button class="btn-xs" data-action="up" ${isFirst ? 'disabled' : ''}>▲</button>
-        <button class="btn-xs" data-action="down" ${isLast ? 'disabled' : ''}>▼</button>
-        <button class="btn-xs" data-action="${def.removable ? 'remove' : 'locked'}" ${def.removable ? '' : 'disabled'} title="${def.removable ? 'Hide' : 'Cannot hide'}">✕</button>
-      </div>`;
+    setHtml(
+      row,
+      html` <span class="sidebar-order-label">${def.label}</span>
+        <div class="sidebar-order-btns">
+          <button class="btn-xs" data-action="up" ${isFirst ? 'disabled' : ''}>▲</button>
+          <button class="btn-xs" data-action="down" ${isLast ? 'disabled' : ''}>▼</button>
+          <button
+            class="btn-xs"
+            data-action="${def.removable ? 'remove' : 'locked'}"
+            ${def.removable ? '' : 'disabled'}
+            title="${def.removable ? 'Hide' : 'Cannot hide'}"
+          >
+            ✕
+          </button>
+        </div>`,
+    );
     container.appendChild(row);
   });
 
@@ -223,7 +261,11 @@ export function buildPanelOrderEditor() {
     const row = document.createElement('div');
     row.className = 'sidebar-order-row sidebar-order-hidden';
     row.dataset.key = def.key;
-    row.innerHTML = `<span class="sidebar-order-label sidebar-order-dim">${def.label}</span><button class="btn-xs" data-action="add">+ Show</button>`;
+    setHtml(
+      row,
+      html`<span class="sidebar-order-label sidebar-order-dim">${def.label}</span
+        ><button class="btn-xs" data-action="add">+ Show</button>`,
+    );
     container.appendChild(row);
   });
 
@@ -248,6 +290,161 @@ export function buildPanelOrderEditor() {
     applyPanelOrder();
     buildPanelOrderEditor();
   };
+}
+
+// ── Provider catalogue (Phase 31.1) ────────────────────────────────────────
+// `envv catalogue show` / `update`. The signature check, rollback refusal and
+// cache are all Rust (`vault_core::catalogue`); this row only asks. Like the TOTP
+// code, it cannot work in a plain browser, and says so rather than pretending.
+
+type CatalogueStatus = {
+  source: 'catalogue' | 'bundled';
+  generated_at?: string;
+  providers?: number;
+};
+
+function describeCatalogue(c: CatalogueStatus): string {
+  return c.source === 'catalogue'
+    ? `Using the downloaded catalogue from ${c.generated_at ?? '?'} (${c.providers ?? 0} providers).`
+    : 'Using the issuer list built into this app. Update to fetch newer signed entries.';
+}
+
+function wireCatalogueRow(): void {
+  const status = document.getElementById('s-catalogue-status');
+  const btn = document.getElementById('s-catalogue-update') as HTMLButtonElement | null;
+  if (!status || !btn) return;
+  if (!inTauri) {
+    status.textContent = 'Available in the desktop app. In a terminal: envv catalogue update.';
+    btn.disabled = true;
+    return;
+  }
+  btn.disabled = false;
+  invokeTauri<CatalogueStatus>('catalogue_status')
+    .then((c) => (status.textContent = describeCatalogue(c)))
+    .catch((e: unknown) => (status.textContent = `Cannot read the catalogue: ${String(e)}`));
+  // Assignment, not addEventListener: this pane is opened repeatedly (invariant 9).
+  btn.onclick = () => {
+    btn.disabled = true;
+    status.textContent = 'Fetching…';
+    invokeTauri<{ generated_at: string; providers: number }>('catalogue_update', {})
+      .then((r) => {
+        status.textContent = describeCatalogue({ source: 'catalogue', ...r });
+        showToast('Catalogue updated', 'ok', 1500);
+      })
+      .catch((e: unknown) => {
+        // The Rust side names the reason: bad signature, rollback, unreachable.
+        status.textContent = `Not updated: ${String(e)}`;
+        showToast('Catalogue not updated', 'err', 2500);
+      })
+      .finally(() => (btn.disabled = false));
+  };
+}
+
+// ── Full-fidelity archive (Phase 33.3) ──────────────────────────────────────
+// `envv backup archive` / `restore-archive`. The cryptography and the checks are
+// Rust (`envv_cli::backup`); this only collects a password and a file.
+
+function pickTextFile(): Promise<string | null> {
+  return new Promise((resolve) => {
+    // Created and removed per use: a static file input is a ghost widget in
+    // WebKitGTK (AGENTS.md, Phase 3).
+    const inp = document.createElement('input');
+    inp.type = 'file';
+    inp.style.display = 'none';
+    document.body.appendChild(inp);
+    const done = (v: string | null) => {
+      inp.remove();
+      resolve(v);
+    };
+    inp.onchange = () => {
+      const f = inp.files?.[0];
+      if (!f) return done(null);
+      f.text().then(done, () => done(null));
+    };
+    inp.click();
+  });
+}
+
+function wireArchiveRows(): void {
+  const make = document.getElementById('s-archive-btn') as HTMLButtonElement | null;
+  const restore = document.getElementById('s-archive-restore-btn') as HTMLButtonElement | null;
+  if (!make || !restore) return;
+  if (!inTauri) {
+    for (const b of [make, restore]) {
+      b.disabled = true;
+      b.title = 'Available in the desktop app. In a terminal: envv backup archive.';
+    }
+    return;
+  }
+  make.onclick = () => {
+    void (async () => {
+      const pw = await showPasswordPrompt(
+        'Archive password (12+ characters). Keep it somewhere the archive is not.',
+      );
+      if (!pw) return;
+      try {
+        const text = await invokeTauri<string>('backup_archive_build', { password: pw });
+        const r = await saveFile(text, 'envvault.vaultarc', 'application/json');
+        if (r.ok) showToast(`Archive written${r.path ? `: ${r.path}` : ''}`, 'ok', 3500);
+        else showToast(`Could not write the archive: ${r.error}`, 'err', 4000);
+      } catch (e) {
+        showToast(`Archive failed: ${e instanceof Error ? e.message : String(e)}`, 'err', 4000);
+      }
+    })();
+  };
+  restore.onclick = () => {
+    void (async () => {
+      const text = await pickTextFile();
+      if (text === null) return;
+      const pw = await showPasswordPrompt('Password this archive was made with');
+      if (!pw) return;
+      const ok = await showConfirm(
+        "Replace this machine's vault with the archive? The current vault is overwritten and cannot be recovered from here.",
+      );
+      if (!ok) return;
+      try {
+        await invokeTauri('backup_archive_restore', { text, password: pw });
+        showToast("Restored. Reloading; unlock with the archive's master password.", 'ok', 3000);
+        setTimeout(() => window.location.reload(), 800);
+      } catch (e) {
+        showToast(`Restore failed: ${e instanceof Error ? e.message : String(e)}`, 'err', 5000);
+      }
+    })();
+  };
+}
+
+// ── Entropy source (Phase 33.4) ────────────────────────────────────────────
+// Options come from `entropy_sources` rather than a list here, so the dropdown
+// can never offer a source the backend would refuse. Applied on Save.
+
+async function wireEntropyRow(current: string): Promise<void> {
+  const sel = document.getElementById('s-entropy-source') as HTMLSelectElement | null;
+  if (!sel) return;
+  if (!inTauri) {
+    sel.disabled = true;
+    sel.title =
+      'Hardware entropy sources are available in the desktop app. In a terminal: --entropy-source.';
+    return;
+  }
+  try {
+    const sources =
+      await invokeTauri<{ id: string; ready: boolean; detail: string }[]>('entropy_sources');
+    sel.replaceChildren(
+      ...sources.map((src) => {
+        const o = document.createElement('option');
+        o.value = src.id;
+        o.textContent = src.id === 'os' ? 'Operating system' : src.id;
+        if (!src.ready) {
+          o.disabled = true;
+          o.textContent += ` (unavailable: ${src.detail})`;
+        }
+        return o;
+      }),
+    );
+    sel.value = current;
+  } catch (e) {
+    sel.title = `Cannot list entropy sources: ${String(e)}`;
+  }
 }
 
 // ── The Copy section's worked example ──────────────────────────────────────
@@ -423,6 +620,10 @@ export function openSettings() {
       showToast('Search history cleared', 'ok', 1500);
     };
 
+  wireCatalogueRow();
+  wireArchiveRows();
+  void wireEntropyRow(s.entropySource || 'os');
+
   const runOnboarding = document.getElementById('s-run-onboarding');
   if (runOnboarding)
     (runOnboarding as HTMLElement).onclick = async () => {
@@ -451,14 +652,12 @@ export function openSettings() {
             : id === 's-activity-bar-position'
               ? 'activityBarPosition'
               : 'activityBarStyle';
+      const current = Settings.get(key as keyof AppSettings);
+      const currentValue =
+        typeof current === 'string' || typeof current === 'number' ? String(current) : '';
       document
         .querySelectorAll<HTMLButtonElement>(`#${id} button`)
-        .forEach((btn) =>
-          btn.classList.toggle(
-            'active',
-            btn.dataset.val === String(Settings.get(key as keyof AppSettings)),
-          ),
-        );
+        .forEach((btn) => btn.classList.toggle('active', btn.dataset.val === currentValue));
     },
   );
 
@@ -565,6 +764,7 @@ export function saveSettings() {
       .checked,
     keepLocalUnlocked: (document.getElementById('s-keep-local-unlocked') as HTMLInputElement)
       .checked,
+    entropySource: (document.getElementById('s-entropy-source') as HTMLSelectElement).value || 'os',
     activityBarPosition: (getSegVal('s-activity-bar-position') || 'left') as 'left' | 'right',
     activityBarStyle: (getSegVal('s-activity-bar-style') || 'icon') as 'icon' | 'icon-label',
   });
