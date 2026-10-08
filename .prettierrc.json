@@ -12,15 +12,25 @@
   "overrides": [
     {
       "files": "*.css",
-      "options": { "printWidth": 100, "singleQuote": false }
+      "options": {
+        "printWidth": 100,
+        "singleQuote": false
+      }
     },
     {
       "files": "*.md",
-      "options": { "printWidth": 80, "proseWrap": "preserve" }
+      "options": {
+        "printWidth": 80,
+        "proseWrap": "preserve"
+      }
     },
     {
       "files": ["*.yml", "*.yaml"],
-      "options": { "printWidth": 100, "singleQuote": false }
+      "options": {
+        "printWidth": 100,
+        "singleQuote": false
+      }
     }
-  ]
+  ],
+  "embeddedLanguageFormatting": "off"
 }
