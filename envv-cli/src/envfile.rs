@@ -25,6 +25,22 @@ pub enum NameCase {
     Lower,
 }
 
+/// `--env-case` / `--env-prefix`, set once from the flags. They are the CLI side of
+/// the app's `envCopyCase` and `envIncludePrefix` settings, and like those they
+/// govern what a *copy or export* writes. Reference resolution and `exec` keep the
+/// default names: a `${SPOTIFY_ID}` must mean the same thing whatever flags a
+/// run was given.
+static NAMING: std::sync::OnceLock<(Option<NameCase>, bool)> = std::sync::OnceLock::new();
+
+pub fn set_naming(case: Option<NameCase>, include_prefix: bool) {
+    let _ = NAMING.set((case, include_prefix));
+}
+
+/// The case and prefix choice for exporters and the copy-profile builder.
+pub fn export_naming() -> (Option<NameCase>, bool) {
+    NAMING.get().copied().unwrap_or((None, false))
+}
+
 impl NameCase {
     /// Parse the `envCopyCase` setting / `--case` flag. Anything unknown is `Upper`.
     pub fn parse(raw: &str) -> Self {
@@ -329,39 +345,11 @@ pub fn disambiguate_names(names: &[String]) -> Vec<String> {
         .collect()
 }
 
-/// True for a value safe to write bare. Deliberately narrow.
-fn bare_ok(v: &str) -> bool {
-    !v.is_empty()
-        && v.chars()
-            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '/' | ':' | '@' | '-'))
-}
-
-/// A value as it must appear after the `=` (E1).
-///
-/// The empty string quotes to `""` rather than to nothing, because a bare `KEY=`
-/// is how "unset" is spelled and a deliberately empty value must not read as
-/// one. A newline is escaped rather than emitted, so the parser's backslash
-/// line-continuation can never see one.
+/// A value as it must appear after the `=` (E1). The one implementation lives
+/// in `vault_core::env_quote`, because `vault-core`'s emitters write `.env`
+/// lines too and two copies of an escaping rule is how a value gets corrupted.
 pub fn quote_env_value(value: &str) -> String {
-    if bare_ok(value) {
-        return value.to_string();
-    }
-    let mut out = String::with_capacity(value.len() + 2);
-    out.push('"');
-    for ch in value.chars() {
-        match ch {
-            '\\' | '"' | '$' | '`' => {
-                out.push('\\');
-                out.push(ch);
-            }
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            _ => out.push(ch),
-        }
-    }
-    out.push('"');
-    out
+    vault_core::env_quote(value)
 }
 
 /// The inverse, applied by the parser.
