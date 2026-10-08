@@ -23,6 +23,29 @@ beforeEach(() => {
 });
 
 describe('renderGrid', () => {
+  it('shows selectable version tabs and only the active member when a bundle has over three slots', () => {
+    const bundle = makeEntry({ id: 'bundle', provider: 'Service', secretType: 'bundle' });
+    const members = ['v1', 'v2', 'v3', 'v4'].map((version, i) =>
+      makeEntry({
+        id: `member-${i}`,
+        provider: 'Service',
+        bundle_id: 'bundle',
+        bundle_slot: `key-${version}`,
+        version,
+      }),
+    );
+    st.vault.api_keys = [bundle, ...members];
+    st.expandedBundles.add('bundle');
+    st.bundleSlotTabs = { bundle: 'member-2' };
+    renderGrid();
+
+    const card = grid().querySelector('.bundle-card-wrap')!;
+    expect(card.querySelectorAll('[role="tab"]')).toHaveLength(4);
+    expect(card.querySelector('[role="tab"][aria-selected="true"]')?.textContent).toBe('v3');
+    expect(card.querySelectorAll('.bundle-member')).toHaveLength(1);
+    expect(card.querySelector('.bundle-member')?.textContent).toContain('v3');
+  });
+
   it('renders one card per entry', () => {
     st.vault.api_keys = [
       makeEntry({ provider: 'A' }),
@@ -83,6 +106,166 @@ describe('renderGrid', () => {
     const headers = [...grid().querySelectorAll('.type-group-header')].map((h) => h.textContent);
     expect(headers).toEqual(['API Keys', 'Passwords']);
     expect(cards()).toHaveLength(2);
+  });
+
+  it('renders bundled members once inside their bundle and leaves dangling members standalone', () => {
+    const bundle = makeEntry({ id: 'bundle-1', provider: 'Discord bot', secretType: 'bundle' });
+    const member = makeEntry({
+      id: 'member-1',
+      provider: 'Discord',
+      bundle_id: 'bundle-1',
+      bundle_slot: 'discord',
+    });
+    const dangling = makeEntry({ id: 'orphan-1', provider: 'Orphan', bundle_id: 'missing-bundle' });
+    st.vault.api_keys = [bundle, member, dangling];
+
+    renderGrid();
+
+    expect(grid().querySelectorAll('.bundle-card-wrap')).toHaveLength(1);
+    expect(grid().querySelectorAll('.bundle-card-wrap .card')).toHaveLength(1);
+    expect(
+      grid().querySelector('[data-action="bundle-primary"]')?.getAttribute('data-member'),
+    ).toBe('member-1');
+    expect(
+      grid().querySelector('[data-action="bundle-remove-member"]')?.getAttribute('data-member'),
+    ).toBe('member-1');
+    expect(grid().querySelector('[data-action="bundle-add-member"]')).not.toBeNull();
+    expect(grid().querySelector('[data-action="bundle-add-var"]')).not.toBeNull();
+    expect(cards()).toHaveLength(2);
+    expect(grid().textContent).toContain('Orphan');
+    expect(document.getElementById('result-count')!.textContent).toBe('2 secrets · 1 bundle');
+  });
+
+  it('groups key pools inside a bundle rather than flattening their members', () => {
+    const bundle = makeEntry({ id: 'bundle-pool', provider: 'Workspace', secretType: 'bundle' });
+    const members = [
+      makeEntry({
+        id: 'pool-a',
+        provider: 'API A',
+        bundle_id: 'bundle-pool',
+        bundle_slot: 'api_a',
+        pool: 'rotation',
+      }),
+      makeEntry({
+        id: 'pool-b',
+        provider: 'API B',
+        bundle_id: 'bundle-pool',
+        bundle_slot: 'api_b',
+        pool: 'rotation',
+      }),
+    ];
+    st.vault.api_keys = [bundle, ...members];
+    renderGrid();
+    expect(grid().querySelectorAll('.bundle-card-wrap .pool-card-wrap')).toHaveLength(1);
+    expect(grid().querySelectorAll('.bundle-card-wrap .pool-card-wrap .card')).toHaveLength(2);
+  });
+
+  it('shows generated environment-name collisions between a member and local variable', () => {
+    const bundle = makeEntry({
+      id: 'bundle-collision',
+      provider: 'Discord',
+      secretType: 'bundle',
+      extra_vars: [{ key: 'ID', value: 'local-id', secret: false, public: true }],
+    });
+    const member = makeEntry({
+      id: 'member-collision',
+      provider: 'Discord',
+      api_key: 'member-id',
+      primary_role: 'id',
+      bundle_id: 'bundle-collision',
+      bundle_slot: 'discord',
+    });
+    st.vault.api_keys = [bundle, member];
+
+    renderGrid();
+
+    expect(grid().querySelector('.bundle-collision')?.textContent).toContain('1 name collision');
+    expect(grid().querySelector('.bundle-collision')?.getAttribute('title')).toContain(
+      'DISCORD_ID',
+    );
+  });
+
+  it('shows the projects, categories and tags union with explicit member assignment actions', () => {
+    st.vault.projects = [makeProject({ id: 'p1', name: 'Production' })];
+    st.vault.user_categories = ['Infrastructure'];
+    const bundle = makeEntry({ id: 'bundle-union', provider: 'Workspace', secretType: 'bundle' });
+    const member = makeEntry({
+      id: 'member-union',
+      provider: 'Service',
+      bundle_id: 'bundle-union',
+      projectIds: ['Universal', 'p1'],
+      categories: ['Infrastructure'],
+      tags: ['critical'],
+    });
+    st.vault.api_keys = [bundle, member];
+
+    renderGrid();
+
+    expect(grid().querySelector('.bundle-card-wrap')?.textContent).toContain(
+      'Projects: Production',
+    );
+    expect(grid().querySelector('.bundle-card-wrap')?.textContent).toContain(
+      'Categories: Infrastructure',
+    );
+    expect(grid().querySelector('.bundle-card-wrap')?.textContent).toContain('Tags: critical');
+    expect(grid().querySelectorAll('[data-action^="bundle-add-"]')).toHaveLength(5);
+  });
+
+  it('keeps bundle-scope resolution independent of the active presentation filter', () => {
+    const bundle = makeEntry({
+      id: 'bundle-search',
+      provider: 'Workspace',
+      secretType: 'bundle',
+      extra_vars: [{ key: 'derived', value: '{other.api_key}', kind: 'template', public: true }],
+    });
+    const match = makeEntry({
+      id: 'member-match',
+      provider: 'Discord bot',
+      bundle_id: 'bundle-search',
+    });
+    const other = makeEntry({
+      id: 'member-other',
+      provider: 'Other',
+      bundle_id: 'bundle-search',
+      bundle_slot: 'other',
+      api_key: 'public-app-id',
+      primary_public: true,
+    });
+    st.vault.api_keys = [bundle, match, other];
+    st.searchQ = 'Discord';
+
+    renderGrid();
+
+    expect(grid().querySelectorAll('.bundle-member')).toHaveLength(1);
+    expect(grid().querySelector('.bundle-local-vars')?.textContent).toContain('public-app-id');
+  });
+
+  it('renders a composite over sibling bundle values with URL-zone encoding', () => {
+    const bundle = makeEntry({ id: 'bundle-composite', provider: 'Discord', secretType: 'bundle' });
+    const sibling = makeEntry({
+      id: 'discord-app',
+      provider: 'Discord App',
+      bundle_id: 'bundle-composite',
+      bundle_slot: 'discord',
+      extra_vars: [{ key: 'id', value: '123', public: true }],
+    });
+    const invite = makeEntry({
+      id: 'discord-invite',
+      provider: 'Invite URL',
+      secretType: 'composite',
+      bundle_id: 'bundle-composite',
+      bundle_slot: 'invite',
+      composite_kind: 'link',
+      composite_template: 'https://discord.test/?client_id={discord.id}&scope={permissions}',
+      extra_vars: [{ key: 'permissions', value: 'bot apps.commands', public: true }],
+    });
+    st.vault.api_keys = [bundle, sibling, invite];
+
+    renderGrid();
+
+    expect(grid().querySelector('#kv-key-2')?.getAttribute('data-value')).toBe(
+      'https://discord.test/?client_id=123&scope=bot%20apps.commands',
+    );
   });
 
   it('honours the active tag filter', () => {
@@ -154,6 +337,25 @@ describe('secret masking', () => {
     const text = grid().textContent!;
     expect(text).toContain('visible');
     expect(text).not.toContain('hidden-value');
+  });
+});
+
+describe('credential card groups', () => {
+  it('nests named variables and 2FA under labelled groups', () => {
+    st.vault.api_keys = [
+      makeEntry({
+        id: 'grouped',
+        totp_secret: 'JBSWY3DPEHPK3PXP',
+        extra_vars: [{ key: 'tenant', value: 'acme' }],
+      }),
+    ];
+    renderGrid();
+    expect(grid().querySelector('.key-vars[role="group"]')?.getAttribute('aria-label')).toBe(
+      'Variables (1)',
+    );
+    expect(grid().querySelector('.key-second-factor[role="group"]')?.textContent).toContain(
+      'Second factor',
+    );
   });
 });
 
