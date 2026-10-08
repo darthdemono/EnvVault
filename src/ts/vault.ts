@@ -1,10 +1,6 @@
-/**
- * @file
- * EnvVault — application bootstrap.
- * All logic lives in the dedicated modules under src/.
- * This file wires everything together and registers event listeners.
- */
-
+import { buildBundle, bundleSuggestions } from './bundle-scope';
+import { codeStatus, markUsed, nextCode } from './recovery-codes';
+import { hideWifiQr } from './wifi-qr';
 import {
   st,
   Settings,
@@ -15,21 +11,29 @@ import {
   setRenderFn,
   triggerRender,
   switchPanel,
-  switchTool,
   persist,
   entryId,
   ensureEntryIds,
   backfillCreatedAt,
   applyUsersPanelVisibility,
   applySidebarLayout,
+  saveViewState,
   restoreViewState,
   clearAllFilters,
   SIDEBAR_MIN_W,
   SIDEBAR_MAX_W,
 } from './state';
+import type { AppSettings, VaultEntry } from './types';
 import { initIconPicker, openIconPicker, iconHTML } from './icons';
-import { showToast, showConfirm, clipboardWrite, saveFile } from './utils';
-import { getFiltered, sorted } from './filters';
+import {
+  showToast,
+  errorMessage,
+  showConfirm,
+  showPrompt,
+  showPasswordPrompt,
+  clipboardWrite,
+  saveFile,
+} from './utils';
 import { poolsOf, poolNext } from './pools';
 import {
   CustomSelect,
@@ -37,18 +41,13 @@ import {
   TYPE_CONFIG,
   showDropdown,
   showContextMenu,
-  applySchemaTooltips,
-  buildCatChips,
   dynamicSecretFields,
-  openModal,
   openAdd,
   openEdit,
   closeModal,
   saveModal,
   duplicateKey,
   deleteKey,
-  pushUndo,
-  injectIntoForm,
   quickGenerate,
   toggleCard,
   toggleReveal,
@@ -56,10 +55,13 @@ import {
   doCopyEnv,
   openCopyEnvMenu,
   onIconWrapClick,
-  openIconPickerFor,
   markAsRotated,
   suggestExtraVarsForType,
+  confirmBundleMemberReferenceBreakage,
+  pushUndo,
 } from './modals';
+import { renameBundleSlotRefs } from './bundle-scope';
+import { buildBundleExport, type BundleExportFormat } from './copy-profile';
 import {
   doSetFilter,
   openProjectCreateModal,
@@ -78,7 +80,6 @@ import {
   copyAll,
   exportAs,
   handleFileSelect,
-  openEnvImportModal,
   closeEnvImportModal,
   confirmEnvImport,
   exportK8sSecret,
@@ -90,7 +91,7 @@ import { openSettings, saveSettings, closeSettings, cancelSettings } from './set
 import { lockVault, resetLock, showUnlockModal, setFinishInitFn } from './lock';
 import { initTools } from './tools';
 import { mountToolsPanes } from './tools-markup';
-import { initUsersPanel, renderUsersPanel } from './users';
+import { initUsersPanel } from './users';
 import { initAuthPanel } from './auth-panel';
 import { startVaultWatch } from './vault-watch';
 import {
@@ -101,17 +102,8 @@ import {
 } from './remote-panel';
 import { initLanPanel } from './lan';
 import { showOnboarding, shouldShowOnboarding } from './onboarding';
+import { render, renderGrid, updateCopyAllBtn, closeEnvLinkModal, applyEnvLink } from './render';
 import {
-  render,
-  renderGrid,
-  updateCopyAllBtn,
-  renderProjectTree,
-  openEnvLinkModal,
-  closeEnvLinkModal,
-  applyEnvLink,
-} from './render';
-import {
-  openChunkEditModal,
   closeChunkEditModal,
   saveChunkEdit,
   renderChunkEditFields,
@@ -121,6 +113,7 @@ import { wireSearchHistory, closeSearchHistory, wireCloseGuard, wireModalFocus }
 import type { ProjectType, SecretType } from './types';
 import { EXPORT_FORMATS, runTotpExport, runTotpImport } from './totp-io';
 import { runCxfImport, runCxfExport } from './cxf-io';
+import { setHtml } from './html';
 
 // Wire the global render callback so all modules can call triggerRender()
 setRenderFn(render);
@@ -229,7 +222,7 @@ async function finishInit() {
   document.documentElement.classList.remove('booting');
   try {
     const r = await fetch('./schema.json');
-    if (r.ok) st.schema = await r.json();
+    if (r.ok) st.schema = (await r.json()) as typeof st.schema;
   } catch {}
 
   try {
@@ -529,12 +522,12 @@ async function init() {
     const target = e.target as HTMLElement;
     const renameBtn = target.closest<HTMLElement>('.rename-cat');
     if (renameBtn?.dataset.category) {
-      renameCategory(renameBtn.dataset.category);
+      void renameCategory(renameBtn.dataset.category);
       return;
     }
     const deleteBtn = target.closest<HTMLElement>('.delete-cat');
     if (deleteBtn?.dataset.category) {
-      deleteCategory(deleteBtn.dataset.category);
+      void deleteCategory(deleteBtn.dataset.category);
       return;
     }
   });
@@ -551,12 +544,12 @@ async function init() {
     }
     const renameBtn = target.closest<HTMLElement>('.rename-proj');
     if (renameBtn?.dataset.project) {
-      renameProject(renameBtn.dataset.project);
+      void renameProject(renameBtn.dataset.project);
       return;
     }
     const deleteBtn = target.closest<HTMLElement>('.delete-proj');
     if (deleteBtn?.dataset.project) {
-      deleteProject(deleteBtn.dataset.project);
+      void deleteProject(deleteBtn.dataset.project);
       return;
     }
   });
@@ -566,9 +559,8 @@ async function init() {
   const searchClearBtn = document.getElementById('search-clear')!;
   searchEl.addEventListener('input', (e) => {
     st.searchQ = (e.target as HTMLInputElement).value;
-    st.searchQ
-      ? searchClearBtn.classList.add('visible')
-      : searchClearBtn.classList.remove('visible');
+    if (st.searchQ) searchClearBtn.classList.add('visible');
+    else searchClearBtn.classList.remove('visible');
     debouncedSearch();
   });
   searchClearBtn.addEventListener('click', () => {
@@ -709,9 +701,12 @@ async function init() {
     );
   document.getElementById('f-icon')!.addEventListener('input', (e) => {
     const prev = document.getElementById('f-icon-preview')!;
-    prev.innerHTML = (e.target as HTMLInputElement).value
-      ? iconHTML('', (e.target as HTMLInputElement).value)
-      : '';
+    setHtml(
+      prev,
+      (e.target as HTMLInputElement).value
+        ? iconHTML('', (e.target as HTMLInputElement).value)
+        : '',
+    );
   });
 
   // Settings panel
@@ -756,7 +751,7 @@ async function init() {
             : ctrl.id === 's-activity-bar-position'
               ? 'activityBarPosition'
               : 'activityBarStyle';
-      Settings.set(key as any, btn.dataset.val as any);
+      Settings.set(key, btn.dataset.val as AppSettings[typeof key]);
       Settings._apply();
       render();
     }),
@@ -846,7 +841,7 @@ async function init() {
     ?.addEventListener('click', () => void runCxfExport());
   document.getElementById('settings-export-encrypted')?.addEventListener('click', () => {
     const pw = (document.getElementById('settings-backup-pw') as HTMLInputElement).value;
-    exportEncryptedBackup(pw);
+    void exportEncryptedBackup(pw);
   });
   document.getElementById('settings-import-encrypted')?.addEventListener('click', () => {
     const pw = (document.getElementById('settings-backup-pw') as HTMLInputElement).value;
@@ -865,7 +860,8 @@ async function init() {
       }
       const reader = new FileReader();
       reader.onload = (e) => {
-        importEncryptedBackup(String(e.target?.result ?? ''), pw);
+        const data = e.target?.result;
+        if (typeof data === 'string') void importEncryptedBackup(data, pw);
         inp.remove();
       };
       reader.readAsText(f);
@@ -942,8 +938,10 @@ async function init() {
   });
 
   // Lock
-  document.getElementById('lock-btn')!.addEventListener('click', async () => {
-    if (await showConfirm('Lock vault?')) lockVault();
+  document.getElementById('lock-btn')!.addEventListener('click', () => {
+    void (async () => {
+      if (await showConfirm('Lock vault?')) void lockVault();
+    })();
   });
 
   // Undo bar
@@ -951,7 +949,7 @@ async function init() {
     const last = st.undoStack.pop();
     if (last) {
       clearTimeout(last.t);
-      last.fn();
+      void last.fn();
       if (!st.undoStack.length) document.getElementById('undo-bar')!.classList.remove('visible');
     }
   });
@@ -968,8 +966,24 @@ async function init() {
     if (e.target === e.currentTarget) shortcutsEl.classList.remove('open');
   });
 
+  // Wi-Fi QR overlay: emptied on every close path.
+  const wifiQrEl = document.getElementById('wifi-qr-overlay')!;
+  document.getElementById('wifi-qr-close')!.addEventListener('click', hideWifiQr);
+  wifiQrEl.addEventListener('click', (e) => {
+    if (e.target === e.currentTarget) hideWifiQr();
+  });
+
   // Global keyboard shortcuts
   document.addEventListener('keydown', (e) => {
+    // A non-<button> given role="button" (the card's icon) must answer Enter and
+    // Space like one; a role without the keys is a control a keyboard can reach
+    // and cannot use.
+    const t = e.target as HTMLElement | null;
+    if ((e.key === 'Enter' || e.key === ' ') && t?.matches('[role="button"][data-action]')) {
+      e.preventDefault();
+      t.click();
+      return;
+    }
     const inInput = ['INPUT', 'SELECT', 'TEXTAREA'].includes(
       (document.activeElement as HTMLElement)?.tagName,
     );
@@ -1016,7 +1030,7 @@ async function init() {
   });
 
   // Card grid — delegated click
-  document.getElementById('card-grid')!.addEventListener('click', (e) => {
+  const onGridClick = (e: MouseEvent) => {
     const el = (e.target as HTMLElement).closest('[data-action]') as HTMLElement | null;
     if (!el) return;
     const action = el.dataset.action!;
@@ -1029,10 +1043,10 @@ async function init() {
       (e.target as HTMLElement).closest('[data-action]') !== el
     )
       return;
-    if ((window as any).__envvIsBulkMode?.() && action !== 'bulk-toggle') {
+    if (window.__envvIsBulkMode?.() && action !== 'bulk-toggle') {
       const card = el.closest<HTMLElement>('[data-idx]');
       if (card) {
-        (window as any).__envvBulkToggle?.(parseInt(card.dataset.idx!));
+        window.__envvBulkToggle?.(parseInt(card.dataset.idx!));
         return;
       }
     }
@@ -1073,15 +1087,29 @@ async function init() {
         const entry = st.vault.api_keys[idx];
         if (entry) {
           entry.pinned = entry.pinned ? undefined : true;
-          persist();
+          void persist();
           triggerRender();
           showToast(entry.pinned ? 'Pinned ✓' : 'Unpinned', 'ok', 1500);
         }
         break;
       }
       case 'bulk-toggle':
-        (window as any).__envvBulkToggle?.(idx);
+        window.__envvBulkToggle?.(idx);
         break;
+      case 'bundle-bulk-toggle': {
+        if (!window.__envvIsBulkMode?.()) {
+          showToast('Choose Select first to bulk-select bundle members', 'info');
+          break;
+        }
+        const bundle = el.closest<HTMLElement>('.bundle-card-wrap');
+        const indices = new Set(
+          [...(bundle?.querySelectorAll<HTMLElement>('.card[data-idx]') ?? [])]
+            .map((card) => Number(card.dataset.idx))
+            .filter(Number.isInteger),
+        );
+        indices.forEach((memberIdx) => window.__envvBulkToggle?.(memberIdx));
+        break;
+      }
       case 'duplicate':
         duplicateKey(e, idx);
         break;
@@ -1108,11 +1136,11 @@ async function init() {
         const pool = el.dataset.pool ?? '';
         // In bulk mode the card has no per-pool checkbox of its own; the
         // summary bar stands in for one, ticking every member it covers.
-        if ((window as any).__envvIsBulkMode?.()) {
+        if (window.__envvIsBulkMode?.()) {
           const members = poolsOf(st.vault).get(pool) ?? [];
           members.forEach((m) => {
             const i = st.vault.api_keys.indexOf(m);
-            if (i >= 0) (window as any).__envvBulkToggle?.(i);
+            if (i >= 0) window.__envvBulkToggle?.(i);
           });
           break;
         }
@@ -1124,7 +1152,436 @@ async function init() {
       case 'pool-card-copy':
         void copyPoolNext(el.dataset.pool ?? '');
         break;
+      case 'bundle-toggle': {
+        const bundleId = el.dataset.bundle ?? '';
+        if (st.expandedBundles.has(bundleId)) st.expandedBundles.delete(bundleId);
+        else st.expandedBundles.add(bundleId);
+        saveViewState();
+        render();
+        break;
+      }
+      case 'bundle-primary': {
+        const bundle = st.vault.api_keys.find(
+          (entry) => entry.id === el.dataset.bundle && entry.secretType === 'bundle',
+        );
+        const member = st.vault.api_keys.find(
+          (entry) => entry.id === el.dataset.member && entry.bundle_id === bundle?.id,
+        );
+        if (!bundle || !member) break;
+        bundle.bundle_primary = member.id;
+        void persist().then(() => render());
+        break;
+      }
+      case 'bundle-slot-tab': {
+        const bundleId = el.dataset.bundle ?? '';
+        const member = st.vault.api_keys.find(
+          (entry) => entry.id === el.dataset.member && entry.bundle_id === bundleId,
+        );
+        if (!member) break;
+        st.bundleSlotTabs[bundleId] = member.id!;
+        saveViewState();
+        render();
+        break;
+      }
+      case 'bundle-rename-slot': {
+        const bundleId = el.dataset.bundle ?? '';
+        const memberId = el.dataset.member ?? '';
+        void (async () => {
+          const bundle = st.vault.api_keys.find(
+            (entry) => entry.id === bundleId && entry.secretType === 'bundle',
+          );
+          const member = st.vault.api_keys.find(
+            (entry) => entry.id === memberId && entry.bundle_id === bundleId,
+          );
+          if (!bundle || !member) return;
+          const next = (
+            await showPrompt(`New slot name for ${member.bundle_slot || member.provider}`)
+          )?.trim();
+          if (!next || next === member.bundle_slot) return;
+          if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,23}$/.test(next)) {
+            showToast(
+              'Slot names must start with a letter or digit and use only letters, digits, _ or - (max 24)',
+              'err',
+            );
+            return;
+          }
+          if (
+            st.vault.api_keys.some(
+              (entry) =>
+                entry.bundle_id === bundleId && entry.id !== memberId && entry.bundle_slot === next,
+            ) ||
+            bundle.extra_vars?.some((variable) => variable.key === next)
+          ) {
+            showToast('That slot name is already used in this bundle', 'err');
+            return;
+          }
+          const previous = member.bundle_slot || member.provider;
+          const refs = renameBundleSlotRefs(
+            st.vault.api_keys,
+            st.vault.projects,
+            bundle,
+            previous,
+            next,
+          );
+          member.bundle_slot = next;
+          await persist();
+          render();
+          if (refs)
+            showToast(`Updated ${refs} bundle reference${refs === 1 ? '' : 's'}`, 'ok', 2500);
+        })();
+        break;
+      }
+      case 'bundle-remove-member': {
+        const bundleId = el.dataset.bundle;
+        const memberId = el.dataset.member;
+        const bundle = st.vault.api_keys.find(
+          (entry) => entry.id === bundleId && entry.secretType === 'bundle',
+        );
+        const member = st.vault.api_keys.find(
+          (entry) => entry.id === memberId && entry.bundle_id === bundle?.id,
+        );
+        if (!bundle || !member) break;
+        void (async () => {
+          if (!(await confirmBundleMemberReferenceBreakage(member))) return;
+          const currentBundle = st.vault.api_keys.find(
+            (entry) => entry.id === bundleId && entry.secretType === 'bundle',
+          );
+          const currentMember = st.vault.api_keys.find(
+            (entry) => entry.id === memberId && entry.bundle_id === bundleId,
+          );
+          if (!currentBundle || !currentMember) return;
+          delete currentMember.bundle_id;
+          delete currentMember.bundle_slot;
+          delete currentMember.bundle_order;
+          if (currentBundle.bundle_primary === currentMember.id) {
+            currentBundle.bundle_primary =
+              st.vault.api_keys.find((entry) => entry.bundle_id === currentBundle.id)?.id ?? null;
+          }
+          await persist();
+          render();
+        })();
+        break;
+      }
+      case 'bundle-add-member': {
+        const bundleId = el.dataset.bundle ?? '';
+        void (async () => {
+          const candidate = await showPrompt('Name of an unbundled entry to add');
+          const matches = st.vault.api_keys.filter(
+            (entry) =>
+              entry.secretType !== 'bundle' &&
+              !entry.bundle_id &&
+              (entry.provider === candidate?.trim() || entry.label === candidate?.trim()),
+          );
+          const bundle = st.vault.api_keys.find(
+            (entry) => entry.id === bundleId && entry.secretType === 'bundle',
+          );
+          if (matches.length !== 1 || !bundle) {
+            showToast(
+              matches.length > 1
+                ? 'That name is ambiguous; choose a unique label'
+                : 'No matching unbundled entry',
+              'err',
+            );
+            return;
+          }
+          const member = matches[0];
+          if (!member) {
+            showToast('No matching unbundled entry', 'err');
+            return;
+          }
+          const poolName = typeof member.pool === 'string' ? member.pool.trim() : '';
+          const pool = poolName
+            ? st.vault.api_keys.filter((entry) => entry.pool?.trim() === poolName)
+            : [member];
+          if (pool.some((entry) => entry.bundle_id && entry.bundle_id !== bundleId)) {
+            showToast('All entries in a key pool must belong to the same bundle', 'err');
+            return;
+          }
+          const additions = pool.filter((entry) => !entry.bundle_id);
+          if (
+            additions.length > 1 &&
+            !(await showConfirm(`Add all ${additions.length} entries in pool "${poolName}"?`))
+          )
+            return;
+          let order = Math.max(
+            0,
+            ...st.vault.api_keys
+              .filter((entry) => entry.bundle_id === bundleId)
+              .map((entry) => entry.bundle_order ?? 0),
+          );
+          const used = new Set(
+            st.vault.api_keys
+              .filter((entry) => entry.bundle_id === bundleId)
+              .map((entry) => entry.bundle_slot),
+          );
+          for (const addition of additions) {
+            const base = (addition.label || addition.provider)
+              .trim()
+              .replace(/[^A-Za-z0-9_-]+/g, '_')
+              .slice(0, 24);
+            let slot = /^[A-Za-z0-9]/.test(base)
+              ? base
+              : `member_${st.vault.api_keys.filter((entry) => entry.bundle_id === bundleId).length + 1}`;
+            for (let suffix = 2; used.has(slot); suffix++) {
+              const tail = `_${suffix}`;
+              slot = `${base.slice(0, 24 - tail.length)}${tail}`;
+            }
+            used.add(slot);
+            addition.bundle_id = bundleId;
+            addition.bundle_slot = slot;
+            addition.bundle_order = order += 10;
+            bundle.bundle_primary ??= addition.id;
+          }
+          await persist();
+          render();
+        })();
+        break;
+      }
+      case 'bundle-add-var': {
+        const bundle = st.vault.api_keys.find(
+          (entry) => entry.id === el.dataset.bundle && entry.secretType === 'bundle',
+        );
+        if (!bundle) break;
+        void (async () => {
+          const key = (await showPrompt('Variable name'))?.trim();
+          if (!key) return;
+          if (bundle.extra_vars?.some((variable) => variable.key === key)) {
+            showToast('That variable already exists', 'err');
+            return;
+          }
+          const value = await showPasswordPrompt(`Secret value for ${key}`);
+          if (value === null) return;
+          bundle.extra_vars ??= [];
+          // Until this form exposes an explicit visibility control, new locals
+          // fail closed and are masked rather than accidentally shown in a card.
+          bundle.extra_vars.push({ key, value, secret: true });
+          await persist();
+          render();
+        })();
+        break;
+      }
+      case 'bundle-var-remove': {
+        const bundle = st.vault.api_keys.find(
+          (entry) => entry.id === el.dataset.bundle && entry.secretType === 'bundle',
+        );
+        const key = el.dataset.key;
+        if (!bundle || !key) break;
+        void (async () => {
+          if (!(await showConfirm(`Remove bundle variable "${key}"?`))) return;
+          bundle.extra_vars = (bundle.extra_vars ?? []).filter((variable) => variable.key !== key);
+          await persist();
+          render();
+        })();
+        break;
+      }
+      case 'bundle-add-project':
+      case 'bundle-add-category':
+      case 'bundle-add-tag': {
+        const bundleId = el.dataset.bundle ?? '';
+        const kind = action.slice('bundle-add-'.length);
+        void (async () => {
+          const bundle = st.vault.api_keys.find(
+            (entry) => entry.id === bundleId && entry.secretType === 'bundle',
+          );
+          if (!bundle) return;
+          const value = (await showPrompt(`Assign ${kind} to every member`))?.trim();
+          if (!value) return;
+          const members = st.vault.api_keys.filter((entry) => entry.bundle_id === bundleId);
+          if (kind === 'project') {
+            const project = st.vault.projects.find(
+              (item) => item.id === value || item.name === value,
+            );
+            if (!project) {
+              showToast('Choose an existing project name or ID', 'err');
+              return;
+            }
+            for (const member of members) {
+              if (!member.projectIds.includes(project.id)) member.projectIds.push(project.id);
+            }
+          } else if (kind === 'category') {
+            if (!st.vault.user_categories.includes(value)) {
+              showToast('Choose an existing category', 'err');
+              return;
+            }
+            for (const member of members) {
+              if (!member.categories.includes(value)) member.categories.push(value);
+            }
+          } else {
+            for (const member of members) {
+              member.tags ??= [];
+              if (!member.tags.includes(value)) member.tags.push(value);
+            }
+          }
+          await persist();
+          render();
+          showToast(
+            `${kind[0].toUpperCase()}${kind.slice(1)} assigned to ${members.length} member${members.length === 1 ? '' : 's'}`,
+            'ok',
+          );
+        })();
+        break;
+      }
+      case 'bundle-order': {
+        const bundleId = el.dataset.bundle ?? '';
+        const members = st.vault.api_keys
+          .filter((entry) => entry.bundle_id === bundleId)
+          .sort((a, b) => (a.bundle_order ?? 0) - (b.bundle_order ?? 0));
+        const at = members.findIndex((entry) => entry.id === el.dataset.member);
+        const to = at + Number(el.dataset.direction ?? 0);
+        if (at < 0 || to < 0 || to >= members.length) break;
+        [members[at].bundle_order, members[to].bundle_order] = [
+          members[to].bundle_order ?? (to + 1) * 10,
+          members[at].bundle_order ?? (at + 1) * 10,
+        ];
+        void persist().then(() => render());
+        break;
+      }
+      case 'bundle-dissolve': {
+        const bundleId = el.dataset.bundle ?? '';
+        const bundle = st.vault.api_keys.find(
+          (entry) => entry.id === bundleId && entry.secretType === 'bundle',
+        );
+        if (!bundle) break;
+        st.vault.api_keys.forEach((entry) => {
+          if (entry.bundle_id === bundleId) {
+            delete entry.bundle_id;
+            delete entry.bundle_slot;
+            delete entry.bundle_order;
+          }
+        });
+        bundle.secretType = 'env_var';
+        delete bundle.bundle_primary;
+        void (async () => {
+          await persist();
+          render();
+          showToast('Bundle dissolved; entries preserved', 'ok');
+        })();
+        break;
+      }
+      case 'bundle-delete-all': {
+        const bundleId = el.dataset.bundle ?? '';
+        const bundle = st.vault.api_keys.find(
+          (entry) => entry.id === bundleId && entry.secretType === 'bundle',
+        );
+        if (!bundle) break;
+        void (async () => {
+          const doomed = st.vault.api_keys.filter(
+            (entry) => entry.id === bundleId || entry.bundle_id === bundleId,
+          );
+          // Dissolve keeps every member; this destroys them, so it names the
+          // count of entries (not cards) and goes through the undo stack.
+          if (
+            !(await showConfirm(
+              `Delete bundle "${bundle.provider}" AND its ${doomed.length - 1} member entries? This removes secrets.`,
+            ))
+          )
+            return;
+          const positions = doomed.map((entry) => st.vault.api_keys.indexOf(entry));
+          st.vault.api_keys = st.vault.api_keys.filter((entry) => !doomed.includes(entry));
+          await persist();
+          render();
+          pushUndo(`Deleted bundle "${bundle.provider}" and ${doomed.length - 1} members`, () => {
+            doomed.forEach((entry, i) =>
+              st.vault.api_keys.splice(Math.min(positions[i], st.vault.api_keys.length), 0, entry),
+            );
+            void persist().then(() => render());
+          });
+        })();
+        break;
+      }
+      case 'bundle-suggest-dismiss': {
+        const provider = (el.dataset.provider ?? '').toLowerCase();
+        const list = Settings.get('dismissedBundleSuggestions') ?? [];
+        if (provider && !list.includes(provider))
+          Settings.set('dismissedBundleSuggestions', [...list, provider]);
+        render();
+        break;
+      }
+      case 'bundle-suggest-accept': {
+        const group = bundleSuggestions(st.vault.api_keys, []).find(
+          (g) => g.provider.toLowerCase() === (el.dataset.provider ?? '').toLowerCase(),
+        );
+        if (!group) break;
+        const bundle = buildBundle(group.entries, group.provider);
+        st.vault.api_keys.push(bundle);
+        void (async () => {
+          await persist();
+          render();
+          showToast(`Bundled ${group.entries.length} entries`, 'ok');
+        })();
+        break;
+      }
+      case 'codes-use': {
+        const entry = st.vault.api_keys[parseInt(el.dataset.idx ?? '-1', 10)] as
+          VaultEntry | undefined;
+        if (entry?.secretType !== 'recovery_codes') break;
+        // Marking is explicit: showing a code never spends it. This is the
+        // "the service accepted it" button.
+        void (async () => {
+          const code = nextCode(entry);
+          if (!code) return;
+          if (!(await showConfirm(`Mark the next recovery code as used for "${entry.provider}"?`)))
+            return;
+          const codes = entry.extra_vars?.find((v) => v.key === 'codes');
+          if (!codes) return;
+          try {
+            codes.value = markUsed(entry, null, new Date().toISOString().slice(0, 10));
+          } catch (err) {
+            showToast(errorMessage(err), 'err');
+            return;
+          }
+          await persist();
+          render();
+          showToast(`${codeStatus(entry).remaining} recovery codes left`, 'ok');
+        })();
+        break;
+      }
+      case 'bundle-export': {
+        const bundleId = el.dataset.bundle ?? '';
+        const bundle = st.vault.api_keys.find(
+          (entry) => entry.id === bundleId && entry.secretType === 'bundle',
+        );
+        if (!bundle) break;
+        const members = st.vault.api_keys
+          .filter((entry) => entry.bundle_id === bundleId)
+          .sort((a, b) => (a.bundle_order ?? 0) - (b.bundle_order ?? 0));
+        const formats: [BundleExportFormat, string][] = [
+          ['dotenv', '.env'],
+          ['python', 'Python'],
+          ['javascript', 'JavaScript'],
+          ['typescript', 'TypeScript'],
+          ['json', 'JSON'],
+          ['yaml', 'YAML'],
+          ['toml', 'TOML'],
+          ['shell', 'Shell'],
+        ];
+        showContextMenu(
+          (e as MouseEvent).clientX,
+          (e as MouseEvent).clientY,
+          formats.map(([format, label]) => ({
+            label: `Copy all as ${label}`,
+            fn: () => {
+              try {
+                void clipboardWrite(buildBundleExport(bundle, members, format)).then(() =>
+                  showToast(`Bundle copied as ${label}`, 'ok'),
+                );
+              } catch (error) {
+                showToast(`Export failed: ${String(error)}`, 'err');
+              }
+            },
+          })),
+        );
+        break;
+      }
     }
+  };
+  document.getElementById('card-grid')!.addEventListener('click', onGridClick);
+  // The "bundle them?" banner sits above the grid, not inside it, so a listener on
+  // the grid never saw its Accept and Dismiss buttons: both did nothing in the
+  // real app (found by the Phase 32.2 probe). Delegated from the document
+  // because the banner is created lazily by the first render that needs it.
+  document.addEventListener('click', (e) => {
+    if ((e.target as Element | null)?.closest?.('#bundle-suggest')) onGridClick(e);
   });
 
   // Card grid — double-click to edit
@@ -1145,14 +1602,9 @@ async function init() {
     const entry = st.vault.api_keys[idx];
     if (!entry) return;
     const _keyLabel = TYPE_CONFIG[entry.secretType || 'api_key']?.keyLabel || 'Key';
-    // Use a plain string label — showContextMenu renders via innerHTML so user data must be escaped.
-    const _safeProvider = entry.provider
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;');
     const _items: (DropdownItem | '---')[] = [
       {
-        label: `Copy Provider: ${_safeProvider}`,
+        label: `Copy Provider: ${entry.provider}`,
         fn: () => clipboardWrite(entry.provider).then(() => showToast('Copied ✓', 'ok', 1500)),
       },
       { label: `Copy ${_keyLabel}`, fn: () => copyField(e as MouseEvent, entry.api_key, card) },
@@ -1190,7 +1642,7 @@ async function init() {
   document.getElementById('vault-switcher')!.addEventListener('click', (e) => {
     const isRemote = st.store instanceof RemoteVaultStore;
     const saved = Settings.get('remoteSaved') ?? [];
-    const items: any[] = [
+    const items: (DropdownItem | '---')[] = [
       {
         label: isRemote ? '  Local Vault' : '⬤ Local Vault',
         active: !isRemote,
@@ -1228,17 +1680,17 @@ async function init() {
     dynamicSecretFields();
     suggestExtraVarsForType((e.target as HTMLSelectElement).value as SecretType);
   });
-  document.getElementById('f-key-generate')?.addEventListener('click', () => quickGenerate());
+  document.getElementById('f-key-generate')?.addEventListener('click', () => void quickGenerate());
 
   // ── Tauri unlock flow ──
   if (inTauri) {
-    (st.store as TauriVaultStore).vaultFilePath().then((p) => {
+    void (st.store as TauriVaultStore).vaultFilePath().then((p) => {
       const el = document.getElementById('lock-status');
       if (el && p) el.title = `Vault file: ${p}`;
     });
     document.getElementById('vault-name')!.textContent = 'Local Vault';
     const exists = await (st.store as TauriVaultStore).exists();
-    await showUnlockModal(!exists);
+    showUnlockModal(!exists);
     return;
   }
 
