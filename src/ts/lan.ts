@@ -1,20 +1,9 @@
-/**
- * @file
- * "Open to LAN" — serve this vault to the local network from the desktop.
- *
- * Minecraft-style: the server exists only while the app is open, shares the
- * vault already on screen, and dies when you close it or lock. A Docker
- * `envv-server` remains the option for something always-on.
- *
- * Peers sign in with user accounts. `POST /api/unlock` is refused while hosting,
- * so the master password never crosses the network.
- */
+import { st, applyUsersPanelVisibility, switchPanel, inTauri } from './state';
+import { showToast, showConfirm, clipboardWrite, errorMessage } from './utils';
+import { invokeTauri } from './tauri';
+import { html, setHtml } from './html';
 
-import { st, Settings, applyUsersPanelVisibility, switchPanel, inTauri } from './state';
-import { esc, showToast, showConfirm, clipboardWrite } from './utils';
-
-const invoke = (cmd: string, args?: Record<string, unknown>) =>
-  (window as any).__TAURI__?.core?.invoke?.(cmd, args) as Promise<any> | undefined;
+const invoke = invokeTauri;
 
 export interface LanStatus {
   running: boolean;
@@ -46,7 +35,7 @@ export function lanStatus(): LanStatus {
 
 async function refresh(): Promise<void> {
   try {
-    _status = (await invoke('lan_status')) ?? { ...EMPTY };
+    _status = (await invoke<LanStatus>('lan_status')) ?? { ...EMPTY };
   } catch {
     _status = { ...EMPTY };
   }
@@ -68,7 +57,7 @@ async function refresh(): Promise<void> {
 
 function startPolling() {
   if (_poll !== null) return;
-  _poll = setInterval(refresh, 5000);
+  _poll = setInterval(() => void refresh(), 5000);
 }
 
 function stopPolling() {
@@ -97,7 +86,7 @@ export async function startLan(): Promise<void> {
   }
 
   try {
-    _status = await invoke('lan_start', { port: null, tls: true });
+    _status = await invoke<LanStatus>('lan_start', { port: null, tls: true });
     st.lanServerRunning = true;
     applyUsersPanelVisibility();
     startPolling();
@@ -107,8 +96,8 @@ export async function startLan(): Promise<void> {
     // st.lanServerRunning and stands down.
     const m = await import('./lock');
     m.resetLock();
-  } catch (e: any) {
-    const msg = String(e?.message ?? e);
+  } catch (e) {
+    const msg = errorMessage(e);
     render();
     if (msg.includes('No user account exists')) {
       showToast('Create a user account first — peers sign in with one', 'err', 5000);
@@ -181,101 +170,111 @@ function render(): void {
   // "Stop serving" control while the vault is still being published would be
   // strictly worse than showing it in the wrong panel.
   if (!lanAvailable() && !_status.running) {
-    host.innerHTML = st.store.isRemote
-      ? `<div class="lan-card lan-card-muted">
-           <div class="lan-head"><span class="lan-title">Open to LAN</span></div>
-           <p class="lan-help">
-             Serving shares the vault stored on <strong>this machine</strong>, not the
-             remote you are connected to. Switch to the local vault to use it.
-           </p>
-         </div>`
-      : '';
+    setHtml(
+      host,
+      st.store.isRemote
+        ? html`<div class="lan-card lan-card-muted">
+            <div class="lan-head"><span class="lan-title">Open to LAN</span></div>
+            <p class="lan-help">
+              Serving shares the vault stored on <strong>this machine</strong>, not the remote you
+              are connected to. Switch to the local vault to use it.
+            </p>
+          </div>`
+        : '',
+    );
     return;
   }
 
   if (!_status.running) {
-    host.innerHTML = `
-      <div class="lan-card">
+    setHtml(
+      host,
+      html` <div class="lan-card">
         <div class="lan-head">
           <span class="lan-title">Open to LAN</span>
           <span class="lan-state off">Not serving</span>
         </div>
         <p class="lan-help">
-          Serve <strong>this</strong> vault to your local network straight from the app —
-          no Docker, no second database. It closes when you lock or quit.
-          <br>Peers sign in with a user account; the master password never leaves this machine.
+          Serve <strong>this</strong> vault to your local network straight from the app — no Docker,
+          no second database. It closes when you lock or quit. <br />Peers sign in with a user
+          account; the master password never leaves this machine.
         </p>
         <div class="lan-actions">
           <button class="btn btn-sm btn-accent" id="lan-start-btn">Open to LAN</button>
         </div>
-      </div>`;
-    document.getElementById('lan-start-btn')?.addEventListener('click', startLan);
+      </div>`,
+    );
+    document.getElementById('lan-start-btn')?.addEventListener('click', () => void startLan());
     return;
   }
 
   const fp = _status.fingerprint ?? '';
-  host.innerHTML = `
-    <div class="lan-card running">
+  setHtml(
+    host,
+    html` <div class="lan-card running">
       <div class="lan-head">
         <span class="lan-title">Open to LAN</span>
-        <span class="lan-state on">Serving · ${_status.peers} peer${_status.peers === 1 ? '' : 's'}</span>
+        <span class="lan-state on"
+          >Serving · ${_status.peers} peer${_status.peers === 1 ? '' : 's'}</span
+        >
       </div>
       <div class="lan-field">
         <span class="lan-label">Address</span>
-        <code class="lan-value">${esc(_status.url)}</code>
+        <code class="lan-value">${_status.url}</code>
         <button class="btn btn-xs btn-ghost" id="lan-copy-url">Copy</button>
-      </div>
-      ${
+      </div>${
         fp
-          ? `
-      <div class="lan-field">
-        <span class="lan-label">TLS fingerprint</span>
-        <code class="lan-value lan-fp" title="${esc(fp)}">${esc(fp.slice(0, 32))}…</code>
-        <button class="btn btn-xs btn-ghost" id="lan-copy-fp">Copy</button>
-      </div>
-      <p class="lan-help">
-        The certificate is self-signed, so peers must pin this fingerprint when adding
-        the connection. Compare it on their screen before accepting.
-      </p>`
-          : `
-      <p class="lan-help lan-warn">
-        Running without TLS — secrets travel this network in clear text.
-      </p>`
+          ? html` <div class="lan-field">
+                <span class="lan-label">TLS fingerprint</span>
+                <code class="lan-value lan-fp" title="${fp}">${fp.slice(0, 32)}…</code>
+                <button class="btn btn-xs btn-ghost" id="lan-copy-fp">Copy</button>
+              </div>
+              <p class="lan-help">
+                The certificate is self-signed, so peers must pin this fingerprint when adding the
+                connection. Compare it on their screen before accepting.
+              </p>`
+          : html` <p class="lan-help lan-warn">
+              Running without TLS — secrets travel this network in clear text.
+            </p>`
       }
       <p class="lan-help">
-        Auto-lock is suspended while serving. The server closes itself after
-        ${IDLE_SHUTDOWN_HOURS}h with no peer activity.
+        Auto-lock is suspended while serving. The server closes itself after ${IDLE_SHUTDOWN_HOURS}h
+        with no peer activity.
       </p>
       <div class="lan-actions">
         <button class="btn btn-sm danger" id="lan-stop-btn">Stop serving</button>
       </div>
-    </div>`;
+    </div>`,
+  );
 
-  document.getElementById('lan-stop-btn')?.addEventListener('click', async () => {
-    if (_status.peers > 0) {
-      const ok = await showConfirm(
-        `${_status.peers} peer${_status.peers === 1 ? ' is' : 's are'} connected. Disconnect ${_status.peers === 1 ? 'them' : 'all'}?`,
-      );
-      if (!ok) return;
-    }
-    await stopLan();
+  document.getElementById('lan-stop-btn')?.addEventListener('click', () => {
+    void (async () => {
+      if (_status.peers > 0) {
+        const ok = await showConfirm(
+          `${_status.peers} peer${_status.peers === 1 ? ' is' : 's are'} connected. Disconnect ${_status.peers === 1 ? 'them' : 'all'}?`,
+        );
+        if (!ok) return;
+      }
+      await stopLan();
+    })();
   });
   document
     .getElementById('lan-copy-url')
-    ?.addEventListener('click', () =>
-      clipboardWrite(_status.url).then(() => showToast('Address copied ✓', 'ok', 1500)),
+    ?.addEventListener(
+      'click',
+      () => void clipboardWrite(_status.url).then(() => showToast('Address copied ✓', 'ok', 1500)),
     );
   document
     .getElementById('lan-copy-fp')
-    ?.addEventListener('click', () =>
-      clipboardWrite(fp).then(() => showToast('Fingerprint copied ✓', 'ok', 1500)),
+    ?.addEventListener(
+      'click',
+      () => void clipboardWrite(fp).then(() => showToast('Fingerprint copied ✓', 'ok', 1500)),
     );
 }
 
 export function initLanPanel(): void {
   render();
   // Pick up a server left running from before a UI reload.
-  refresh().then(() => {
+  void refresh().then(() => {
     if (_status.running) startPolling();
   });
 }
