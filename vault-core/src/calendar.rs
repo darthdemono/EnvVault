@@ -317,6 +317,47 @@ fn events_for_entry(entry: &Value, kinds: &[EventKind]) -> Vec<CalEvent> {
         }
     }
 
+    // Dates that live in a type's named variables rather than `expires_at`
+    // (Phase 24.5): a licence's maintenance window and an identity document's
+    // expiry. Date only, never the number or the holder: an identity document
+    // gets no metadata lines at all, because those lines carry account names and
+    // a calendar feed is shared further than the vault is.
+    if kinds.contains(&EventKind::Expires) {
+        let (var, what, with_meta) = match s(entry, "secretType").as_deref() {
+            Some("license_key") => ("maintenance_until", "Maintenance ends", true),
+            Some("identity_document") => ("expires", "Expires", false),
+            _ => ("", "", false),
+        };
+        if !var.is_empty() {
+            let value = entry
+                .get("extra_vars")
+                .and_then(|v| v.as_array())
+                .into_iter()
+                .flatten()
+                .find(|v| v.get("key").and_then(|k| k.as_str()) == Some(var))
+                .and_then(|v| v.get("value").and_then(|x| x.as_str()))
+                .map(str::to_string);
+            if let Some(date) = to_ics_date(value.as_deref()) {
+                // `entry_label` appends the account name, which for an identity
+                // document is the holder's.
+                let label = if with_meta {
+                    label.clone()
+                } else {
+                    s(entry, "provider").unwrap_or_default()
+                };
+                let head = format!("{label}: {}.", what.to_lowercase());
+                out.push(CalEvent {
+                    uid: format!("{id}-{var}@envvault"),
+                    date,
+                    summary: format!("{what}: {label}"),
+                    description: if with_meta { join(head) } else { head },
+                    kind: EventKind::Expires,
+                    alarm_days_before: 30,
+                });
+            }
+        }
+    }
+
     if kinds.contains(&EventKind::Rotation) {
         if let Some(due) = rotation_due(entry) {
             if let Some(date) = to_ics_date(Some(&due)) {
@@ -436,6 +477,25 @@ mod tests {
         assert_eq!(
             to_ics_date(rotation_due(&e).as_deref()),
             Some("20260401".to_string())
+        );
+    }
+
+    #[test]
+    fn a_licence_and_an_identity_document_put_their_own_dates_on_the_calendar() {
+        let lic = json!({ "id": "l1", "provider": "Editor", "secretType": "license_key",
+            "extra_vars": [{ "key": "maintenance_until", "value": "2027-03-01" }] });
+        let doc = json!({ "id": "d1", "provider": "Passport", "secretType": "identity_document",
+            "account_name": "Holder Name", "api_key": "X1234567",
+            "extra_vars": [{ "key": "expires", "value": "2031-05-09" }] });
+        let ics = build_ics(&[lic, doc], &IcsOptions::default());
+        assert!(ics.contains("SUMMARY:Maintenance ends: Editor"), "{ics}");
+        assert!(ics.contains("DTSTART;VALUE=DATE:20270301"));
+        assert!(ics.contains("SUMMARY:Expires: Passport"));
+        assert!(ics.contains("20310509"));
+        // PII stays out of the feed: not the number, not the holder.
+        assert!(
+            !ics.contains("X1234567") && !ics.contains("Holder Name"),
+            "{ics}"
         );
     }
 
