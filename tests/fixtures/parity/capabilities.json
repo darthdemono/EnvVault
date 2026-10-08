@@ -1,0 +1,773 @@
+{
+  "comment": "Phase 33. The UI/CLI capability map. tests: envv-cli/tests/capabilities.rs. Evidence prefixes: tauri: (a registered command), id: (an element id in index.html or tools-markup.ts), tool: (a data-tool pane), src: (a source file). status: both | gap-ui | gap-cli | exempt.",
+  "capabilities": [
+    {
+      "id": "entries",
+      "status": "both",
+      "cli": [
+        "envv list",
+        "envv get",
+        "envv entry ls",
+        "envv entry get",
+        "envv entry add",
+        "envv entry set",
+        "envv entry rename",
+        "envv entry rm",
+        "envv entry tag",
+        "envv entry pin",
+        "envv entry compromise",
+        "envv entry rotate",
+        "envv entry verify",
+        "envv entry history",
+        "envv entry restore"
+      ],
+      "ui": [
+        "id:add-btn",
+        "src:src/ts/modals.ts"
+      ],
+      "tauri": [
+        "load_vault",
+        "save_vault"
+      ],
+      "note": "The app edits the vault document and saves it whole; the CLI goes through Access::save.",
+      "cli_flags": []
+    },
+    {
+      "id": "export",
+      "status": "both",
+      "cli": [
+        "envv export",
+        "envv project export",
+        "envv emit",
+        "envv curl",
+        "envv cookie header",
+        "envv cookie curl",
+        "envv cookie txt",
+        "envv cookie json",
+        "envv file write",
+        "envv render",
+        "envv env"
+      ],
+      "ui": [
+        "id:copy-all-btn",
+        "id:bulk-export-btn"
+      ],
+      "tauri": [
+        "write_export_file",
+        "type_emit"
+      ],
+      "note": "UI copy/export is the materialising path; CLI needs --out or --reveal.",
+      "cli_flags": []
+    },
+    {
+      "id": "cookie-capture",
+      "status": "both",
+      "cli": [
+        "envv cookie import"
+      ],
+      "ui": [
+        "id:f-capture-btn"
+      ],
+      "tauri": [
+        "session_capture_parse"
+      ],
+      "note": "",
+      "cli_flags": []
+    },
+    {
+      "id": "calendar",
+      "status": "both",
+      "cli": [
+        "envv calendar export",
+        "envv calendar feed new",
+        "envv calendar feed ls",
+        "envv calendar feed revoke"
+      ],
+      "ui": [
+        "tool:timeline",
+        "tool:expiry-calendar"
+      ],
+      "tauri": [
+        "calendar_build_ics"
+      ],
+      "note": "",
+      "cli_flags": []
+    },
+    {
+      "id": "cxf",
+      "status": "both",
+      "cli": [
+        "envv cxf import",
+        "envv cxf export"
+      ],
+      "ui": [
+        "id:settings-cxf-import-btn",
+        "id:settings-cxf-export-btn"
+      ],
+      "tauri": [
+        "cxf_import",
+        "cxf_export"
+      ],
+      "note": "",
+      "cli_flags": []
+    },
+    {
+      "id": "health",
+      "status": "both",
+      "cli": [
+        "envv scan",
+        "envv status",
+        "envv rotate-check"
+      ],
+      "ui": [
+        "tool:health"
+      ],
+      "tauri": [],
+      "note": "",
+      "cli_flags": []
+    },
+    {
+      "id": "config-check",
+      "status": "both",
+      "cli": [
+        "envv check"
+      ],
+      "ui": [
+        "src:src/ts/config-check.ts"
+      ],
+      "tauri": [
+        "config_check_project"
+      ],
+      "note": "",
+      "cli_flags": []
+    },
+    {
+      "id": "audit",
+      "status": "both",
+      "cli": [
+        "envv audit"
+      ],
+      "ui": [
+        "tool:audit"
+      ],
+      "tauri": [
+        "get_audit_log"
+      ],
+      "note": "",
+      "cli_flags": []
+    },
+    {
+      "id": "import-env",
+      "status": "both",
+      "cli": [
+        "envv import"
+      ],
+      "ui": [
+        "tool:import-export",
+        "id:import-file-btn"
+      ],
+      "tauri": [
+        "parse_toml_import"
+      ],
+      "note": "",
+      "cli_flags": []
+    },
+    {
+      "id": "pools",
+      "status": "both",
+      "cli": [
+        "envv pool ls",
+        "envv pool show",
+        "envv pool next",
+        "envv pool report",
+        "envv pool reset"
+      ],
+      "ui": [
+        "tool:pools"
+      ],
+      "tauri": [
+        "pool_state",
+        "pool_next",
+        "pool_set_cooldown",
+        "pool_reset",
+        "pool_state_path"
+      ],
+      "note": "",
+      "cli_flags": []
+    },
+    {
+      "id": "projects",
+      "status": "both",
+      "cli": [
+        "envv project ls",
+        "envv project show",
+        "envv project add",
+        "envv project rename",
+        "envv project rm",
+        "envv project chunk ls",
+        "envv project chunk show",
+        "envv project chunk add",
+        "envv project chunk rm",
+        "envv project chunk rename",
+        "envv project chunk set",
+        "envv project chunk unset",
+        "envv project chunk disable",
+        "envv project chunk enable"
+      ],
+      "ui": [
+        "id:new-project-btn",
+        "src:src/ts/projects.ts"
+      ],
+      "tauri": [],
+      "note": "",
+      "cli_flags": []
+    },
+    {
+      "id": "categories",
+      "status": "both",
+      "cli": [
+        "envv category ls",
+        "envv category add",
+        "envv category rename",
+        "envv category rm",
+        "envv tags"
+      ],
+      "ui": [
+        "id:new-category-root-btn"
+      ],
+      "tauri": [],
+      "note": "",
+      "cli_flags": []
+    },
+    {
+      "id": "catalogue",
+      "status": "both",
+      "cli": [
+        "envv catalogue update",
+        "envv catalogue show",
+        "envv catalogue diff"
+      ],
+      "ui": [
+        "id:s-catalogue-update"
+      ],
+      "tauri": [
+        "catalogue_status",
+        "catalogue_update"
+      ],
+      "note": "",
+      "cli_flags": []
+    },
+    {
+      "id": "oauth",
+      "status": "both",
+      "cli": [
+        "envv oauth refresh"
+      ],
+      "ui": [
+        "src:src/ts/render.ts"
+      ],
+      "tauri": [
+        "oauth_refresh"
+      ],
+      "note": "",
+      "cli_flags": []
+    },
+    {
+      "id": "recovery-codes",
+      "status": "both",
+      "cli": [
+        "envv codes status",
+        "envv codes next",
+        "envv codes use"
+      ],
+      "ui": [
+        "src:src/ts/render.ts"
+      ],
+      "tauri": [],
+      "note": "",
+      "cli_flags": []
+    },
+    {
+      "id": "bundles",
+      "status": "both",
+      "cli": [
+        "envv bundle ls",
+        "envv bundle new",
+        "envv bundle add",
+        "envv bundle remove",
+        "envv bundle dissolve",
+        "envv bundle delete"
+      ],
+      "ui": [
+        "src:src/ts/bundle-scope.ts",
+        "id:bulk-bundle-btn"
+      ],
+      "tauri": [],
+      "note": "",
+      "cli_flags": []
+    },
+    {
+      "id": "generators",
+      "status": "both",
+      "cli": [
+        "envv gen secret",
+        "envv gen password",
+        "envv gen cert",
+        "envv gen ssh"
+      ],
+      "ui": [
+        "tool:secret-gen",
+        "tool:password-gen",
+        "tool:pem-cert-gen",
+        "tool:ssh-keygen"
+      ],
+      "tauri": [
+        "generate_certificate",
+        "generate_ssh_keypair"
+      ],
+      "note": "",
+      "cli_flags": []
+    },
+    {
+      "id": "backup",
+      "status": "both",
+      "cli": [
+        "envv backup export",
+        "envv backup import"
+      ],
+      "ui": [
+        "id:settings-export-btn",
+        "id:settings-import-btn"
+      ],
+      "tauri": [],
+      "note": "",
+      "cli_flags": []
+    },
+    {
+      "id": "users",
+      "status": "both",
+      "cli": [
+        "envv user ls",
+        "envv user add",
+        "envv user rm",
+        "envv user rename",
+        "envv user passwd",
+        "envv user class",
+        "envv user token ls",
+        "envv user token new",
+        "envv user token revoke",
+        "envv class ls",
+        "envv class add",
+        "envv class set",
+        "envv class rm",
+        "envv perm show",
+        "envv perm set",
+        "envv perm check"
+      ],
+      "ui": [
+        "id:create-user-btn",
+        "id:create-class-btn"
+      ],
+      "tauri": [
+        "list_users",
+        "create_user",
+        "set_user_password",
+        "rename_user",
+        "delete_user",
+        "list_user_classes",
+        "create_user_class",
+        "update_user_class",
+        "delete_user_class",
+        "get_class_permissions",
+        "set_class_permissions",
+        "assign_user_class",
+        "create_user_token",
+        "revoke_user_token",
+        "list_user_tokens",
+        "get_user_permissions",
+        "set_user_permissions"
+      ],
+      "note": "",
+      "cli_flags": []
+    },
+    {
+      "id": "user-totp",
+      "status": "both",
+      "cli": [
+        "envv user totp status",
+        "envv user totp enroll",
+        "envv user totp confirm",
+        "envv user totp disable"
+      ],
+      "ui": [
+        "src:src/ts/users.ts"
+      ],
+      "tauri": [
+        "totp_status",
+        "totp_enroll",
+        "totp_confirm",
+        "totp_disable"
+      ],
+      "note": "",
+      "cli_flags": []
+    },
+    {
+      "id": "authenticator",
+      "status": "both",
+      "cli": [
+        "envv totp code",
+        "envv totp ls",
+        "envv totp add",
+        "envv totp advance",
+        "envv totp uri",
+        "envv totp rm",
+        "envv totp import",
+        "envv totp export"
+      ],
+      "ui": [
+        "id:auth-add-btn",
+        "id:auth-import-btn",
+        "id:auth-export-btn"
+      ],
+      "tauri": [
+        "entry_totp_code",
+        "totp_import_merge",
+        "totp_export_build",
+        "bip39_validate"
+      ],
+      "note": "",
+      "cli_flags": []
+    },
+    {
+      "id": "enrich",
+      "status": "both",
+      "cli": [
+        "envv enrich"
+      ],
+      "ui": [
+        "tool:enrich"
+      ],
+      "tauri": [
+        "enrich_plan",
+        "enrich_online_targets",
+        "enrich_online"
+      ],
+      "note": "Tools -> Enrich over the same plan_entry and probe_entry the CLI runs. The online half is behind a checkbox and a consent screen that names every issuer and the count sent to each before any request is made; cookies are never probed.",
+      "cli_flags": []
+    },
+    {
+      "id": "doctor",
+      "status": "both",
+      "cli": [
+        "envv doctor"
+      ],
+      "ui": [
+        "id:doctor-run-btn"
+      ],
+      "tauri": [
+        "doctor_document",
+        "doctor_file"
+      ],
+      "note": "Health pane -> Diagnose vault runs the document checks over whichever vault is open and, for this machine's vault, the file checks too (integrity, storage hashes, salt pairing, permissions, audit chain) through the same functions `envv doctor` runs. `--fix` repairs stay CLI-only for now.",
+      "cli_flags": []
+    },
+    {
+      "id": "import-vault",
+      "status": "both",
+      "cli": [
+        "envv import-vault"
+      ],
+      "ui": [
+        "id:vi-file-btn"
+      ],
+      "tauri": [
+        "import_vault_plan"
+      ],
+      "note": "Tools -> Import -> From another password manager: Bitwarden, 1Password, Proton. Same plan_import as the CLI; the preview shows fingerprints, and Import saves once.",
+      "cli_flags": []
+    },
+    {
+      "id": "backup-archive",
+      "status": "both",
+      "cli": [
+        "envv backup archive",
+        "envv backup restore-archive"
+      ],
+      "ui": [
+        "id:s-archive-btn",
+        "id:s-archive-restore-btn"
+      ],
+      "tauri": [
+        "backup_archive_build",
+        "backup_archive_restore"
+      ],
+      "note": "Settings -> Import / Export -> Full-fidelity archive. build_archive/open_archive are shared with the CLI; restore verifies before writing, stops the LAN server, zeroizes the key and reloads.",
+      "cli_flags": []
+    },
+    {
+      "id": "uid-registry",
+      "status": "both",
+      "cli": [
+        "envv uid check",
+        "envv uid register",
+        "envv uid mint",
+        "envv uid lookup",
+        "envv uid prune",
+        "envv uid stats"
+      ],
+      "ui": [
+        "tool:uid-registry"
+      ],
+      "tauri": [],
+      "note": "Tools -> Unique IDs over /api/uid/* (remote vault, server started with --uid-registry): mint, check, lookup, stats, prune with a dry run. Register (bulk) is CLI-only for now.",
+      "cli_flags": []
+    },
+    {
+      "id": "strict-write",
+      "status": "both",
+      "cli": [
+        "envv user strict-write"
+      ],
+      "ui": [
+        "src:src/ts/users.ts"
+      ],
+      "tauri": [
+        "set_strict_write"
+      ],
+      "note": "Checkbox in the user and class detail; owner-only on the server (PUT /api/{users|classes}/{id}/strict-write), because switching it off widens what a sub-user can write.",
+      "cli_flags": []
+    },
+    {
+      "id": "settings",
+      "status": "exempt",
+      "cli": [],
+      "ui": [
+        "id:settings-btn"
+      ],
+      "tauri": [],
+      "note": "Theme, layout, auto-lock and the other presentation settings live in the webview (localStorage) and have no CLI meaning. The settings that change what a copy emits are a separate gap: copy-settings.",
+      "cli_flags": []
+    },
+    {
+      "id": "remote-vaults",
+      "status": "both",
+      "cli": [],
+      "ui": [
+        "id:add-remote-btn"
+      ],
+      "tauri": [
+        "remote_request",
+        "probe_cert_fingerprint"
+      ],
+      "note": "The app keeps a saved list of remotes in the webview; the CLI takes --server, --fingerprint, --tofu and --ca-cert per call and caches sessions (login, sessions). A saved-remotes list is a convenience, not a capability.",
+      "cli_flags": [
+        "--server",
+        "--fingerprint",
+        "--tofu"
+      ]
+    },
+    {
+      "id": "lan",
+      "status": "exempt",
+      "cli": [],
+      "ui": [
+        "src:src/ts/lan.ts"
+      ],
+      "tauri": [
+        "lan_start",
+        "lan_stop",
+        "lan_status"
+      ],
+      "note": "The app hosts the vault it has open on the LAN for up to 8 idle hours. The CLI-side equivalent is the separate envv-server binary (envv-server --host 0.0.0.0 --tls), which serves a vault file to the LAN as its own process.",
+      "cli_flags": []
+    },
+    {
+      "id": "reset-vault",
+      "status": "both",
+      "cli": [
+        "envv reset-vault"
+      ],
+      "ui": [],
+      "tauri": [
+        "reset_vault"
+      ],
+      "note": "Deletes the local vault and salt. Needs no password (it exists for a lost one); --yes or a terminal answer, --dry-run supported, a .v1.bak is left alone.",
+      "cli_flags": []
+    },
+    {
+      "id": "cli-session",
+      "status": "exempt",
+      "cli": [
+        "envv completions",
+        "envv describe",
+        "envv login",
+        "envv whoami",
+        "envv logout",
+        "envv sessions"
+      ],
+      "ui": [],
+      "tauri": [],
+      "note": "CLI-only by nature: shell integration, self-description and the CLI session cache.",
+      "cli_flags": []
+    },
+    {
+      "id": "cwd-context",
+      "status": "exempt",
+      "cli": [
+        "envv use"
+      ],
+      "ui": [],
+      "tauri": [],
+      "note": "Scoped to a working directory; the app has no such concept.",
+      "cli_flags": []
+    },
+    {
+      "id": "exec",
+      "status": "exempt",
+      "cli": [
+        "envv exec"
+      ],
+      "ui": [],
+      "tauri": [],
+      "note": "Runs a local child process with secrets in its environment. The app has no process runner; its equivalents are copy and export. A VS Code integration is Phase 38.",
+      "cli_flags": []
+    },
+    {
+      "id": "watch",
+      "status": "exempt",
+      "cli": [
+        "envv watch"
+      ],
+      "ui": [],
+      "tauri": [],
+      "note": "Long-running file watcher; the app equivalent is the import pane.",
+      "cli_flags": []
+    },
+    {
+      "id": "shield",
+      "status": "exempt",
+      "cli": [
+        "envv shield"
+      ],
+      "ui": [],
+      "tauri": [],
+      "note": "Redaction filter for command output streams (agent safety); nothing to shield in a GUI.",
+      "cli_flags": []
+    },
+    {
+      "id": "catalogue-publisher",
+      "status": "exempt",
+      "cli": [
+        "envv catalogue export",
+        "envv catalogue sign"
+      ],
+      "ui": [],
+      "tauri": [],
+      "note": "Publisher tooling for the catalogue workflow.",
+      "cli_flags": []
+    },
+    {
+      "id": "gen-ui-lifecycle",
+      "status": "exempt",
+      "cli": [],
+      "ui": [],
+      "tauri": [
+        "unlock_vault",
+        "lock_vault",
+        "vault_is_unlocked",
+        "vault_exists",
+        "get_vault_path",
+        "vault_version",
+        "caps_lock_state"
+      ],
+      "note": "App lifecycle and window plumbing; the CLI opens the vault per command.",
+      "cli_flags": []
+    },
+    {
+      "id": "copy-settings",
+      "status": "both",
+      "cli": [],
+      "ui": [
+        "id:settings-btn"
+      ],
+      "tauri": [],
+      "note": "envCopyCase and envIncludePrefix are the global flags --env-case and --env-prefix (also ENVV_ENV_CASE / ENVV_ENV_PREFIX); copyProfile and metadataStyle were already --profile and --metadata; envCopyField is `get --field`. They govern copies and exports only: reference resolution and exec keep the default names.",
+      "cli_flags": [
+        "--env-case",
+        "--env-prefix"
+      ]
+    },
+    {
+      "id": "entropy-sources",
+      "status": "both",
+      "cli": [
+        "envv gen sources"
+      ],
+      "ui": [
+        "id:s-entropy-source"
+      ],
+      "tauri": [
+        "entropy_sources",
+        "entropy_fill"
+      ],
+      "note": "Settings -> Randomness; the UI generators draw from the chosen source (mixed with OS entropy, never alone) through a pool the app tops up over entropy_fill. An empty pool is a message, not a silent fall back.",
+      "cli_flags": []
+    },
+    {
+      "id": "dev-utilities",
+      "status": "exempt",
+      "cli": [],
+      "ui": [
+        "tool:cidr",
+        "tool:cron",
+        "tool:uuid-ulid",
+        "tool:hash-gen",
+        "tool:string-tools",
+        "tool:formatter",
+        "tool:base64"
+      ],
+      "tauri": [],
+      "cli_flags": [],
+      "note": "Pure developer utilities that read no vault data; the platform already has better CLI tools for each (uuidgen, sha256sum, base64, jq, yq)."
+    },
+    {
+      "id": "vault-diff",
+      "status": "both",
+      "cli": [
+        "envv diff"
+      ],
+      "ui": [
+        "tool:diff"
+      ],
+      "tauri": [],
+      "cli_flags": [],
+      "note": "Same fields, same order as the Diff pane; secrets are fingerprints unless --reveal."
+    },
+    {
+      "id": "templates",
+      "status": "both",
+      "cli": [
+        "envv template ls",
+        "envv template show"
+      ],
+      "ui": [
+        "tool:templates"
+      ],
+      "tauri": [],
+      "cli_flags": [],
+      "note": "One preset file, secret-templates.json, read by the pane and by vault_core::templates; `envv entry add --preset ID` creates from a preset and explicit flags override it."
+    },
+    {
+      "id": "token-tools",
+      "status": "exempt",
+      "cli": [],
+      "ui": [
+        "tool:token-validator",
+        "tool:api-key-patterns"
+      ],
+      "tauri": [],
+      "cli_flags": [],
+      "note": "JWT decoding of pasted text and a reference table of key formats; neither reads vault data. The format table is the provider catalogue (envv catalogue show)."
+    }
+  ]
+}
