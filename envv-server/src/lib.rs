@@ -315,6 +315,106 @@ pub struct AppState {
     /// and every `/api/uid/*` route. Keyed `"<bucket>:<who>"` so one map
     /// serves every limit in both features without a struct per bucket.
     limiter: Arc<Mutex<HashMap<String, (Instant, u32)>>>,
+    /// Token buckets for `/api/uid/*` (`"<bucket>:actor:<id>"` / `"<bucket>:server"`
+    /// -> last refill instant and tokens left). A real bucket, not a fixed
+    /// window: a window lets a client spend two bursts across a boundary.
+    uid_buckets: Arc<Mutex<HashMap<String, (Instant, f64)>>>,
+    uid_rates: Arc<UidRates>,
+}
+
+/// One token bucket: tokens refill at `refill` per second up to `burst`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Bucket {
+    pub refill: f64,
+    pub burst: f64,
+}
+
+/// The `/api/uid/*` limits, derived in `AGENTS.md` (Phase 24.4, "Rate limits —
+/// derived") from a 2 vCPU host and a quarter-of-capacity budget. Configuration,
+/// not constants: `--uid-rate BUCKET=A_REFILL:A_BURST:S_REFILL:S_BURST`.
+/// Counted **per value**, so a 1,000-id batch costs 1,000 tokens.
+#[derive(Clone, Debug)]
+pub struct UidRates {
+    /// `(per actor, server-wide)` for each of `mint`, `check` and `lookup`.
+    table: HashMap<&'static str, (Bucket, Bucket)>,
+}
+
+impl Default for UidRates {
+    fn default() -> Self {
+        let b = |refill, burst| Bucket { refill, burst };
+        UidRates {
+            table: HashMap::from([
+                ("mint", (b(100.0, 10_000.0), b(1_500.0, 15_000.0))),
+                ("check", (b(250.0, 10_000.0), b(6_000.0, 30_000.0))),
+                ("lookup", (b(10.0, 100.0), b(500.0, 2_000.0))),
+            ]),
+        }
+    }
+}
+
+impl UidRates {
+    /// Applies one `BUCKET=A_REFILL:A_BURST:S_REFILL:S_BURST` override.
+    pub fn set(&mut self, spec: &str) -> Result<(), String> {
+        let (name, nums) = spec
+            .split_once('=')
+            .ok_or_else(|| format!("--uid-rate wants BUCKET=a:b:c:d, got '{spec}'"))?;
+        let key = ["mint", "check", "lookup"]
+            .into_iter()
+            .find(|k| *k == name)
+            .ok_or_else(|| format!("unknown bucket '{name}' (mint, check, lookup)"))?;
+        let v: Vec<f64> = nums
+            .split(':')
+            .map(|n| {
+                n.parse::<f64>()
+                    .map_err(|_| format!("'{n}' is not a number"))
+            })
+            .collect::<Result<_, _>>()?;
+        if v.len() != 4 || v.iter().any(|x| !x.is_finite() || *x <= 0.0) {
+            return Err(
+                "--uid-rate needs four positive numbers: a_refill:a_burst:s_refill:s_burst".into(),
+            );
+        }
+        self.table.insert(
+            key,
+            (
+                Bucket {
+                    refill: v[0],
+                    burst: v[1],
+                },
+                Bucket {
+                    refill: v[2],
+                    burst: v[3],
+                },
+            ),
+        );
+        Ok(())
+    }
+
+    fn get(&self, bucket: &str) -> (Bucket, Bucket) {
+        self.table[bucket]
+    }
+}
+
+/// Seconds until `n` tokens are available, or `None` when they are now.
+/// Reads only; [`bucket_commit`] spends. Both buckets are checked before either
+/// is spent, so a refusal by the server-wide bucket does not eat the actor's.
+fn bucket_peek(
+    map: &HashMap<String, (Instant, f64)>,
+    key: &str,
+    n: f64,
+    b: Bucket,
+    now: Instant,
+) -> (f64, Option<u64>) {
+    let (last, tokens) = map.get(key).copied().unwrap_or((now, b.burst));
+    let tokens = (tokens + now.duration_since(last).as_secs_f64() * b.refill).min(b.burst);
+    if tokens >= n {
+        (tokens, None)
+    } else {
+        // A request larger than the burst can never be satisfied; the wait is
+        // reported as the time to a full bucket so the caller backs off.
+        let missing = (n.min(b.burst) - tokens).max(0.0);
+        (tokens, Some(((missing / b.refill).ceil() as u64).max(1)))
+    }
 }
 
 /// "Never expires", as a duration rather than a special case at every
@@ -356,7 +456,15 @@ impl AppState {
             uid_registry_enabled: false,
             uid_max_bytes: 10 * 1024 * 1024 * 1024,
             limiter: Arc::new(Mutex::new(HashMap::new())),
+            uid_buckets: Arc::new(Mutex::new(HashMap::new())),
+            uid_rates: Arc::new(UidRates::default()),
         }
+    }
+
+    /// Replaces the `/api/uid/*` limits (Phase 24.4).
+    pub fn with_uid_rates(mut self, rates: UidRates) -> Self {
+        self.uid_rates = Arc::new(rates);
+        self
     }
 
     /// Opts into the unique-ID registry (Phase 24.4). Off by default.
@@ -631,6 +739,38 @@ fn guard_manage_user(
 /// the response, in the log line for that request, and in nothing else. Without
 /// it the only way to find the matching log entry on a busy server is a
 /// timestamp and a guess.
+/// `204` for a save, carrying the version the caller should send as its next
+/// `If-Match`. When the save folded in other writers' changes it also sets
+/// `X-Vault-Merged: 1`: the caller's copy is behind and it should reload.
+fn saved_response(version: &str) -> axum::response::Response {
+    let (bare, merged) = match version.strip_suffix(vault_core::MERGED_SUFFIX) {
+        Some(b) => (b, true),
+        None => (version, false),
+    };
+    let mut r = StatusCode::NO_CONTENT.into_response();
+    if let Ok(v) = axum::http::HeaderValue::from_str(bare) {
+        r.headers_mut().insert(axum::http::header::ETAG, v);
+    }
+    if merged {
+        r.headers_mut().insert(
+            axum::http::HeaderName::from_static("x-vault-merged"),
+            axum::http::HeaderValue::from_static("1"),
+        );
+    }
+    r
+}
+
+/// The client-facing 409 text: names the entries both writers changed when the
+/// storage layer could say which, since that is what the user has to resolve.
+fn conflict_message(e: &str) -> String {
+    match e.split_once("both changed: ") {
+        Some((_, names)) => {
+            format!("Vault changed since last read — you and another writer both changed: {names}")
+        }
+        None => "Vault changed since last read — reload and retry".to_string(),
+    }
+}
+
 fn err_json(status: StatusCode, msg: &str) -> (StatusCode, Json<serde_json::Value>) {
     match current_request_id() {
         Some(id) => (
@@ -1121,7 +1261,9 @@ async fn get_entries(
         Ok(c) => c,
         Err(e) => return err_json(StatusCode::INTERNAL_SERVER_ERROR, &e).into_response(),
     };
-    let vault = match load_vault(&conn) {
+    // Selective read: no `version_history`, which is the bulk of a large vault's
+    // secret material and which no caller of this route reads.
+    let vault = match vault_core::load_vault_lite(&conn) {
         Ok(Some(d)) => d,
         Ok(None) => return StatusCode::NOT_FOUND.into_response(),
         Err(e) => return err_json(StatusCode::INTERNAL_SERVER_ERROR, &e).into_response(),
@@ -1289,12 +1431,10 @@ async fn put_vault(
 
     if session.is_owner {
         return match save_vault(&conn, data, ctx) {
-            Ok(_) => StatusCode::NO_CONTENT.into_response(),
-            Err(e) if e.starts_with(vault_core::CONFLICT_ERR) => err_json(
-                StatusCode::CONFLICT,
-                "Vault changed since last read — reload and retry",
-            )
-            .into_response(),
+            Ok(v) => saved_response(&v),
+            Err(e) if e.starts_with(vault_core::CONFLICT_ERR) => {
+                err_json(StatusCode::CONFLICT, &conflict_message(&e)).into_response()
+            }
             Err(e) => err_json(StatusCode::INTERNAL_SERVER_ERROR, &e).into_response(),
         };
     }
@@ -1315,7 +1455,9 @@ async fn put_vault(
     // version than the data, which makes the compare-and-swap fail and the
     // request retry: safe. Data-then-version mis-pairs the other way, passing
     // the check while merging against a stale base: exactly the clobber.
-    let merge_base = vault_core::vault_version(&conn).ok().flatten();
+    let merge_base = vault_core::ensure_current_schema(&conn)
+        .ok()
+        .and_then(|_| vault_core::vault_version(&conn).ok().flatten());
     let full_vault = match load_vault(&conn) {
         Ok(Some(v)) => v,
         Ok(None) => serde_json::json!({ "api_keys": [], "user_categories": [], "projects": [] }),
@@ -1337,12 +1479,10 @@ async fn put_vault(
         expect_version: expect.as_deref().or(merge_base.as_deref()),
     };
     match save_vault(&conn, merged, ctx) {
-        Ok(_) => StatusCode::NO_CONTENT.into_response(),
-        Err(e) if e.starts_with(vault_core::CONFLICT_ERR) => err_json(
-            StatusCode::CONFLICT,
-            "Vault changed since last read — reload and retry",
-        )
-        .into_response(),
+        Ok(v) => saved_response(&v),
+        Err(e) if e.starts_with(vault_core::CONFLICT_ERR) => {
+            err_json(StatusCode::CONFLICT, &conflict_message(&e)).into_response()
+        }
         Err(e) => err_json(StatusCode::INTERNAL_SERVER_ERROR, &e).into_response(),
     }
 }
@@ -1672,6 +1812,57 @@ async fn rename_user_handler(
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
         Err(e) => err_json(StatusCode::BAD_REQUEST, &e).into_response(),
     }
+}
+
+#[derive(Deserialize)]
+struct StrictWriteRequest {
+    strict: bool,
+}
+
+/// `PUT /api/{users|classes}/{id}/strict-write` (Phase 33.4). Owner only, for both
+/// directions: turning strict mode off *widens* what a sub-user can write, so it
+/// is not something a manage-users delegate gets to do, and the CLI's
+/// `user strict-write` is an owner-side local operation too.
+async fn set_strict_write_handler(
+    kind: &'static str,
+    headers: HeaderMap,
+    state: AppState,
+    id: String,
+    req: StrictWriteRequest,
+) -> axum::response::Response {
+    let (_, session) = match extract_session(&headers, &state) {
+        Ok(s) => s,
+        Err(e) => return e.into_response(),
+    };
+    if let Err(e) = require_owner(&session) {
+        return e.into_response();
+    }
+    let conn = match open_db(&state.db_path, &session.vault_key) {
+        Ok(c) => c,
+        Err(e) => return err_json(StatusCode::INTERNAL_SERVER_ERROR, &e).into_response(),
+    };
+    match vault_core::users::set_strict_write(&conn, kind, &id, req.strict) {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(e) => err_json(StatusCode::NOT_FOUND, &e).into_response(),
+    }
+}
+
+async fn user_strict_write_handler(
+    headers: HeaderMap,
+    State(state): State<AppState>,
+    Path(user_id): Path<String>,
+    Json(req): Json<StrictWriteRequest>,
+) -> impl IntoResponse {
+    set_strict_write_handler("user", headers, state, user_id, req).await
+}
+
+async fn class_strict_write_handler(
+    headers: HeaderMap,
+    State(state): State<AppState>,
+    Path(class_id): Path<String>,
+    Json(req): Json<StrictWriteRequest>,
+) -> impl IntoResponse {
+    set_strict_write_handler("class", headers, state, class_id, req).await
 }
 
 async fn set_password_handler(
@@ -2432,18 +2623,6 @@ async fn ics_feed_handler(
 
 // ── Unique-ID registry (Phase 24.4) ────────────────────────────────────────────
 
-/// Approximations of the token-bucket table in `CLAUDE.md` (Phase 24.4),
-/// collapsed to fixed 60-second windows — see [`rate_allow`]'s doc comment for
-/// why that trade was made. `(per_actor, server_wide)` per 60s.
-fn uid_limits(bucket: &str) -> (u32, u32) {
-    match bucket {
-        "mint_register" => (6_000, 90_000),
-        "check" => (15_000, 360_000),
-        "lookup" => (600, 30_000),
-        _ => (100, 1_000),
-    }
-}
-
 fn uid_actor(session: &Session) -> String {
     if session.is_owner {
         "owner".to_string()
@@ -2452,28 +2631,27 @@ fn uid_actor(session: &Session) -> String {
     }
 }
 
-/// Checks both the per-actor and server-wide buckets for `op`, counting `n`
-/// values against each. Returns the longer of the two waits on refusal.
+/// Checks the per-actor and server-wide buckets for `op` (`mint`, `check` or
+/// `lookup`), counting `n` values against each. Spends only when both pass, and
+/// returns the longer wait on refusal.
 fn uid_rate_check(state: &AppState, op: &str, actor: &str, n: u32) -> Option<u64> {
-    let (per_actor, per_server) = uid_limits(op);
-    let a = rate_allow(
-        &state.limiter,
-        &format!("uid:{op}:actor:{actor}"),
-        n,
-        per_actor,
-        Duration::from_secs(60),
-    );
-    let s = rate_allow(
-        &state.limiter,
-        &format!("uid:{op}:server"),
-        n,
-        per_server,
-        Duration::from_secs(60),
-    );
-    match (a, s) {
-        (None, None) => None,
-        (a, s) => Some(a.into_iter().chain(s).max().unwrap_or(1)),
+    let (actor_b, server_b) = state.uid_rates.get(op);
+    let (ak, sk) = (format!("{op}:actor:{actor}"), format!("{op}:server"));
+    let now = Instant::now();
+    let n = f64::from(n.max(1));
+    let mut map = state.uid_buckets.lock().unwrap();
+    let (a_tokens, a_wait) = bucket_peek(&map, &ak, n, actor_b, now);
+    let (s_tokens, s_wait) = bucket_peek(&map, &sk, n, server_b, now);
+    if a_wait.is_some() || s_wait.is_some() {
+        return Some(a_wait.into_iter().chain(s_wait).max().unwrap_or(1));
     }
+    map.insert(ak, (now, a_tokens - n));
+    map.insert(sk, (now, s_tokens - n));
+    // Idle actors refill to full anyway, so dropping a stale entry loses nothing.
+    if map.len() > 5000 {
+        map.retain(|_, (t, _)| now.duration_since(*t) < Duration::from_secs(600));
+    }
+    None
 }
 
 /// The daily cap — 1,000,000 values/actor/day, a disk-guard against a runaway
@@ -2606,7 +2784,7 @@ async fn uid_register_handler(
         return err_json(StatusCode::BAD_REQUEST, "1 to 1000 values per call.").into_response();
     }
     let actor = uid_actor(&session);
-    if let Some(retry) = uid_rate_check(&state, "mint_register", &actor, req.values.len() as u32) {
+    if let Some(retry) = uid_rate_check(&state, "mint", &actor, req.values.len() as u32) {
         return err_json_retry(StatusCode::TOO_MANY_REQUESTS, "Too many requests", retry);
     }
     if let Some(retry) = uid_daily_check(&state, &actor, req.values.len() as u32) {
@@ -2665,7 +2843,7 @@ async fn uid_mint_handler(
     };
     let length = req.length.clamp(8, 128);
     let actor = uid_actor(&session);
-    if let Some(retry) = uid_rate_check(&state, "mint_register", &actor, 1) {
+    if let Some(retry) = uid_rate_check(&state, "mint", &actor, 1) {
         return err_json_retry(StatusCode::TOO_MANY_REQUESTS, "Too many requests", retry);
     }
     if let Some(retry) = uid_daily_check(&state, &actor, 1) {
@@ -2937,7 +3115,14 @@ pub fn build_router(state: AppState, port: u16) -> Router {
     let cors = tower_http::cors::CorsLayer::new()
         .allow_origin(origins)
         .allow_methods(tower_http::cors::Any)
-        .allow_headers(tower_http::cors::Any);
+        .allow_headers(tower_http::cors::Any)
+        // A browser only lets a cross-origin page read the safelisted response
+        // headers, so without this the ETag a client needs for its next If-Match,
+        // and the merge marker, never reach it.
+        .expose_headers([
+            axum::http::header::ETAG,
+            axum::http::HeaderName::from_static("x-vault-merged"),
+        ]);
 
     let vault_routes = Router::new()
         .route("/api/unlock", post(unlock).delete(lock))
@@ -2979,6 +3164,14 @@ pub fn build_router(state: AppState, port: u16) -> Router {
         // One `.route()` per path, methods chained. Registering the same path
         // twice is a startup panic in axum 0.8, not a compile error — the same
         // class of failure as the `:param` syntax change.
+        .route(
+            "/api/users/{user_id}/strict-write",
+            axum::routing::put(user_strict_write_handler),
+        )
+        .route(
+            "/api/classes/{class_id}/strict-write",
+            axum::routing::put(class_strict_write_handler),
+        )
         .route(
             "/api/users/{user_id}/totp",
             get(totp_status_handler).delete(totp_disable_handler),
@@ -3151,6 +3344,33 @@ mod tests {
         AppState::new(d.join("vault.db"), d.join("vault.salt"), None, 480, 24, lan)
     }
 
+    fn owner_with_vault() -> (AppState, HeaderMap) {
+        let s = state(false);
+        let key = [42u8; 32];
+        let token = s.adopt_owner_key(key, "owner".into());
+        let conn = vault_core::open_db(&s.db_path, &key).unwrap();
+        vault_core::init_schema(&conn).unwrap();
+        vault_core::save_vault(
+            &conn,
+            serde_json::json!({
+                "api_keys": [{
+                    "id": "entry-1", "provider": "Renewal", "secretType": "api_key",
+                    "api_key": "must-not-appear", "created_at": "2026-09-01T00:00:00Z",
+                    "expires_at": "2026-10-01T00:00:00Z"
+                }],
+                "user_categories": [], "projects": []
+            }),
+            vault_core::SaveCtx::default(),
+        )
+        .unwrap();
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            axum::http::header::AUTHORIZATION,
+            format!("Bearer {token}").parse().unwrap(),
+        );
+        (s, headers)
+    }
+
     #[test]
     fn the_router_builds_without_a_duplicate_path_panic() {
         // axum 0.8 panics at *startup*, not compile time, when two `.route()`
@@ -3158,6 +3378,958 @@ mod tests {
         // written that way first. A compiling binary that cannot boot is the
         // worst shape this can take, so the router is constructed in a test.
         let _ = build_router(state(false), 8080);
+    }
+
+    #[tokio::test]
+    async fn calendar_feed_token_serves_metadata_only_and_revocation_takes_effect() {
+        let (s, headers) = owner_with_vault();
+        let response = create_feed_handler(
+            headers.clone(),
+            State(s.clone()),
+            Json(CreateFeedRequest {
+                name: "Renewals".into(),
+                kinds: vec!["expires".into()],
+                include_account_names: false,
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), 16 * 1024)
+            .await
+            .unwrap();
+        let created: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let id = created["id"].as_str().unwrap();
+        let path = created["path"].as_str().unwrap();
+        let token_ics = path.strip_prefix("/ics/").unwrap().to_string();
+
+        let feed = ics_feed_handler(
+            ConnectInfo("127.0.0.1:43210".parse().unwrap()),
+            State(s.clone()),
+            Path(token_ics.clone()),
+            HeaderMap::new(),
+        )
+        .await;
+        assert_eq!(feed.status(), StatusCode::OK);
+        assert_eq!(
+            feed.headers()[axum::http::header::CONTENT_TYPE],
+            "text/calendar; charset=utf-8"
+        );
+        let body = axum::body::to_bytes(feed.into_body(), 64 * 1024)
+            .await
+            .unwrap();
+        let ics = String::from_utf8(body.to_vec()).unwrap();
+        assert!(ics.contains("BEGIN:VCALENDAR"));
+        assert!(ics.contains("Renewal"));
+        assert!(!ics.contains("must-not-appear"));
+
+        assert_eq!(
+            revoke_feed_handler(headers, State(s.clone()), Path(id.to_string()))
+                .await
+                .into_response()
+                .status(),
+            StatusCode::NO_CONTENT
+        );
+        let revoked = ics_feed_handler(
+            ConnectInfo("127.0.0.1:43210".parse().unwrap()),
+            State(s),
+            Path(token_ics),
+            HeaderMap::new(),
+        )
+        .await;
+        assert_eq!(revoked.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn uid_registry_is_opt_in_and_registered_values_are_detected() {
+        let (disabled, headers) = owner_with_vault();
+        let response = uid_check_handler(
+            headers.clone(),
+            State(disabled),
+            Json(UidCheckRequest {
+                values: vec!["id-1".into()],
+                normalise: "none".into(),
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+        let enabled = state(false).with_uid_registry(true, Some(1024 * 1024));
+        let key = [43u8; 32];
+        let token = enabled.adopt_owner_key(key, "owner".into());
+        let conn = vault_core::open_db(&enabled.db_path, &key).unwrap();
+        vault_core::init_schema(&conn).unwrap();
+        vault_core::save_vault(
+            &conn,
+            serde_json::json!({"api_keys": [], "user_categories": [], "projects": []}),
+            vault_core::SaveCtx::default(),
+        )
+        .unwrap();
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            axum::http::header::AUTHORIZATION,
+            format!("Bearer {token}").parse().unwrap(),
+        );
+        let registered = uid_register_handler(
+            headers.clone(),
+            State(enabled.clone()),
+            Json(UidRegisterRequest {
+                values: vec!["id-1".into()],
+                normalise: "none".into(),
+                namespace: Some("test".into()),
+                generator: None,
+                note: None,
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(registered.status(), StatusCode::OK);
+
+        let checked = uid_check_handler(
+            headers,
+            State(enabled),
+            Json(UidCheckRequest {
+                values: vec!["id-1".into(), "id-2".into()],
+                normalise: "none".into(),
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(checked.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(checked.into_body(), 16 * 1024)
+            .await
+            .unwrap();
+        let result: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(result["results"][0]["unique"], false);
+        assert_eq!(result["results"][1]["unique"], true);
+    }
+
+    /// One request through the real router, with the socket address the
+    /// production `into_make_service_with_connect_info` would have added.
+    async fn call(
+        router: &Router,
+        method: &str,
+        uri: &str,
+        auth: Option<&HeaderMap>,
+        body: Option<serde_json::Value>,
+    ) -> axum::response::Response {
+        use tower::ServiceExt;
+        let mut req = axum::http::Request::builder().method(method).uri(uri);
+        if let Some(h) = auth {
+            req = req.header(
+                axum::http::header::AUTHORIZATION,
+                h[axum::http::header::AUTHORIZATION].clone(),
+            );
+        }
+        let mut req = req
+            .header("content-type", "application/json")
+            .body(axum::body::Body::from(
+                body.map(|b| b.to_string()).unwrap_or_default(),
+            ))
+            .unwrap();
+        req.extensions_mut().insert(ConnectInfo::<SocketAddr>(
+            "127.0.0.1:50000".parse().unwrap(),
+        ));
+        router.clone().oneshot(req).await.unwrap()
+    }
+
+    async fn json_of(resp: axum::response::Response) -> serde_json::Value {
+        let bytes = axum::body::to_bytes(resp.into_body(), 256 * 1024)
+            .await
+            .unwrap();
+        serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null)
+    }
+
+    /// `call` with extra request headers (the `If-Match` a client sends).
+    async fn call_with(
+        router: &Router,
+        method: &str,
+        uri: &str,
+        auth: &HeaderMap,
+        extra: &[(&str, &str)],
+        body: serde_json::Value,
+    ) -> axum::response::Response {
+        use tower::ServiceExt;
+        let mut req = axum::http::Request::builder()
+            .method(method)
+            .uri(uri)
+            .header(
+                axum::http::header::AUTHORIZATION,
+                auth[axum::http::header::AUTHORIZATION].clone(),
+            )
+            .header("content-type", "application/json");
+        for (k, v) in extra {
+            req = req.header(*k, *v);
+        }
+        let mut req = req.body(axum::body::Body::from(body.to_string())).unwrap();
+        req.extensions_mut().insert(ConnectInfo::<SocketAddr>(
+            "127.0.0.1:50000".parse().unwrap(),
+        ));
+        router.clone().oneshot(req).await.unwrap()
+    }
+
+    #[tokio::test]
+    async fn saves_merge_disjoint_edits_report_it_and_name_a_real_conflict() {
+        let (state, owner) = owner_with_vault();
+        let router = build_router(state.clone(), 8080);
+
+        let got = call(&router, "GET", "/api/vault", Some(&owner), None).await;
+        let v1 = got.headers()[axum::http::header::ETAG]
+            .to_str()
+            .unwrap()
+            .to_string();
+        let doc = json_of(got).await;
+
+        // Writer one edits the existing entry.
+        let mut one = doc.clone();
+        one["api_keys"][0]["provider"] = serde_json::json!("Renewal-one");
+        let r = call_with(
+            &router,
+            "PUT",
+            "/api/vault",
+            &owner,
+            &[("if-match", &v1)],
+            one,
+        )
+        .await;
+        assert_eq!(r.status(), StatusCode::NO_CONTENT);
+        let v2 = r.headers()[axum::http::header::ETAG]
+            .to_str()
+            .unwrap()
+            .to_string();
+        assert_ne!(v1, v2, "the save hands back the version to send next");
+        assert!(r.headers().get("x-vault-merged").is_none());
+
+        // Writer two still holds v1 and only adds an entry: merged, and told so.
+        let mut two = doc.clone();
+        two["api_keys"]
+            .as_array_mut()
+            .unwrap()
+            .push(serde_json::json!({
+                "id": "entry-2", "provider": "Added", "api_key": "k"
+            }));
+        let r = call_with(
+            &router,
+            "PUT",
+            "/api/vault",
+            &owner,
+            &[("if-match", &v1)],
+            two,
+        )
+        .await;
+        assert_eq!(r.status(), StatusCode::NO_CONTENT);
+        assert_eq!(r.headers()["x-vault-merged"], "1");
+        let after = json_of(call(&router, "GET", "/api/vault", Some(&owner), None).await).await;
+        let names: Vec<&str> = after["api_keys"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|e| e["provider"].as_str().unwrap())
+            .collect();
+        assert_eq!(names, vec!["Renewal-one", "Added"]);
+
+        // Writer three edits the entry writer one already changed: a real conflict.
+        let mut three = doc.clone();
+        three["api_keys"][0]["provider"] = serde_json::json!("Renewal-three");
+        let r = call_with(
+            &router,
+            "PUT",
+            "/api/vault",
+            &owner,
+            &[("if-match", &v1)],
+            three,
+        )
+        .await;
+        assert_eq!(r.status(), StatusCode::CONFLICT);
+        let msg = json_of(r).await.to_string();
+        assert!(
+            msg.contains("both changed") && msg.contains("Renewal-three"),
+            "{msg}"
+        );
+    }
+
+    #[tokio::test]
+    async fn the_selective_read_leaves_out_version_history() {
+        let (state, owner) = owner_with_vault();
+        let router = build_router(state.clone(), 8080);
+        let got = call(&router, "GET", "/api/vault", Some(&owner), None).await;
+        let v1 = got.headers()[axum::http::header::ETAG]
+            .to_str()
+            .unwrap()
+            .to_string();
+        let mut doc = json_of(got).await;
+        doc["api_keys"][0]["api_key"] = serde_json::json!("rotated");
+        let r = call_with(
+            &router,
+            "PUT",
+            "/api/vault",
+            &owner,
+            &[("if-match", &v1)],
+            doc,
+        )
+        .await;
+        assert_eq!(r.status(), StatusCode::NO_CONTENT);
+
+        let full = json_of(call(&router, "GET", "/api/vault", Some(&owner), None).await).await;
+        assert!(full["api_keys"][0]["version_history"].is_array());
+        let sel = json_of(
+            call(
+                &router,
+                "GET",
+                "/api/vault/entries?provider=Renewal",
+                Some(&owner),
+                None,
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(sel["count"], 1);
+        assert!(sel["entries"][0].get("version_history").is_none());
+    }
+
+    #[tokio::test]
+    async fn core_routes_over_http_keep_public_data_small_and_gate_vault_data() {
+        let (state, owner) = owner_with_vault();
+        let router = build_router(state.clone(), 8080);
+
+        let status = json_of(call(&router, "GET", "/api/status", None, None).await).await;
+        assert_eq!(status["unlocked"], true);
+        assert_eq!(status["vault_exists"], true);
+
+        let health = json_of(call(&router, "GET", "/api/health", None, None).await).await;
+        assert_eq!(health["status"], "ok");
+        assert!(health.get("secrets_stored").is_none());
+        let stats = json_of(call(&router, "GET", "/api/stats", None, None).await).await;
+        assert_eq!(stats["secrets_stored"], 1);
+        assert_eq!(stats["users_connected"], 0);
+        assert_eq!(
+            call(&router, "GET", "/api/openapi.json", None, None)
+                .await
+                .status(),
+            StatusCode::OK
+        );
+
+        for path in [
+            "/api/vault",
+            "/api/vault/entries",
+            "/api/vault/expiring",
+            "/api/audit",
+            "/api/ping",
+        ] {
+            assert_eq!(
+                call(&router, "GET", path, None, None).await.status(),
+                StatusCode::UNAUTHORIZED,
+                "{path}"
+            );
+        }
+        assert_eq!(
+            call(&router, "POST", "/api/vault", Some(&owner), None)
+                .await
+                .status(),
+            StatusCode::METHOD_NOT_ALLOWED
+        );
+
+        let vault = call(&router, "GET", "/api/vault", Some(&owner), None).await;
+        assert_eq!(vault.status(), StatusCode::OK);
+        assert!(vault.headers().contains_key(axum::http::header::ETAG));
+        let vault = json_of(vault).await;
+        assert_eq!(vault["api_keys"][0]["api_key"], "must-not-appear");
+
+        let entries = json_of(
+            call(
+                &router,
+                "GET",
+                "/api/vault/entries?provider=Renewal",
+                Some(&owner),
+                None,
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(entries["count"], 1);
+        assert_eq!(entries["entries"][0]["provider"], "Renewal");
+        assert_eq!(
+            json_of(
+                call(
+                    &router,
+                    "GET",
+                    "/api/vault/entries?provider=missing",
+                    Some(&owner),
+                    None
+                )
+                .await
+            )
+            .await["count"],
+            0
+        );
+        assert_eq!(
+            call(
+                &router,
+                "GET",
+                "/api/vault/expiring?days=30",
+                Some(&owner),
+                None
+            )
+            .await
+            .status(),
+            StatusCode::OK
+        );
+        assert_eq!(
+            call(&router, "GET", "/api/audit", Some(&owner), None)
+                .await
+                .status(),
+            StatusCode::OK
+        );
+        assert_eq!(
+            json_of(call(&router, "GET", "/api/ping", Some(&owner), None).await).await["ok"],
+            true
+        );
+
+        // An owner lock is global: a previously valid owner token cannot read afterwards.
+        assert_eq!(
+            call(&router, "DELETE", "/api/unlock", Some(&owner), None)
+                .await
+                .status(),
+            StatusCode::NO_CONTENT
+        );
+        assert_eq!(
+            call(&router, "GET", "/api/vault", Some(&owner), None)
+                .await
+                .status(),
+            StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(
+            json_of(call(&router, "GET", "/api/status", None, None).await).await["unlocked"],
+            false
+        );
+    }
+
+    #[tokio::test]
+    async fn user_and_class_routes_over_http_preserve_rbac_boundaries() {
+        let (state, owner) = owner_with_vault();
+        let router = build_router(state, 8080);
+
+        assert_eq!(
+            call(&router, "GET", "/api/users", None, None)
+                .await
+                .status(),
+            StatusCode::UNAUTHORIZED
+        );
+        let created = call(
+            &router,
+            "POST",
+            "/api/users",
+            Some(&owner),
+            Some(serde_json::json!({"username":"reader","password":"before"})),
+        )
+        .await;
+        assert_eq!(created.status(), StatusCode::CREATED);
+        let user_id = json_of(created).await["id"].as_str().unwrap().to_string();
+        assert_eq!(
+            call(&router, "GET", "/api/users", Some(&owner), None)
+                .await
+                .status(),
+            StatusCode::OK
+        );
+
+        let auth = call(
+            &router,
+            "POST",
+            "/api/auth",
+            None,
+            Some(serde_json::json!({"username":"reader","password":"before"})),
+        )
+        .await;
+        assert_eq!(auth.status(), StatusCode::OK);
+        let mut reader = HeaderMap::new();
+        reader.insert(
+            axum::http::header::AUTHORIZATION,
+            format!("Bearer {}", json_of(auth).await["token"].as_str().unwrap())
+                .parse()
+                .unwrap(),
+        );
+        for path in ["/api/users", "/api/classes", "/api/audit"] {
+            assert_eq!(
+                call(&router, "GET", path, Some(&reader), None)
+                    .await
+                    .status(),
+                StatusCode::FORBIDDEN,
+                "{path}"
+            );
+        }
+        assert_eq!(
+            json_of(call(&router, "GET", "/api/vault", Some(&reader), None).await).await
+                ["api_keys"]
+                .as_array()
+                .unwrap()
+                .len(),
+            0
+        );
+
+        let class = call(
+            &router,
+            "POST",
+            "/api/classes",
+            Some(&owner),
+            Some(serde_json::json!({"name":"Infra readers","description":"only infra"})),
+        )
+        .await;
+        assert_eq!(class.status(), StatusCode::CREATED);
+        let class_id = json_of(class).await["id"].as_str().unwrap().to_string();
+        let class_perms = serde_json::json!({"read":"type:api_key","write":""});
+        assert_eq!(
+            call(
+                &router,
+                "PUT",
+                &format!("/api/classes/{class_id}/permissions"),
+                Some(&owner),
+                Some(class_perms.clone())
+            )
+            .await
+            .status(),
+            StatusCode::NO_CONTENT
+        );
+        assert_eq!(
+            json_of(
+                call(
+                    &router,
+                    "GET",
+                    &format!("/api/classes/{class_id}/permissions"),
+                    Some(&owner),
+                    None
+                )
+                .await
+            )
+            .await,
+            class_perms
+        );
+        assert_eq!(
+            call(
+                &router,
+                "PUT",
+                &format!("/api/users/{user_id}/class"),
+                Some(&owner),
+                Some(serde_json::json!({"class_id":class_id}))
+            )
+            .await
+            .status(),
+            StatusCode::NO_CONTENT
+        );
+        let user_perms = serde_json::json!({"read":"project:*","write":""});
+        assert_eq!(
+            call(
+                &router,
+                "PUT",
+                &format!("/api/users/{user_id}/permissions"),
+                Some(&owner),
+                Some(user_perms.clone())
+            )
+            .await
+            .status(),
+            StatusCode::NO_CONTENT
+        );
+        assert_eq!(
+            json_of(
+                call(
+                    &router,
+                    "GET",
+                    &format!("/api/users/{user_id}/permissions"),
+                    Some(&owner),
+                    None
+                )
+                .await
+            )
+            .await,
+            user_perms
+        );
+        assert_eq!(
+            json_of(call(&router, "GET", "/api/vault", Some(&reader), None).await).await
+                ["api_keys"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+
+        let token = call(
+            &router,
+            "POST",
+            &format!("/api/users/{user_id}/tokens"),
+            Some(&owner),
+            Some(serde_json::json!({"description":"ci"})),
+        )
+        .await;
+        assert_eq!(token.status(), StatusCode::CREATED);
+        let token_id = json_of(token).await["token_id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        assert_eq!(
+            json_of(
+                call(
+                    &router,
+                    "GET",
+                    &format!("/api/users/{user_id}/tokens"),
+                    Some(&owner),
+                    None
+                )
+                .await
+            )
+            .await
+            .as_array()
+            .unwrap()
+            .len(),
+            1
+        );
+        assert_eq!(
+            call(
+                &router,
+                "DELETE",
+                &format!("/api/users/{user_id}/tokens/{token_id}"),
+                Some(&owner),
+                None
+            )
+            .await
+            .status(),
+            StatusCode::NO_CONTENT
+        );
+        // Strict write scoping (Phase 33.4): owner only, in both directions, and an
+        // unknown subject is a 404 rather than a silent success.
+        for (path, who, want) in [
+            (
+                format!("/api/users/{user_id}/strict-write"),
+                &owner,
+                StatusCode::NO_CONTENT,
+            ),
+            (
+                format!("/api/classes/{class_id}/strict-write"),
+                &owner,
+                StatusCode::NO_CONTENT,
+            ),
+            (
+                format!("/api/users/{user_id}/strict-write"),
+                &reader,
+                StatusCode::FORBIDDEN,
+            ),
+            (
+                "/api/users/nobody/strict-write".to_string(),
+                &owner,
+                StatusCode::NOT_FOUND,
+            ),
+        ] {
+            assert_eq!(
+                call(
+                    &router,
+                    "PUT",
+                    &path,
+                    Some(who),
+                    Some(serde_json::json!({"strict": true}))
+                )
+                .await
+                .status(),
+                want,
+                "{path}"
+            );
+        }
+        assert_eq!(
+            call(
+                &router,
+                "PUT",
+                &format!("/api/users/{user_id}/rename"),
+                Some(&owner),
+                Some(serde_json::json!({"username":"reader-2"}))
+            )
+            .await
+            .status(),
+            StatusCode::NO_CONTENT
+        );
+        assert_eq!(
+            call(
+                &router,
+                "PUT",
+                &format!("/api/users/{user_id}/password"),
+                Some(&owner),
+                Some(serde_json::json!({"password":"after"}))
+            )
+            .await
+            .status(),
+            StatusCode::NO_CONTENT
+        );
+        assert_eq!(
+            call(
+                &router,
+                "PUT",
+                &format!("/api/classes/{class_id}"),
+                Some(&owner),
+                Some(serde_json::json!({"name":"Infra readers","description":"updated"}))
+            )
+            .await
+            .status(),
+            StatusCode::NO_CONTENT
+        );
+        assert_eq!(
+            call(
+                &router,
+                "DELETE",
+                &format!("/api/users/{user_id}"),
+                Some(&owner),
+                None
+            )
+            .await
+            .status(),
+            StatusCode::NO_CONTENT
+        );
+        assert_eq!(
+            call(
+                &router,
+                "DELETE",
+                &format!("/api/classes/{class_id}"),
+                Some(&owner),
+                None
+            )
+            .await
+            .status(),
+            StatusCode::NO_CONTENT
+        );
+    }
+
+    #[tokio::test]
+    async fn ics_routes_over_http_auth_lock_and_revocation() {
+        let (s, headers) = owner_with_vault();
+        let router = build_router(s.clone(), 8080);
+
+        // Minting a feed needs a session: no header, no feed.
+        let anon = call(
+            &router,
+            "POST",
+            "/api/calendar/feeds",
+            None,
+            Some(serde_json::json!({"name":"n","kinds":["expires"],"include_account_names":false})),
+        )
+        .await;
+        assert!(
+            matches!(
+                anon.status(),
+                StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN
+            ),
+            "got {}",
+            anon.status()
+        );
+
+        let created = call(
+            &router,
+            "POST",
+            "/api/calendar/feeds",
+            Some(&headers),
+            Some(serde_json::json!({"name":"Renewals","kinds":["expires"],"include_account_names":false})),
+        )
+        .await;
+        assert_eq!(created.status(), StatusCode::OK);
+        let created = json_of(created).await;
+        let path = created["path"].as_str().unwrap().to_string();
+        let id = created["id"].as_str().unwrap().to_string();
+        assert!(path.starts_with("/ics/") && path.ends_with(".ics"));
+
+        // The feed needs no Authorization header: the token *is* the credential.
+        let ok = call(&router, "GET", &path, None, None).await;
+        assert_eq!(ok.status(), StatusCode::OK);
+        assert_eq!(
+            ok.headers()[axum::http::header::CONTENT_TYPE],
+            "text/calendar; charset=utf-8"
+        );
+
+        // A token without the .ics suffix and an unknown token are both 404.
+        let bare = path.trim_end_matches(".ics");
+        assert_eq!(
+            call(&router, "GET", bare, None, None).await.status(),
+            StatusCode::NOT_FOUND
+        );
+        assert_eq!(
+            call(&router, "GET", "/ics/nope.ics", None, None)
+                .await
+                .status(),
+            StatusCode::NOT_FOUND
+        );
+
+        // Revocation over HTTP takes effect on the next fetch.
+        let del = call(
+            &router,
+            "DELETE",
+            &format!("/api/calendar/feeds/{id}"),
+            Some(&headers),
+            None,
+        )
+        .await;
+        assert_eq!(del.status(), StatusCode::NO_CONTENT);
+        assert_eq!(
+            call(&router, "GET", &path, None, None).await.status(),
+            StatusCode::NOT_FOUND
+        );
+
+        // A locked server answers 503 + Retry-After, never an empty calendar.
+        let locked = build_router(state(false), 8080);
+        let resp = call(&locked, "GET", "/ics/anything.ics", None, None).await;
+        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert!(resp.headers().contains_key(axum::http::header::RETRY_AFTER));
+    }
+
+    #[tokio::test]
+    async fn uid_routes_over_http_gate_auth_and_rate_limit() {
+        // Disabled: every route is a 404 naming the flag, even for the owner.
+        let (off, headers) = owner_with_vault();
+        let router = build_router(off, 8080);
+        let resp = call(
+            &router,
+            "POST",
+            "/api/uid/check",
+            Some(&headers),
+            Some(serde_json::json!({"values":["a"]})),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+
+        // Enabled.
+        let on = state(false).with_uid_registry(true, Some(1024 * 1024));
+        let key = [44u8; 32];
+        let token = on.adopt_owner_key(key, "owner".into());
+        let conn = vault_core::open_db(&on.db_path, &key).unwrap();
+        vault_core::init_schema(&conn).unwrap();
+        vault_core::save_vault(
+            &conn,
+            serde_json::json!({"api_keys": [], "user_categories": [], "projects": []}),
+            vault_core::SaveCtx::default(),
+        )
+        .unwrap();
+        let mut h = HeaderMap::new();
+        h.insert(
+            axum::http::header::AUTHORIZATION,
+            format!("Bearer {token}").parse().unwrap(),
+        );
+        let router = build_router(on, 8080);
+
+        // No session: refused before any registry work.
+        let anon = call(
+            &router,
+            "POST",
+            "/api/uid/register",
+            None,
+            Some(serde_json::json!({"values":["x"]})),
+        )
+        .await;
+        assert!(matches!(
+            anon.status(),
+            StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN
+        ));
+
+        // register -> a second register of the same value conflicts -> check says taken.
+        let body = serde_json::json!({"values":["id-http-1"],"namespace":"t"});
+        let first = call(
+            &router,
+            "POST",
+            "/api/uid/register",
+            Some(&h),
+            Some(body.clone()),
+        )
+        .await;
+        assert_eq!(first.status(), StatusCode::OK);
+        let again =
+            json_of(call(&router, "POST", "/api/uid/register", Some(&h), Some(body)).await).await;
+        assert_eq!(
+            again["results"][0]["registered"], false,
+            "a duplicate must be reported, not silently accepted: {again}"
+        );
+        let chk = json_of(
+            call(
+                &router,
+                "POST",
+                "/api/uid/check",
+                Some(&h),
+                Some(serde_json::json!({"values":["id-http-1","fresh"]})),
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(chk["results"][0]["unique"], false);
+        assert_eq!(chk["results"][1]["unique"], true);
+
+        // Lookup is the tightest bucket (burst 100, 10/s): the 101st call in a
+        // burst is a 429 carrying a Retry-After the client can obey.
+        let mut last = StatusCode::OK;
+        let mut retry = None;
+        for _ in 0..140 {
+            let r = call(
+                &router,
+                "POST",
+                "/api/uid/lookup",
+                Some(&h),
+                Some(serde_json::json!({"value": "id-http-1"})),
+            )
+            .await;
+            last = r.status();
+            if last == StatusCode::TOO_MANY_REQUESTS {
+                retry = r.headers().get(axum::http::header::RETRY_AFTER).cloned();
+                break;
+            }
+        }
+        assert_eq!(
+            last,
+            StatusCode::TOO_MANY_REQUESTS,
+            "lookup burst must be bounded"
+        );
+        assert!(retry.is_some(), "429 must carry Retry-After");
+
+        let burst: Vec<String> = (0..101).map(|i| format!("b{i}")).collect();
+        let resp = call(
+            &router,
+            "POST",
+            "/api/uid/check",
+            Some(&h),
+            Some(serde_json::json!({"values": burst})),
+        )
+        .await;
+        assert_eq!(
+            resp.status(),
+            StatusCode::BAD_REQUEST,
+            "more than 100 values in one check is refused outright"
+        );
+    }
+
+    #[test]
+    fn uid_buckets_allow_the_burst_then_refill_and_do_not_spend_on_refusal() {
+        let mut s = state(false);
+        let mut rates = UidRates::default();
+        // actor: 10/s, burst 20; server: 1000/s, burst 25
+        rates.set("lookup=10:20:1000:25").unwrap();
+        s = s.with_uid_rates(rates);
+        // A burst of 20 is allowed once, in one go: counted per value.
+        assert_eq!(uid_rate_check(&s, "lookup", "a", 20), None);
+        // The actor is now empty; one more value waits about a tenth of a
+        // second, reported as at least 1s (Retry-After is whole seconds).
+        assert_eq!(uid_rate_check(&s, "lookup", "a", 1), Some(1));
+        // Another actor has its own bucket...
+        assert_eq!(uid_rate_check(&s, "lookup", "b", 5), None);
+        // ...but the shared server bucket (25) is the ceiling: 20 + 5 spent.
+        // A refused request must not have spent the actor's tokens: "c" can
+        // still take its full burst of 20 minus what the server has left (0).
+        let before = s.uid_buckets.lock().unwrap().get("lookup:actor:c").copied();
+        assert_eq!(uid_rate_check(&s, "lookup", "c", 3), Some(1));
+        let after = s.uid_buckets.lock().unwrap().get("lookup:actor:c").copied();
+        assert_eq!(
+            before.is_none(),
+            after.is_none(),
+            "a refusal must not spend"
+        );
+    }
+
+    #[test]
+    fn uid_rate_overrides_are_validated() {
+        let mut r = UidRates::default();
+        assert!(r.set("mint=1:2:3:4").is_ok());
+        assert!(r.set("bogus=1:2:3:4").is_err());
+        assert!(r.set("mint=1:2:3").is_err());
+        assert!(r.set("mint=0:2:3:4").is_err());
+        assert!(r.set("mint=a:2:3:4").is_err());
     }
 
     #[test]
