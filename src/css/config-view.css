@@ -24,6 +24,124 @@
   white-space: nowrap;
 }
 
+/* ── GENERATOR POPOVER (A8, 2026-09-15) ──────────────────────────── */
+.key-gen-wrap {
+  position: relative;
+  display: flex;
+  gap: 4px;
+  flex-shrink: 0;
+}
+.key-gen-caret-btn {
+  padding: 4px 6px;
+}
+.gen-popover {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  margin-top: 4px;
+  width: 280px;
+  max-width: min(280px, 80vw);
+  background: var(--surface2);
+  border: 1px solid var(--border2);
+  border-radius: 9px;
+  padding: 10px;
+  z-index: 300;
+  box-shadow: 0 8px 32px var(--shadow);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+/* A class setting `display` outranks the `hidden` attribute's user-agent rule
+   (invariant caught before, see Pitfalls Reference) — must be written here too. */
+.gen-popover[hidden] {
+  display: none;
+}
+.gen-popover-tabs {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+.gen-tab-btn {
+  font-size: 11px;
+  padding: 3px 8px;
+  border-radius: 6px;
+  background: transparent;
+  border: 1px solid var(--border2);
+  color: var(--text2);
+  cursor: pointer;
+}
+.gen-tab-btn.active {
+  background: var(--accent);
+  color: #fff;
+  border-color: transparent;
+}
+.gen-tab-pane {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.gen-tab-pane[hidden] {
+  display: none;
+}
+.gen-byte-row {
+  display: flex;
+  gap: 4px;
+}
+.gen-byte-btn {
+  flex: 1;
+  font-size: 11px;
+  padding: 3px 0;
+  border-radius: 6px;
+  border: 1px solid var(--border2);
+  background: transparent;
+  color: var(--text2);
+  cursor: pointer;
+}
+.gen-byte-btn.active {
+  background: var(--accent);
+  color: #fff;
+  border-color: transparent;
+}
+.gen-checks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  font-size: 11px;
+  color: var(--text2);
+}
+.gen-checks label {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.gen-inline-label {
+  font-size: 11px;
+  color: var(--text2);
+}
+.gen-inline-row {
+  display: flex;
+  gap: 6px;
+}
+.gen-inline-row > * {
+  flex: 1;
+}
+.gen-popover-output {
+  display: block;
+  font-size: 11px;
+  word-break: break-all;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 8px;
+  min-height: 1.4em;
+  color: var(--text);
+}
+.gen-popover-actions {
+  display: flex;
+  gap: 6px;
+  justify-content: flex-end;
+}
+
 /* ── CONFIG VIEW (Tasks 6, 7) ────────────────────────────────────── */
 .config-view {
   padding: 16px;
@@ -1007,4 +1125,69 @@ pre.chunk-field-val.code-block {
   flex-direction: column;
   flex: 1;
   overflow: auto;
+}
+
+/* ── CONFIG CHECKS (Phase 29) ───────────────────────────────────────────────── */
+.config-check {
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+}
+.config-check[hidden] {
+  display: none;
+}
+.config-check-head {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text2);
+  margin-bottom: 6px;
+}
+.config-check-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.config-check-item {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 11px;
+  min-width: 0;
+}
+.config-check-sev {
+  flex: none;
+  text-transform: uppercase;
+}
+.config-check-error .config-check-sev {
+  color: var(--price-paid);
+}
+.config-check-chunk {
+  flex: none;
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  background: none;
+  border: 0;
+  padding: 0;
+  color: var(--accent);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+  text-decoration: underline;
+}
+.config-check-msg {
+  color: var(--text2);
+  min-width: 0;
+}
+/* A colour change, not a transform: see .auth-card.flash. */
+.chunk-card.flash,
+.docker-service-card.flash {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 35%, transparent);
 }
