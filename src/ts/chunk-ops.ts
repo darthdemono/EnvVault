@@ -1,39 +1,14 @@
-/**
- * @file
- * Chunk operations — chunk card rendering, config exporters, cert linking.
- *
- * This module was ~2350 lines covering six unrelated concerns. The
- * self-contained pieces now live under `./chunks/` and are re-exported below,
- * so every existing `from './chunk-ops'` import keeps working unchanged:
- *
- * - `chunks/starters`   — starter chunk templates for new typed projects
- * - `chunks/parsers`    — wg0.conf / compose / nginx / apache / haproxy / ssh parsers
- * - `chunks/edit-modal` — the chunk field editor
- * - `chunks/env-link`   — env-file field ↔ vault entry matching
- *
- * What remains here is the part that is genuinely interdependent: card
- * rendering, the exporters and the nginx certificate auto-linking.
- */
-
 import type {
   Project,
   SecretChunk,
   ChunkField,
   ChunkFieldType,
-  ChunkType,
   ProjectType,
   VaultEntry,
 } from './types';
-import {
-  st,
-  Settings,
-  triggerRender,
-  persist,
-  quoteEnvValue,
-  envName,
-  primaryEnvName,
-} from './state';
-import { esc, escAttr, copySVG, editSVG, delSVG, showToast } from './utils';
+import { st, Settings, quoteEnvValue, envName, primaryEnvName } from './state';
+import { copySVG, editSVG, delSVG } from './utils';
+import { html, setHtml, type SafeHtml, type HtmlValue } from './html';
 
 // ── Re-exports (barrel) ────────────────────────────────────────────────────
 export * from './chunks/starters';
@@ -293,7 +268,7 @@ function roleKey(raw: string): string {
   return raw.replace(/[^A-Za-z0-9]/g, '_').toUpperCase();
 }
 
-function getEntryFieldValue(entry: VaultEntry, field: string): string | null | undefined {
+export function getEntryFieldValue(entry: VaultEntry, field: string): string | null | undefined {
   const canonical = FIELD_ALIASES[field.toUpperCase()] ?? field;
   if (REFERENCE_DENY.has(field) || REFERENCE_DENY.has(canonical)) return undefined;
 
@@ -328,6 +303,24 @@ function getEntryFieldValue(entry: VaultEntry, field: string): string | null | u
   )[canonical];
   if (builtin != null && builtin !== '') return builtin;
   return entry.extra_vars?.find((v) => v.key === field || v.key === canonical)?.value;
+}
+
+/** Whether the reference target is explicitly public; unknown values fail closed. */
+export function isEntryFieldPublic(entry: VaultEntry, field: string): boolean {
+  const canonical = FIELD_ALIASES[field.toUpperCase()] ?? field;
+  const want = roleKey(field);
+  if (want && want !== 'VALUE') {
+    if (entry.primary_role && roleKey(String(entry.primary_role)) === want)
+      return entry.primary_public === true;
+    if (entry.secret_role && roleKey(String(entry.secret_role)) === want)
+      return entry.secret_public === true;
+  }
+  if (canonical === 'api_key') return entry.primary_public === true;
+  if (canonical === 'api_secret') return entry.secret_public === true;
+  if (canonical === 'key_id') return true;
+  const variable = entry.extra_vars?.find((v) => v.key === field || v.key === canonical);
+  if (variable) return variable.public === true || variable.secret === false;
+  return ['username', 'api_url', 'email', 'mount_path', 'expires_at'].includes(canonical);
 }
 
 /**
@@ -378,6 +371,45 @@ export function findEntryByRef(name: string): VaultEntry | undefined {
   return legacy;
 }
 
+/**
+ * `${bundle:Name}`, `${bundle:Name/slot}`, `${bundle:Name/slot/field}` and
+ * `${bundle:Name/local}`. Twin of `resolve_bundle_ref` in `envv-cli/src/refs.rs`.
+ * An ambiguous bundle name or an unknown slot is unresolved, never a guess.
+ */
+function resolveBundleRef(body: string, useEnvCopyField: boolean): string | null {
+  const [name, second, ...rest] = body.split('/');
+  const third = rest.length ? rest.join('/') : undefined;
+  const bundles = st.vault.api_keys.filter(
+    (e) => e.secretType === 'bundle' && e.provider.toLowerCase() === name.toLowerCase(),
+  );
+  if (bundles.length !== 1) return null;
+  const bundle = bundles[0];
+  const id = bundle.id;
+  if (!id) return null;
+  const member = (slot: string) =>
+    st.vault.api_keys.find((e) => e.bundle_id === id && e.bundle_slot === slot);
+  const primary = (e: VaultEntry): string | null => {
+    const chosen = useEnvCopyField
+      ? e[(Settings.get('envCopyField') || 'api_key') as keyof VaultEntry]
+      : '';
+    return (typeof chosen === 'string' && chosen) || e.api_key || null;
+  };
+  const field = (e: VaultEntry, f: string): string | null => {
+    const v = getEntryFieldValue(e, f);
+    return v != null && v !== '' ? String(v) : null;
+  };
+  if (second === undefined) {
+    const pe = st.vault.api_keys.find((e) => e.id === bundle.bundle_primary);
+    return pe ? primary(pe) : null;
+  }
+  if (third !== undefined) {
+    const m = member(second);
+    return m ? field(m, third) : null;
+  }
+  const m = member(second);
+  return m ? primary(m) : field(bundle, second);
+}
+
 export function resolveFieldRef(
   value: string,
   useEnvCopyField = false,
@@ -391,6 +423,16 @@ export function resolveFieldRef(
   const match = /^\$\{(.+)}$/.exec(value);
   if (!match) return { resolved: value, refName: null, unresolved: false, source: null };
   const refName = match[1];
+
+  if (refName.startsWith('bundle:')) {
+    const resolved = resolveBundleRef(refName.slice(7), useEnvCopyField);
+    return {
+      resolved,
+      refName,
+      unresolved: resolved == null,
+      source: resolved == null ? null : 'vault',
+    };
+  }
 
   // Cross-chunk notation: ${chunk:ChunkName/FieldKey} — resolve any chunk field across all projects.
   // Recursively resolves if the target is itself a ${ref} (depth-guarded against cycles).
@@ -440,7 +482,10 @@ export function resolveFieldRef(
     if (useEnvCopyField) {
       const fieldName = (Settings.get('envCopyField') || 'api_key') as keyof VaultEntry;
       const rawVal = entry[fieldName];
-      resolved = rawVal != null && rawVal !== '' ? String(rawVal) : entry.api_key || null;
+      resolved =
+        typeof rawVal === 'string' || typeof rawVal === 'number'
+          ? String(rawVal) || entry.api_key || null
+          : entry.api_key || null;
     } else {
       resolved = entry.api_key || null;
     }
@@ -492,7 +537,7 @@ export function renameProviderRefs(
         const match = typeof field.value === 'string' && /^\$\{(.+)}$/.exec(field.value);
         if (!match) continue;
         const body = match[1];
-        if (body.startsWith('chunk:')) continue;
+        if (body.startsWith('chunk:') || body.startsWith('bundle:')) continue;
 
         const slash = body.indexOf('/');
         const head = slash >= 0 ? body.slice(0, slash) : body;
@@ -557,7 +602,7 @@ function findLinkedCert(value: string): VaultEntry | null {
 }
 
 /** Render a certificate info panel for a linked vault cert entry. */
-function renderCertPanel(entry: VaultEntry, isCertKey: boolean): string {
+function renderCertPanel(entry: VaultEntry, isCertKey: boolean): SafeHtml {
   const cn = entry.api_description || entry.provider;
   const expiry = entry.expires_at ? new Date(entry.expires_at) : null;
   const now = new Date();
@@ -570,18 +615,18 @@ function renderCertPanel(entry: VaultEntry, isCertKey: boolean): string {
     : entry.certificate_data || entry.api_key || '';
   const pemPreview = pemContent ? pemContent.split('\n').slice(0, 3).join('\n') + '\n…' : '—';
 
-  return `
+  return html`
     <div class="cert-panel">
       <div class="cert-panel-row">
         <div class="cert-panel-meta">
-          <span class="cert-panel-cn">${esc(cn)}</span>
-          <span class="cert-panel-expiry" style="color:${expiryColor}">${expired ? '⚠ EXPIRED ' : soon ? '⚠ expires ' : 'exp '}${esc(expiryText)}</span>
+          <span class="cert-panel-cn">${cn}</span>
+          <span class="cert-panel-expiry" style="color:${expiryColor}"
+            >${expired ? '⚠ EXPIRED ' : soon ? '⚠ expires ' : 'exp '}${expiryText}</span
+          >
         </div>
-        <div class="cert-panel-actions">
-          ${pemContent ? `<button class="btn btn-ghost btn-xs" data-action="chunk-copy" data-value="${escAttr(pemContent)}" title="Copy PEM">Copy PEM</button>` : ''}
-        </div>
+        <div class="cert-panel-actions">${pemContent ? html`<button class="btn btn-ghost btn-xs" data-action="chunk-copy" data-value="${pemContent}" title="Copy PEM">Copy PEM</button>` : ''}</div>
       </div>
-      <pre class="cert-panel-pem">${esc(pemPreview)}</pre>
+      <pre class="cert-panel-pem">${pemPreview}</pre>
     </div>
   `;
 }
@@ -673,13 +718,15 @@ export function redundantCertKeyChunkIds(project: Project): string[] {
 }
 
 /** Big canonical card for a domain's certificate in the nginx view: full fullchain + privkey, or a create prompt. */
-export function renderNginxCertCard(domain: string): string {
+export function renderNginxCertCard(domain: string): SafeHtml {
   const entry = certEntryForDomain(domain);
   if (!entry) {
-    return `<div class="cert-link-card cert-link-card--missing">
-      <div class="cert-link-head"><span class="cert-link-domain">${esc(domain)}</span></div>
+    return html`<div class="cert-link-card cert-link-card--missing">
+      <div class="cert-link-head"><span class="cert-link-domain">${domain}</span></div>
       <div class="cert-link-empty">No certificate entry yet.</div>
-      <button class="btn btn-ghost btn-sm" data-action="create-cert-stub" data-domain="${escAttr(domain)}">+ Create cert entry</button>
+      <button class="btn btn-ghost btn-sm" data-action="create-cert-stub" data-domain="${domain}">
+        + Create cert entry
+      </button>
     </div>`;
   }
   const fc = entry.certificate_data || entry.api_key || '';
@@ -701,33 +748,32 @@ export function renderNginxCertCard(domain: string): string {
     const certCount = blocks.filter((b) => b.includes('-----BEGIN CERTIFICATE-----')).length;
     const sub = label === 'Fullchain' && certCount > 1 ? ` · ${certCount} certs` : '';
     const body = blocks.length
-      ? blocks.map((b) => `<pre class="cert-link-pem-full">${esc(b)}</pre>`).join('')
-      : `<pre class="cert-link-pem-full cert-link-pem-empty">— empty —</pre>`;
-    return `<div class="cert-link-section">
+      ? blocks.map((b) => html`<pre class="cert-link-pem-full">${b}</pre>`)
+      : html`<pre class="cert-link-pem-full cert-link-pem-empty">— empty —</pre>`;
+    return html`<div class="cert-link-section">
       <div class="cert-link-section-head">
-        <span class="cert-link-section-label">${label}${sub}</span>
-        ${pem ? `<button class="btn btn-ghost btn-xs" data-action="chunk-copy" data-value="${escAttr(pem)}" title="Copy PEM">Copy</button>` : ''}
-      </div>
-      ${body}
-    </div>`;
+        <span class="cert-link-section-label">${label}${sub}</span>${pem ? html`<button class="btn btn-ghost btn-xs" data-action="chunk-copy" data-value="${pem}" title="Copy PEM">Copy</button>` : ''}</div>${body}</div>`;
   };
 
-  return `<div class="cert-link-card cert-link-card--full">
+  return html`<div class="cert-link-card cert-link-card--full">
     <div class="cert-link-head">
-      <span class="cert-link-domain">${esc(entry.provider)}</span>
-      ${entry.cert_issuer ? `<span class="cert-link-issuer" title="Issuer">${esc(entry.cert_issuer)}</span>` : ''}
-      <span class="cert-link-expiry" style="color:${expColor}">${esc(expText)}</span>
-      <button class="btn btn-ghost btn-xs" data-action="edit-cert-entry" data-provider="${escAttr(entry.provider)}" title="Edit certificate entry">Edit</button>
-    </div>
-    ${section('Fullchain', fc)}
-    ${section('Privkey', pk)}
-  </div>`;
+      <span class="cert-link-domain">${entry.provider}</span>${entry.cert_issuer ? html`<span class="cert-link-issuer" title="Issuer">${entry.cert_issuer}</span>` : ''}
+      <span class="cert-link-expiry" style="color:${expColor}">${expText}</span>
+      <button
+        class="btn btn-ghost btn-xs"
+        data-action="edit-cert-entry"
+        data-provider="${entry.provider}"
+        title="Edit certificate entry"
+      >
+        Edit
+      </button>
+    </div>${section('Fullchain', fc)} ${section('Privkey', pk)}</div>`;
 }
 
 // ── Nginx display helpers ──────────────────────────────────────────────────
 
 /** Render an nginx listen directive as a badge row. */
-function renderListenBadge(value: string): string {
+function renderListenBadge(value: string): SafeHtml {
   const raw = value.trim();
   const parts = raw.split(/\s+/);
   const addr = parts[0];
@@ -740,36 +786,32 @@ function renderListenBadge(value: string): string {
   const portMatch = /:(\d+)$/.exec(addr) || /^(\d+)$/.exec(addr);
   const port = portMatch ? portMatch[1] : addr;
 
-  return `<span class="listen-badge">
-    ${isIpv6 ? `<span class="listen-tag listen-ipv6">ipv6</span>` : ''}
-    <span class="listen-port">${esc(port)}</span>
-    ${hasSSL ? `<span class="listen-tag listen-ssl">SSL</span>` : ''}
-    ${hasH2 ? `<span class="listen-tag listen-proto">h2</span>` : ''}
-    ${hasH3 ? `<span class="listen-tag listen-proto">h3</span>` : ''}
-  </span>`;
+  return html`<span class="listen-badge">${isIpv6 ? html`<span class="listen-tag listen-ipv6">ipv6</span>` : ''}
+    <span class="listen-port">${port}</span>${hasSSL ? html`<span class="listen-tag listen-ssl">SSL</span>` : ''}
+    ${hasH2 ? html`<span class="listen-tag listen-proto">h2</span>` : ''}
+    ${hasH3 ? html`<span class="listen-tag listen-proto">h3</span>` : ''}</span>`;
 }
 
 /** Render server_name value as individual hostname badges. */
-function renderServerNameBadges(value: string): string {
-  return value
+function renderServerNameBadges(value: string): SafeHtml {
+  return html`${value
     .trim()
     .split(/\s+/)
     .filter(Boolean)
-    .map((n) => `<span class="hostname-badge">${esc(n)}</span>`)
-    .join('');
+    .map((n) => html`<span class="hostname-badge">${n}</span>`)}`;
 }
 
 /** Render an nginx return directive as a redirect badge. */
-function renderReturnBadge(value: string): string {
+function renderReturnBadge(value: string): SafeHtml {
   const m = /^(\d{3})\s+(.+)$/.exec(value);
-  if (!m) return esc(value);
+  if (!m) return html`${value}`;
   const code = m[1];
   const dest = m[2];
   const color = code === '301' ? '#4fc97e' : code === '302' ? '#f0ad4e' : 'var(--text2)';
-  return `<span class="redirect-badge">
-    <span class="redirect-status" style="color:${color}">${esc(code)}</span>
+  return html`<span class="redirect-badge">
+    <span class="redirect-status" style="color:${color}">${code}</span>
     <span class="redirect-arrow">→</span>
-    <span class="redirect-dest">${esc(dest)}</span>
+    <span class="redirect-dest">${dest}</span>
   </span>`;
 }
 
@@ -781,11 +823,14 @@ function normalizePem(raw: string): string {
   if (/-----BEGIN [^-]+-----\n/.test(raw)) return raw.trim();
   // Re-wrap: split on -----BEGIN, reconstruct each block with 64-char lines
   return raw
-    .replace(/-----BEGIN ([^-]+)-----([\s\S]*?)-----END \1-----/g, (_m, type, body) => {
-      const b64 = body.replace(/\s+/g, '');
-      const lines = b64.match(/.{1,64}/g) ?? [];
-      return `-----BEGIN ${type}-----\n${lines.join('\n')}\n-----END ${type}-----`;
-    })
+    .replace(
+      /-----BEGIN ([^-]+)-----([\s\S]*?)-----END \1-----/g,
+      (_m, type: string, body: string) => {
+        const b64 = body.replace(/\s+/g, '');
+        const lines = b64.match(/.{1,64}/g) ?? [];
+        return `-----BEGIN ${type}-----\n${lines.join('\n')}\n-----END ${type}-----`;
+      },
+    )
     .trim();
 }
 
@@ -800,15 +845,9 @@ export function renderChunkCard(chunk: SecretChunk, project: Project): HTMLEleme
   const isDockerSvc = chunk.chunk_type === 'docker_service';
   const isNginx = ['nginx_server', 'nginx_location', 'nginx_upstream'].includes(chunk.chunk_type);
 
-  const chunkEnvFields = isDockerSvc
-    ? chunk.fields.filter((f) => f.description === 'env' || f.field_type === 'env_var')
-    : [];
-  const hasChunkEnvFields = chunkEnvFields.length > 0;
-  const hasChunkEnvRefs = chunkEnvFields.some((f) => /^\$\{.+\}$/.test(f.value));
-
-  let fieldsHtml = '';
+  const fieldsHtml: SafeHtml[] = [];
   for (const field of chunk.fields) {
-    const { resolved, refName, unresolved, source: refSource } = resolveFieldRef(field.value);
+    const { refName, unresolved, source: refSource } = resolveFieldRef(field.value);
     const isSecret = field.secret || field.field_type === 'secret';
 
     // Context-aware effective type — lets old imported data display smartly
@@ -840,22 +879,41 @@ export function renderChunkCard(chunk: SecretChunk, project: Project): HTMLEleme
       }
     }
 
-    let displayVal = '';
-    let badgeHtml = '';
+    let displayVal: string;
+    let badgeHtml: SafeHtml | '' = '';
 
     if (refName) {
       if (unresolved) {
         displayVal = `\${${refName}}`;
-        badgeHtml = `<span class="chunk-ref-badge chunk-ref-unresolved" title="Not linked — no vault entry or .env field named '${esc(refName)}'">unresolved: ${esc(refName)}</span>`;
+        badgeHtml = html`<span
+          class="chunk-ref-badge chunk-ref-unresolved"
+          title="Not linked — no vault entry or .env field named '${refName}'"
+          >unresolved: ${refName}</span
+        >`;
       } else if (refSource === 'env_file') {
         displayVal = '••••••••';
-        badgeHtml = `<span class="chunk-ref-badge chunk-ref-env" title="Linked from .env chunk field '${esc(refName)}'">→ .env: ${esc(refName)}</span>`;
+        badgeHtml = html`<span
+          class="chunk-ref-badge chunk-ref-env"
+          title="Linked from .env chunk field '${refName}'"
+          >→ .env: ${refName}</span
+        >`;
       } else if (refSource === 'chunk') {
         displayVal = '••••••••';
-        badgeHtml = `<span class="chunk-ref-badge chunk-ref-chunk" title="Linked from chunk '${esc(refName)}'">→ chunk: ${esc(refName.replace(/^chunk:/, ''))}</span>`;
+        badgeHtml = html`<span
+          class="chunk-ref-badge chunk-ref-chunk"
+          title="Linked from chunk '${refName}'"
+          >→ chunk: ${refName.replace(/^chunk:/, '')}</span
+        >`;
       } else {
         displayVal = '••••••••';
-        badgeHtml = `<span class="chunk-ref-badge chunk-ref-jump" data-action="jump-ref" data-ref="${escAttr(refName)}" style="cursor:pointer" title="Click to open vault entry '${esc(refName)}'">→ vault: ${esc(refName)}</span>`;
+        badgeHtml = html`<span
+          class="chunk-ref-badge chunk-ref-jump"
+          data-action="jump-ref"
+          data-ref="${refName}"
+          style="cursor:pointer"
+          title="Click to open vault entry '${refName}'"
+          >→ vault: ${refName}</span
+        >`;
       }
     } else if (isSecret && field.value) {
       displayVal = '••••••••';
@@ -881,11 +939,23 @@ export function renderChunkCard(chunk: SecretChunk, project: Project): HTMLEleme
     const isMultiline = (effType === 'multiline' || effType === 'list') && !isSecret && !refName;
     const copyBtn =
       copyData !== undefined && copyData !== ''
-        ? `<button class="icon-btn sm" data-action="chunk-copy" data-value="${escAttr(copyData)}" title="Copy">${copySVG}</button>`
+        ? html`<button
+            class="icon-btn sm"
+            data-action="chunk-copy"
+            data-value="${copyData}"
+            title="Copy"
+          >${copySVG}</button>`
         : '';
     const envCopyBtn =
       envCopyResolved !== null
-        ? `<button class="btn btn-ghost btn-xs" data-action="chunk-copy" data-value="${escAttr(`${field.key}=${envCopyResolved}`)}" title="Copy resolved value">.env</button>`
+        ? html`<button
+            class="btn btn-ghost btn-xs"
+            data-action="chunk-copy"
+            data-value="${`${field.key}=${envCopyResolved}`}"
+            title="Copy resolved value"
+          >
+            .env
+          </button>`
         : '';
 
     // JSON object/array detection for pretty display
@@ -906,166 +976,189 @@ export function renderChunkCard(chunk: SecretChunk, project: Project): HTMLEleme
       const base = portStr.replace(/\/(tcp|udp|sctp)$/i, '');
       const parts = base.split(':');
       if (parts.length === 1) {
-        return `<span class="port-badge"><span class="port-container">${esc(parts[0])}</span>${proto ? `<span class="port-proto">${esc(proto)}</span>` : ''}</span>`;
+        return html`<span class="port-badge"
+          ><span class="port-container">${parts[0]}</span
+          >${proto ? html`<span class="port-proto">${proto}</span>` : ''}</span
+        >`;
       }
       const host = parts[0];
       const container = parts.slice(1).join(':');
-      return `<span class="port-badge"><span class="port-host">${esc(host)}</span><span class="port-arrow">→</span><span class="port-container">${esc(container)}</span>${proto ? `<span class="port-proto">${esc(proto)}</span>` : ''}</span>`;
+      return html`<span class="port-badge"
+        ><span class="port-host">${host}</span><span class="port-arrow">→</span
+        ><span class="port-container">${container}</span
+        >${proto ? html`<span class="port-proto">${proto}</span>` : ''}</span
+      >`;
     };
 
     const renderVolBadge = (str: string) => {
       const colon1 = str.indexOf(':');
       if (colon1 < 0)
-        return `<span class="volume-badge"><span class="vol-name">${esc(str)}</span></span>`;
+        return html`<span class="volume-badge"><span class="vol-name">${str}</span></span>`;
       const host = str.slice(0, colon1);
       const rest = str.slice(colon1 + 1);
       const modeMatch = /:?(ro|rw)$/.exec(rest);
       const mode = modeMatch ? modeMatch[1] : '';
       const container = mode ? rest.slice(0, rest.lastIndexOf(':')) : rest;
       const hostShort = host.length > 30 ? '…' + host.slice(host.lastIndexOf('/')) : host;
-      return `<span class="volume-badge" title="${escAttr(str)}"><span class="vol-host">${esc(hostShort)}</span><span class="port-arrow">→</span><span class="vol-container">${esc(container)}</span>${mode ? `<span class="port-proto">${esc(mode)}</span>` : ''}</span>`;
+      return html`<span class="volume-badge" title="${str}"
+        ><span class="vol-host">${hostShort}</span><span class="port-arrow">→</span
+        ><span class="vol-container">${container}</span
+        >${mode ? html`<span class="port-proto">${mode}</span>` : ''}</span
+      >`;
     };
 
     if (isNginx && effType === 'port' && /^listen$/i.test(field.key)) {
       // nginx listen: parse port + SSL/http2 indicators
-      fieldsHtml += `
-        <div class="chunk-field-row">
-          <span class="chunk-field-key">${esc(field.key)}</span>
+      fieldsHtml.push(
+        html` <div class="chunk-field-row">
+          <span class="chunk-field-key">${field.key}</span>
           <div class="chunk-field-val">${renderListenBadge(displayVal)}</div>
           <div class="chunk-field-actions">${copyBtn}</div>
-        </div>`;
+        </div>`,
+      );
     } else if (effType === 'port') {
-      const portLines = (displayVal || '')
-        .split(/\n/)
-        .filter(Boolean)
-        .map(renderPortBadge)
-        .join('');
-      fieldsHtml += `
-        <div class="chunk-field-row multiline-row">
-          <span class="chunk-field-key">${esc(field.key)}</span>
+      const portLines = (displayVal || '').split(/\n/).filter(Boolean).map(renderPortBadge);
+      fieldsHtml.push(
+        html` <div class="chunk-field-row multiline-row">
+          <span class="chunk-field-key">${field.key}</span>
           <div class="chunk-field-actions">${copyBtn}</div>
-          <div class="chunk-field-val port-list">${portLines || '<span style="color:var(--text3);font-size:10px">empty</span>'}</div>
-        </div>`;
+          <div class="chunk-field-val port-list">${portLines.length ? portLines : html`<span style="color:var(--text3);font-size:10px">empty</span>`}</div>
+        </div>`,
+      );
     } else if (effType === 'volume_mount') {
-      const volLines = (displayVal || '').split(/\n/).filter(Boolean).map(renderVolBadge).join('');
-      fieldsHtml += `
-        <div class="chunk-field-row multiline-row">
-          <span class="chunk-field-key">${esc(field.key)}</span>
+      const volLines = (displayVal || '').split(/\n/).filter(Boolean).map(renderVolBadge);
+      fieldsHtml.push(
+        html` <div class="chunk-field-row multiline-row">
+          <span class="chunk-field-key">${field.key}</span>
           <div class="chunk-field-actions">${copyBtn}</div>
-          <div class="chunk-field-val port-list">${volLines || '<span style="color:var(--text3);font-size:10px">empty</span>'}</div>
-        </div>`;
+          <div class="chunk-field-val port-list">${volLines.length ? volLines : html`<span style="color:var(--text3);font-size:10px">empty</span>`}</div>
+        </div>`,
+      );
     } else if (effType === 'subnet') {
       const cidrs = (displayVal || '')
         .split(/[\n,;]+/)
         .map((s) => s.trim())
         .filter(Boolean);
-      const badges = cidrs.map((c) => `<span class="subnet-badge">${esc(c)}</span>`).join('');
-      fieldsHtml += `
-        <div class="chunk-field-row">
-          <span class="chunk-field-key">${esc(field.key)}</span>
-          <div class="chunk-field-val badge-list">${badges || '<span style="color:var(--text3);font-size:10px">empty</span>'}</div>
+      const badges = cidrs.map((c) => html`<span class="subnet-badge">${c}</span>`);
+      fieldsHtml.push(
+        html` <div class="chunk-field-row">
+          <span class="chunk-field-key">${field.key}</span>
+          <div class="chunk-field-val badge-list">${badges.length ? badges : html`<span style="color:var(--text3);font-size:10px">empty</span>`}</div>
           <div class="chunk-field-actions">${copyBtn}</div>
-        </div>`;
+        </div>`,
+      );
     } else if (isNginx && /^server_name$/i.test(field.key)) {
       // nginx server_name: each hostname as a badge
-      fieldsHtml += `
-        <div class="chunk-field-row">
-          <span class="chunk-field-key">${esc(field.key)}</span>
+      fieldsHtml.push(
+        html` <div class="chunk-field-row">
+          <span class="chunk-field-key">${field.key}</span>
           <div class="chunk-field-val badge-list">${renderServerNameBadges(displayVal)}</div>
           <div class="chunk-field-actions">${copyBtn}</div>
-        </div>`;
+        </div>`,
+      );
     } else if (isNginx && /^return$/i.test(field.key)) {
       // nginx return: redirect badge — return has effType 'endpoint' from detection but handled here
-      fieldsHtml += `
-        <div class="chunk-field-row">
-          <span class="chunk-field-key">${esc(field.key)}</span>
+      fieldsHtml.push(
+        html` <div class="chunk-field-row">
+          <span class="chunk-field-key">${field.key}</span>
           <div class="chunk-field-val">${renderReturnBadge(displayVal)}</div>
           <div class="chunk-field-actions">${copyBtn}</div>
-        </div>`;
+        </div>`,
+      );
     } else if (effType === 'ip') {
       const ips = (displayVal || '')
         .split(/[\n,;]+/)
         .map((s) => s.trim())
         .filter(Boolean);
-      const badges = ips.map((ip) => `<span class="ip-badge">${esc(ip)}</span>`).join('');
-      fieldsHtml += `
-        <div class="chunk-field-row">
-          <span class="chunk-field-key">${esc(field.key)}</span>
-          <div class="chunk-field-val badge-list">${badges || '<span style="color:var(--text3);font-size:10px">empty</span>'}</div>
+      const badges = ips.map((ip) => html`<span class="ip-badge">${ip}</span>`);
+      fieldsHtml.push(
+        html` <div class="chunk-field-row">
+          <span class="chunk-field-key">${field.key}</span>
+          <div class="chunk-field-val badge-list">${badges.length ? badges : html`<span style="color:var(--text3);font-size:10px">empty</span>`}</div>
           <div class="chunk-field-actions">${copyBtn}</div>
-        </div>`;
+        </div>`,
+      );
     } else if (effType === 'cert') {
       // SSL certificate / key: path + linked vault cert panel
       const isCertKey = /key/i.test(field.key);
       const linkedCert = findLinkedCert(field.value);
       const pathDisplay = refName
-        ? `<span class="cert-ref-badge">${esc(displayVal)}</span>`
-        : `<span class="chunk-field-val">${esc(displayVal)}</span>`;
-      fieldsHtml += `
-        <div class="chunk-field-row chunk-field-cert-row">
-          <span class="chunk-field-key">${esc(field.key)}</span>
-          <div class="chunk-field-val">${pathDisplay}</div>
-          <div class="chunk-field-actions">${copyBtn}</div>
-        </div>
-        ${linkedCert ? renderCertPanel(linkedCert, isCertKey) : ''}`;
+        ? html`<span class="cert-ref-badge">${displayVal}</span>`
+        : html`<span class="chunk-field-val">${displayVal}</span>`;
+      fieldsHtml.push(
+        html` <div class="chunk-field-row chunk-field-cert-row">
+            <span class="chunk-field-key">${field.key}</span>
+            <div class="chunk-field-val">${pathDisplay}</div>
+            <div class="chunk-field-actions">${copyBtn}</div>
+          </div>${linkedCert ? renderCertPanel(linkedCert, isCertKey) : ''}`,
+      );
     } else if (effType === 'endpoint') {
       const lastColon = displayVal.lastIndexOf(':');
       const epHost = lastColon > 0 ? displayVal.slice(0, lastColon) : displayVal;
       const epPort = lastColon > 0 ? displayVal.slice(lastColon + 1) : '';
-      const endpointBadge = `<span class="endpoint-badge"><span class="endpoint-host">${esc(epHost)}</span>${epPort ? `<span class="port-arrow">:</span><span class="endpoint-port">${esc(epPort)}</span>` : ''}</span>`;
-      fieldsHtml += `
-        <div class="chunk-field-row">
-          <span class="chunk-field-key">${esc(field.key)}</span>
+      const endpointBadge = html`<span class="endpoint-badge"
+        ><span class="endpoint-host">${epHost}</span
+        >${epPort ? html`<span class="port-arrow">:</span><span class="endpoint-port">${epPort}</span>` : ''}</span
+      >`;
+      fieldsHtml.push(
+        html` <div class="chunk-field-row">
+          <span class="chunk-field-key">${field.key}</span>
           <div class="chunk-field-val">${endpointBadge}</div>
           <div class="chunk-field-actions">${copyBtn}</div>
-        </div>`;
+        </div>`,
+      );
     } else if (effType === 'list' && isDockerSvc && field.key === 'networks') {
       const nets = (displayVal || '')
         .split(/[\n,]+/)
         .map((s) => s.trim())
         .filter(Boolean);
-      const badges = nets.map((n) => `<span class="net-badge">${esc(n)}</span>`).join('');
-      fieldsHtml += `
-        <div class="chunk-field-row">
-          <span class="chunk-field-key">${esc(field.key)}</span>
-          <div class="chunk-field-val badge-list">${badges || '<span style="color:var(--text3);font-size:10px">empty</span>'}</div>
+      const badges = nets.map((n) => html`<span class="net-badge">${n}</span>`);
+      fieldsHtml.push(
+        html` <div class="chunk-field-row">
+          <span class="chunk-field-key">${field.key}</span>
+          <div class="chunk-field-val badge-list">${badges.length ? badges : html`<span style="color:var(--text3);font-size:10px">empty</span>`}</div>
           <div class="chunk-field-actions">${copyBtn}</div>
-        </div>`;
+        </div>`,
+      );
     } else if (effType === 'list' && isDockerSvc && field.key === 'devices') {
-      const devLines = (displayVal || '').split(/\n/).filter(Boolean).map(renderVolBadge).join('');
-      fieldsHtml += `
-        <div class="chunk-field-row multiline-row">
-          <span class="chunk-field-key">${esc(field.key)}</span>
+      const devLines = (displayVal || '').split(/\n/).filter(Boolean).map(renderVolBadge);
+      fieldsHtml.push(
+        html` <div class="chunk-field-row multiline-row">
+          <span class="chunk-field-key">${field.key}</span>
           <div class="chunk-field-actions">${copyBtn}</div>
-          <div class="chunk-field-val port-list">${devLines || '<span style="color:var(--text3);font-size:10px">empty</span>'}</div>
-        </div>`;
+          <div class="chunk-field-val port-list">${devLines.length ? devLines : html`<span style="color:var(--text3);font-size:10px">empty</span>`}</div>
+        </div>`,
+      );
     } else if (effType === 'list' && isDockerSvc && field.key === 'cap_add') {
       const caps = (displayVal || '')
         .split(/[\n,]+/)
         .map((s) => s.trim())
         .filter(Boolean);
-      const badges = caps.map((c) => `<span class="cap-badge">${esc(c)}</span>`).join('');
-      fieldsHtml += `
-        <div class="chunk-field-row">
-          <span class="chunk-field-key">${esc(field.key)}</span>
-          <div class="chunk-field-val badge-list">${badges || '<span style="color:var(--text3);font-size:10px">empty</span>'}</div>
+      const badges = caps.map((c) => html`<span class="cap-badge">${c}</span>`);
+      fieldsHtml.push(
+        html` <div class="chunk-field-row">
+          <span class="chunk-field-key">${field.key}</span>
+          <div class="chunk-field-val badge-list">${badges.length ? badges : html`<span style="color:var(--text3);font-size:10px">empty</span>`}</div>
           <div class="chunk-field-actions">${copyBtn}</div>
-        </div>`;
+        </div>`,
+      );
     } else if (isJsonVal) {
       const formatted = JSON.stringify(parsedJson, null, 2);
-      fieldsHtml += `
-        <div class="chunk-field-row multiline-row">
-          <span class="chunk-field-key">${esc(field.key)}</span>
+      fieldsHtml.push(
+        html` <div class="chunk-field-row multiline-row">
+          <span class="chunk-field-key">${field.key}</span>
           <div class="chunk-field-actions">${copyBtn}${envCopyBtn}</div>
-          <pre class="${valClass} code-block">${esc(formatted)}</pre>
-        </div>`;
+          <pre class="${valClass} code-block">${formatted}</pre>
+        </div>`,
+      );
     } else if (isMultiline) {
-      fieldsHtml += `
-        <div class="chunk-field-row multiline-row">
-          <span class="chunk-field-key">${esc(field.key)}</span>
+      fieldsHtml.push(
+        html` <div class="chunk-field-row multiline-row">
+          <span class="chunk-field-key">${field.key}</span>
           <div class="chunk-field-actions">${copyBtn}</div>
-          <pre class="${valClass} code-block">${esc(displayVal)}</pre>
-        </div>`;
+          <pre class="${valClass} code-block">${displayVal}</pre>
+        </div>`,
+      );
     } else if (isDockerSvc && field.key === 'image' && field.value && !isSecret && !refName) {
       const colonIdx = field.value.lastIndexOf(':');
       const hasTag = colonIdx > field.value.lastIndexOf('/');
@@ -1074,28 +1167,31 @@ export function renderChunkCard(chunk: SecretChunk, project: Project): HTMLEleme
       const lastSlash = nameWithReg.lastIndexOf('/');
       const imgName = lastSlash >= 0 ? nameWithReg.slice(lastSlash + 1) : nameWithReg;
       const registry = lastSlash >= 0 ? nameWithReg.slice(0, lastSlash) : '';
-      fieldsHtml += `
-        <div class="chunk-field-row">
-          <span class="chunk-field-key">${esc(field.key)}</span>
+      fieldsHtml.push(
+        html` <div class="chunk-field-row">
+          <span class="chunk-field-key">${field.key}</span>
           <div class="chunk-field-val">
-            <span class="image-badge">
-              ${registry ? `<span class="img-registry">${esc(registry)}/</span>` : ''}<span class="img-name">${esc(imgName)}</span>${tag ? `<span class="img-tag">:${esc(tag)}</span>` : ''}
-            </span>
+            <span class="image-badge">${registry ? html`<span class="img-registry">${registry}/</span>` : ''}<span
+                class="img-name"
+                >${imgName}</span
+              >${tag ? html`<span class="img-tag">:${tag}</span>` : ''}</span>
           </div>
           <div class="chunk-field-actions">${copyBtn}</div>
-        </div>`;
+        </div>`,
+      );
     } else {
-      let extraBadge = '';
+      let extraBadge: SafeHtml | '' = '';
       if (field.field_type === 'user_id' && field.value && !refName) {
         const [uid, gid] = field.value.split(':');
-        extraBadge = `<span class="user-id-badge">uid:${esc(uid)}${gid ? `·gid:${esc(gid)}` : ''}</span>`;
+        extraBadge = html`<span class="user-id-badge">uid:${uid}${gid ? `·gid:${gid}` : ''}</span>`;
       }
-      fieldsHtml += `
-        <div class="chunk-field-row">
-          <span class="chunk-field-key">${esc(field.key)}</span>
-          <span class="${valClass}">${esc(displayVal)} ${badgeHtml}${extraBadge}</span>
+      fieldsHtml.push(
+        html` <div class="chunk-field-row">
+          <span class="chunk-field-key">${field.key}</span>
+          <span class="${valClass}">${displayVal} ${badgeHtml}${extraBadge}</span>
           <div class="chunk-field-actions">${copyBtn}${envCopyBtn}</div>
-        </div>`;
+        </div>`,
+      );
     }
   }
 
@@ -1108,8 +1204,8 @@ export function renderChunkCard(chunk: SecretChunk, project: Project): HTMLEleme
 
   // nginx_key: PEM certificate/key file — special display
   if (chunk.chunk_type === 'nginx_key') {
-    const pid = escAttr(project.id);
-    const cid = escAttr(chunk.id);
+    const pid = project.id;
+    const cid = chunk.id;
     const pathField = chunk.fields.find((f) => f.key === 'path');
     const keyTypeField = chunk.fields.find((f) => f.key === 'key_type');
     const contentField = chunk.fields.find((f) => f.key === 'content');
@@ -1130,73 +1226,167 @@ export function renderChunkCard(chunk: SecretChunk, project: Project): HTMLEleme
     );
 
     const usedByHtml = usedBy.length
-      ? usedBy
-          .map(
-            (c) =>
-              `<span class="nginx-key-usedby-badge" title="ssl_certificate path matches">${esc(c.name)}</span>`,
-          )
-          .join('')
-      : '';
+      ? usedBy.map(
+          (c) =>
+            html`<span class="nginx-key-usedby-badge" title="ssl_certificate path matches"
+              >${c.name}</span
+            >`,
+        )
+      : [];
 
     const pem = normalizePem(contentField?.value || '');
     const pemBlocks = pem
       .split(/(?=-----BEGIN )/)
       .map((s) => s.trim())
       .filter(Boolean);
-    const renderPemBlock = (raw: string) => {
-      const header = /^-----BEGIN ([^-]+)-----/.exec(raw)?.[1] ?? '';
+    const renderPemBlock = (pemText: string) => {
+      const header = /^-----BEGIN ([^-]+)-----/.exec(pemText)?.[1] ?? '';
       const cls = /CERTIFICATE/i.test(header)
         ? 'pem-cert'
         : /PRIVATE|RSA|EC|OPENSSH/i.test(header)
           ? 'pem-key'
           : 'pem-other';
-      return `<div class="pem-block ${cls}"><div class="pem-label">${esc(header || 'PEM Block')}</div><pre class="pem-pre">${esc(raw)}</pre></div>`;
+      return html`<div class="pem-block ${cls}">
+        <div class="pem-label">${header || 'PEM Block'}</div>
+        <pre class="pem-pre">${pemText}</pre>
+      </div>`;
     };
     const certCount = pemBlocks.filter((b) => b.includes('-----BEGIN CERTIFICATE-----')).length;
     const chainLabel = !isPrivkey && certCount > 1 ? ` · ${certCount} certs` : '';
     const pemHtml = pemBlocks.length
-      ? pemBlocks.map(renderPemBlock).join('')
-      : `<div class="pem-empty">No PEM content — click Import or Edit to add</div>`;
+      ? pemBlocks.map(renderPemBlock)
+      : html`<div class="pem-empty">No PEM content — click Import or Edit to add</div>`;
 
-    card.innerHTML = `
-      <div class="chunk-card-head">
-        <span class="chunk-card-title">${esc(chunk.name)}</span>
-        <span class="chunk-type-badge ${keyTypeCls}">${keyTypeLabel}${chainLabel}</span>
-        ${usedByHtml ? `<span class="nginx-key-usedby">${usedByHtml}</span>` : ''}
-        <div style="display:flex;gap:4px;margin-left:auto;flex-shrink:0">
-          <button class="btn btn-ghost btn-sm" data-action="import-nginx-key-file" data-project-id="${pid}" data-chunk-id="${cid}">Import file</button>
-          <button class="btn btn-ghost btn-sm" data-action="copy-chunk-full"       data-project-id="${pid}" data-chunk-id="${cid}" title="Copy PEM">Copy</button>
-          <button class="btn btn-ghost btn-sm" data-action="chunk-up"              data-project-id="${pid}" data-chunk-id="${cid}">↑</button>
-          <button class="btn btn-ghost btn-sm" data-action="chunk-down"            data-project-id="${pid}" data-chunk-id="${cid}">↓</button>
-          <button class="btn btn-ghost btn-sm" data-action="edit-chunk"            data-project-id="${pid}" data-chunk-id="${cid}">Edit</button>
-          <button class="btn btn-ghost btn-sm" data-action="delete-chunk"          data-project-id="${pid}" data-chunk-id="${cid}" style="color:var(--price-paid)">Delete</button>
-        </div>
-      </div>
-      ${keyPath ? `<div class="nginx-key-path">${esc(keyPath)}</div>` : ''}
-      <div class="nginx-key-body">${pemHtml}</div>
-    `;
+    setHtml(
+      card,
+      html`
+        <div class="chunk-card-head">
+          <span class="chunk-card-title">${chunk.name}</span>
+          <span class="chunk-type-badge ${keyTypeCls}">${keyTypeLabel}${chainLabel}</span>${usedByHtml.length ? html`<span class="nginx-key-usedby">${usedByHtml}</span>` : ''}
+          <div style="display:flex;gap:4px;margin-left:auto;flex-shrink:0">
+            <button
+              class="btn btn-ghost btn-sm"
+              data-action="import-nginx-key-file"
+              data-project-id="${pid}"
+              data-chunk-id="${cid}"
+            >
+              Import file
+            </button>
+            <button
+              class="btn btn-ghost btn-sm"
+              data-action="copy-chunk-full"
+              data-project-id="${pid}"
+              data-chunk-id="${cid}"
+              title="Copy PEM"
+            >
+              Copy
+            </button>
+            <button
+              class="btn btn-ghost btn-sm"
+              data-action="chunk-up"
+              data-project-id="${pid}"
+              data-chunk-id="${cid}"
+            >
+              ↑
+            </button>
+            <button
+              class="btn btn-ghost btn-sm"
+              data-action="chunk-down"
+              data-project-id="${pid}"
+              data-chunk-id="${cid}"
+            >
+              ↓
+            </button>
+            <button
+              class="btn btn-ghost btn-sm"
+              data-action="edit-chunk"
+              data-project-id="${pid}"
+              data-chunk-id="${cid}"
+            >
+              Edit
+            </button>
+            <button
+              class="btn btn-ghost btn-sm"
+              data-action="delete-chunk"
+              data-project-id="${pid}"
+              data-chunk-id="${cid}"
+              style="color:var(--price-paid)"
+            >
+              Delete
+            </button>
+          </div>
+        </div>${keyPath ? html`<div class="nginx-key-path">${keyPath}</div>` : ''}
+        <div class="nginx-key-body">${pemHtml}</div>
+      `,
+    );
     return card;
   }
 
-  card.innerHTML = `
-    <div class="chunk-card-head">
-      <span class="chunk-card-title">${esc(chunk.name)}</span>
-      <span class="chunk-type-badge">${esc(typeLabel)}</span>
-      <div style="display:flex;gap:4px;margin-left:auto">
-        <button class="btn btn-ghost btn-sm" data-action="copy-chunk-full" data-project-id="${escAttr(project.id)}" data-chunk-id="${escAttr(chunk.id)}" title="Copy entire chunk in native format">Copy</button>
-        ${chunk.chunk_type === 'env_file' ? `<button class="btn btn-ghost btn-sm" data-action="export-env-chunk" data-project-id="${escAttr(project.id)}" data-chunk-id="${escAttr(chunk.id)}">Export .env</button>` : ''}
-        ${chunk.chunk_type === 'env_file' ? `<button class="btn btn-ghost btn-sm" data-action="link-env-chunk" data-project-id="${escAttr(project.id)}" data-chunk-id="${escAttr(chunk.id)}" title="Link fields to vault entries">Link</button>` : ''}
-        ${hasChunkEnvRefs ? `<button class="btn btn-ghost btn-sm" data-action="copy-chunk-env" data-project-id="${escAttr(project.id)}" data-chunk-id="${escAttr(chunk.id)}" title="Copy env fields with resolved secret values">Copy (resolved)</button>` : ''}
-        <button class="btn btn-ghost btn-sm" data-action="chunk-up" data-project-id="${escAttr(project.id)}" data-chunk-id="${escAttr(chunk.id)}" title="Move up">↑</button>
-        <button class="btn btn-ghost btn-sm" data-action="chunk-down" data-project-id="${escAttr(project.id)}" data-chunk-id="${escAttr(chunk.id)}" title="Move down">↓</button>
-        <button class="btn btn-ghost btn-sm" data-action="dup-chunk" data-project-id="${escAttr(project.id)}" data-chunk-id="${escAttr(chunk.id)}">Dup</button>
-        <button class="btn btn-ghost btn-sm" data-action="edit-chunk" data-project-id="${escAttr(project.id)}" data-chunk-id="${escAttr(chunk.id)}">Edit</button>
-        <button class="btn btn-ghost btn-sm" data-action="delete-chunk" data-project-id="${escAttr(project.id)}" data-chunk-id="${escAttr(chunk.id)}" style="color:var(--price-paid)">Delete</button>
-      </div>
-    </div>
-    ${chunk.notes ? `<div class="chunk-notes">${esc(chunk.notes)}</div>` : ''}
-    <div class="chunk-fields">${fieldsHtml || '<div class="chunk-no-fields">No fields</div>'}</div>
-  `;
+  setHtml(
+    card,
+    html`
+      <div class="chunk-card-head">
+        <span class="chunk-card-title">${chunk.name}</span>
+        <span class="chunk-type-badge">${typeLabel}</span>
+        <div style="display:flex;gap:4px;margin-left:auto">
+          <button
+            class="btn btn-ghost btn-sm"
+            data-action="copy-chunk-full"
+            data-project-id="${project.id}"
+            data-chunk-id="${chunk.id}"
+            title="Copy entire chunk in native format"
+          >
+            Copy
+          </button>${chunk.chunk_type === 'env_file' ? html`<button class="btn btn-ghost btn-sm" data-action="export-env-chunk" data-project-id="${project.id}" data-chunk-id="${chunk.id}">Export .env</button>` : ''}
+          ${chunk.chunk_type === 'env_file' ? html`<button class="btn btn-ghost btn-sm" data-action="link-env-chunk" data-project-id="${project.id}" data-chunk-id="${chunk.id}" title="Link fields to vault entries">Link</button>` : ''}
+          <button
+            class="btn btn-ghost btn-sm"
+            data-action="chunk-up"
+            data-project-id="${project.id}"
+            data-chunk-id="${chunk.id}"
+            title="Move up"
+          >
+            ↑
+          </button>
+          <button
+            class="btn btn-ghost btn-sm"
+            data-action="chunk-down"
+            data-project-id="${project.id}"
+            data-chunk-id="${chunk.id}"
+            title="Move down"
+          >
+            ↓
+          </button>
+          <button
+            class="btn btn-ghost btn-sm"
+            data-action="dup-chunk"
+            data-project-id="${project.id}"
+            data-chunk-id="${chunk.id}"
+          >
+            Dup
+          </button>
+          <button
+            class="btn btn-ghost btn-sm"
+            data-action="edit-chunk"
+            data-project-id="${project.id}"
+            data-chunk-id="${chunk.id}"
+          >
+            Edit
+          </button>
+          <button
+            class="btn btn-ghost btn-sm"
+            data-action="delete-chunk"
+            data-project-id="${project.id}"
+            data-chunk-id="${chunk.id}"
+            style="color:var(--price-paid)"
+          >
+            Delete
+          </button>
+        </div>
+      </div>${chunk.notes ? html`<div class="chunk-notes">${chunk.notes}</div>` : ''}
+      <div class="chunk-fields">${fieldsHtml.length ? fieldsHtml : html`<div class="chunk-no-fields">No fields</div>`}</div>
+    `,
+  );
   return card;
 }
 
@@ -1205,7 +1395,7 @@ export function renderChunkCard(chunk: SecretChunk, project: Project): HTMLEleme
 function serviceChunkToYaml(sc: SecretChunk): string {
   const yamlStr = (v: string): string => {
     if (!v) return '""';
-    if (/[\s:#\[\]{},|>&*!'"@`]/.test(v)) return JSON.stringify(v);
+    if (/[\s:#[\]{},|>&*!'"@`]/.test(v)) return JSON.stringify(v);
     return v;
   };
   const quoteItem = (v: string): string => (/\s/.test(v) ? JSON.stringify(v) : v);
@@ -1429,7 +1619,7 @@ export function exportDockerCompose(project: Project): { yaml: string; envFile: 
 
   const yamlStr = (v: string): string => {
     if (!v) return '""';
-    if (/[\s:#\[\]{},|>&*!'"@`]/.test(v)) return JSON.stringify(v);
+    if (/[\s:#[\]{},|>&*!'"@`]/.test(v)) return JSON.stringify(v);
     return v;
   };
   const quoteItem = (v: string): string => (/\s/.test(v) ? JSON.stringify(v) : v);
@@ -1587,17 +1777,17 @@ export function exportServicesSection(project: Project): string {
 }
 
 export function renderDockerServicesCard(project: Project): HTMLElement {
-  const pid = escAttr(project.id);
+  const pid = project.id;
   const svcChunks = (project.chunks || []).filter((c) => c.chunk_type === 'docker_service');
 
-  const makeSubCard = (label: string, bodyHtml: string): string =>
-    `<div class="docker-sub-card">
-      <div class="docker-sub-card-label">${esc(label)}</div>
+  const makeSubCard = (label: string, bodyHtml: HtmlValue): SafeHtml =>
+    html`<div class="docker-sub-card">
+      <div class="docker-sub-card-label">${label}</div>
       <div class="docker-sub-card-body">${bodyHtml}</div>
     </div>`;
 
-  const renderSvcCard = (sc: SecretChunk): string => {
-    const cid = escAttr(sc.id);
+  const renderSvcCard = (sc: SecretChunk): SafeHtml => {
+    const cid = sc.id;
     const envFields: ChunkField[] = [];
     const portItems: string[] = [];
     const volumeItems: string[] = [];
@@ -1647,108 +1837,185 @@ export function renderDockerServicesCard(project: Project): HTMLElement {
       'restart',
     ];
     const scalarMap = new Map(scalars);
-    let scalarsHtml = '';
+    const scalarsHtml: SafeHtml[] = [];
     for (const k of PRIO) {
       if (scalarMap.has(k)) {
-        scalarsHtml += `<div class="dsvc-field"><span class="dsvc-key">${esc(k)}</span><span class="dsvc-val">${esc(scalarMap.get(k)!)}</span></div>`;
+        scalarsHtml.push(
+          html`<div class="dsvc-field">
+            <span class="dsvc-key">${k}</span><span class="dsvc-val">${scalarMap.get(k)!}</span>
+          </div>`,
+        );
         scalarMap.delete(k);
       }
     }
     for (const [k, v] of scalarMap) {
-      scalarsHtml += `<div class="dsvc-field"><span class="dsvc-key">${esc(k)}</span><span class="dsvc-val">${esc(v)}</span></div>`;
+      scalarsHtml.push(
+        html`<div class="dsvc-field">
+          <span class="dsvc-key">${k}</span><span class="dsvc-val">${v}</span>
+        </div>`,
+      );
     }
 
-    let subCards = '';
+    const subCards: SafeHtml[] = [];
 
     if (envFields.length) {
-      let envBody = '';
+      const envBody: SafeHtml[] = [];
       for (const f of envFields) {
         const { refName, unresolved, source } = resolveFieldRef(f.value);
         const valDisplay = refName ? (unresolved ? `\${${refName}}` : '••••••••') : (f.value ?? '');
-        let badge = '';
+        let badge: SafeHtml | '' = '';
         if (refName) {
           if (unresolved) {
-            badge = `<span class="chunk-ref-badge chunk-ref-unresolved" title="Not linked — no vault entry or .env field named '${esc(refName!)}'">${esc(refName!)}</span>`;
+            badge = html`<span
+              class="chunk-ref-badge chunk-ref-unresolved"
+              title="Not linked — no vault entry or .env field named '${refName!}'"
+              >${refName!}</span
+            >`;
           } else if (source === 'env_file') {
-            badge = `<span class="chunk-ref-badge chunk-ref-env" title="Linked from .env: ${esc(refName!)}">→ .env</span>`;
+            badge = html`<span
+              class="chunk-ref-badge chunk-ref-env"
+              title="Linked from .env: ${refName!}"
+              >→ .env</span
+            >`;
           } else {
-            badge = `<span class="chunk-ref-badge" title="Linked from vault: ${esc(refName!)}">→ vault</span>`;
+            badge = html`<span class="chunk-ref-badge" title="Linked from vault: ${refName!}"
+              >→ vault</span
+            >`;
           }
         }
-        envBody += `<div class="dsvc-env-row"><span class="dsvc-env-key">${esc(f.key)}</span><span class="dsvc-env-eq">=</span><span class="dsvc-env-val">${esc(valDisplay)}</span>${badge ? `<span class="dsvc-env-badge">${badge}</span>` : ''}</div>`;
+        envBody.push(
+          html`<div class="dsvc-env-row">
+            <span class="dsvc-env-key">${f.key}</span><span class="dsvc-env-eq">=</span
+            ><span class="dsvc-env-val">${valDisplay}</span
+            >${badge ? html`<span class="dsvc-env-badge">${badge}</span>` : ''}</div>`,
+        );
       }
-      subCards += makeSubCard('environment', envBody);
+      subCards.push(makeSubCard('environment', envBody));
     }
 
     if (portItems.length) {
-      let portBody = '';
+      const portBody: SafeHtml[] = [];
       for (const p of portItems) {
         const parts = p.split(':');
         const inner =
           parts.length >= 2
-            ? `<span class="dsvc-port-host">${esc(parts[0])}</span><span class="dsvc-port-sep">→</span><span class="dsvc-port-cont">${esc(parts.slice(1).join(':'))}</span>`
-            : `<span class="dsvc-port-cont">${esc(p)}</span>`;
-        portBody += `<div class="dsvc-list-item"><span class="dsvc-port-badge">${inner}</span></div>`;
+            ? html`<span class="dsvc-port-host">${parts[0]}</span
+                ><span class="dsvc-port-sep">→</span
+                ><span class="dsvc-port-cont">${parts.slice(1).join(':')}</span>`
+            : html`<span class="dsvc-port-cont">${p}</span>`;
+        portBody.push(
+          html`<div class="dsvc-list-item"><span class="dsvc-port-badge">${inner}</span></div>`,
+        );
       }
-      subCards += makeSubCard('ports', portBody);
+      subCards.push(makeSubCard('ports', portBody));
     }
 
     if (volumeItems.length) {
-      let volBody = '';
+      const volBody: SafeHtml[] = [];
       for (const v of volumeItems) {
         const parts = v.split(':');
         const inner =
           parts.length >= 2
-            ? `<span class="dsvc-vol-host">${esc(parts[0])}</span><span class="dsvc-vol-sep">:</span><span class="dsvc-vol-cont">${esc(parts.slice(1).join(':'))}</span>`
-            : `<span class="dsvc-vol-host">${esc(v)}</span>`;
-        volBody += `<div class="dsvc-list-item"><span class="dsvc-vol-badge">${inner}</span></div>`;
+            ? html`<span class="dsvc-vol-host">${parts[0]}</span><span class="dsvc-vol-sep">:</span
+                ><span class="dsvc-vol-cont">${parts.slice(1).join(':')}</span>`
+            : html`<span class="dsvc-vol-host">${v}</span>`;
+        volBody.push(
+          html`<div class="dsvc-list-item"><span class="dsvc-vol-badge">${inner}</span></div>`,
+        );
       }
-      subCards += makeSubCard('volumes', volBody);
+      subCards.push(makeSubCard('volumes', volBody));
     }
 
     for (const [k, items] of listMap) {
-      const listBody = items
-        .map(
-          (item) =>
-            `<div class="dsvc-list-item"><span class="dsvc-net-badge">${esc(item)}</span></div>`,
-        )
-        .join('');
-      subCards += makeSubCard(k, listBody);
+      const listBody = items.map(
+        (item) =>
+          html`<div class="dsvc-list-item"><span class="dsvc-net-badge">${item}</span></div>`,
+      );
+      subCards.push(makeSubCard(k, listBody));
     }
 
-    return `<div class="docker-service-card" data-chunk-id="${cid}">
+    return html`<div class="docker-service-card" data-chunk-id="${cid}">
       <div class="docker-service-header">
-        <span class="docker-service-name">${esc(sc.name)}</span>
+        <span class="docker-service-name">${sc.name}</span>
         <div class="docker-service-actions">
-          <button class="btn btn-ghost btn-xs" data-action="copy-chunk-full" data-project-id="${pid}" data-chunk-id="${cid}" title="Copy YAML">${copySVG}</button>
-          <button class="btn btn-ghost btn-xs" data-action="chunk-up"    data-project-id="${pid}" data-chunk-id="${cid}">↑</button>
-          <button class="btn btn-ghost btn-xs" data-action="chunk-down"  data-project-id="${pid}" data-chunk-id="${cid}">↓</button>
-          <button class="btn btn-ghost btn-xs" data-action="edit-chunk"  data-project-id="${pid}" data-chunk-id="${cid}">${editSVG}</button>
-          <button class="btn btn-ghost btn-xs" data-action="delete-chunk" data-project-id="${pid}" data-chunk-id="${cid}" style="color:var(--price-paid)">${delSVG}</button>
+          <button
+            class="btn btn-ghost btn-xs"
+            data-action="copy-chunk-full"
+            data-project-id="${pid}"
+            data-chunk-id="${cid}"
+            title="Copy YAML"
+          >${copySVG}</button>
+          <button
+            class="btn btn-ghost btn-xs"
+            data-action="chunk-up"
+            data-project-id="${pid}"
+            data-chunk-id="${cid}"
+            aria-label="Move chunk up"
+            title="Move up"
+          >
+            ↑
+          </button>
+          <button
+            class="btn btn-ghost btn-xs"
+            data-action="chunk-down"
+            data-project-id="${pid}"
+            data-chunk-id="${cid}"
+            aria-label="Move chunk down"
+            title="Move down"
+          >
+            ↓
+          </button>
+          <button
+            class="btn btn-ghost btn-xs"
+            data-action="edit-chunk"
+            data-project-id="${pid}"
+            data-chunk-id="${cid}"
+            aria-label="Edit chunk"
+            title="Edit"
+          >${editSVG}</button>
+          <button
+            class="btn btn-ghost btn-xs"
+            data-action="delete-chunk"
+            data-project-id="${pid}"
+            data-chunk-id="${cid}"
+            aria-label="Delete chunk"
+            title="Delete"
+            style="color:var(--price-paid)"
+          >${delSVG}</button>
         </div>
-      </div>
-      ${scalarsHtml ? `<div class="docker-service-scalars">${scalarsHtml}</div>` : ''}
-      ${subCards ? `<div class="docker-service-subcards">${subCards}</div>` : ''}
-      ${!scalarsHtml && !subCards ? '<div class="dsvc-empty">No fields — click Edit to configure</div>' : ''}
-    </div>`;
+      </div>${scalarsHtml.length ? html`<div class="docker-service-scalars">${scalarsHtml}</div>` : ''}
+      ${subCards.length ? html`<div class="docker-service-subcards">${subCards}</div>` : ''}
+      ${!scalarsHtml.length && !subCards ? html`<div class="dsvc-empty">No fields — click Edit to configure</div>` : ''}</div>`;
   };
 
   const card = document.createElement('div');
   card.className = 'chunk-card docker-services-card';
-  card.innerHTML = `
-    <div class="chunk-card-head">
-      <span class="chunk-card-title">Services</span>
-      ${svcChunks.length ? `<span class="chunk-type-badge">${svcChunks.length} service${svcChunks.length !== 1 ? 's' : ''}</span>` : ''}
-      <div style="display:flex;gap:4px;margin-left:auto;flex-shrink:0">
-        <button class="btn btn-ghost btn-sm" data-action="add-docker-service"     data-project-id="${pid}">+ Service</button>
-        <button class="btn btn-ghost btn-sm" data-action="export-docker-services" data-project-id="${pid}" title="Copy services: block">${copySVG} All</button>
+  setHtml(
+    card,
+    html`
+      <div class="chunk-card-head">
+        <span class="chunk-card-title">Services</span>${svcChunks.length ? html`<span class="chunk-type-badge">${svcChunks.length} service${svcChunks.length !== 1 ? 's' : ''}</span>` : ''}
+        <div style="display:flex;gap:4px;margin-left:auto;flex-shrink:0">
+          <button
+            class="btn btn-ghost btn-sm"
+            data-action="add-docker-service"
+            data-project-id="${pid}"
+          >
+            + Service
+          </button>
+          <button
+            class="btn btn-ghost btn-sm"
+            data-action="export-docker-services"
+            data-project-id="${pid}"
+            title="Copy services: block"
+          >${copySVG} All
+          </button>
+        </div>
       </div>
-    </div>
-    <div class="docker-services-body">
-      ${svcChunks.map(renderSvcCard).join('')}
-      ${!svcChunks.length ? '<div class="chunk-no-fields">No services yet — use “Import compose” above, or + Service</div>' : ''}
-    </div>
-  `;
+      <div class="docker-services-body">${svcChunks.map(renderSvcCard)}
+        ${!svcChunks.length ? html`<div class="chunk-no-fields">No services yet — use “Import compose” above, or + Service</div>` : ''}</div>
+    `,
+  );
   return card;
 }
 
@@ -1772,63 +2039,235 @@ export function getProjectTypeLabel(type: ProjectType): string {
   );
 }
 
-export function makeConfigViewHeaderBtns(project: Project): string {
-  const pid = escAttr(project.id);
+export function makeConfigViewHeaderBtns(project: Project): SafeHtml | '' {
+  const pid = project.id;
   switch (project.project_type) {
     case 'wireguard':
-      return `<button class="btn btn-ghost btn-sm" data-action="import-wg" data-project-id="${pid}">Import wg0.conf</button>
-              <button class="btn btn-ghost btn-sm" data-action="add-wg-peer" data-project-id="${pid}">+ Add Peer</button>
-              <button class="btn btn-ghost btn-sm" data-action="export-wg" data-project-id="${pid}">Export wg0.conf</button>`;
+      return html`<button
+          class="btn btn-ghost btn-sm"
+          data-action="import-wg"
+          data-project-id="${pid}"
+        >
+          Import wg0.conf
+        </button>
+        <button class="btn btn-ghost btn-sm" data-action="add-wg-peer" data-project-id="${pid}">
+          + Add Peer
+        </button>
+        <button class="btn btn-ghost btn-sm" data-action="export-wg" data-project-id="${pid}">
+          Export wg0.conf
+        </button>`;
     case 'docker':
       // Import/Export sit here, as they do for every other project type. They
       // used to exist only inside the Services card, which is the one header in
       // the app that does not carry them — so the way into a docker project from
       // a compose file was findable only by already knowing where it was.
-      return `<button class="btn btn-ghost btn-sm" data-action="import-docker" data-project-id="${pid}">Import compose</button>
-              <button class="btn btn-ghost btn-sm" data-action="add-docker-network" data-project-id="${pid}">+ Network</button>
-              <button class="btn btn-ghost btn-sm" data-action="add-docker-volume" data-project-id="${pid}">+ Volume</button>
-              <button class="btn btn-ghost btn-sm" data-action="export-docker" data-project-id="${pid}">Export compose</button>`;
+      return html`<button
+          class="btn btn-ghost btn-sm"
+          data-action="import-docker"
+          data-project-id="${pid}"
+        >
+          Import compose
+        </button>
+        <button
+          class="btn btn-ghost btn-sm"
+          data-action="add-docker-network"
+          data-project-id="${pid}"
+        >
+          + Network
+        </button>
+        <button
+          class="btn btn-ghost btn-sm"
+          data-action="add-docker-volume"
+          data-project-id="${pid}"
+        >
+          + Volume
+        </button>
+        <button class="btn btn-ghost btn-sm" data-action="export-docker" data-project-id="${pid}">
+          Export compose
+        </button>`;
     case 'nginx':
-      return `<button class="btn btn-ghost btn-sm" data-action="import-nginx" data-project-id="${pid}">Import site config</button>
-              <button class="btn btn-ghost btn-sm" data-action="add-nginx-server" data-project-id="${pid}">+ Server</button>
-              <button class="btn btn-ghost btn-sm" data-action="add-nginx-upstream" data-project-id="${pid}">+ Upstream</button>
-              <button class="btn btn-ghost btn-sm" data-action="add-nginx-location" data-project-id="${pid}">+ Location</button>
-              <button class="btn btn-ghost btn-sm" data-action="add-nginx-key" data-project-id="${pid}">+ Key File</button>
-              <button class="btn btn-ghost btn-sm" data-action="export-nginx" data-project-id="${pid}">Export nginx.conf</button>`;
+      return html`<button
+          class="btn btn-ghost btn-sm"
+          data-action="import-nginx"
+          data-project-id="${pid}"
+        >
+          Import site config
+        </button>
+        <button
+          class="btn btn-ghost btn-sm"
+          data-action="add-nginx-server"
+          data-project-id="${pid}"
+        >
+          + Server
+        </button>
+        <button
+          class="btn btn-ghost btn-sm"
+          data-action="add-nginx-upstream"
+          data-project-id="${pid}"
+        >
+          + Upstream
+        </button>
+        <button
+          class="btn btn-ghost btn-sm"
+          data-action="add-nginx-location"
+          data-project-id="${pid}"
+        >
+          + Location
+        </button>
+        <button class="btn btn-ghost btn-sm" data-action="add-nginx-key" data-project-id="${pid}">
+          + Key File
+        </button>
+        <button class="btn btn-ghost btn-sm" data-action="export-nginx" data-project-id="${pid}">
+          Export nginx.conf
+        </button>`;
     case 'kubernetes':
-      return `<button class="btn btn-ghost btn-sm" data-action="add-k8s-deployment" data-project-id="${pid}">+ Deploy</button>
-              <button class="btn btn-ghost btn-sm" data-action="add-k8s-service" data-project-id="${pid}">+ Service</button>
-              <button class="btn btn-ghost btn-sm" data-action="add-k8s-configmap" data-project-id="${pid}">+ ConfigMap</button>
-              <button class="btn btn-ghost btn-sm" data-action="add-k8s-secret" data-project-id="${pid}">+ Secret</button>
-              <button class="btn btn-ghost btn-sm" data-action="add-k8s-ingress" data-project-id="${pid}">+ Ingress</button>
-              <button class="btn btn-ghost btn-sm" data-action="export-k8s" data-project-id="${pid}">Export YAML</button>`;
+      return html`<button
+          class="btn btn-ghost btn-sm"
+          data-action="add-k8s-deployment"
+          data-project-id="${pid}"
+        >
+          + Deploy
+        </button>
+        <button class="btn btn-ghost btn-sm" data-action="add-k8s-service" data-project-id="${pid}">
+          + Service
+        </button>
+        <button
+          class="btn btn-ghost btn-sm"
+          data-action="add-k8s-configmap"
+          data-project-id="${pid}"
+        >
+          + ConfigMap
+        </button>
+        <button class="btn btn-ghost btn-sm" data-action="add-k8s-secret" data-project-id="${pid}">
+          + Secret
+        </button>
+        <button class="btn btn-ghost btn-sm" data-action="add-k8s-ingress" data-project-id="${pid}">
+          + Ingress
+        </button>
+        <button class="btn btn-ghost btn-sm" data-action="export-k8s" data-project-id="${pid}">
+          Export YAML
+        </button>`;
     case 'ssh_config':
-      return `<button class="btn btn-ghost btn-sm" data-action="import-ssh" data-project-id="${pid}">Import Config</button>
-              <button class="btn btn-ghost btn-sm" data-action="add-ssh-host" data-project-id="${pid}">+ Add Host</button>
-              <button class="btn btn-ghost btn-sm" data-action="export-ssh" data-project-id="${pid}">Export ~/.ssh/config</button>`;
+      return html`<button
+          class="btn btn-ghost btn-sm"
+          data-action="import-ssh"
+          data-project-id="${pid}"
+        >
+          Import Config
+        </button>
+        <button class="btn btn-ghost btn-sm" data-action="add-ssh-host" data-project-id="${pid}">
+          + Add Host
+        </button>
+        <button class="btn btn-ghost btn-sm" data-action="export-ssh" data-project-id="${pid}">
+          Export ~/.ssh/config
+        </button>`;
     case 'traefik':
-      return `<button class="btn btn-ghost btn-sm" data-action="add-traefik-router" data-project-id="${pid}">+ Router</button>
-              <button class="btn btn-ghost btn-sm" data-action="add-traefik-service" data-project-id="${pid}">+ Service</button>
-              <button class="btn btn-ghost btn-sm" data-action="add-traefik-middleware" data-project-id="${pid}">+ Middleware</button>
-              <button class="btn btn-ghost btn-sm" data-action="export-traefik" data-project-id="${pid}">Export traefik.yaml</button>`;
+      return html`<button
+          class="btn btn-ghost btn-sm"
+          data-action="add-traefik-router"
+          data-project-id="${pid}"
+        >
+          + Router
+        </button>
+        <button
+          class="btn btn-ghost btn-sm"
+          data-action="add-traefik-service"
+          data-project-id="${pid}"
+        >
+          + Service
+        </button>
+        <button
+          class="btn btn-ghost btn-sm"
+          data-action="add-traefik-middleware"
+          data-project-id="${pid}"
+        >
+          + Middleware
+        </button>
+        <button class="btn btn-ghost btn-sm" data-action="export-traefik" data-project-id="${pid}">
+          Export traefik.yaml
+        </button>`;
     case 'apache':
-      return `<button class="btn btn-ghost btn-sm" data-action="import-apache" data-project-id="${pid}">Import httpd.conf</button>
-              <button class="btn btn-ghost btn-sm" data-action="add-apache-vhost" data-project-id="${pid}">+ VirtualHost</button>
-              <button class="btn btn-ghost btn-sm" data-action="add-apache-directory" data-project-id="${pid}">+ Directory</button>
-              <button class="btn btn-ghost btn-sm" data-action="export-apache" data-project-id="${pid}">Export config</button>`;
+      return html`<button
+          class="btn btn-ghost btn-sm"
+          data-action="import-apache"
+          data-project-id="${pid}"
+        >
+          Import httpd.conf
+        </button>
+        <button
+          class="btn btn-ghost btn-sm"
+          data-action="add-apache-vhost"
+          data-project-id="${pid}"
+        >
+          + VirtualHost
+        </button>
+        <button
+          class="btn btn-ghost btn-sm"
+          data-action="add-apache-directory"
+          data-project-id="${pid}"
+        >
+          + Directory
+        </button>
+        <button class="btn btn-ghost btn-sm" data-action="export-apache" data-project-id="${pid}">
+          Export config
+        </button>`;
     case 'haproxy':
-      return `<button class="btn btn-ghost btn-sm" data-action="import-haproxy" data-project-id="${pid}">Import haproxy.cfg</button>
-              <button class="btn btn-ghost btn-sm" data-action="add-haproxy-frontend" data-project-id="${pid}">+ Frontend</button>
-              <button class="btn btn-ghost btn-sm" data-action="add-haproxy-backend" data-project-id="${pid}">+ Backend</button>
-              <button class="btn btn-ghost btn-sm" data-action="export-haproxy" data-project-id="${pid}">Export haproxy.cfg</button>`;
+      return html`<button
+          class="btn btn-ghost btn-sm"
+          data-action="import-haproxy"
+          data-project-id="${pid}"
+        >
+          Import haproxy.cfg
+        </button>
+        <button
+          class="btn btn-ghost btn-sm"
+          data-action="add-haproxy-frontend"
+          data-project-id="${pid}"
+        >
+          + Frontend
+        </button>
+        <button
+          class="btn btn-ghost btn-sm"
+          data-action="add-haproxy-backend"
+          data-project-id="${pid}"
+        >
+          + Backend
+        </button>
+        <button class="btn btn-ghost btn-sm" data-action="export-haproxy" data-project-id="${pid}">
+          Export haproxy.cfg
+        </button>`;
     case 'ansible':
-      return `<button class="btn btn-ghost btn-sm" data-action="add-ansible-vars" data-project-id="${pid}">+ vars</button>
-              <button class="btn btn-ghost btn-sm" data-action="add-ansible-task" data-project-id="${pid}">+ task</button>
-              <button class="btn btn-ghost btn-sm" data-action="export-ansible" data-project-id="${pid}">Export YAML</button>`;
+      return html`<button
+          class="btn btn-ghost btn-sm"
+          data-action="add-ansible-vars"
+          data-project-id="${pid}"
+        >
+          + vars
+        </button>
+        <button
+          class="btn btn-ghost btn-sm"
+          data-action="add-ansible-task"
+          data-project-id="${pid}"
+        >
+          + task
+        </button>
+        <button class="btn btn-ghost btn-sm" data-action="export-ansible" data-project-id="${pid}">
+          Export YAML
+        </button>`;
     case 'postgres':
-      return `<button class="btn btn-ghost btn-sm" data-action="add-pg-connection" data-project-id="${pid}">+ Connection</button>
-              <button class="btn btn-ghost btn-sm" data-action="add-pg-role" data-project-id="${pid}">+ Role</button>
-              <button class="btn btn-ghost btn-sm" data-action="export-postgres" data-project-id="${pid}">Export .pgpass</button>`;
+      return html`<button
+          class="btn btn-ghost btn-sm"
+          data-action="add-pg-connection"
+          data-project-id="${pid}"
+        >
+          + Connection
+        </button>
+        <button class="btn btn-ghost btn-sm" data-action="add-pg-role" data-project-id="${pid}">
+          + Role
+        </button>
+        <button class="btn btn-ghost btn-sm" data-action="export-postgres" data-project-id="${pid}">
+          Export .pgpass
+        </button>`;
     default:
       return '';
   }
@@ -1906,6 +2345,11 @@ function b64Utf8(s: string): string {
   return btoa(bin);
 }
 
+/** Comma/whitespace separated list; identical to the Rust `split_k8s_list`. */
+function splitK8sList(raw: string | undefined): string[] {
+  return (raw ?? '').split(/[,\s]+/).filter(Boolean);
+}
+
 export function exportK8s(project: Project): string {
   const manifests: string[] = [];
   for (const chunk of activeChunks(project)) {
@@ -1926,8 +2370,43 @@ export function exportK8s(project: Project): string {
             )
             .join('')
         : '';
+      // Phase 29: Secrets the Deployment consumes. `secretEnv` lists Secrets whose
+      // keys become environment variables; `secretMounts` lists `secret:/path`
+      // pairs mounted read-only. They are what lets `envv check` prove that the
+      // Secret a Deployment names is a Secret some chunk creates.
+      const secretEnv = [
+        ...new Set(splitK8sList(chunk.fields.find((f) => f.key === 'secretEnv')?.value)),
+      ];
+      const secretMounts = splitK8sList(chunk.fields.find((f) => f.key === 'secretMounts')?.value)
+        .map((m) => {
+          const i = m.indexOf(':');
+          return i > 0 && i < m.length - 1 ? { secret: m.slice(0, i), path: m.slice(i + 1) } : null;
+        })
+        .filter((m): m is { secret: string; path: string } => m !== null);
+      const envFromBlock = secretEnv.length
+        ? '\n          envFrom:' +
+          secretEnv.map((n) => `\n            - secretRef:\n                name: ${n}`).join('')
+        : '';
+      const mountBlock = secretMounts.length
+        ? '\n          volumeMounts:' +
+          secretMounts
+            .map(
+              (m) =>
+                `\n            - name: secret-${m.secret}\n              mountPath: ${m.path}\n              readOnly: true`,
+            )
+            .join('')
+        : '';
+      const volumesBlock = secretMounts.length
+        ? '\n      volumes:' +
+          [...new Set(secretMounts.map((m) => m.secret))]
+            .map(
+              (n) =>
+                `\n        - name: secret-${n}\n          secret:\n            secretName: ${n}`,
+            )
+            .join('')
+        : '';
       manifests.push(
-        `apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: ${name}\n  namespace: ${ns}\nspec:\n  replicas: ${replicas}\n  selector:\n    matchLabels:\n      app: ${name}\n  template:\n    metadata:\n      labels:\n        app: ${name}\n    spec:\n      containers:\n        - name: ${name}\n          image: ${image}\n          ports:\n            - containerPort: ${port}${envBlock}`,
+        `apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: ${name}\n  namespace: ${ns}\nspec:\n  replicas: ${replicas}\n  selector:\n    matchLabels:\n      app: ${name}\n  template:\n    metadata:\n      labels:\n        app: ${name}\n    spec:\n      containers:\n        - name: ${name}\n          image: ${image}\n          ports:\n            - containerPort: ${port}${envBlock}${envFromBlock}${mountBlock}${volumesBlock}`,
       );
     } else if (chunk.chunk_type === 'k8s_service') {
       const port = chunk.fields.find((f) => f.key === 'port')?.value || '80';
