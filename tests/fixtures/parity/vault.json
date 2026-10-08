@@ -388,6 +388,16 @@
           ]
         },
         {
+   "id": "k3",
+   "chunk_type": "k8s_deployment",
+   "name": "web",
+   "fields": [
+    {"key": "image", "value": "nginx:1.27", "field_type": "var", "secret": false},
+    {"key": "secretEnv", "value": "app-secrets, app-secrets", "field_type": "list", "secret": false},
+    {"key": "secretMounts", "value": "app-secrets:/etc/app\nbad-entry app-secrets:/etc/other", "field_type": "list", "secret": false}
+   ]
+  },
+  {
           "id": "kdis",
           "chunk_type": "k8s_secret",
           "name": "disabled-one",
