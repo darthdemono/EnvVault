@@ -1,0 +1,106 @@
+{
+  "vars": [
+    {
+      "key": "token",
+      "value": "EXAMPLE_DISCORD_TOKEN_NOT_REAL",
+      "kind": "string"
+    },
+    {
+      "key": "defprefix",
+      "value": ">",
+      "kind": "string"
+    },
+    {
+      "key": "colour",
+      "value": "0x800000",
+      "kind": "hex_int"
+    },
+    {
+      "key": "application_id",
+      "value": "708766134927442001",
+      "kind": "large_id"
+    },
+    {
+      "key": "owner_id",
+      "value": "123456789012345678",
+      "kind": "int"
+    },
+    {
+      "key": "api_key",
+      "value": "EXAMPLE_YT_KEY_ONE",
+      "kind": "string"
+    },
+    {
+      "key": "title",
+      "value": "Example Bot",
+      "kind": "string"
+    },
+    {
+      "key": "description",
+      "value": "Plays {nothing}",
+      "kind": "string"
+    },
+    {
+      "key": "stats_url",
+      "value": "https://example.invalid/stats?key={api_key}&id={application_id}",
+      "kind": "template"
+    },
+    {
+      "key": "api_key_2",
+      "value": "EXAMPLE_YT_KEY_TWO",
+      "kind": "string"
+    },
+    {
+      "key": "channel_stats",
+      "value": "https://example.invalid/channels?key={api_key_2}",
+      "kind": "template"
+    },
+    {
+      "key": "invite",
+      "value": "https://discord.com/api/oauth2/authorize?client_id={application_id}&scope=bot&scope=applications.commands",
+      "kind": "template"
+    },
+    {
+      "key": "blink",
+      "value": "https://example.invalid/blink?scope=bot&scope=bot&p={defprefix}",
+      "kind": "template"
+    },
+    {
+      "key": "click",
+      "value": "[Click me!](https://discord.com/api/oauth2/authorize?client_id=708766134927442001)",
+      "kind": "markdown_link"
+    },
+    {
+      "key": "volume",
+      "value": "0.5",
+      "kind": "float"
+    },
+    {
+      "key": "debug",
+      "value": "true",
+      "kind": "bool"
+    },
+    {
+      "key": "nothing",
+      "value": "",
+      "kind": "string"
+    },
+    {
+      "key": "weird",
+      "value": "{api_key!r}",
+      "kind": "string"
+    },
+    {
+      "key": "other",
+      "value": "len(token)",
+      "kind": "string"
+    }
+  ],
+  "warnings": [
+    "line 13: api_key is assigned more than once; the first stays api_key, this one is imported as api_key_2, and later references use api_key_2",
+    "line 20: nothing is None; imported as an empty string",
+    "line 21: weird is an f-string with an expression a template cannot hold; imported as a string",
+    "line 22: other is not a supported literal; imported as source text",
+    "1 later reference to api_key now uses api_key_2"
+  ]
+}
