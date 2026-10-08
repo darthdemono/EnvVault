@@ -44,6 +44,7 @@
 
 import { st, inTauri } from './state';
 import { showToast } from './utils';
+import { invokeTauri } from './tauri';
 
 /** How often to ask. Long enough to be free, short enough to feel live. */
 const POLL_MS = 3000;
@@ -52,10 +53,7 @@ let timer: ReturnType<typeof setInterval> | null = null;
 /** Set while a reload is in flight, so a slow load cannot overlap the next tick. */
 let reloading = false;
 
-const invoke = (cmd: string, args?: Record<string, unknown>) =>
-  (
-    window as unknown as { __TAURI__?: { core?: { invoke?: (c: string, a?: unknown) => unknown } } }
-  ).__TAURI__?.core?.invoke?.(cmd, args) as Promise<unknown> | undefined;
+const invoke = invokeTauri;
 
 /** True while any modal is open — see the file header on why that blocks a reload. */
 function editorOpen(): boolean {
