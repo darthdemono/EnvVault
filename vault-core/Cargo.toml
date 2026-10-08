@@ -1,7 +1,8 @@
 [package]
 name    = "vault-core"
-version = "0.24.0"
+version = "0.33.0"
 edition = "2021"
+publish = false
 license = "MIT"
 
 [features]
@@ -37,6 +38,7 @@ rcgen      = "=0.13.2"
 ssh-key    = { version = "=0.6.7", features = ["ed25519", "crypto"] }
 time       = { version = "=0.3.37", features = ["parsing"] }
 sha2       = "0.10"
+ed25519-dalek = "2"
 # HKDF is implemented over this rather than pulled in as `hkdf`: the extract and
 # expand steps are ten lines, and `entropy.rs` needs them to be readable — the
 # mixing rule is the security property of that module.
@@ -51,6 +53,7 @@ sha1       = "0.10"
 base64     = "0.22"
 serde      = { version = "1", features = ["derive"] }
 serde_json = "1"
+toml       = "=0.8.2"
 # Locating the per-user state directory for pools.json ($XDG_STATE_HOME on Unix,
 # %LOCALAPPDATA% on Windows). The CLI already depended on this; the path lives
 # here now because the desktop app reads the same file.
