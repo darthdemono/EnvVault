@@ -6,7 +6,7 @@
  * name changes. These pin the identity-keyed behaviour in place.
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { st, entryId } from '../src/ts/state';
+import { st } from '../src/ts/state';
 import {
   deleteKey,
   duplicateKey,
