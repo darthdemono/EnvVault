@@ -558,6 +558,53 @@ mod tests {
         })
     }
 
+    #[test]
+    fn matches_the_shared_typescript_parity_fixture() {
+        let fixture: serde_json::Value =
+            serde_json::from_str(include_str!("../../tests/fixtures/parity/permex.json")).unwrap();
+        let projects = fixture["projects"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|p| {
+                Some((
+                    p["id"].as_str()?.to_string(),
+                    p["name"].as_str()?.to_string(),
+                ))
+            })
+            .collect::<HashMap<_, _>>();
+
+        for case in fixture["cases"].as_array().unwrap() {
+            let parse_optional = |key: &str| {
+                case[key]
+                    .as_str()
+                    .filter(|src| !src.is_empty())
+                    .map(parse)
+                    .transpose()
+                    .unwrap_or_else(|err| panic!("{}: {err}", case["name"]))
+            };
+            let mut expr = combine(parse_optional("class"), parse_optional("individual"));
+            if case["strict"].as_bool() == Some(true) {
+                expr = expr.map(require_all);
+            }
+            for (entry, expected) in fixture["entries"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .zip(case["matches"].as_array().unwrap())
+            {
+                assert_eq!(
+                    expr.as_ref()
+                        .is_some_and(|e| eval(e, &EntryView::from_entry(entry, &projects))),
+                    expected.as_bool().unwrap(),
+                    "{}: {}",
+                    case["name"],
+                    entry["id"],
+                );
+            }
+        }
+    }
+
     // ── Parsing ───────────────────────────────────────────────────────────────
 
     #[test]
