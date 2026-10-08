@@ -69,3 +69,28 @@ test.describe('boot', () => {
     );
   });
 });
+
+test.describe('keyboard', () => {
+  test('a card icon (role=button) opens the icon picker on Enter, like a button would', async ({
+    page,
+  }) => {
+    await page.addInitScript(() => {
+      localStorage.setItem('envvault-settings', JSON.stringify({ onboardingCompleted: true }));
+      sessionStorage.setItem(
+        'envvault',
+        JSON.stringify({
+          api_keys: [{ id: 'k1', provider: 'GitHub', api_key: 'x', secretType: 'api_key' }],
+          user_categories: [],
+          projects: [],
+        }),
+      );
+    });
+    await page.goto('/');
+    await page.waitForSelector('.provider-icon-wrap', { timeout: 15_000 });
+    const icon = page.locator('.provider-icon-wrap').first();
+    await expect(icon).toHaveAttribute('aria-label', /Change icon for GitHub/);
+    await icon.focus();
+    await page.keyboard.press('Enter');
+    await expect(page.locator('#icon-picker-overlay')).toHaveClass(/open/);
+  });
+});
