@@ -55,6 +55,10 @@ pub struct SecretTypeDescriptor {
     /// still lossless, since `custom-fields` round-trips through EnvVault's
     /// own extension the way Phase 24.5's design requires.
     pub cxf: Option<String>,
+    /// Output formats `envv emit` / the card's Copy menu offer, implemented in
+    /// `type_emit.rs`. A test asserts this and `type_emit::formats_for` agree.
+    #[serde(default)]
+    pub emitters: Vec<String>,
 }
 
 #[derive(Deserialize)]
