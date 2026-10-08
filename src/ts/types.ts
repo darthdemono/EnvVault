@@ -807,6 +807,8 @@ export interface UserInfo {
   created_at: string;
   last_seen_at: string | null;
   class_id: string | null;
+  /** Narrows this user's write expression to every top-level alternative. */
+  strict_write?: boolean;
   /**
    * True when this user has a *confirmed* second factor. Enrollment alone does
    * not set it — a secret that was never confirmed must not make the account
@@ -846,6 +848,8 @@ export interface UserClass {
   cap_manage_users: boolean;
   cap_manage_classes: boolean;
   cap_delete_projects: boolean;
+  /** Applies strict-write narrowing to every class member. */
+  strict_write?: boolean;
   created_at: string;
 }
 
@@ -860,7 +864,7 @@ export interface ClassPermission {
 /** A single row from the append-only vault audit log. */
 export interface AuditRow {
   id: number;
-  action: 'add' | 'update' | 'delete' | string;
+  action: string;
   entry_provider: string | null;
   timestamp: string;
   details: string | null;
@@ -922,6 +926,10 @@ export interface PersistedView {
    * nor a `SecretType` actually present in the loaded vault.
    */
   typeChips?: string[];
+  /** Expanded bundle entry ids; restored only while those bundles still exist. */
+  expandedBundleIds?: string[];
+  /** Selected member id per bundle; restored only while membership still matches. */
+  bundleSlotTabs?: Record<string, string>;
   projectIds: string[];
 }
 
@@ -933,7 +941,7 @@ export interface PersistedView {
  */
 export interface AppSettings {
   /** Active colour theme identifier. 'system' follows the OS preference. */
-  theme: 'dark' | 'midnight' | 'dracula' | 'nord' | 'catppuccin' | 'light' | 'system' | string;
+  theme: string;
   /** Hex accent colour used for highlights and active states (e.g. `"#7364c9"`). */
   accentColor: string;
   /** Visual density of secret cards in the grid. */
@@ -977,6 +985,9 @@ export interface AppSettings {
    * shows every member, because cooldown management needs them all visible.
    */
   groupPools: boolean;
+  groupBundles: boolean;
+  /** Case-folded providers whose "bundle them?" prompt was dismissed. */
+  dismissedBundleSuggestions: string[];
   /** Position of the activity bar. */
   activityBarPosition: 'left' | 'right';
   /** Activity bar display style. */
@@ -1079,6 +1090,8 @@ export interface AppSettings {
    * not being resident, unseen, for the rest of the session.
    */
   keepLocalUnlocked: boolean;
+  /** `os`, or `file:PATH`: where the UI generators draw randomness from (Phase 33.4). */
+  entropySource: string;
   /**
    * Whether the first-run wizard has been shown.
    *
