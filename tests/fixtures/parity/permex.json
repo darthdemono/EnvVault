@@ -1,0 +1,42 @@
+{
+  "projects": [
+    { "id": "Universal", "name": "Universal" },
+    { "id": "p-acme", "name": "Acme" },
+    { "id": "p-web", "name": "Acme/Web" }
+  ],
+  "entries": [
+    { "id": "prod-acme", "projectIds": ["Universal", "p-acme"], "categories": ["infra"], "tags": ["prod"], "environment": "production", "secretType": "api_key" },
+    { "id": "ops-web", "projectIds": ["Universal", "p-web"], "categories": ["infra"], "tags": ["ops"], "environment": "production", "secretType": "password" },
+    { "id": "public", "projectIds": ["Universal"], "categories": ["public"], "tags": ["prod"], "environment": "staging", "secretType": "api_key" }
+  ],
+  "cases": [
+    {
+      "name": "class rules intersect individual rules",
+      "class": "category:infra",
+      "individual": "project:Acme",
+      "strict": false,
+      "matches": [true, false, false]
+    },
+    {
+      "name": "strict write narrows a top-level OR",
+      "class": null,
+      "individual": "tag:prod OR project:Acme",
+      "strict": true,
+      "matches": [true, false, false]
+    },
+    {
+      "name": "strict write preserves an authored nested OR",
+      "class": null,
+      "individual": "(tag:prod OR tag:ops) AND category:infra",
+      "strict": true,
+      "matches": [true, true, false]
+    },
+    {
+      "name": "a named project never matches Universal alone",
+      "class": null,
+      "individual": "project:Acme OR project:Acme/Web",
+      "strict": false,
+      "matches": [true, true, false]
+    }
+  ]
+}
