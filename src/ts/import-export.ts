@@ -1,9 +1,4 @@
-/**
- * @file
- * Import / export: copyAll, exportAs, .env import modal, file import.
- */
-
-import type { VaultEntry, SecretType } from './types';
+import type { VaultEntry, SecretType, VaultData, Project } from './types';
 import {
   st,
   Settings,
@@ -14,10 +9,21 @@ import {
   primaryEnvName,
   unquoteEnvValue,
 } from './state';
-import { showToast, clipboardWrite, saveFile } from './utils';
+import {
+  showToast,
+  clipboardWrite,
+  saveFile,
+  errorMessage,
+  showConfirm,
+  showPrompt,
+} from './utils';
+import { importPythonConfig } from './bundle-import';
+import { buildBundle } from './bundle-scope';
 import { getFiltered, sorted } from './filters';
 import { buildCopyTextAll, type CopyProfile, type MetadataStyle } from './copy-profile';
 import * as yaml from 'js-yaml';
+import { invokeTauri } from './tauri';
+import { html, setHtml } from './html';
 
 // ── Copy All / Export As ──────────────────────────────────────────────────
 
@@ -41,7 +47,7 @@ export function copyAll(fmt: string) {
             case: Settings.get('envCopyCase'),
             includePrefix: !!Settings.get('envIncludePrefix'),
           });
-  clipboardWrite(text).then(() =>
+  void clipboardWrite(text).then(() =>
     showToast(
       profile === 'full' && fmt !== 'yaml' && fmt !== 'json'
         ? `${keys.length} keys copied — "full" is per-entry only, copied as extended`
@@ -65,6 +71,55 @@ export async function exportAs(fmt: string) {
   const res = await saveFile(content, filename);
   if (!res.ok) showToast(`Export failed: ${res.error}`, 'error');
   else showToast(res.path ? `Exported to ${res.path}` : `Exported as .${fmt}`, 'ok');
+}
+
+/** Import simple Python `NAME = literal` config assignments; never evaluates code. */
+export function parsePythonAssignments(text: string): EnvVar[] {
+  const vars: EnvVar[] = [];
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.trim();
+    const assignment = /^([A-Za-z_]\w*)\s*=\s*(.*)$/.exec(line);
+    if (!assignment) continue;
+    const [, name, source] = assignment;
+    const quoted = /^(?:[fFuUrR]{1,2})?(['"])/.exec(source);
+    if (quoted) {
+      const quote = quoted[1];
+      const start = quoted[0].length - 1;
+      let end = start + 1;
+      for (; end < source.length; end++) {
+        if (source[end] === '\\') end++;
+        else if (source[end] === quote) break;
+      }
+      if (source[end] !== quote || !/^\s*(?:#.*)?$/.test(source.slice(end + 1))) continue;
+      const body = source.slice(start + 1, end);
+      let value: string;
+      if (quote === '"') {
+        try {
+          value = JSON.parse(`"${body}"`) as string;
+        } catch {
+          continue;
+        }
+      } else {
+        // The supported assignment subset decodes common Python string escapes.
+        value = body.replace(
+          /\\([\\'"nrt])/g,
+          (_match, escaped: string) => ({ n: '\n', r: '\r', t: '\t' })[escaped] ?? escaped,
+        );
+        if (/\\(?![\\'"nrt])/.test(value)) continue;
+      }
+      vars.push({ name, value });
+      continue;
+    }
+    const scalar = source.replace(/\s+#.*$/, '').trim();
+    if (
+      /^(?:True|False|None|[-+]?(?:0[xX][\da-fA-F]+|0[oO][0-7]+|0[bB][01]+|\d+(?:\.\d+)?(?:[eE][-+]?\d+)?))$/.test(
+        scalar,
+      )
+    ) {
+      vars.push({ name, value: scalar });
+    }
+  }
+  return vars;
 }
 
 // ── Infra-as-code export formats ───────────────────────────────────────────
@@ -193,9 +248,9 @@ export async function exportEncryptedBackup(password: string) {
 
 /** Decrypt a .vaultbak envelope and replace the current vault. */
 export async function importEncryptedBackup(text: string, password: string) {
-  let env: any;
+  let env: Record<string, unknown>;
   try {
-    env = JSON.parse(text);
+    env = objectRecord(JSON.parse(text));
   } catch {
     showToast('Not a valid backup file', 'err');
     return;
@@ -205,23 +260,25 @@ export async function importEncryptedBackup(text: string, password: string) {
     return;
   }
   try {
+    if (typeof env.salt !== 'string' || typeof env.iv !== 'string' || typeof env.ct !== 'string')
+      throw new Error('Invalid backup envelope');
     const salt = fromB64(env.salt);
     const iv = fromB64(env.iv);
+    const kdf = objectRecord(env.kdf);
     // Honour the iteration count recorded in the envelope. It was written but
     // never read, so a backup made with any other count would fail to decrypt
     // and be reported as a wrong password.
     const iters =
-      Number.isInteger(env.kdf?.iters) && env.kdf.iters > 0 ? env.kdf.iters : PBKDF2_ITERS;
+      Number.isInteger(kdf.iters) && Number(kdf.iters) > 0 ? Number(kdf.iters) : PBKDF2_ITERS;
     const key = await deriveBackupKey(password, salt, iters);
     const plain = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, fromB64(env.ct));
-    const data = JSON.parse(new TextDecoder().decode(plain));
-    if (!Array.isArray(data.api_keys)) throw new Error('Missing api_keys');
+    const data = backupData(JSON.parse(new TextDecoder().decode(plain)) as unknown);
     st.vault.api_keys = data.api_keys;
     st.vault.user_categories = data.user_categories || [];
     st.vault.projects = data.projects || [
       { id: 'Universal', name: 'Universal', description: 'All keys belong here by default' },
     ];
-    persist();
+    void persist();
     resetViewState();
     triggerRender();
     showToast(`Restored ${st.vault.api_keys.length} keys ✓`, 'ok');
@@ -235,6 +292,26 @@ export async function importEncryptedBackup(text: string, password: string) {
 export interface EnvVar {
   name: string;
   value: string;
+}
+
+const envVarsForList = new WeakMap<HTMLElement, EnvVar[]>();
+
+function objectRecord(value: unknown): Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+}
+
+function backupData(value: unknown): VaultData {
+  const record = objectRecord(value);
+  if (!Array.isArray(record.api_keys)) throw new Error('Missing api_keys');
+  return {
+    api_keys: record.api_keys as VaultEntry[],
+    user_categories: Array.isArray(record.user_categories)
+      ? record.user_categories.filter((item): item is string => typeof item === 'string')
+      : [],
+    projects: Array.isArray(record.projects) ? (record.projects as Project[]) : [],
+  };
 }
 
 export function parseEnvFile(text: string): EnvVar[] {
@@ -266,24 +343,24 @@ export function parseEnvFile(text: string): EnvVar[] {
 
 export function openEnvImportModal(vars: EnvVar[]) {
   const list = document.getElementById('env-import-list')!;
-  list.innerHTML = '';
+  setHtml(list, '');
   vars.forEach((v, i) => {
     const row = document.createElement('label');
     row.className = 'env-import-row';
-    const valPreview = v.value.length > 40 ? v.value.slice(0, 40) + '…' : v.value;
-    const safeVal =
-      v.value.length > 40
-        ? v.value.slice(0, 40).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;') +
-          '…'
-        : v.value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-    const safeName = v.name.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-    row.innerHTML = `<input type="checkbox" class="env-import-check" data-idx="${i}" checked><span class="env-import-name mono">${safeName}</span><span class="env-import-val mono">${safeVal}</span>`;
+    const safeVal = v.value.length > 40 ? v.value.slice(0, 40) + '…' : v.value;
+    setHtml(
+      row,
+      html`<input type="checkbox" class="env-import-check" data-idx="${i}" checked /><span
+          class="env-import-name mono"
+          >${v.name}</span
+        ><span class="env-import-val mono">${safeVal}</span>`,
+    );
     list.appendChild(row);
   });
   document.getElementById('env-import-subtitle')!.textContent =
     `Found ${vars.length} variable${vars.length !== 1 ? 's' : ''}. Set options and select which to import.`;
   const catSel = document.getElementById('env-import-category') as HTMLSelectElement;
-  catSel.innerHTML = '<option value="">— none —</option>';
+  setHtml(catSel, html`<option value="">— none —</option>`);
   (st.vault.user_categories || []).forEach((cat) => {
     const opt = document.createElement('option');
     opt.value = cat;
@@ -291,7 +368,7 @@ export function openEnvImportModal(vars: EnvVar[]) {
     catSel.appendChild(opt);
   });
   const projSel = document.getElementById('env-import-project') as HTMLSelectElement;
-  projSel.innerHTML = '';
+  setHtml(projSel, '');
   st.vault.projects
     .filter((p) => p.name !== 'Universal')
     .forEach((p) => {
@@ -304,7 +381,7 @@ export function openEnvImportModal(vars: EnvVar[]) {
   univOpt.value = 'Universal';
   univOpt.textContent = 'Universal';
   projSel.appendChild(univOpt);
-  (list as any)._envVars = vars;
+  envVarsForList.set(list, vars);
   document.getElementById('env-import-overlay')!.classList.add('open');
 }
 
@@ -314,7 +391,7 @@ export function closeEnvImportModal() {
 
 export function confirmEnvImport() {
   const list = document.getElementById('env-import-list')!;
-  const vars: EnvVar[] = (list as any)._envVars || [];
+  const vars = envVarsForList.get(list) ?? [];
   const checked = Array.from(list.querySelectorAll<HTMLInputElement>('.env-import-check:checked'))
     .map((cb) => parseInt(cb.dataset.idx!))
     .filter((i) => !isNaN(i));
@@ -347,7 +424,7 @@ export function confirmEnvImport() {
     created_at: new Date().toISOString(),
   }));
   st.vault.api_keys.push(...imported);
-  persist();
+  void persist();
   triggerRender();
   closeEnvImportModal();
   showToast(`Imported ${imported.length} variable${imported.length !== 1 ? 's' : ''} ✓`, 'ok');
@@ -372,13 +449,75 @@ export function handleFileSelect(input: HTMLInputElement) {
     reader.readAsText(file);
     return;
   }
+  if (lower.endsWith('.py')) {
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      const text = ev.target!.result as string;
+      const vars = parsePythonAssignments(text);
+      if (!vars.length) {
+        showToast('No supported Python assignments found', 'err');
+        return;
+      }
+      void (async () => {
+        // A bundle keeps what the flat .env route cannot: f-strings as
+        // templates, ids as strings, hex colours, and a duplicate name's order.
+        const asBundle = await showConfirm(
+          `Import ${vars.length} values as a new bundle? (Keeps templates, large ids and colours. Cancel for the flat variable list.)`,
+        );
+        if (!asBundle) {
+          openEnvImportModal(vars);
+          return;
+        }
+        const name = await showPrompt('Name this bundle', file.name.replace(/\.py$/i, ''));
+        if (!name?.trim()) return;
+        const imported = importPythonConfig(text);
+        const bundle = buildBundle([], name);
+        bundle.extra_vars = imported.vars.map((v) => ({
+          key: v.key,
+          value: v.value,
+          kind: v.kind,
+        }));
+        st.vault.api_keys.push(bundle);
+        await persist();
+        triggerRender();
+        showToast(
+          `Imported bundle "${bundle.provider}" (${imported.vars.length} variables${imported.warnings.length ? `, ${imported.warnings.length} warnings` : ''})`,
+          'ok',
+          imported.warnings.length ? 6000 : undefined,
+        );
+        if (imported.warnings.length) showToast(imported.warnings.join('\n'), 'err', 15000);
+      })();
+    };
+    reader.readAsText(file);
+    return;
+  }
+  if (lower.endsWith('.toml')) {
+    const reader = new FileReader();
+    reader.onload = async (ev) => {
+      try {
+        const values = await invokeTauri<[string, string][]>('parse_toml_import', {
+          source: ev.target!.result as string,
+        });
+        if (!values.length) {
+          showToast('No supported TOML values found', 'err');
+          return;
+        }
+        openEnvImportModal(values.map(([name, value]) => ({ name, value })));
+      } catch (err) {
+        showToast(`TOML import failed: ${errorMessage(err)}`, 'err', 4000);
+      }
+    };
+    reader.readAsText(file);
+    return;
+  }
   if (lower.endsWith('.yaml') || lower.endsWith('.yml')) {
     const reader = new FileReader();
     reader.onload = (ev) => {
       try {
-        const data: any = yaml.load(ev.target!.result as string);
-        if (data && Array.isArray(data.api_keys)) {
-          loadFullVault(data);
+        const data: unknown = yaml.load(ev.target!.result as string);
+        const record = objectRecord(data);
+        if (Array.isArray(record.api_keys)) {
+          loadFullVault(backupData(data));
           return;
         }
         // Flat KEY: value map → env-import modal.
@@ -394,8 +533,8 @@ export function handleFileSelect(input: HTMLInputElement) {
           return;
         }
         openEnvImportModal(vars);
-      } catch (err: any) {
-        showToast(`Invalid YAML: ${err.message}`, 'err', 4000);
+      } catch (err) {
+        showToast(`Invalid YAML: ${errorMessage(err)}`, 'err', 4000);
       }
     };
     reader.readAsText(file);
@@ -404,18 +543,33 @@ export function handleFileSelect(input: HTMLInputElement) {
   const reader = new FileReader();
   reader.onload = (ev) => {
     try {
-      const data = JSON.parse(ev.target!.result as string);
-      if (!Array.isArray(data.api_keys)) throw new Error('Missing api_keys array');
-      loadFullVault(data);
-    } catch (err: any) {
-      showToast(`Invalid: ${err.message}`, 'err', 4000);
+      const data: unknown = JSON.parse(ev.target!.result as string);
+      const record = objectRecord(data);
+      if (Array.isArray(record.api_keys)) {
+        loadFullVault(backupData(data));
+        return;
+      }
+      const vars: EnvVar[] =
+        data && typeof data === 'object' && !Array.isArray(data)
+          ? Object.entries(data).map(([name, value]) => ({
+              name,
+              value: typeof value === 'string' ? value : JSON.stringify(value),
+            }))
+          : [];
+      if (!vars.length) {
+        showToast('No importable data in JSON', 'err');
+        return;
+      }
+      openEnvImportModal(vars);
+    } catch (err) {
+      showToast(`Invalid: ${errorMessage(err)}`, 'err', 4000);
     }
   };
   reader.readAsText(file);
 }
 
 /** Replace the whole vault from a parsed `{ api_keys, projects?, user_categories? }` object. */
-function loadFullVault(data: any) {
+function loadFullVault(data: VaultData) {
   const projects = data.projects || [
     { id: 'Universal', name: 'Universal', description: 'All keys belong here by default' },
   ];
@@ -427,7 +581,7 @@ function loadFullVault(data: any) {
   st.vault.api_keys = data.api_keys;
   st.vault.user_categories = data.user_categories || [];
   st.vault.projects = projects;
-  persist();
+  void persist();
   // The whole vault was replaced — a project/tag/category selected against the
   // old one no longer resolves, and the freshly imported entries would render
   // into an empty grid.
