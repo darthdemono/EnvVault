@@ -1,0 +1,58 @@
+{
+  "cases": [
+    {
+      "name": "public prefix and large sibling id with secret key taint",
+      "bundle": {
+        "secretType": "bundle",
+        "extra_vars": [{ "key": "prefix", "value": ">", "public": true }]
+      },
+      "members": [
+        {
+          "provider": "Discord",
+          "bundle_slot": "discord",
+          "api_key": "bot-token",
+          "extra_vars": [{ "key": "id", "value": "012345678901234567", "public": true }]
+        }
+      ],
+      "template": "{prefix}{discord.id}:{discord.key}",
+      "expected": { "value": ">012345678901234567:bot-token", "secret": true }
+    },
+    {
+      "name": "public local template",
+      "bundle": {
+        "secretType": "bundle",
+        "extra_vars": [
+          { "key": "id", "value": "012345678901234567", "public": true },
+          { "key": "url", "value": "https://x/{id}", "kind": "template", "public": true }
+        ]
+      },
+      "members": [],
+      "template": "{url}",
+      "expected": { "value": "https://x/012345678901234567", "secret": false }
+    }
+  ],
+  "composites": [
+    {
+      "name": "sibling id, local scope and per-zone URL encoding",
+      "bundle": {
+        "secretType": "bundle",
+        "extra_vars": [{ "key": "scope", "value": "bot applications.commands", "public": true }]
+      },
+      "members": [
+        {
+          "provider": "Discord",
+          "bundle_slot": "discord",
+          "api_key": "secret/token",
+          "extra_vars": [{ "key": "id", "value": "123", "public": true }]
+        }
+      ],
+      "template": "https://discord.test/?client_id={discord.id}&scope={scope}&token={discord.key}",
+      "own_parts": [],
+      "kind": "link",
+      "expected": {
+        "value": "https://discord.test/?client_id=123&scope=bot%20applications.commands&token=secret%2Ftoken",
+        "secret": true
+      }
+    }
+  ]
+}
