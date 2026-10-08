@@ -1889,7 +1889,7 @@ pub fn merge_user_vault_write(
                 if bundle.is_none() && Some(bundle_id) == old_bundle {
                     continue;
                 }
-                if !bundle.is_some_and(&writable) {
+                if !bundle.is_some_and(writable) {
                     return Err(format!(
                         "Write permission denied for bundle membership in '{bundle_id}'"
                     ));
