@@ -1,0 +1,349 @@
+[
+  {
+    "prefix": "github_pat_",
+    "issuer": "GitHub",
+    "secret_type": "api_key",
+    "icon": "github",
+    "api_url": "https://api.github.com",
+    "acts_as": "user"
+  },
+  {
+    "prefix": "ghp_",
+    "issuer": "GitHub",
+    "secret_type": "api_key",
+    "icon": "github",
+    "api_url": "https://api.github.com",
+    "acts_as": "user"
+  },
+  {
+    "prefix": "gho_",
+    "issuer": "GitHub",
+    "secret_type": "api_key",
+    "icon": "github",
+    "api_url": "https://api.github.com",
+    "acts_as": "user"
+  },
+  {
+    "prefix": "ghs_",
+    "issuer": "GitHub",
+    "secret_type": "api_key",
+    "icon": "github",
+    "api_url": "https://api.github.com",
+    "acts_as": "installation"
+  },
+  {
+    "prefix": "glpat-",
+    "issuer": "GitLab",
+    "secret_type": "api_key",
+    "icon": "gitlab",
+    "api_url": "https://gitlab.com/api/v4"
+  },
+  {
+    "prefix": "sk-ant-",
+    "issuer": "Anthropic",
+    "secret_type": "api_key",
+    "icon": "anthropic",
+    "api_url": "https://api.anthropic.com"
+  },
+  {
+    "prefix": "sk-proj-",
+    "issuer": "OpenAI",
+    "secret_type": "api_key",
+    "icon": "openai",
+    "api_url": "https://api.openai.com/v1",
+    "acts_as": "user"
+  },
+  {
+    "prefix": "sk-svcacct-",
+    "issuer": "OpenAI",
+    "secret_type": "api_key",
+    "icon": "openai",
+    "api_url": "https://api.openai.com/v1",
+    "acts_as": "service"
+  },
+  {
+    "prefix": "sk-admin-",
+    "issuer": "OpenAI",
+    "secret_type": "api_key",
+    "icon": "openai",
+    "api_url": "https://api.openai.com/v1",
+    "acts_as": "admin"
+  },
+  {
+    "prefix": "sk-",
+    "issuer": "OpenAI",
+    "secret_type": "api_key",
+    "icon": "openai",
+    "api_url": "https://api.openai.com/v1"
+  },
+  {
+    "prefix": "xai-",
+    "issuer": "xAI",
+    "secret_type": "api_key",
+    "icon": "x",
+    "api_url": "https://api.x.ai/v1"
+  },
+  {
+    "prefix": "hf_",
+    "issuer": "HuggingFace",
+    "secret_type": "api_key",
+    "icon": "huggingface",
+    "api_url": "https://huggingface.co/api"
+  },
+  {
+    "prefix": "AKIA",
+    "issuer": "AWS",
+    "secret_type": "api_key",
+    "icon": "amazonaws"
+  },
+  {
+    "prefix": "ASIA",
+    "issuer": "AWS",
+    "secret_type": "api_key",
+    "icon": "amazonaws"
+  },
+  {
+    "prefix": "AIza",
+    "issuer": "Google",
+    "secret_type": "api_key",
+    "icon": "google"
+  },
+  {
+    "prefix": "ya29.",
+    "issuer": "Google",
+    "secret_type": "api_key",
+    "icon": "google"
+  },
+  {
+    "prefix": "xoxb-",
+    "issuer": "Slack",
+    "secret_type": "api_key",
+    "icon": "slack",
+    "api_url": "https://slack.com/api",
+    "acts_as": "bot"
+  },
+  {
+    "prefix": "xoxp-",
+    "issuer": "Slack",
+    "secret_type": "api_key",
+    "icon": "slack",
+    "api_url": "https://slack.com/api",
+    "acts_as": "user"
+  },
+  {
+    "prefix": "xapp-",
+    "issuer": "Slack",
+    "secret_type": "api_key",
+    "icon": "slack",
+    "api_url": "https://slack.com/api",
+    "acts_as": "installation"
+  },
+  {
+    "prefix": "sk_live_",
+    "issuer": "Stripe",
+    "secret_type": "api_key",
+    "icon": "stripe",
+    "api_url": "https://api.stripe.com",
+    "environment": "production",
+    "exposure": "server_only"
+  },
+  {
+    "prefix": "sk_test_",
+    "issuer": "Stripe",
+    "secret_type": "api_key",
+    "icon": "stripe",
+    "api_url": "https://api.stripe.com",
+    "environment": "testing",
+    "exposure": "server_only"
+  },
+  {
+    "prefix": "pk_live_",
+    "issuer": "Stripe",
+    "secret_type": "api_key",
+    "icon": "stripe",
+    "api_url": "https://api.stripe.com",
+    "environment": "production",
+    "exposure": "publishable"
+  },
+  {
+    "prefix": "pk_test_",
+    "issuer": "Stripe",
+    "secret_type": "api_key",
+    "icon": "stripe",
+    "api_url": "https://api.stripe.com",
+    "environment": "testing",
+    "exposure": "publishable"
+  },
+  {
+    "prefix": "rk_live_",
+    "issuer": "Stripe",
+    "secret_type": "api_key",
+    "icon": "stripe",
+    "api_url": "https://api.stripe.com",
+    "environment": "production",
+    "exposure": "server_only"
+  },
+  {
+    "prefix": "shpat_",
+    "issuer": "Shopify",
+    "secret_type": "api_key",
+    "icon": "shopify"
+  },
+  {
+    "prefix": "dop_v1_",
+    "issuer": "DigitalOcean",
+    "secret_type": "api_key",
+    "icon": "digitalocean",
+    "api_url": "https://api.digitalocean.com/v2"
+  },
+  {
+    "prefix": "doo_v1_",
+    "issuer": "DigitalOcean",
+    "secret_type": "api_key",
+    "icon": "digitalocean",
+    "api_url": "https://api.digitalocean.com/v2"
+  },
+  {
+    "prefix": "dckr_pat_",
+    "issuer": "Docker Hub",
+    "secret_type": "api_key",
+    "icon": "docker",
+    "api_url": "https://hub.docker.com/v2"
+  },
+  {
+    "prefix": "npm_",
+    "issuer": "npm",
+    "secret_type": "api_key",
+    "icon": "npm",
+    "api_url": "https://registry.npmjs.org"
+  },
+  {
+    "prefix": "pypi-",
+    "issuer": "PyPI",
+    "secret_type": "api_key",
+    "icon": "pypi",
+    "api_url": "https://upload.pypi.org/legacy/"
+  },
+  {
+    "prefix": "SG.",
+    "issuer": "SendGrid",
+    "secret_type": "api_key",
+    "icon": "sendgrid",
+    "api_url": "https://api.sendgrid.com/v3"
+  },
+  {
+    "prefix": "key-",
+    "issuer": "Mailgun",
+    "secret_type": "api_key",
+    "icon": "mailgun",
+    "api_url": "https://api.mailgun.net/v3"
+  },
+  {
+    "prefix": "tvly-",
+    "issuer": "Tavily",
+    "secret_type": "api_key",
+    "icon": "tavily"
+  },
+  {
+    "prefix": "fig_",
+    "issuer": "Figma",
+    "secret_type": "api_key",
+    "icon": "figma",
+    "api_url": "https://api.figma.com/v1"
+  },
+  {
+    "prefix": "atlasv1.",
+    "issuer": "MongoDB Atlas",
+    "secret_type": "api_key",
+    "icon": "mongodb"
+  },
+  {
+    "prefix": "lin_api_",
+    "issuer": "Linear",
+    "secret_type": "api_key",
+    "icon": "linear",
+    "api_url": "https://api.linear.app/graphql"
+  },
+  {
+    "prefix": "ntn_",
+    "issuer": "Notion",
+    "secret_type": "api_key",
+    "icon": "notion",
+    "api_url": "https://api.notion.com/v1"
+  },
+  {
+    "prefix": "secret_",
+    "issuer": "Notion",
+    "secret_type": "api_key",
+    "icon": "notion",
+    "api_url": "https://api.notion.com/v1"
+  },
+  {
+    "prefix": "nvapi-",
+    "issuer": "NVIDIA",
+    "secret_type": "api_key",
+    "icon": "nvidia"
+  },
+  {
+    "prefix": "gsk_",
+    "issuer": "Groq",
+    "secret_type": "api_key",
+    "icon": "groq",
+    "api_url": "https://api.groq.com/openai/v1"
+  },
+  {
+    "prefix": "r8_",
+    "issuer": "Replicate",
+    "secret_type": "api_key",
+    "icon": "replicate",
+    "api_url": "https://api.replicate.com/v1"
+  },
+  {
+    "prefix": "pcsk_",
+    "issuer": "Pinecone",
+    "secret_type": "api_key",
+    "icon": "pinecone"
+  },
+  {
+    "prefix": "ghu_",
+    "issuer": "GitHub",
+    "secret_type": "api_key",
+    "icon": "github",
+    "api_url": "https://api.github.com",
+    "acts_as": "user"
+  },
+  {
+    "prefix": "ghr_",
+    "issuer": "GitHub",
+    "secret_type": "oauth_client",
+    "icon": "github"
+  },
+  {
+    "prefix": "xoxe-",
+    "issuer": "Slack",
+    "secret_type": "oauth_client",
+    "icon": "slack"
+  },
+  {
+    "prefix": "xoxc-",
+    "issuer": "Slack",
+    "secret_type": "cookie",
+    "icon": "slack"
+  },
+  {
+    "prefix": "rk_test_",
+    "issuer": "Stripe",
+    "secret_type": "api_key",
+    "icon": "stripe",
+    "api_url": "https://api.stripe.com",
+    "environment": "testing",
+    "exposure": "server_only"
+  },
+  {
+    "prefix": "whsec_",
+    "issuer": "Stripe",
+    "secret_type": "api_key",
+    "icon": "stripe",
+    "exposure": "verify_only"
+  }
+]
