@@ -28,6 +28,7 @@
 
 import { st, inTauri } from './state';
 import type { VaultEntry } from './types';
+import { invokeTauri } from './tauri';
 
 // ── Shape ─────────────────────────────────────────────────────────────────
 
@@ -409,10 +410,7 @@ export function groupCode(code: string): string {
 
 // ── Live codes (asks Rust; see the file header) ───────────────────────────
 
-const invoke = (cmd: string, args?: Record<string, unknown>) =>
-  (
-    window as unknown as { __TAURI__?: { core?: { invoke?: (c: string, a?: unknown) => unknown } } }
-  ).__TAURI__?.core?.invoke?.(cmd, args) as Promise<unknown> | undefined;
+const invoke = invokeTauri;
 
 /** What `entry_totp_code` hands back. */
 export interface LiveCode {
