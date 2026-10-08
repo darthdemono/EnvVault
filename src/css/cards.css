@@ -942,3 +942,48 @@
   border-radius: 8px;
   font-size: 12.5px;
 }
+
+/* ── Bundle card (Phase 24.1) ──────────────────────────────────────────────
+   The bundle reuses the pool card's wrapper, but its header carries a dozen
+   controls and its members carry their own control rows; none of these classes
+   had a rule, so everything sat on one non-wrapping line and clipped. */
+.bundle-card-wrap .pool-card-summary {
+  flex-wrap: wrap;
+  row-gap: 6px;
+}
+.bundle-card-wrap .pool-card-name {
+  flex: 1 1 8em;
+  min-width: 0;
+}
+.bundle-card-wrap .pool-card-badge {
+  margin-left: 0;
+}
+.bundle-card-wrap .pool-card-members {
+  grid-template-columns: repeat(auto-fill, minmax(min(300px, 100%), 1fr));
+  align-items: start;
+}
+.bundle-member {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+.bundle-member h4 {
+  margin: 0;
+}
+.bundle-member-controls,
+.bundle-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.bundle-actions {
+  grid-column: 1 / -1;
+}
+/* A member card inside a bundle is sized by its content, not the grid floor. */
+.bundle-member .card:not(.expanded) {
+  min-height: 0;
+}
+.bundle-member .card-foot {
+  flex-wrap: wrap;
+}
