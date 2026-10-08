@@ -152,49 +152,21 @@
         <div class="sidebar-section" id="sidebar-section-all">
           <div class="sidebar-heading">All Secrets <button class="section-collapse-btn" data-section="all" title="Collapse">▾</button></div>
           <div class="section-body">
+          <!-- Phase 24.2 removed the old single-select, 7-of-26-type sidebar
+               sub-list here: it was redundant with the type chip bar above the
+               grid (`#type-chip-bar`, `renderTypeChipBar` in render.ts), which
+               is multi-select, dynamic (every type actually present, not a
+               static seven) and has its own counts. Two controls answering the
+               same question with different rules — pick one type here vs pick
+               several there — was the "which of these is redundant" complaint
+               this removal answers. "All Secrets" is the only clear-filters
+               affordance a sidebar item needs; the chip bar is where type
+               selection lives now. -->
           <button class="sidebar-item active" data-filter-type="all" data-filter-value="">
             <span class="sidebar-icon">◈</span>
             <span class="sidebar-label">All Secrets</span>
             <span class="sidebar-count" id="count-all">0</span>
           </button>
-          <div id="secret-type-list" class="sidebar-subtree">
-            <button class="sidebar-item sidebar-subitem" data-filter-type="secret_type" data-filter-value="api_key">
-              <span class="sidebar-icon sidebar-subicon">⬥</span>
-              <span class="sidebar-label">API Keys</span>
-              <span class="sidebar-count" id="count-st-api_key">0</span>
-            </button>
-            <button class="sidebar-item sidebar-subitem" data-filter-type="secret_type" data-filter-value="password">
-              <span class="sidebar-icon sidebar-subicon">⬥</span>
-              <span class="sidebar-label">Passwords</span>
-              <span class="sidebar-count" id="count-st-password">0</span>
-            </button>
-            <button class="sidebar-item sidebar-subitem" data-filter-type="secret_type" data-filter-value="env_var">
-              <span class="sidebar-icon sidebar-subicon">⬥</span>
-              <span class="sidebar-label">Env Variables</span>
-              <span class="sidebar-count" id="count-st-env_var">0</span>
-            </button>
-            <button class="sidebar-item sidebar-subitem" data-filter-type="secret_type"
-              data-filter-value="connection_string">
-              <span class="sidebar-icon sidebar-subicon">⬥</span>
-              <span class="sidebar-label">Connections</span>
-              <span class="sidebar-count" id="count-st-connection_string">0</span>
-            </button>
-            <button class="sidebar-item sidebar-subitem" data-filter-type="secret_type" data-filter-value="ssh_key">
-              <span class="sidebar-icon sidebar-subicon">⬥</span>
-              <span class="sidebar-label">SSH Keys</span>
-              <span class="sidebar-count" id="count-st-ssh_key">0</span>
-            </button>
-            <button class="sidebar-item sidebar-subitem" data-filter-type="secret_type" data-filter-value="certificate">
-              <span class="sidebar-icon sidebar-subicon">⬥</span>
-              <span class="sidebar-label">Certificates</span>
-              <span class="sidebar-count" id="count-st-certificate">0</span>
-            </button>
-            <button class="sidebar-item sidebar-subitem" data-filter-type="secret_type" data-filter-value="file_blob">
-              <span class="sidebar-icon sidebar-subicon">⬥</span>
-              <span class="sidebar-label">File Blobs</span>
-              <span class="sidebar-count" id="count-st-file_blob">0</span>
-            </button>
-          </div>
           </div>
         </div>
         <div class="sidebar-section" id="sidebar-section-price">
@@ -317,6 +289,14 @@
           <button class="tool-nav-btn" data-tool="base64">
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg>
             Base64
+          </button>
+          <button class="tool-nav-btn" data-tool="uid-registry">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 9h16M4 15h16M10 3L8 21M16 3l-2 18"/></svg>
+            Unique IDs
+          </button>
+          <button class="tool-nav-btn" data-tool="enrich">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"/></svg>
+            Enrich
           </button>
           <button class="tool-nav-btn" data-tool="health">
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
@@ -449,6 +429,7 @@
         <div id="bulk-bar" class="bulk-bar">
           <span id="bulk-count" class="bulk-count">0 selected</span>
           <button id="bulk-delete-btn" class="btn btn-xs danger">Delete Selected</button>
+          <button id="bulk-bundle-btn" class="btn btn-xs btn-ghost">Bundle Selected</button>
           <button id="bulk-export-btn" class="btn btn-xs btn-ghost">Export .env</button>
           <button id="bulk-cancel-btn" class="btn btn-xs btn-ghost">Cancel</button>
         </div>
@@ -759,12 +740,94 @@
           <label for="f-key" class="form-label" id="f-key-label" data-field="api_key">API Key <span class="req">*</span></label>
           <div class="key-field-wrap">
             <input class="form-input mono" id="f-key" type="text" placeholder="Your API key or access token">
-            <button type="button" id="f-key-generate" class="btn btn-ghost btn-sm key-gen-btn" title="Generate value">
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/>
-              </svg>
-              Generate
-            </button>
+            <div class="key-gen-wrap">
+              <button type="button" id="f-key-generate" class="btn btn-ghost btn-sm key-gen-btn" title="Generate value">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/>
+                </svg>
+                Generate
+              </button>
+              <!-- A8 (2026-09-15): the Tools panel's generators sit behind the
+                   modal overlay, so "open Tools, generate, Inject" is unreachable
+                   while this form is open — the two states are mutually
+                   exclusive. This popover is the same generators, reachable
+                   without leaving the form: `wireGeneratorPopover` in modals.ts. -->
+              <button type="button" id="f-key-generate-caret" class="btn btn-ghost btn-sm key-gen-caret-btn"
+                title="More generators" aria-haspopup="true" aria-expanded="false" aria-controls="f-gen-popover">
+                <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                  <path d="M6 9l6 6 6-6"/>
+                </svg>
+              </button>
+              <div class="gen-popover" id="f-gen-popover" hidden role="dialog" aria-label="Generators">
+                <div class="gen-popover-tabs" role="tablist" aria-label="Generator type">
+                  <button type="button" class="gen-tab-btn active" data-gen-tab="bytes" role="tab" aria-selected="true">Secret</button>
+                  <button type="button" class="gen-tab-btn" data-gen-tab="password" role="tab" aria-selected="false">Password</button>
+                  <button type="button" class="gen-tab-btn" data-gen-tab="apikey" role="tab" aria-selected="false">API Key</button>
+                  <button type="button" class="gen-tab-btn" data-gen-tab="hash" role="tab" aria-selected="false">Hash</button>
+                </div>
+
+                <div class="gen-tab-pane" data-gen-pane="bytes">
+                  <div class="gen-byte-row">
+                    <button type="button" class="gen-byte-btn" data-bytes="16">16B</button>
+                    <button type="button" class="gen-byte-btn active" data-bytes="32">32B</button>
+                    <button type="button" class="gen-byte-btn" data-bytes="64">64B</button>
+                  </div>
+                  <select class="form-input" id="gp-bytes-format" aria-label="Encoding">
+                    <option value="hex">hex</option>
+                    <option value="base64">base64</option>
+                    <option value="base64url">base64url</option>
+                  </select>
+                </div>
+
+                <div class="gen-tab-pane" data-gen-pane="password" hidden>
+                  <label class="gen-inline-label" for="gp-pw-length">Length: <span id="gp-pw-len-display">20</span></label>
+                  <input type="range" id="gp-pw-length" min="8" max="64" value="20">
+                  <div class="gen-checks">
+                    <label><input type="checkbox" id="gp-pw-upper" checked> A-Z</label>
+                    <label><input type="checkbox" id="gp-pw-lower" checked> a-z</label>
+                    <label><input type="checkbox" id="gp-pw-digits" checked> 0-9</label>
+                    <label><input type="checkbox" id="gp-pw-symbols"> symbols</label>
+                    <label><input type="checkbox" id="gp-pw-noambig"> no ambiguous</label>
+                  </div>
+                </div>
+
+                <div class="gen-tab-pane" data-gen-pane="apikey" hidden>
+                  <select class="form-input" id="gp-ak-pattern" aria-label="Key pattern">
+                    <option value="hex-32">hex, 32 bytes</option>
+                    <option value="hex-16">hex, 16 bytes</option>
+                    <option value="base64-32">base64, 32 bytes</option>
+                    <option value="bearer">bearer token (base64url)</option>
+                    <option value="sk-prefix">sk-… prefix</option>
+                    <option value="jwt-secret">JWT signing secret</option>
+                  </select>
+                </div>
+
+                <div class="gen-tab-pane" data-gen-pane="hash" hidden>
+                  <textarea class="form-input mono" id="gp-hash-input" rows="2" placeholder="text to hash" aria-label="Text to hash"></textarea>
+                  <div class="gen-inline-row">
+                    <select class="form-input" id="gp-hash-algo" aria-label="Hash algorithm">
+                      <option value="SHA-256">SHA-256</option>
+                      <option value="SHA-1">SHA-1</option>
+                      <option value="SHA-384">SHA-384</option>
+                      <option value="SHA-512">SHA-512</option>
+                    </select>
+                    <select class="form-input" id="gp-hash-fmt" aria-label="Output format">
+                      <option value="hex">hex</option>
+                      <option value="base64">base64</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div class="gen-popover-actions">
+                  <button type="button" class="btn btn-sm" id="gp-generate-btn">Generate</button>
+                </div>
+                <output class="gen-popover-output mono" id="gp-output"></output>
+                <div class="gen-popover-actions">
+                  <button type="button" class="btn btn-ghost btn-sm" id="gp-copy-btn" disabled>Copy</button>
+                  <button type="button" class="btn btn-primary btn-sm" id="gp-use-btn" disabled>Use</button>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
         <div class="form-row-2" id="f-role-row">
@@ -816,6 +879,14 @@
           <label for="f-secret" class="form-label" data-field="api_secret">API Secret <span class="opt">optional</span></label>
           <input class="form-input mono" id="f-secret" type="text" placeholder="Client secret or shared secret">
         </div>
+        <div class="form-group" id="f-local-preset-group" style="display:none">
+          <label for="f-local-preset" class="form-label" title="Fills 'Sent as' for the self-hosted apps whose convention is well known. It only sets the two fields below; nothing is contacted.">
+            Self-hosted app <span class="opt">optional</span>
+          </label>
+          <select id="f-local-preset" class="form-input">
+            <option value="">Choose to fill “Sent as”…</option>
+          </select>
+        </div>
         <div class="form-row-2" id="f-auth-row">
           <div class="form-group">
             <label for="f-auth-scheme" class="form-label" data-field="auth_scheme" title="How this credential is sent. It is what turns a stored string into a working request, and it is the one thing about a credential the vault did not hold — two entries that look identical are used completely differently.">
@@ -834,6 +905,12 @@
               Header / parameter name <span class="opt">optional</span>
             </label>
             <input class="form-input mono" id="f-auth-param" type="text" autocomplete="off" placeholder="X-Api-Key">
+          </div>
+        </div>
+        <div class="form-group" id="f-capture-group" style="display:none">
+          <div class="cookie-split-row">
+            <span class="form-label">Paste a DevTools capture (Copy as cURL, HAR or Set-Cookie)</span>
+            <button type="button" class="btn btn-ghost btn-sm" id="f-capture-btn">Import capture…</button>
           </div>
         </div>
         <div class="form-group" id="f-cookie-split-group" style="display:none">
@@ -855,6 +932,11 @@
           </select>
           <p class="form-hint" id="f-session-preset-status"></p>
           <button type="button" class="btn btn-ghost btn-sm" id="f-session-preset-copy-header" style="display:none">Copy derived header</button>
+        </div>
+        <div class="form-group" id="f-storage-tokens-group" style="display:none">
+          <label for="f-storage-tokens" class="form-label">Browser storage tokens <span class="opt">optional JSON array</span></label>
+          <textarea class="form-input mono" id="f-storage-tokens" rows="4" spellcheck="false" placeholder='[{"origin":"https://example.com","storage":"local","key":"token","value":"…"}]'></textarea>
+          <p class="form-hint">Origins must be exact http(s) origins. Values are stored encrypted with this entry.</p>
         </div>
         <div class="form-group" id="f-mount-path-group" style="display:none">
           <label for="f-mount-path" class="form-label" data-field="mount_path" title="Where the consumer expects to find this file. A GCP service-account JSON, an Apple .p8 and a kubeconfig are all consumed by pointing at them, so the variable names the path and never the contents.">
@@ -1275,6 +1357,13 @@
               </div>
               <button id="s-run-onboarding" class="btn btn-sm">Run setup again</button>
             </div>
+            <div class="settings-row">
+              <div class="settings-label" id="s-catalogue-label">
+                Provider catalogue
+                <div class="settings-hint" id="s-catalogue-status">Checking…</div>
+              </div>
+              <button id="s-catalogue-update" class="btn btn-sm" aria-describedby="s-catalogue-status">Update</button>
+            </div>
           </div>
           <div class="settings-section">
             <div class="settings-section-title">Secrets Display</div>
@@ -1362,6 +1451,20 @@
               <button id="settings-import-btn" class="btn btn-ghost btn-sm">Import (JSON / YAML / .env)</button>
             </div>
             <div class="settings-row">
+              <div class="settings-label" id="s-archive-label">
+                Full-fidelity archive
+                <div class="settings-hint" id="s-archive-hint">
+                  The database file and its salt in one encrypted file (the CLI's
+                  <code>backup archive</code>). Lock other tools that use this vault first.
+                  Restoring replaces this machine's vault and locks the app.
+                </div>
+              </div>
+              <div style="display:flex;gap:6px;flex-wrap:wrap">
+                <button id="s-archive-btn" class="btn btn-ghost btn-sm" aria-describedby="s-archive-hint">Create archive…</button>
+                <button id="s-archive-restore-btn" class="btn btn-ghost btn-sm" aria-describedby="s-archive-hint">Restore archive…</button>
+              </div>
+            </div>
+            <div class="settings-row">
               <div class="settings-label">Export vault</div>
               <div style="display:flex;gap:6px;flex-wrap:wrap">
                 <button id="settings-export-dotenv" class="btn btn-ghost btn-sm">.env</button>
@@ -1427,6 +1530,22 @@
                 </div>
               </div>
               <label class="toggle"><input type="checkbox" id="s-keep-local-unlocked" aria-labelledby="s-keep-local-unlocked-label" aria-describedby="s-keep-local-unlocked-hint"><span class="toggle-track"></span></label>
+            </div>
+          </div>
+          <div class="settings-section">
+            <div class="settings-section-title">Randomness</div>
+            <div class="settings-row">
+              <div class="settings-label">
+                <span class="settings-label-text" id="s-entropy-label">Entropy source for generators</span>
+                <div class="settings-hint" id="s-entropy-hint">
+                  The Tools and form generators draw from this. A hardware source is mixed with
+                  the operating system's randomness, never used alone. The CLI's
+                  <code>--entropy-source</code>.
+                </div>
+              </div>
+              <select id="s-entropy-source" class="sort-select" aria-labelledby="s-entropy-label" aria-describedby="s-entropy-hint">
+                <option value="os">Operating system</option>
+              </select>
             </div>
           </div>
           <div class="settings-section">
@@ -1561,6 +1680,15 @@
         <button id="add2fa-cancel" class="btn btn-ghost btn-sm">Cancel</button>
         <button id="add2fa-save" class="btn btn-primary btn-sm">Add</button>
       </div>
+    </div>
+  </div>
+
+  <!-- Wi-Fi QR (Phase 24.5). Filled on open and emptied on close. -->
+  <div id="wifi-qr-overlay" class="shortcuts-overlay" role="dialog" aria-modal="true" aria-label="Wi-Fi QR code">
+    <div class="shortcuts-box wifi-qr-box">
+      <div class="shortcuts-header">Join Wi-Fi<button id="wifi-qr-close" class="icon-btn" aria-label="Close">✕</button></div>
+      <div id="wifi-qr-body" class="wifi-qr-body"></div>
+      <p class="settings-hint">Anyone who can see this screen can join the network.</p>
     </div>
   </div>
 
