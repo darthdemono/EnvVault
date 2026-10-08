@@ -10,9 +10,15 @@ import { st, resetViewState } from '../src/ts/state';
 import { loadRealIndexHtml, makeEntry, makeVault, resetState } from './helpers';
 
 let confirmAnswer = true;
+let promptAnswer = 'Bundle';
 vi.mock('../src/ts/utils', async (importOriginal) => {
   const real = await importOriginal<typeof import('../src/ts/utils')>();
-  return { ...real, showToast: () => {}, showConfirm: async () => confirmAnswer };
+  return {
+    ...real,
+    showToast: () => {},
+    showConfirm: async () => confirmAnswer,
+    showPrompt: async () => promptAnswer,
+  };
 });
 
 const $ = (id: string) => document.getElementById(id)!;
@@ -43,6 +49,7 @@ beforeEach(() => {
   resetState(st);
   resetViewState();
   confirmAnswer = true;
+  promptAnswer = 'Bundle';
 });
 
 describe('bulk selection identity', () => {
@@ -194,6 +201,60 @@ describe('bulk export', () => {
   });
 });
 
+describe('empty-bundle health action', () => {
+  beforeEach(() => {
+    st.vault = makeVault({
+      api_keys: [makeEntry({ id: 'empty-bundle', provider: 'Unused', secretType: 'bundle' })],
+    });
+  });
+
+  it('offers deletion and removes the empty bundle after confirmation', async () => {
+    $('health-scan-btn').click();
+    const action = document.querySelector<HTMLElement>(
+      '[data-action="health-delete-empty-bundle"]',
+    );
+    expect(action).not.toBeNull();
+    action!.click();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(st.vault.api_keys).toHaveLength(0);
+  });
+
+  it('rechecks emptiness after confirmation before deleting', async () => {
+    $('health-scan-btn').click();
+    document.querySelector<HTMLElement>('[data-action="health-delete-empty-bundle"]')!.click();
+    st.vault.api_keys[0].extra_vars = [{ key: 'new', value: 'keep' }];
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(st.vault.api_keys).toHaveLength(1);
+    expect(st.vault.api_keys[0].extra_vars?.[0].value).toBe('keep');
+  });
+});
+
+describe('pool-safe bundle creation', () => {
+  it('offers to include the rest of a pool when only one member is selected', async () => {
+    const save = vi.fn().mockResolvedValue(undefined);
+    st.store = { save, load: async () => null, isRemote: false, vaultId: 'test' };
+    st.vault = makeVault({
+      api_keys: [
+        makeEntry({ id: 'pool-a', provider: 'A', pool: 'rotation' }),
+        makeEntry({ id: 'pool-b', provider: 'B', pool: 'rotation' }),
+      ],
+    });
+    st.bulkMode = true;
+    st.bulkSelected.add('pool-a');
+    promptAnswer = 'Rotating credentials';
+
+    $('bulk-bundle-btn').click();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    const bundle = st.vault.api_keys.find((entry) => entry.secretType === 'bundle');
+    expect(bundle).toBeDefined();
+    expect(
+      st.vault.api_keys.filter((entry) => entry.bundle_id === bundle?.id).map((e) => e.id),
+    ).toEqual(['pool-a', 'pool-b']);
+    expect(save).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('normalizeImported', () => {
   let normalizeImported: typeof import('../src/ts/tools').normalizeImported;
   let sorted: typeof import('../src/ts/filters').sorted;
@@ -275,5 +336,25 @@ describe('diff tool identity', () => {
     expect(values).toContain('a');
     expect(values).toContain('b');
     expect(values).not.toContain('0');
+  });
+});
+
+describe('diff tool escaping', () => {
+  it('renders hostile provider names and values as text', async () => {
+    const TAG = '<img src=x onerror=alert(1)>';
+    st.vault = makeVault({
+      api_keys: [
+        makeEntry({ id: 'a', provider: TAG, purpose: TAG }),
+        makeEntry({ id: 'b', provider: '" onmouseover="x" y="', purpose: '' }),
+      ],
+    });
+    document.querySelector<HTMLElement>('.tool-nav-btn[data-tool="diff"]')?.click();
+    ($('diff-a') as HTMLSelectElement).value = 'a';
+    ($('diff-b') as HTMLSelectElement).value = 'b';
+    $('diff-run').click();
+    const out = $('diff-output');
+    expect(out.querySelector('img')).toBeNull();
+    expect(out.querySelector('[onmouseover]')).toBeNull();
+    expect(out.textContent).toContain(TAG);
   });
 });
