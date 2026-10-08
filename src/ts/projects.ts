@@ -52,7 +52,7 @@ export async function deleteCategory(name: string) {
   });
   if (st.filter.type === 'category' && doomed(st.filter.value))
     st.filter = { type: 'all', value: '' };
-  persist();
+  void persist();
   triggerRender();
 }
 
@@ -79,7 +79,7 @@ export async function renameCategory(name: string) {
   ) {
     st.filter = { type: 'category', value: remap(st.filter.value) };
   }
-  persist();
+  void persist();
   triggerRender();
 }
 
@@ -182,7 +182,7 @@ export async function renameProject(id: string) {
     if (selected && idRemap.has(selected)) st.currentSelectedProjectIds = [idRemap.get(selected)!];
   }
 
-  persist();
+  void persist();
   triggerRender();
   showToast(`Renamed to "${newName}"`, 'ok');
 }
@@ -246,7 +246,7 @@ export async function deleteProject(id: string) {
   else if (selected && idRemap.has(selected))
     st.currentSelectedProjectIds = [idRemap.get(selected)!];
 
-  persist();
+  void persist();
   triggerRender();
   showToast(`Project "${project.name}" deleted`, 'ok');
 }
@@ -329,7 +329,7 @@ export function saveCategoryCreate() {
     return;
   }
   st.vault.user_categories.push(name);
-  persist();
+  void persist();
   closeCategoryCreateModal();
   triggerRender();
   showToast(`Created "${name}"`, 'ok');
@@ -405,7 +405,7 @@ export function saveProjectCreate() {
     }
   }
   st.vault.projects.push(newProject);
-  persist();
+  void persist();
   closeProjectCreateModal();
   triggerRender();
   showToast(`Created "${trimmed}"`, 'ok');
