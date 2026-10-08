@@ -1,0 +1,67 @@
+[graph]
+all-features = true
+
+# Every ignore below names the advisory, why it does not apply or cannot be fixed
+# here, and what would end it. An ignore without a reason is how this list rots.
+
+[advisories]
+version = 2
+yanked = "deny"
+ignore = [
+  # Transitive through Tauri's GTK3 binding stack; build-time macro crate, never
+  # linked into the shipped program. Ends when Tauri moves off gtk-rs 0.18.
+  { id = "RUSTSEC-2024-0370", reason = "proc-macro-error: build-time only, via gtk/glib-macros (Tauri)" },
+  # rust-unic, via tauri-utils -> urlpattern. Used to parse Tauri's own config
+  # URL patterns at build time; no untrusted input reaches it.
+  { id = "RUSTSEC-2025-0075", reason = "unic-char-range: unmaintained, via tauri-utils" },
+  { id = "RUSTSEC-2025-0080", reason = "unic-common: unmaintained, via tauri-utils" },
+  { id = "RUSTSEC-2025-0081", reason = "unic-char-property: unmaintained, via tauri-utils" },
+  { id = "RUSTSEC-2025-0098", reason = "unic-ucd-version: unmaintained, via tauri-utils" },
+  { id = "RUSTSEC-2025-0100", reason = "unic-ucd-ident: unmaintained, via tauri-utils" },
+  # quick-xml 0.38 via plist via tauri-utils: parses Tauri's own macOS plist
+  # templates at build time, never untrusted XML. Needs Tauri to move to >=0.41.
+  { id = "RUSTSEC-2026-0194", reason = "quick-xml: build-time plist parsing of our own files (Tauri)" },
+  { id = "RUSTSEC-2026-0195", reason = "quick-xml: build-time plist parsing of our own files (Tauri)" },
+  # Marvin Attack on RSA decryption timing. Pulled in by ssh-key's `crypto`
+  # feature (exactly pinned in AGENTS.md). EnvVault generates RSA/ed25519 keys and
+  # never performs RSA private-key decryption on attacker-chosen ciphertext, which
+  # is the precondition. There is no patched release.
+  { id = "RUSTSEC-2023-0071", reason = "rsa: no fix exists; no RSA decryption oracle is exposed" },
+  # rustls-pemfile is archived. It reads PEM of the server's own cert/key and the
+  # user's --cacert; migrating to rustls-pki-types' PemObject is a follow-up.
+  { id = "RUSTSEC-2025-0134", reason = "rustls-pemfile: unmaintained; reads operator-supplied PEM only" },
+  # EXACT-PINNED crates (AGENTS.md, Dependency Pinning). Bumping a pin is the
+  # maintainer's decision, so these are recorded rather than silently changed:
+  #  - rand =0.8.5: unsound only with a custom `log` logger calling `rand::rng()`
+  #    (0.9 API); this tree uses 0.8's thread_rng and installs no such logger.
+  #    Fix is the 0.8.6 patch release.
+  { id = "RUSTSEC-2026-0097", reason = "rand =0.8.5 pinned; precondition (custom logger + rand::rng) absent. Bump to =0.8.6" },
+  #  - time =0.3.37: stack exhaustion parsing nested RFC 2822 comments. The one
+  #    place this crate parses attacker-supplied RFC 2822 (a pasted Set-Cookie
+  #    Expires) rejects '(' and long input first, with a test. Bump to >=0.3.47.
+  { id = "RUSTSEC-2026-0009", reason = "time =0.3.37 pinned; hostile RFC 2822 input is rejected before parsing. Bump to >=0.3.47" },
+]
+
+[licenses]
+version = 2
+# MPL-2.0 is file-level copyleft: it binds modifications to those files, not the
+# program that links them, and is how Tauri's CSS stack (cssparser, selectors,
+# option-ext, dtoa-short) is licensed. CC0-1.0 and CDLA-Permissive-2.0 are
+# permissive; LLVM-exception only widens Apache-2.0.
+allow = [
+  "MIT", "Apache-2.0", "Apache-2.0 WITH LLVM-exception", "BSD-2-Clause", "BSD-3-Clause",
+  "ISC", "Unicode-3.0", "Zlib", "MPL-2.0", "CC0-1.0", "CDLA-Permissive-2.0",
+]
+confidence-threshold = 0.8
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+# `{ path = "../vault-core" }` has no version; that is not a wildcard registry
+# dependency.
+allow-wildcard-paths = true
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
