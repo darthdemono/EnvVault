@@ -556,6 +556,23 @@ fn declared_roles_beat_the_alias_table() {
     );
 }
 
+/// `${bundle:…}` references — Phase 24.1. Pinned by `bundle-refs.json`.
+#[test]
+fn bundle_references_resolve_like_the_app() {
+    let doc: Value = serde_json::from_str(&golden("bundle-refs.json")).expect("fixture parses");
+    let entries = doc["entries"].as_array().expect("entries").clone();
+    for c in doc["cases"].as_array().expect("cases") {
+        let inner = c["ref"].as_str().unwrap();
+        let got = envv_cli::refs::resolve_ref(&entries, &[], inner, "api_key", 0);
+        assert_eq!(
+            got.as_deref(),
+            c["expect"].as_str(),
+            "{}",
+            c["why"].as_str().unwrap_or("")
+        );
+    }
+}
+
 /// Copy profiles — Phase 23, step 3. A sixth twin pair.
 ///
 /// It exists twice because the app's Copy button puts the text on the clipboard
