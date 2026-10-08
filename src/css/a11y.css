@@ -100,3 +100,15 @@
     outline: 2px solid Highlight !important;
   }
 }
+
+/* Phase 27: WCAG 2.2 target size (2.5.8) is 24x24 CSS px. The UI lab measured
+   39 controls under it; a floor here fixes them all without touching each
+   component's own sizing. Checkboxes and radios are excluded: the label is the
+   target, and growing the glyph distorts rows. */
+button,
+[role="button"],
+select,
+a[href]:not(.skip-link) {
+  min-width: 24px;
+  min-height: 24px;
+}
