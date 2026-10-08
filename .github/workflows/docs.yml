@@ -16,6 +16,10 @@ name: Docs
 on:
   push:
     branches: [main]
+  # Re-stamps the signed provider catalogue (Phase 31) so a stale one is visible
+  # in `generated_at`. Best-effort: Actions schedules run late under load.
+  schedule:
+    - cron: "17 4 * * *"
   workflow_dispatch:
 
 permissions:
@@ -36,7 +40,7 @@ jobs:
     name: Build both references
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       # graphviz is not optional: Doxyfile sets HAVE_DOT=YES, and without `dot`
       # every include graph silently becomes a broken image rather than an
@@ -57,18 +61,21 @@ jobs:
             librsvg2-dev \
             mold
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
           cache: npm
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@bc2d2e71bd35c5549942babaa51a89c586b981d1 # v2.8.1
         with:
           key: docs
 
       - run: npm ci
+
+      - name: Install mdBook
+        run: cargo install mdbook --locked --version 0.4.52
 
       # tauri-build fails outright when frontendDist ("../dist") is missing, and
       # `cargo doc` reaches the app crate.
@@ -116,6 +123,7 @@ jobs:
 
           rm -rf site
           mkdir -p site
+          mdbook build book --dest-dir ../site/book
           cp -r docs/ts   site/ts
           cp -r target/doc site/rust
 
@@ -162,6 +170,10 @@ jobs:
             <div class="v">API reference &middot; version ${VERSION} &middot; commit ${GITHUB_SHA:0:7}</div>
             <ul>
               <li>
+                <a href="book/">Guide</a>
+                <p>Architecture, security model, CLI reference and roadmap.</p>
+              </li>
+              <li>
                 <a href="ts/index.html">TypeScript frontend</a>
                 <p>
                   The 24 modules under <code>src/ts/</code>, built with Doxygen.
@@ -185,9 +197,30 @@ jobs:
 
           du -sh site/ts site/rust
 
-      - uses: actions/configure-pages@v5
+      # Phase 31. The private key is the CATALOGUE_SIGNING_KEY secret (64 hex
+      # digits); its public half is pinned in vault-core/src/catalogue.rs. A fork
+      # without the secret publishes no catalogue, and clients fall back to the
+      # table compiled into the binary.
+      - name: Sign the provider catalogue
+        env:
+          CATALOGUE_SIGNING_KEY: ${{ secrets.CATALOGUE_SIGNING_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "${CATALOGUE_SIGNING_KEY:-}" ]; then
+            echo "No CATALOGUE_SIGNING_KEY; publishing without a catalogue."
+            exit 0
+          fi
+          umask 077
+          printf '%s' "$CATALOGUE_SIGNING_KEY" > "$RUNNER_TEMP/cat.key"
+          mkdir -p site/catalogue
+          cargo run --locked -q -p envv-cli -- catalogue sign catalogue/providers.json \
+            --key-file "$RUNNER_TEMP/cat.key" -o site/catalogue/catalogue.json
+          rm -f "$RUNNER_TEMP/cat.key"
 
-      - uses: actions/upload-pages-artifact@v3
+      - uses: actions/configure-pages@983d7736d9b0ae728b81ab479565c72886d7745b # v5.0.0
+
+      - uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa # v3.0.1
         with:
           path: site
 
@@ -203,4 +236,4 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e # v4.0.5
