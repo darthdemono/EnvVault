@@ -1,0 +1,3 @@
+{
+  "settings-backup-pw": "A password for the encrypted backup action, not a stored setting; it is read when Export is pressed."
+}
