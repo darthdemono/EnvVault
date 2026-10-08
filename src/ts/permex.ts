@@ -243,13 +243,30 @@ export function evaluateSrc(src: string, entry: VaultEntry, projects: Project[])
   }
 }
 
+/** Combines class and individual rules exactly as the server does. */
+export function combine(classExpr?: Expr, individualExpr?: Expr): Expr | undefined {
+  if (classExpr && individualExpr) return { kind: 'and', a: classExpr, b: individualExpr };
+  return classExpr ?? individualExpr;
+}
+
+/** ORs two optional expressions, used because write access implies read. */
+export function anyOf(a?: Expr, b?: Expr): Expr | undefined {
+  if (a && b) return { kind: 'or', a, b };
+  return a ?? b;
+}
+
+/** Narrows the top-level alternatives used by strict write scoping. */
+export function requireAll(expr: Expr): Expr {
+  return expr.kind === 'or' ? { kind: 'and', a: requireAll(expr.a), b: requireAll(expr.b) } : expr;
+}
+
 /** `null` when valid, otherwise the reason it is not. */
 export function validate(src: string): string | null {
   if (!src.trim()) return null; // blank clears the rule; not an error
   try {
     parse(src);
     return null;
-  } catch (e: any) {
-    return e?.message ?? String(e);
+  } catch (e) {
+    return e instanceof Error ? e.message : String(e);
   }
 }
