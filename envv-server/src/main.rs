@@ -53,6 +53,11 @@ struct Args {
     /// bytes. Default 10 GiB ≈ 160M ids at the measured 61 bytes/row.
     #[arg(long, default_value_t = 10 * 1024 * 1024 * 1024)]
     uid_max_bytes: i64,
+    /// Override a unique-ID rate limit: `BUCKET=A_REFILL:A_BURST:S_REFILL:S_BURST`
+    /// for `mint`, `check` or `lookup` — per-actor then server-wide, refill in
+    /// values per second, counted per value. Repeatable.
+    #[arg(long = "uid-rate")]
+    uid_rate: Vec<String>,
 }
 
 fn main() {
@@ -165,7 +170,17 @@ async fn async_main() {
         args.session_max_hours,
         /* lan_mode */ false,
     )
-    .with_uid_registry(args.uid_registry, Some(args.uid_max_bytes));
+    .with_uid_registry(args.uid_registry, Some(args.uid_max_bytes))
+    .with_uid_rates({
+        let mut rates = envv_server::UidRates::default();
+        for spec in &args.uid_rate {
+            if let Err(e) = rates.set(spec) {
+                eprintln!("--uid-rate: {e}");
+                std::process::exit(1);
+            }
+        }
+        rates
+    });
     if args.uid_registry {
         tracing::info!(max_bytes = args.uid_max_bytes, "uid registry enabled");
     }
