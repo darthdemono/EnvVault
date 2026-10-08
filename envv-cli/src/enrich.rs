@@ -56,6 +56,91 @@ const fn sig(
     }
 }
 
+/// A matched issuer, owned so a catalogue entry and a compiled one look alike.
+struct Hit {
+    prefix: String,
+    issuer: String,
+    secret_type: String,
+    icon: String,
+    api_url: Option<String>,
+    environment: Option<String>,
+    acts_as: Option<String>,
+    exposure: Option<String>,
+    console_url: Option<String>,
+}
+
+/// The verified, cached provider catalogue (Phase 31), loaded once per process.
+fn catalogue() -> Option<&'static vault_core::catalogue::Catalogue> {
+    static C: std::sync::OnceLock<Option<vault_core::catalogue::Catalogue>> =
+        std::sync::OnceLock::new();
+    C.get_or_init(vault_core::catalogue::load_cached).as_ref()
+}
+
+/// Longest matching prefix across the catalogue and the compiled table. A tie
+/// goes to the catalogue, which is the newer of the two.
+fn lookup(secret: &str) -> Option<Hit> {
+    let fresh = catalogue().and_then(|c| {
+        c.providers
+            .iter()
+            .filter(|p| secret.starts_with(p.prefix.as_str()))
+            .max_by_key(|p| p.prefix.len())
+    });
+    let built = SIGNATURES.iter().find(|s| secret.starts_with(s.prefix));
+    match (fresh, built) {
+        (Some(p), b) if b.is_none_or(|b| p.prefix.len() >= b.prefix.len()) => Some(Hit {
+            prefix: p.prefix.clone(),
+            issuer: p.issuer.clone(),
+            secret_type: p.secret_type.clone(),
+            icon: p.icon.clone(),
+            api_url: p.api_url.clone(),
+            environment: p.environment.clone(),
+            acts_as: p.acts_as.clone(),
+            exposure: p.exposure.clone(),
+            console_url: p.console_url.clone(),
+        }),
+        (_, Some(s)) => Some(Hit {
+            prefix: s.prefix.into(),
+            issuer: s.issuer.into(),
+            secret_type: s.secret_type.into(),
+            icon: s.icon.into(),
+            api_url: s.api_url.map(Into::into),
+            environment: s.environment.map(Into::into),
+            // Compiled signatures keep their axes in AXIS_SIGNATURES.
+            acts_as: None,
+            exposure: None,
+            console_url: None,
+        }),
+        _ => None,
+    }
+}
+
+/// The compiled table as catalogue providers, for `catalogue export`/`diff`.
+pub fn bundled_providers() -> Vec<vault_core::catalogue::Provider> {
+    SIGNATURES
+        .iter()
+        .map(|s| vault_core::catalogue::Provider {
+            prefix: s.prefix.into(),
+            issuer: s.issuer.into(),
+            secret_type: s.secret_type.into(),
+            icon: s.icon.into(),
+            api_url: s.api_url.map(Into::into),
+            environment: s.environment.map(Into::into),
+            acts_as: AXIS_SIGNATURES
+                .iter()
+                .find(|a| a.prefix == s.prefix)
+                .and_then(|a| a.acts_as.map(Into::into)),
+            exposure: AXIS_SIGNATURES
+                .iter()
+                .find(|a| a.prefix == s.prefix)
+                .and_then(|a| a.exposure.map(Into::into)),
+            console_url: None,
+            docs_url: None,
+            rotate_url: None,
+            revoke_url: None,
+        })
+        .collect()
+}
+
 /// Documented, public issuer prefixes.
 ///
 /// Ordered longest-first where prefixes nest (`sk-ant-` before `sk-`), because
@@ -599,19 +684,19 @@ pub fn plan_entry(entry: &Value, force: bool) -> EntryPlan {
         };
     }
 
-    let matched = SIGNATURES.iter().find(|s| secret.starts_with(s.prefix));
+    let matched = lookup(secret);
 
-    if let Some(s) = matched {
+    if let Some(s) = matched.as_ref() {
         let why = format!(
             "secret carries the public `{}` prefix used by {}",
             s.prefix, s.issuer
         );
         propose!("secretType", json!(s.secret_type), why.clone());
         propose!("custom_icon", json!(s.icon), why.clone());
-        if let Some(url) = s.api_url {
+        if let Some(url) = &s.api_url {
             propose!("api_url", json!(url), why.clone());
         }
-        if let Some(env) = s.environment {
+        if let Some(env) = &s.environment {
             propose!(
                 "environment",
                 json!(env),
@@ -623,21 +708,35 @@ pub fn plan_entry(entry: &Value, force: bool) -> EntryPlan {
         // structurally (`secretType == "local_service"`), not sniffed from a
         // value's first few characters.
         propose!("issuer_kind", json!("saas"), why.clone());
-        if let Some(axis) = AXIS_SIGNATURES.iter().find(|a| a.prefix == s.prefix) {
-            if let Some(v) = axis.acts_as {
-                propose!(
-                    "acts_as",
-                    json!(v),
-                    format!("`{}` is {}'s {v} prefix", s.prefix, s.issuer)
-                );
-            }
-            if let Some(v) = axis.exposure {
-                propose!(
-                    "exposure",
-                    json!(v),
-                    format!("`{}` is {}'s {v} prefix", s.prefix, s.issuer)
-                );
-            }
+        // The catalogue's own axes win; a compiled signature carries none on the
+        // Hit and falls through to AXIS_SIGNATURES.
+        let axis = AXIS_SIGNATURES
+            .iter()
+            .find(|a| a.prefix == s.prefix.as_str());
+        let acts_as = s
+            .acts_as
+            .clone()
+            .or_else(|| axis.and_then(|a| a.acts_as.map(String::from)));
+        let exposure = s
+            .exposure
+            .clone()
+            .or_else(|| axis.and_then(|a| a.exposure.map(String::from)));
+        if let Some(v) = acts_as {
+            propose!(
+                "acts_as",
+                json!(v),
+                format!("`{}` is {}'s {v} prefix", s.prefix, s.issuer)
+            );
+        }
+        if let Some(v) = exposure {
+            propose!(
+                "exposure",
+                json!(v),
+                format!("`{}` is {}'s {v} prefix", s.prefix, s.issuer)
+            );
+        }
+        if let Some(url) = &s.console_url {
+            propose!("console_url", json!(url), why.clone());
         }
         propose!(
             "api_description",
@@ -815,6 +914,21 @@ fn pick(body: &Value, paths: &[&str]) -> Option<String> {
 /// party that already has it — and to nowhere else. It is behind `--online` for
 /// exactly that reason: a command that reads a vault should not start making
 /// network calls because someone ran it out of habit.
+/// The issuer `--online` would send this entry's secret to, or `None` when it
+/// would contact no one (no recognised prefix, or a cookie, which is never
+/// probed). Lets the app name every recipient on its consent screen before any
+/// request is made.
+pub fn issuer_for(entry: &Value) -> Option<&'static str> {
+    if data::secret_type_of(entry) == "cookie" {
+        return None;
+    }
+    let secret = entry.get("api_key").and_then(|v| v.as_str()).unwrap_or("");
+    PROBES
+        .iter()
+        .find(|p| p.prefixes.iter().any(|pre| secret.starts_with(pre)))
+        .map(|p| p.issuer)
+}
+
 pub fn probe_entry(entry: &Value, timeout_secs: u64, force: bool) -> Option<Live> {
     let secret = entry.get("api_key").and_then(|v| v.as_str()).unwrap_or("");
     let probe = PROBES
