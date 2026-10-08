@@ -262,6 +262,57 @@ export const TOOLS_PANES_HTML = String.raw`
           </div>
         </div>
 
+        <!-- Tool: Unique IDs (Phase 33.4, server registry of Phase 24.4) -->
+        <div id="tool-uid-registry" class="tool-pane" style="display:none">
+          <div class="tool-header">
+            <h3>Unique IDs</h3>
+            <p>Mint, check and look up identifiers in the server's registry. Only a keyed hash is stored, never the value. Needs a remote vault on a server started with --uid-registry.</p>
+          </div>
+          <div class="tool-body" style="max-width:700px">
+            <div class="tool-actions" style="margin-bottom:10px;gap:10px;flex-wrap:wrap">
+              <label class="tool-label" for="uid-length">Length</label>
+              <input id="uid-length" class="tool-input" type="number" min="8" max="128" value="32" style="max-width:80px">
+              <label class="tool-label" for="uid-namespace">Namespace</label>
+              <input id="uid-namespace" class="tool-input" type="text" placeholder="optional" style="max-width:140px">
+              <button id="uid-mint-btn" class="btn btn-accent btn-sm">Mint</button>
+              <button id="uid-stats-btn" class="btn btn-ghost btn-sm">Stats</button>
+            </div>
+            <label class="tool-label" for="uid-values">Values to check or look up (one per line)</label>
+            <textarea id="uid-values" class="tool-input mono" rows="3"></textarea>
+            <div class="tool-actions" style="margin:8px 0;gap:10px">
+              <button id="uid-check-btn" class="btn btn-ghost btn-sm">Check</button>
+              <button id="uid-lookup-btn" class="btn btn-ghost btn-sm">Look up first line</button>
+            </div>
+            <div class="tool-actions" style="margin:8px 0;gap:10px;flex-wrap:wrap">
+              <label class="tool-label" for="uid-prune-before">Prune before</label>
+              <input id="uid-prune-before" class="tool-input" type="date" style="max-width:160px">
+              <button id="uid-prune-dry-btn" class="btn btn-ghost btn-sm">Count (dry run)</button>
+              <button id="uid-prune-btn" class="btn btn-ghost btn-sm">Prune</button>
+            </div>
+            <p class="settings-hint">Pruning deletes the only evidence an ID was issued: a pruned ID can be issued again without a collision being noticed.</p>
+            <div id="uid-status" class="tool-status" style="font-size:11px;color:var(--text3)"></div>
+            <pre id="uid-output" class="tool-output mono"></pre>
+          </div>
+        </div>
+
+        <!-- Tool: Enrich (Phase 33.1), envv enrich without --online -->
+        <div id="tool-enrich" class="tool-pane" style="display:none">
+          <div class="tool-header">
+            <h3>Enrich</h3>
+            <p>Fill missing metadata from each entry's name and its secret's public issuer prefix. Nothing is changed until you apply.</p>
+          </div>
+          <div class="tool-body" style="max-width:760px">
+            <div class="tool-actions" style="margin-bottom:12px;flex-wrap:wrap;gap:10px">
+              <button id="enrich-preview-btn" class="btn btn-accent btn-sm">Preview</button>
+              <label class="tool-label" for="enrich-force"><input type="checkbox" id="enrich-force"> Replace fields that already have a value</label>
+              <label class="tool-label" for="enrich-online"><input type="checkbox" id="enrich-online"> Also ask each issuer (sends the secret to the service that issued it)</label>
+              <button id="enrich-apply-btn" class="btn btn-ghost btn-sm" disabled>Apply</button>
+              <span id="enrich-status" class="tool-status" style="font-size:11px;color:var(--text3)"></span>
+            </div>
+            <div id="enrich-results"></div>
+          </div>
+        </div>
+
         <!-- Tool: Health Dashboard (item 7) -->
         <div id="tool-health" class="tool-pane" style="display:none">
           <div class="tool-header">
@@ -279,22 +330,19 @@ export const TOOLS_PANES_HTML = String.raw`
                 <option value="low">Info</option>
               </select>
               <label class="tool-label" for="health-filter-type">Type</label>
+              <!-- The rest is populated from the secret-type registry at init
+                   (tools.ts) rather than hardcoded here — see that comment. -->
               <select id="health-filter-type" class="tool-input" style="max-width:150px">
                 <option value="">All types</option>
-                <option value="api_key">API Key</option>
-                <option value="password">Password</option>
-                <option value="certificate">Certificate</option>
-                <option value="env_var">Env Var</option>
-                <option value="connection_string">Connection</option>
-                <option value="ssh_key">SSH Key</option>
-                <option value="file_blob">File</option>
-                <option value="cookie">Web Session</option>
-                <option value="composite">Composite</option>
-                <option value="bundle">Bundle</option>
               </select>
               <span id="health-scan-time" style="font-size:11px;color:var(--text3)"></span>
             </div>
             <div id="health-results"></div>
+            <div class="tool-actions" style="margin:16px 0 8px;gap:10px">
+              <button id="doctor-run-btn" class="btn btn-ghost btn-sm">Diagnose vault</button>
+              <span id="doctor-status" class="tool-status" style="font-size:11px;color:var(--text3)"></span>
+            </div>
+            <div id="doctor-results"></div>
           </div>
         </div>
 
@@ -342,6 +390,25 @@ export const TOOLS_PANES_HTML = String.raw`
               <button id="import-confirm-btn" class="btn btn-accent btn-sm" style="display:none">Import Entries</button>
               <span id="import-status" style="font-size:12px;color:var(--text3)"></span>
             </div>
+            <div class="tool-header" style="margin-top:22px">
+              <h3>From another password manager</h3>
+              <p>Bitwarden, 1Password or Proton Pass JSON exports. Shows what would change before anything is written; an existing entry with the same secret is left alone.</p>
+            </div>
+            <div class="tool-row">
+              <label class="tool-label" for="vi-vendor">Export from</label>
+              <select id="vi-vendor" class="tool-select">
+                <option value="bitwarden">Bitwarden (JSON)</option>
+                <option value="onepassword">1Password (1pif or JSON)</option>
+                <option value="proton">Proton Pass (JSON)</option>
+              </select>
+              <label class="tool-label" for="vi-folders"><input type="checkbox" id="vi-folders"> Keep folders as categories</label>
+            </div>
+            <div class="tool-actions" style="margin-top:6px;gap:10px">
+              <button id="vi-file-btn" class="btn btn-ghost btn-sm">Choose file and preview</button>
+              <button id="vi-apply-btn" class="btn btn-accent btn-sm" disabled>Import</button>
+              <span id="vi-status" class="tool-status" style="font-size:12px;color:var(--text3)"></span>
+            </div>
+            <div id="vi-preview"></div>
           </div>
         </div>
 
@@ -539,6 +606,7 @@ export const TOOLS_PANES_HTML = String.raw`
 export function mountToolsPanes(): void {
   const host = document.getElementById('tools-workspace');
   if (!host || host.dataset.mounted === '1') return;
+  // eslint-disable-next-line no-restricted-syntax -- TOOLS_PANES_HTML is a build-time constant with no interpolation
   host.insertAdjacentHTML('afterbegin', TOOLS_PANES_HTML);
   host.dataset.mounted = '1';
 }
