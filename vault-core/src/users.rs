@@ -36,7 +36,8 @@ type Scope = (String, String);
 type PermissionsBySubject = HashMap<String, (Vec<Scope>, Vec<Scope>)>;
 
 /// The `users` columns every lookup selects, in `SELECT` order:
-/// `id, username, password_hash, is_owner, created_at, last_seen_at`.
+/// `id, username, password_hash, is_owner, created_at, last_seen_at, class_id,
+/// strict_write, totp_enabled`.
 ///
 /// `password_hash` and `last_seen_at` are nullable — a user created by an
 /// administrator has no hash until first login, and has never been seen.
@@ -47,6 +48,8 @@ type UserRow = (
     i32,
     String,
     Option<String>,
+    Option<String>,
+    i32,
     i32,
 );
 
@@ -64,6 +67,7 @@ pub struct UserClass {
     pub cap_manage_classes: bool,
     /// Can delete projects.
     pub cap_delete_projects: bool,
+    pub strict_write: bool,
     pub created_at: String,
 }
 
@@ -86,6 +90,8 @@ pub struct UserRecord {
     pub is_owner: bool,
     pub created_at: String,
     pub last_seen_at: Option<String>,
+    pub class_id: Option<String>,
+    pub strict_write: bool,
     /// True when the user has a *confirmed* second factor. Enrollment alone does
     /// not set it — see [`totp_enroll`] for why the two are separate.
     pub totp_enabled: bool,
@@ -626,6 +632,8 @@ pub fn create_user(
         is_owner,
         created_at: now,
         last_seen_at: None,
+        class_id: None,
+        strict_write: false,
         totp_enabled: false,
     })
 }
@@ -662,7 +670,7 @@ pub fn verify_user_password(
 ) -> Result<Option<UserRecord>, String> {
     let row: Option<UserRow> = conn
         .query_row(
-            "SELECT id, username, password_hash, is_owner, created_at, last_seen_at, totp_enabled \
+            "SELECT id, username, password_hash, is_owner, created_at, last_seen_at, class_id, strict_write, totp_enabled \
              FROM users WHERE username = ?1",
             rusqlite::params![username],
             |r| {
@@ -674,13 +682,26 @@ pub fn verify_user_password(
                     r.get(4)?,
                     r.get(5)?,
                     r.get(6)?,
+                    r.get(7)?,
+                    r.get(8)?,
                 ))
             },
         )
         .optional()
         .map_err(|e| e.to_string())?;
 
-    let Some((id, uname, hash_opt, is_owner_i, created_at, last_seen, totp_on)) = row else {
+    let Some((
+        id,
+        uname,
+        hash_opt,
+        is_owner_i,
+        created_at,
+        last_seen,
+        class_id,
+        strict_write,
+        totp_on,
+    )) = row
+    else {
         return Ok(None);
     };
     // A user with no password (token-only, or the owner row) simply cannot
@@ -713,6 +734,8 @@ pub fn verify_user_password(
         is_owner: is_owner_i != 0,
         created_at,
         last_seen_at: last_seen,
+        class_id,
+        strict_write: strict_write != 0,
         totp_enabled: totp_on != 0,
     }))
 }
@@ -724,7 +747,7 @@ pub fn verify_user_token(conn: &Connection, token: &str) -> Result<Option<UserRe
     let row: Option<UserRow> = conn
         .query_row(
             "SELECT u.id, u.username, u.password_hash, u.is_owner, u.created_at, u.last_seen_at, \
-                     u.totp_enabled \
+                     u.class_id, u.strict_write, u.totp_enabled \
              FROM user_tokens t JOIN users u ON u.id = t.user_id \
              WHERE t.token_hash = ?1 AND (t.expires_at IS NULL OR t.expires_at > ?2)",
             rusqlite::params![token_hash, now],
@@ -737,13 +760,26 @@ pub fn verify_user_token(conn: &Connection, token: &str) -> Result<Option<UserRe
                     r.get(4)?,
                     r.get(5)?,
                     r.get(6)?,
+                    r.get(7)?,
+                    r.get(8)?,
                 ))
             },
         )
         .optional()
         .map_err(|e| e.to_string())?;
 
-    let Some((id, uname, hash_opt, is_owner_i, created_at, last_seen, totp_on)) = row else {
+    let Some((
+        id,
+        uname,
+        hash_opt,
+        is_owner_i,
+        created_at,
+        last_seen,
+        class_id,
+        strict_write,
+        totp_on,
+    )) = row
+    else {
         return Ok(None);
     };
     touch_last_seen(conn, &id)?;
@@ -754,6 +790,8 @@ pub fn verify_user_token(conn: &Connection, token: &str) -> Result<Option<UserRe
         is_owner: is_owner_i != 0,
         created_at,
         last_seen_at: last_seen,
+        class_id,
+        strict_write: strict_write != 0,
         totp_enabled: totp_on != 0,
     }))
 }
@@ -762,7 +800,7 @@ pub fn verify_user_token(conn: &Connection, token: &str) -> Result<Option<UserRe
 pub fn list_users(conn: &Connection) -> Result<Vec<UserRecord>, String> {
     let mut stmt = conn
         .prepare(
-            "SELECT id, username, password_hash, is_owner, created_at, last_seen_at, totp_enabled \
+            "SELECT id, username, password_hash, is_owner, created_at, last_seen_at, class_id, strict_write, totp_enabled \
          FROM users ORDER BY is_owner DESC, created_at ASC",
         )
         .map_err(|e| e.to_string())?;
@@ -775,7 +813,9 @@ pub fn list_users(conn: &Connection) -> Result<Vec<UserRecord>, String> {
                 is_owner: r.get::<_, i32>(3)? != 0,
                 created_at: r.get(4)?,
                 last_seen_at: r.get(5)?,
-                totp_enabled: r.get::<_, i32>(6)? != 0,
+                class_id: r.get(6)?,
+                strict_write: r.get::<_, i32>(7)? != 0,
+                totp_enabled: r.get::<_, i32>(8)? != 0,
             })
         })
         .map_err(|e| e.to_string())?
@@ -1030,7 +1070,7 @@ pub fn delete_user(conn: &Connection, user_id: &str) -> Result<(), String> {
 
 pub fn list_user_classes(conn: &Connection) -> Result<Vec<UserClass>, String> {
     let mut stmt = conn.prepare(
-        "SELECT id, name, description, cap_manage_users, cap_manage_classes, cap_delete_projects, created_at \
+        "SELECT id, name, description, cap_manage_users, cap_manage_classes, cap_delete_projects, strict_write, created_at \
          FROM user_classes ORDER BY created_at ASC"
     ).map_err(|e| e.to_string())?;
     let rows: Vec<Result<UserClass, _>> = stmt
@@ -1042,7 +1082,8 @@ pub fn list_user_classes(conn: &Connection) -> Result<Vec<UserClass>, String> {
                 cap_manage_users: r.get::<_, i32>(3)? != 0,
                 cap_manage_classes: r.get::<_, i32>(4)? != 0,
                 cap_delete_projects: r.get::<_, i32>(5)? != 0,
-                created_at: r.get(6)?,
+                strict_write: r.get::<_, i32>(6)? != 0,
+                created_at: r.get(7)?,
             })
         })
         .map_err(|e| e.to_string())?
@@ -1074,6 +1115,7 @@ pub fn create_user_class(
         cap_manage_users,
         cap_manage_classes,
         cap_delete_projects,
+        strict_write: false,
         created_at: now,
     })
 }
@@ -1535,7 +1577,7 @@ pub fn filter_vault_for_user(
         .and_then(|v| v.as_array())
         .unwrap_or(&empty);
 
-    let visible: Vec<serde_json::Value> = api_keys
+    let mut visible: Vec<serde_json::Value> = api_keys
         .iter()
         .filter(|e| {
             crate::permex::eval(
@@ -1545,6 +1587,35 @@ pub fn filter_vault_for_user(
         })
         .cloned()
         .collect();
+
+    // A visible member must not disclose that its parent bundle exists when the
+    // user cannot read that bundle. Present it as standalone; writes below
+    // restore this association unless the user has explicit bundle access and
+    // requests a membership change.
+    let visible_bundle_ids: HashSet<String> = visible
+        .iter()
+        .filter(|entry| {
+            entry.get("secretType").and_then(serde_json::Value::as_str) == Some("bundle")
+        })
+        .filter_map(|entry| {
+            entry
+                .get("id")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned)
+        })
+        .collect();
+    for entry in &mut visible {
+        let Some(bundle_id) = entry.get("bundle_id").and_then(serde_json::Value::as_str) else {
+            continue;
+        };
+        if !visible_bundle_ids.contains(bundle_id) {
+            if let Some(object) = entry.as_object_mut() {
+                object.remove("bundle_id");
+                object.remove("bundle_slot");
+                object.remove("bundle_order");
+            }
+        }
+    }
 
     let visible_pids: HashSet<String> = visible
         .iter()
@@ -1753,6 +1824,23 @@ pub fn merge_user_vault_write(
         .get("api_keys")
         .and_then(|v| v.as_array())
         .unwrap_or(&empty);
+    let readable = |entry: &serde_json::Value| {
+        read.is_some_and(|expr| {
+            crate::permex::eval(
+                expr,
+                &crate::permex::EntryView::from_entry(entry, &project_names),
+            )
+        })
+    };
+    let find_bundle = |id: &str| {
+        full_keys.iter().chain(user_keys.iter()).find(|candidate| {
+            candidate.get("id").and_then(serde_json::Value::as_str) == Some(id)
+                && candidate
+                    .get("secretType")
+                    .and_then(serde_json::Value::as_str)
+                    == Some("bundle")
+        })
+    };
 
     // Identity comes from the shared `crate::entry_ck` so this merge and
     // `save_vault` can never disagree about what "the same entry" means. A
@@ -1770,6 +1858,43 @@ pub fn merge_user_vault_write(
                     .and_then(|v| v.as_str())
                     .unwrap_or("?")
             ));
+        }
+        let id = entry_ck(entry);
+        let prior = full_keys.iter().find(|old| entry_ck(old) == id);
+        let old_bundle = prior
+            .and_then(|old| old.get("bundle_id"))
+            .and_then(serde_json::Value::as_str);
+        let new_bundle = entry.get("bundle_id").and_then(serde_json::Value::as_str);
+        let hidden_parent_was_omitted = old_bundle
+            .and_then(find_bundle)
+            .is_some_and(|bundle| !readable(bundle))
+            && entry.get("bundle_id").is_none();
+        let effective_new_bundle = if hidden_parent_was_omitted {
+            old_bundle
+        } else {
+            new_bundle
+        };
+        let old_slot = prior.and_then(|old| old.get("bundle_slot"));
+        let new_slot = entry.get("bundle_slot");
+        let old_order = prior.and_then(|old| old.get("bundle_order"));
+        let new_order = entry.get("bundle_order");
+        let association_unchanged =
+            hidden_parent_was_omitted && new_slot.is_none() && new_order.is_none()
+                || old_slot == new_slot && old_order == new_order;
+        if old_bundle != effective_new_bundle || !association_unchanged {
+            for bundle_id in [old_bundle, effective_new_bundle].into_iter().flatten() {
+                let bundle = find_bundle(bundle_id);
+                // A stale membership can be removed without permission on a
+                // bundle that no longer exists.
+                if bundle.is_none() && Some(bundle_id) == old_bundle {
+                    continue;
+                }
+                if !bundle.is_some_and(&writable) {
+                    return Err(format!(
+                        "Write permission denied for bundle membership in '{bundle_id}'"
+                    ));
+                }
+            }
         }
     }
 
@@ -1791,7 +1916,23 @@ pub fn merge_user_vault_write(
         let ck = entry_ck(entry);
         if user_writable_cks.contains(&ck) {
             if let Some(&user_entry) = user_map.get(&ck) {
-                result.push(user_entry.clone());
+                let hidden_parent_was_omitted = entry
+                    .get("bundle_id")
+                    .and_then(serde_json::Value::as_str)
+                    .and_then(find_bundle)
+                    .is_some_and(|bundle| !readable(bundle))
+                    && user_entry.get("bundle_id").is_none();
+                if hidden_parent_was_omitted {
+                    let mut merged = user_entry.clone();
+                    for key in ["bundle_id", "bundle_slot", "bundle_order"] {
+                        if let Some(value) = entry.get(key) {
+                            merged[key] = value.clone();
+                        }
+                    }
+                    result.push(merged);
+                } else {
+                    result.push(user_entry.clone());
+                }
             }
             // else: user deleted it — omit
         } else {
@@ -2263,6 +2404,34 @@ mod tests {
     }
 
     #[test]
+    fn a_visible_bundle_member_does_not_reveal_an_unreadable_parent() {
+        let mut full = sample_vault();
+        full["api_keys"][0]["bundle_id"] = json!("private-bundle");
+        full["api_keys"][0]["bundle_slot"] = json!("member");
+        full["api_keys"][0]["bundle_order"] = json!(10);
+        full["api_keys"].as_array_mut().unwrap().push(json!({
+            "id": "private-bundle", "provider": "Private", "secretType": "bundle",
+            "projectIds": ["Universal", "p2"]
+        }));
+
+        let out = filter_vault_for_user(full, Some(&ex("project:Alpha")));
+        let member = out["api_keys"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|entry| entry["id"] == "1")
+            .unwrap();
+        assert!(member.get("bundle_id").is_none());
+        assert!(member.get("bundle_slot").is_none());
+        assert!(member.get("bundle_order").is_none());
+        assert!(!out["api_keys"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|e| e["id"] == "private-bundle"));
+    }
+
+    #[test]
     fn filtering_does_not_leak_the_category_taxonomy() {
         let out = filter_vault_for_user(sample_vault(), Some(&ex("project:Alpha")));
         let cats: Vec<&str> = out["user_categories"]
@@ -2304,6 +2473,55 @@ mod tests {
             err.contains("Theirs"),
             "error should name the offending entry, got: {err}"
         );
+    }
+
+    #[test]
+    fn changing_bundle_membership_requires_write_access_to_both_entries() {
+        let mut full = sample_vault();
+        full["api_keys"].as_array_mut().unwrap().push(json!({
+            "id": "bundle", "provider": "Restricted bundle", "secretType": "bundle",
+            "projectIds": ["Universal", "p2"]
+        }));
+        let submitted = json!({ "api_keys": [
+            { "id": "1", "provider": "Mine", "categories": ["dev"],
+              "projectIds": ["Universal", "p1"], "bundle_id": "bundle" }
+        ]});
+        let err = merge_user_vault_write(
+            full,
+            submitted,
+            Some(&ex("vault:*")),
+            Some(&ex("project:Alpha")),
+        )
+        .expect_err("member write alone must not expose it through a restricted bundle");
+        assert!(err.contains("bundle membership"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn unrelated_writes_preserve_membership_in_an_unreadable_bundle() {
+        let mut full = sample_vault();
+        full["api_keys"][0]["bundle_id"] = json!("private-bundle");
+        full["api_keys"][0]["bundle_slot"] = json!("member");
+        full["api_keys"][0]["bundle_order"] = json!(10);
+        full["api_keys"].as_array_mut().unwrap().push(json!({
+            "id": "private-bundle", "provider": "Private", "secretType": "bundle",
+            "projectIds": ["Universal", "p2"]
+        }));
+        let read = ex("project:Alpha");
+        let write = ex("project:Alpha");
+        let mut submitted = filter_vault_for_user(full.clone(), Some(&read));
+        submitted["api_keys"][0]["api_key"] = json!("updated");
+
+        let merged = merge_user_vault_write(full, submitted, Some(&read), Some(&write)).unwrap();
+        let member = merged["api_keys"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|entry| entry["id"] == "1")
+            .unwrap();
+        assert_eq!(member["api_key"], "updated");
+        assert_eq!(member["bundle_id"], "private-bundle");
+        assert_eq!(member["bundle_slot"], "member");
+        assert_eq!(member["bundle_order"], 10);
     }
 
     #[test]
