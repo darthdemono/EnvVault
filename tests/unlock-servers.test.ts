@@ -101,7 +101,7 @@ describe('unlock screen server picker', () => {
     );
     Settings.set('remoteSaved', saved);
 
-    await showUnlockModal(false);
+    showUnlockModal(false);
 
     expect(($('unlock-server') as HTMLInputElement).value).toBe('http://recent.example');
     expect(($('unlock-username') as HTMLInputElement).value).toBe('joy');
@@ -110,7 +110,7 @@ describe('unlock screen server picker', () => {
   it('opens the picker with an entry per saved server plus Local Vault', async () => {
     upsertSavedRemote({ url: 'http://a.example', username: '' });
     upsertSavedRemote({ url: 'http://b.example', username: '' });
-    await showUnlockModal(false);
+    showUnlockModal(false);
 
     $('unlock-server-recent').click();
     const items = document.querySelectorAll('#dropdown [data-ddid]');
@@ -125,7 +125,7 @@ describe('unlock screen server picker', () => {
     // submit, but it comes back the moment the user re-enters a server URL.
     const cfg = upsertSavedRemote({ url: 'http://a.example', username: 'joy' });
     markRemoteConnected(cfg.id);
-    await showUnlockModal(false);
+    showUnlockModal(false);
     expect(($('unlock-server') as HTMLInputElement).value).toBe('http://a.example');
 
     $('unlock-server-recent').click();
@@ -138,7 +138,7 @@ describe('unlock screen server picker', () => {
 
   it('picking a server fills the URL and its paired username, and switches to remote mode', async () => {
     upsertSavedRemote({ url: 'http://a.example', username: 'joy' });
-    await showUnlockModal(false);
+    showUnlockModal(false);
     // Blank both fields first, or the modal's own pre-fill would satisfy the
     // assertions and the pick handler would never actually be exercised.
     ($('unlock-server') as HTMLInputElement).value = '';
@@ -164,13 +164,13 @@ describe('unlock screen server picker', () => {
         username: '',
       },
     ]);
-    await showUnlockModal(false);
+    showUnlockModal(false);
     $('unlock-server-recent').click();
     expect($('dropdown').querySelector('img')).toBeNull();
   });
 
   it('says so rather than opening an empty menu when nothing is saved', async () => {
-    await showUnlockModal(false);
+    showUnlockModal(false);
     $('unlock-server-recent').click();
     expect($('dropdown').textContent).toContain('No servers connected yet');
   });
