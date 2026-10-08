@@ -62,12 +62,6 @@ fn legacy_json_path(app: &AppHandle) -> Result<PathBuf, String> {
         .map(|d| d.join("vault.json"))
         .map_err(|e| e.to_string())
 }
-fn settings_path(app: &AppHandle) -> Result<PathBuf, String> {
-    app.path()
-        .app_config_dir()
-        .map(|d| d.join("settings.json"))
-        .map_err(|e| e.to_string())
-}
 fn ensure_parent(path: &Path) -> Result<(), String> {
     if let Some(p) = path.parent() {
         fs::create_dir_all(p).map_err(|e| e.to_string())?;
@@ -82,6 +76,31 @@ mod commands {
     use tauri::State;
     // Use fully-qualified vault_core:: calls inside each fn to avoid
     // name collision with the Tauri command functions (which keep original names).
+
+    /// Current lock state from the desktop session, or `None` where the
+    /// platform cannot report it. Linux reads GDK's keymap (X11 and Wayland);
+    /// Windows reads the Caps Lock toggle bit.
+    #[tauri::command]
+    pub fn caps_lock_state() -> Option<bool> {
+        #[cfg(target_os = "linux")]
+        {
+            let display = gtk::gdk::Display::default()?;
+            gtk::gdk::Keymap::for_display(&display).map(|keymap| keymap.is_caps_locked())
+        }
+        #[cfg(target_os = "windows")]
+        {
+            #[link(name = "user32")]
+            unsafe extern "system" {
+                fn GetKeyState(key: i32) -> i16;
+            }
+            // VK_CAPITAL = 0x14; the low bit is the toggle state.
+            Some(unsafe { GetKeyState(0x14) } & 1 != 0)
+        }
+        #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+        {
+            None
+        }
+    }
 
     #[tauri::command]
     pub fn unlock_vault(
@@ -182,7 +201,9 @@ mod commands {
         let key = g.as_ref().ok_or("Vault is locked")?;
         let conn = vault_core::open_db(&db_path(&app)?, key)?;
         // Version first, then data — see the same ordering note in the server's
-        // PUT handler. Mis-pairing this way fails closed.
+        // PUT handler. Mis-pairing this way fails closed. A v1 vault is converted
+        // first, or the version read here would be the old blob's hash.
+        vault_core::ensure_current_schema(&conn)?;
         let version = vault_core::vault_version(&conn)?;
         Ok(vault_core::load_vault(&conn)?.map(|data| VersionedVault { data, version }))
     }
@@ -248,40 +269,6 @@ mod commands {
     #[tauri::command]
     pub fn get_vault_path(app: AppHandle) -> Result<String, String> {
         db_path(&app).map(|p| p.display().to_string())
-    }
-
-    #[tauri::command]
-    pub fn load_settings(app: AppHandle) -> Result<Option<serde_json::Value>, String> {
-        let path = settings_path(&app)?;
-        if !path.exists() {
-            return Ok(None);
-        }
-        serde_json::from_str(&fs::read_to_string(&path).map_err(|e| e.to_string())?)
-            .map(Some)
-            .map_err(|e| e.to_string())
-    }
-
-    #[tauri::command]
-    pub fn save_settings(app: AppHandle, data: serde_json::Value) -> Result<(), String> {
-        let path = settings_path(&app)?;
-        ensure_parent(&path)?;
-        fs::write(
-            path,
-            serde_json::to_string_pretty(&data).map_err(|e| e.to_string())?,
-        )
-        .map_err(|e| e.to_string())
-    }
-
-    #[tauri::command]
-    pub fn get_expiring(
-        app: AppHandle,
-        state: State<VaultState>,
-        days: u32,
-    ) -> Result<Vec<serde_json::Value>, String> {
-        let g = state.0.lock().map_err(|_| "State lock poisoned")?;
-        let key = g.as_ref().ok_or("Vault is locked")?;
-        let conn = vault_core::open_db(&db_path(&app)?, key)?;
-        vault_core::get_expiring_entries(&conn, days)
     }
 
     #[tauri::command]
@@ -520,6 +507,98 @@ mod commands {
                 })
             })
             .collect()
+    }
+
+    /// Phase 33.3: `envv backup archive` in the app. Returns the encrypted
+    /// `.vaultarc` text for the caller to save with `saveFile` (0600). The vault's
+    /// connections are opened and closed per command, so the file on disk is whole;
+    /// an archive taken while another process (a LAN server, `envv`) is mid-write
+    /// could still miss its last pages, so the pane says to lock first.
+    #[tauri::command]
+    pub fn backup_archive_build(app: AppHandle, password: String) -> Result<String, String> {
+        let db = fs::read(db_path(&app)?).map_err(|e| format!("Cannot read the vault: {e}"))?;
+        let salt = fs::read(salt_path(&app)?).map_err(|e| format!("Cannot read the salt: {e}"))?;
+        envv_cli::backup::build_archive(&db, &salt, &password)
+            .map(|(text, _)| text)
+            .map_err(|e| e.message)
+    }
+
+    /// Phase 33.3: `envv backup restore-archive` in the app. Verifies the archive
+    /// (password, checksums, salt length) before touching a file, then stops the
+    /// LAN server, zeroizes the in-memory key like `reset_vault`, writes the salt
+    /// first (a salt without a database is recoverable, the reverse is not), then
+    /// the database, and removes a stale WAL. The renderer reloads afterwards.
+    #[tauri::command]
+    pub fn backup_archive_restore(
+        app: AppHandle,
+        state: State<VaultState>,
+        lan: State<LanState>,
+        text: String,
+        password: String,
+    ) -> Result<(), String> {
+        let (db, salt) = envv_cli::backup::open_archive(&text, &password).map_err(|e| e.message)?;
+        lan_stop(lan)?;
+        let mut g = state.0.lock().map_err(|_| "State lock poisoned")?;
+        if let Some(mut k) = g.take() {
+            k.zeroize();
+        }
+        let (dbp, sp) = (db_path(&app)?, salt_path(&app)?);
+        ensure_parent(&dbp)?;
+        fs::write(&sp, &salt).map_err(|e| format!("Cannot write the salt: {e}"))?;
+        vault_core::restrict_to_owner(&sp)?;
+        fs::write(&dbp, &db).map_err(|e| format!("Cannot write the vault: {e}"))?;
+        vault_core::restrict_to_owner(&dbp)?;
+        for suffix in ["-wal", "-shm"] {
+            let mut p = dbp.clone().into_os_string();
+            p.push(suffix);
+            let _ = fs::remove_file(p);
+        }
+        Ok(())
+    }
+
+    /// Phase 33.3: `envv import-vault` in the app. Pure over its arguments (the
+    /// renderer holds the decrypted vault, the A1 rule): parses a Bitwarden,
+    /// 1Password or Proton export and returns what importing would do, plus the
+    /// entry array after it. Nothing is written here; the caller applies it with
+    /// its own save, so the compare-and-swap covers the whole import.
+    #[tauri::command]
+    pub fn import_vault_plan(
+        vendor: String,
+        text: String,
+        vault: serde_json::Value,
+        project: Option<String>,
+        keep_folders: bool,
+    ) -> Result<serde_json::Value, String> {
+        let doc: serde_json::Value = serde_json::from_str(&text)
+            .map_err(|e| format!("Not JSON: {e}. Export from {vendor} in JSON format."))?;
+        let opts = envv_cli::import_vaults::ImportOpts {
+            apply: false,
+            project: project.as_deref(),
+            category: None,
+            keep_folders,
+        };
+        let plan = envv_cli::import_vaults::plan_import(&vault, &vendor, &doc, &opts)
+            .map_err(|e| e.message)?;
+        Ok(serde_json::json!({
+            "entries": plan.entries, "created": plan.created, "updated": plan.updated,
+            "unchanged": plan.unchanged, "skipped": plan.skipped, "preview": plan.preview,
+        }))
+    }
+
+    /// Phase 33.4: bytes from a chosen entropy source for the UI generators, the
+    /// app side of `--entropy-source`. Returned as hex. The source is mixed with OS
+    /// entropy exactly as the CLI does (`vault_core::entropy::fill`), so picking a
+    /// hardware device can add to the OS CSPRNG but never replace it. Capped,
+    /// because the renderer asks for a pool, not a stream.
+    #[tauri::command]
+    pub fn entropy_fill(source: String, length: usize) -> Result<String, String> {
+        let source = vault_core::entropy::Source::parse(&source)?;
+        if length == 0 || length > 8192 {
+            return Err("length must be between 1 and 8192".into());
+        }
+        let mut buf = vec![0u8; length];
+        vault_core::entropy::fill(&source, "ui-generator", &mut buf)?;
+        Ok(hex::encode(buf))
     }
 
     // ── User management (owner-only Tauri commands) ────────────────────────
@@ -814,15 +893,222 @@ mod commands {
         vault_core::totp::live_code_with(&secret, &params, with_next.unwrap_or(false))
     }
 
-    /// Splits a pasted `otpauth://` URI, or normalises a bare base32 seed.
-    ///
-    /// Exists so the CLI, the desktop app and this command cannot disagree about
-    /// what a pasted URI meant. `src/ts/totp.ts` has the same parser, because the
-    /// form has to split a URI as it is typed and a round trip per keystroke is
-    /// not a form; the two are pinned by `tests/fixtures/parity/totp-seeds.json`.
+    /// Phase 29: the cross-chunk checks. Pure over its arguments, so it needs no
+    /// vault key and works on a remote session (the A1 rule). The rules live in
+    /// `vault_core::config_check`, which `envv check` calls too.
     #[tauri::command]
-    pub fn parse_totp_seed(seed: String) -> Result<vault_core::totp::Stored, String> {
-        vault_core::totp::parse_seed(&seed)
+    pub fn config_check_project(
+        project: serde_json::Value,
+        vault_names: Vec<String>,
+    ) -> Vec<serde_json::Value> {
+        vault_core::config_check::check_project(&project, &vault_names)
+            .iter()
+            .map(vault_core::config_check::Finding::to_json)
+            .collect()
+    }
+
+    #[tauri::command]
+    pub fn parse_toml_import(source: String) -> Result<Vec<(String, String)>, String> {
+        vault_core::toml_import::parse(&source)
+    }
+
+    /// Parses a DevTools capture (Copy as cURL, HAR, Set-Cookie lines) into
+    /// cookies, a User-Agent and the headers worth keeping — Phase 24.5. Pure
+    /// over its arguments, like `parse_toml_import`: one implementation in
+    /// `vault_core::session_import`, shared with `envv cookie import`.
+    #[tauri::command]
+    pub fn session_capture_parse(
+        text: String,
+        origin: Option<String>,
+    ) -> Result<vault_core::session_import::Capture, String> {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs() as i64);
+        vault_core::session_import::parse_auto(&text, origin.as_deref(), now)
+    }
+
+    /// Refreshes an `oauth_client` entry's access token at its `token_url`
+    /// (Phase 24.5) and returns the updated entry; the caller **persists it
+    /// before using the token**, because a rotating issuer has already killed the
+    /// old refresh token. No redirects are followed — one would forward the client
+    /// secret — and http is allowed to localhost only. Same
+    /// `vault_core::oauth` as `envv oauth refresh`.
+    #[tauri::command]
+    pub async fn oauth_refresh(mut entry: serde_json::Value) -> Result<serde_json::Value, String> {
+        let (url, form) = vault_core::oauth::refresh_request(&entry)?;
+        let host = vault_core::oauth::refresh_host(&url).to_string();
+        let client = reqwest::ClientBuilder::new()
+            .redirect(reqwest::redirect::Policy::none())
+            .timeout(std::time::Duration::from_secs(20))
+            .build()
+            .map_err(|e| e.to_string())?;
+        let resp = client
+            .post(&url)
+            .header("Accept", "application/json")
+            .form(&form)
+            .send()
+            .await
+            .map_err(|e| format!("could not reach {host}: {}", e.without_url()))?;
+        let status = resp.status();
+        let body: serde_json::Value = resp.json().await.unwrap_or(serde_json::Value::Null);
+        if !status.is_success() && body.get("error").is_none() {
+            return Err(format!("{host} answered HTTP {status}"));
+        }
+        let grant = vault_core::oauth::parse_grant(&body)?;
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs() as i64);
+        let rotated = vault_core::oauth::apply_grant(&mut entry, &grant, now);
+        Ok(serde_json::json!({ "entry": entry, "rotated": rotated }))
+    }
+
+    /// Renders a credential in the file its tool reads (`.npmrc`, a DSN, a Wi-Fi
+    /// string…) — Phase 24.5. Pure over its arguments; the same
+    /// `vault_core::type_emit` as `envv emit`.
+    #[tauri::command]
+    pub fn type_emit(entry: serde_json::Value, format: String) -> Result<String, String> {
+        vault_core::type_emit::emit(&entry, &format)
+    }
+
+    /// Phase 33.1: `envv enrich` without `--online`. Pure over its arguments (the
+    /// renderer already holds the decrypted vault, the A1 rule): returns, per
+    /// entry, the proposals `plan_entry` makes with their reasons and the secret's
+    /// fingerprint. The values it proposes are metadata, never the secret, and
+    /// nothing is written here: the caller applies what the user accepts.
+    #[tauri::command]
+    pub fn enrich_plan(entries: Vec<serde_json::Value>, force: bool) -> Vec<serde_json::Value> {
+        entries
+            .iter()
+            .map(|e| {
+                let plan = envv_cli::enrich::plan_entry(e, force);
+                serde_json::json!({
+                    "id": e.get("id"),
+                    "provider": plan.provider,
+                    "fingerprint": plan.fingerprint,
+                    "proposals": plan.proposals.iter().map(|p| serde_json::json!({
+                        "field": p.field, "value": p.value, "reason": p.reason,
+                    })).collect::<Vec<_>>(),
+                })
+            })
+            .filter(|p| p["proposals"].as_array().is_some_and(|a| !a.is_empty()))
+            .collect()
+    }
+
+    /// Phase 33.1b: which issuer `enrich --online` would send each entry's secret
+    /// to. Makes no request. The consent screen shows this list before
+    /// `enrich_online` is allowed to run.
+    #[tauri::command]
+    pub fn enrich_online_targets(entries: Vec<serde_json::Value>) -> Vec<serde_json::Value> {
+        entries
+            .iter()
+            .filter_map(|e| {
+                envv_cli::enrich::issuer_for(e).map(|issuer| {
+                    serde_json::json!({ "id": e.get("id"), "provider": e.get("provider"), "issuer": issuer })
+                })
+            })
+            .collect()
+    }
+
+    /// Phase 33.1b: `envv enrich --online`. Sends each given entry's secret over
+    /// TLS to the issuer that issued it, and nowhere else, then returns what the
+    /// issuer said. Public-CA validation, no redirects (`probe_entry` builds the
+    /// client). Blocking HTTP, so it runs off the async runtime. The renderer only
+    /// calls this after the user has seen `enrich_online_targets`.
+    #[tauri::command]
+    pub async fn enrich_online(
+        entries: Vec<serde_json::Value>,
+        force: bool,
+    ) -> Result<Vec<serde_json::Value>, String> {
+        tauri::async_runtime::spawn_blocking(move || {
+            entries
+                .iter()
+                .filter_map(|e| {
+                    envv_cli::enrich::probe_entry(e, 10, force).map(|live| {
+                        serde_json::json!({
+                            "id": e.get("id"),
+                            "provider": e.get("provider"),
+                            "issuer": live.issuer,
+                            "status": live.status,
+                            "detail": live.detail,
+                            "proposals": live.proposals.iter().map(|p| serde_json::json!({
+                                "field": p.field, "value": p.value, "reason": p.reason,
+                            })).collect::<Vec<_>>(),
+                        })
+                    })
+                })
+                .collect()
+        })
+        .await
+        .map_err(|e| e.to_string())
+    }
+
+    /// Phase 33.2b: the file half of `envv doctor` (integrity, storage hashes, salt
+    /// pairing, permissions, audit chain) over this machine's vault. Local only:
+    /// against a remote the database is the server's, and `envv doctor` there.
+    #[tauri::command]
+    pub fn doctor_file(
+        app: AppHandle,
+        state: State<VaultState>,
+    ) -> Result<Vec<serde_json::Value>, String> {
+        let g = state.0.lock().map_err(|_| "State lock poisoned")?;
+        let key = *g.as_ref().ok_or("Vault is locked")?;
+        envv_cli::access::set_paths(Some(db_path(&app)?), Some(salt_path(&app)?));
+        Ok(envv_cli::doctor::file_findings(
+            &envv_cli::access::Access::Local(key),
+        ))
+    }
+
+    /// Phase 33.2: the document half of `envv doctor`. Pure over its argument.
+    #[tauri::command]
+    pub fn doctor_document(vault: serde_json::Value) -> Vec<serde_json::Value> {
+        envv_cli::doctor::document_findings(&vault)
+    }
+
+    /// Phase 31: which table `enrich` uses (`envv catalogue show`). Reads the
+    /// cache and re-verifies it; touches neither the vault nor the network.
+    #[tauri::command]
+    pub fn catalogue_status() -> serde_json::Value {
+        match vault_core::catalogue::load_cached() {
+            Some(c) => serde_json::json!({
+                "source": "catalogue", "generated_at": c.generated_at, "providers": c.providers.len(),
+            }),
+            None => serde_json::json!({ "source": "bundled" }),
+        }
+    }
+
+    /// Phase 31: `envv catalogue update`. Fetches one whole file over https (CA
+    /// validation, https only, 4 MiB cap), then `vault_core::catalogue::store`
+    /// verifies the signature and refuses a rollback before caching.
+    #[tauri::command]
+    pub async fn catalogue_update(url: Option<String>) -> Result<serde_json::Value, String> {
+        let url = url.unwrap_or_else(|| vault_core::catalogue::DEFAULT_URL.to_string());
+        if !url.starts_with("https://") {
+            return Err("the catalogue is only fetched over https".into());
+        }
+        let client = reqwest::ClientBuilder::new()
+            .timeout(std::time::Duration::from_secs(20))
+            .build()
+            .map_err(|e| e.to_string())?;
+        let bytes = client
+            .get(&url)
+            .send()
+            .await
+            .and_then(|r| r.error_for_status())
+            .map_err(|e| format!("could not fetch the catalogue: {}", e.without_url()))?
+            .bytes()
+            .await
+            .map_err(|e| e.without_url().to_string())?;
+        if bytes.len() > 4 * 1024 * 1024 {
+            return Err("catalogue is over 4 MiB; refusing".into());
+        }
+        let c = vault_core::catalogue::store(&bytes)?;
+        Ok(serde_json::json!({ "generated_at": c.generated_at, "providers": c.providers.len() }))
+    }
+
+    /// `Ok(())` when `mnemonic` is a valid BIP39 phrase; the error never echoes a word.
+    #[tauri::command]
+    pub fn bip39_validate(mnemonic: String) -> Result<(), String> {
+        vault_core::type_emit::bip39_validate(&mnemonic)
     }
 
     /// Converts a CXF document's text into entries ready to append — Phase
@@ -885,29 +1171,6 @@ mod commands {
         ))
     }
 
-    /// Read another authenticator app's export.
-    ///
-    /// Ente Auth, Aegis, 2FAS, andOTP, Bitwarden and Google Authenticator, with
-    /// the format detected from the bytes. Encrypted exports are refused by
-    /// name; this never tries to decrypt another app's vault.
-    ///
-    /// Parsing is `vault_core::totp_import` and nothing else — six formats
-    /// parsed twice is six chances for the app and the CLI to disagree about
-    /// what a file meant, and a disagreement here is a seed that imports with
-    /// the wrong period and produces codes the issuer rejects.
-    ///
-    /// It returns parsed seeds to the frontend, which is where they were headed
-    /// anyway: the caller holds the decrypted vault and is about to write them
-    /// into it.
-    ///
-    /// **A11: no longer gated on `VaultState`.** It never touched the local
-    /// database — the gate only ever checked the wrong vault on a remote
-    /// session, same class as `entry_totp_code` above.
-    #[tauri::command]
-    pub fn totp_import_parse(text: String) -> Result<vault_core::totp_import::ParseReport, String> {
-        vault_core::totp_import::parse(&text)
-    }
-
     /// Merge an authenticator export into the entries the frontend holds.
     ///
     /// Parse, plan and apply in one call, returning the new entry array and a
@@ -922,7 +1185,7 @@ mod commands {
     /// this command load and save independently would put two writers on one
     /// file with no compare-and-swap between them.
     /// **A11: no longer gated on `VaultState`** — pure over `entries` and
-    /// `text`, same reasoning as `totp_import_parse`.
+    /// `text`, same reasoning as the other authenticator commands.
     #[tauri::command]
     pub fn totp_import_merge(
         entries: Vec<serde_json::Value>,
@@ -990,6 +1253,22 @@ mod commands {
         let fmt = vault_core::totp_import::Format::parse(&format)
             .ok_or_else(|| format!("Unknown format '{format}'"))?;
         vault_core::totp_import::build(&items, fmt)
+    }
+
+    /// Phase 33.4: `envv user strict-write` / `class` in the app. `subject_kind`
+    /// is `user` or `class`; the owner is the only caller the app can have.
+    #[tauri::command]
+    pub fn set_strict_write(
+        app: AppHandle,
+        state: State<VaultState>,
+        subject_kind: String,
+        subject_id: String,
+        strict: bool,
+    ) -> Result<(), String> {
+        let g = state.0.lock().map_err(|_| "State lock poisoned")?;
+        let key = g.as_ref().ok_or("Vault is locked")?;
+        let conn = vault_core::open_db(&db_path(&app)?, key)?;
+        vault_core::users::set_strict_write(&conn, &subject_kind, &subject_id, strict)
     }
 
     #[tauri::command]
@@ -1290,7 +1569,7 @@ mod commands {
 
     /// Writes an export to disk and returns the absolute path it landed at.
     ///
-    /// **A3 (2026-09-14).** Every app export — ICS included — built a `Blob`,
+    /// **ADR-0003.** Every app export — ICS included — built a `Blob`,
     /// clicked a `<a download>` anchor, and toasted "Exported ✓" unconditionally
     /// (`downloadText` in `src/ts/import-export.ts`). Tauri's WebKitGTK webview
     /// has no download handler registered and no `tauri-plugin-dialog`/`-fs`
@@ -1315,13 +1594,21 @@ mod commands {
         let dir = dirs::download_dir()
             .or_else(dirs::home_dir)
             .unwrap_or_else(std::env::temp_dir);
-        fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        write_export_file_to(&dir, &filename, &content)
+    }
+
+    pub(super) fn write_export_file_to(
+        dir: &Path,
+        filename: &str,
+        content: &str,
+    ) -> Result<String, String> {
+        fs::create_dir_all(dir).map_err(|e| e.to_string())?;
 
         // Take only the final path component of whatever the caller sent — this
         // is a *filename*, not a path, and untrusted vault-derived text (a
         // provider name, invariant 4) must never be able to write outside the
         // resolved directory.
-        let safe_name = Path::new(&filename)
+        let safe_name = Path::new(filename)
             .file_name()
             .and_then(|n| n.to_str())
             .filter(|n| !n.is_empty())
@@ -1482,6 +1769,7 @@ pub fn run() {
         .manage(LanState(Mutex::new(None)))
         .invoke_handler(tauri::generate_handler![
             commands::unlock_vault,
+            commands::caps_lock_state,
             commands::lock_vault,
             commands::vault_is_unlocked,
             commands::vault_exists,
@@ -1494,9 +1782,6 @@ pub fn run() {
             commands::pool_set_cooldown,
             commands::pool_reset,
             commands::pool_state_path,
-            commands::load_settings,
-            commands::save_settings,
-            commands::get_expiring,
             commands::get_audit_log,
             commands::generate_certificate,
             commands::generate_ssh_keypair,
@@ -1510,11 +1795,27 @@ pub fn run() {
             commands::totp_disable,
             commands::vault_version,
             commands::entry_totp_code,
-            commands::parse_totp_seed,
+            commands::config_check_project,
+            commands::parse_toml_import,
+            commands::session_capture_parse,
+            commands::type_emit,
+            commands::oauth_refresh,
+            commands::bip39_validate,
+            commands::enrich_plan,
+            commands::enrich_online_targets,
+            commands::enrich_online,
+            commands::set_strict_write,
+            commands::entropy_fill,
+            commands::import_vault_plan,
+            commands::backup_archive_build,
+            commands::backup_archive_restore,
+            commands::doctor_document,
+            commands::doctor_file,
+            commands::catalogue_status,
+            commands::catalogue_update,
             commands::calendar_build_ics,
             commands::cxf_import,
             commands::cxf_export,
-            commands::totp_import_parse,
             commands::totp_import_merge,
             commands::totp_export_build,
             commands::rename_user,
@@ -1531,7 +1832,6 @@ pub fn run() {
             commands::list_user_tokens,
             commands::get_user_permissions,
             commands::set_user_permissions,
-            commands::get_expiring,
             commands::get_audit_log,
             commands::lan_start,
             commands::lan_stop,
@@ -1580,28 +1880,40 @@ mod export_file_tests {
     //! live `AppHandle`/`VaultState`; this one is a plain function over its
     //! arguments, so it is the one command in this file that can be unit
     //! tested directly without a test harness for the others.
-    use super::commands::write_export_file;
+    use super::commands::write_export_file_to;
     use std::fs;
+    use std::path::PathBuf;
+
+    fn scratch() -> PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!("envvault-export-test-{nanos}"));
+        fs::create_dir_all(&path).unwrap();
+        path
+    }
 
     #[test]
     fn writes_the_content_and_returns_the_real_path() {
         let content = "SPOTIFY_ID=abc123\n";
-        let path = write_export_file("envvault-test-basic.env".into(), content.into()).unwrap();
+        let dir = scratch();
+        let path = write_export_file_to(&dir, "basic.env", content).unwrap();
         assert_eq!(fs::read_to_string(&path).unwrap(), content);
-        fs::remove_file(&path).ok();
+        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
     fn a_filename_that_already_exists_is_disambiguated_rather_than_overwritten() {
         // The whole point of not asking for a save location: the write must
         // never silently clobber yesterday's export.
-        let a = write_export_file("envvault-test-dup.env".into(), "first".into()).unwrap();
-        let b = write_export_file("envvault-test-dup.env".into(), "second".into()).unwrap();
+        let dir = scratch();
+        let a = write_export_file_to(&dir, "dup.env", "first").unwrap();
+        let b = write_export_file_to(&dir, "dup.env", "second").unwrap();
         assert_ne!(a, b);
         assert_eq!(fs::read_to_string(&a).unwrap(), "first");
         assert_eq!(fs::read_to_string(&b).unwrap(), "second");
-        fs::remove_file(&a).ok();
-        fs::remove_file(&b).ok();
+        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
@@ -1610,18 +1922,21 @@ mod export_file_tests {
         // project name) — untrusted input, invariant 4. `../../etc/passwd`
         // must land as a file literally named that inside the resolved
         // directory, never traverse out of it.
-        let path = write_export_file("../../etc/passwd".into(), "x".into()).unwrap();
+        let dir = scratch();
+        let path = write_export_file_to(&dir, "../../etc/passwd", "x").unwrap();
         assert!(!path.contains(".."));
-        fs::remove_file(&path).ok();
+        assert_eq!(PathBuf::from(&path).parent(), Some(dir.as_path()));
+        fs::remove_dir_all(dir).unwrap();
     }
 
     #[cfg(unix)]
     #[test]
     fn is_written_0600_on_unix() {
         use std::os::unix::fs::PermissionsExt;
-        let path = write_export_file("envvault-test-perms.env".into(), "x".into()).unwrap();
+        let dir = scratch();
+        let path = write_export_file_to(&dir, "perms.env", "x").unwrap();
         let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode, 0o600);
-        fs::remove_file(&path).ok();
+        fs::remove_dir_all(dir).unwrap();
     }
 }
