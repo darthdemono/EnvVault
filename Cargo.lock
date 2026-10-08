@@ -5495,7 +5495,7 @@ dependencies = [
  "sha2",
  "ssh-key",
  "time",
- "toml 0.8.2",
+ "toml 1.1.4+spec-1.1.0",
  "tracing",
  "tracing-subscriber",
  "webpki-roots 0.26.11",
