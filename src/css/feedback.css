@@ -171,3 +171,15 @@ kbd {
   font-size: 12px;
   color: var(--text2);
 }
+
+.wifi-qr-box {
+  width: 340px;
+}
+
+.wifi-qr-body svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  background: #fff; /* a QR code needs its quiet zone to be light in every theme */
+  border-radius: 8px;
+}
