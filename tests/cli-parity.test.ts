@@ -204,6 +204,15 @@ describe('exporter parity fixtures', () => {
    * Asserted through `resolveFieldRef` rather than by importing the table, so it
    * tests the resolution path the exporters actually take.
    */
+  it('bundle references', () => {
+    const doc = JSON.parse(readFileSync(join(FIXTURES, 'bundle-refs.json'), 'utf8'));
+    st.vault.api_keys = doc.entries;
+    st.vault.projects = [];
+    for (const c of doc.cases as { ref: string; expect: string | null; why: string }[]) {
+      expect(resolveFieldRef(`\${${c.ref}}`, true).resolved, c.why).toBe(c.expect);
+    }
+  });
+
   it('field aliases', () => {
     const doc = JSON.parse(readFileSync(join(FIXTURES, 'field-aliases.json'), 'utf8'));
     // Every field holds its own name, so a resolved reference reports which
