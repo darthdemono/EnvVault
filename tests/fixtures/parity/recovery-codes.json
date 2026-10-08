@@ -1,0 +1,17 @@
+{
+  "_comment": "Recovery-code line format, asserted from src/ts/recovery-codes.ts and vault-core/src/type_emit.rs. One code per line; a used code keeps its text and gains a tab and 'USED <date>'. Reading never consumes.",
+  "cases": [
+    { "name": "all unused", "codes": "aaaa-1111\nbbbb-2222\ncccc-3333", "total": 3, "remaining": 3, "next": "aaaa-1111" },
+    { "name": "one used", "codes": "aaaa-1111\tUSED 2026-10-08\nbbbb-2222\ncccc-3333", "total": 3, "remaining": 2, "next": "bbbb-2222" },
+    { "name": "all used", "codes": "aaaa-1111\tUSED 2026-10-08", "total": 1, "remaining": 0, "next": null },
+    { "name": "blank lines and trailing space are ignored", "codes": "\naaaa-1111  \n\n  \nbbbb-2222\n", "total": 2, "remaining": 2, "next": "aaaa-1111" },
+    { "name": "empty", "codes": "", "total": 0, "remaining": 0, "next": null }
+  ],
+  "mark_used": {
+    "codes": "aaaa-1111\nbbbb-2222",
+    "date": "2026-10-08",
+    "first_unused": "aaaa-1111\tUSED 2026-10-08\nbbbb-2222",
+    "named": { "code": "bbbb-2222", "result": "aaaa-1111\nbbbb-2222\tUSED 2026-10-08" },
+    "refused": ["zzzz-9999"]
+  }
+}
