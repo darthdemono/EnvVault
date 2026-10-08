@@ -209,53 +209,9 @@ pub fn archive(path: &std::path::Path, password: Option<&str>) -> CliResult {
     let salt = std::fs::read(&salt_path)
         .map_err(|e| CliError::unavailable(format!("Cannot read {}: {e}", salt_path.display())))?;
 
-    // The manifest is what makes a mispairing detectable. Restoring a database
-    // with the wrong salt derives the wrong key and reports "wrong password" for
-    // a password that is entirely correct — a failure that sends people looking
-    // in exactly the wrong place.
-    let manifest = json!({
-        "db_sha256":   crate::out::raw_sha256_hex(&db),
-        "salt_sha256": crate::out::raw_sha256_hex(&salt),
-        "db_bytes":    db.len(),
-        "created_at":  vault_core::iso_now(),
-        "version":     env!("CARGO_PKG_VERSION"),
-    });
-
-    let mut kdf_salt = [0u8; 16];
-    let mut iv = [0u8; 12];
-    rand::thread_rng().fill_bytes(&mut kdf_salt);
-    rand::thread_rng().fill_bytes(&mut iv);
-    let key = derive(&pw, &kdf_salt, PBKDF2_ITERS);
-    let cipher = Aes256Gcm::new_from_slice(&key).map_err(|e| CliError::from(e.to_string()))?;
-
-    let plain = json!({
-        "db":       b64().encode(&db),
-        "salt":     b64().encode(&salt),
-        "manifest": manifest.clone(),
-    });
-    let plain = serde_json::to_vec(&plain).map_err(|e| CliError::from(e.to_string()))?;
-    let ct = cipher
-        .encrypt(
-            Nonce::from_slice(&iv),
-            Payload {
-                msg: &plain,
-                aad: ARCHIVE_MAGIC.as_bytes(),
-            },
-        )
-        .map_err(|_| CliError::from("Encryption failed"))?;
-
-    let envelope = json!({
-        "magic": ARCHIVE_MAGIC,
-        "kdf":   { "name": "PBKDF2", "hash": "SHA-256", "iters": PBKDF2_ITERS },
-        "salt":  b64().encode(kdf_salt),
-        "iv":    b64().encode(iv),
-        "ct":    b64().encode(&ct),
-    });
-    std::fs::write(
-        path,
-        serde_json::to_string(&envelope).map_err(|e| CliError::from(e.to_string()))?,
-    )
-    .map_err(|e| CliError::from(format!("Cannot write {}: {e}", path.display())))?;
+    let (envelope_text, manifest) = build_archive(&db, &salt, &pw)?;
+    std::fs::write(path, envelope_text)
+        .map_err(|e| CliError::from(format!("Cannot write {}: {e}", path.display())))?;
     // The archive is the vault. Anything that can read it can open the vault
     // with the archive password alone, so it gets the same mode as the session
     // file rather than whatever the umask happened to be.
@@ -288,73 +244,11 @@ pub fn restore_archive(
 ) -> CliResult {
     let raw = std::fs::read_to_string(path)
         .map_err(|e| CliError::not_found(format!("Cannot read {}: {e}", path.display())))?;
-    let env: Value = serde_json::from_str(&raw)
-        .map_err(|_| CliError::invalid("Not an archive file (invalid JSON)"))?;
-    if env.get("magic").and_then(|m| m.as_str()) != Some(ARCHIVE_MAGIC) {
-        return Err(CliError::invalid(format!(
-            "Not an EnvVault archive. A `.vaultbak` holds vault contents and is \
-             restored with `envv backup import`; an archive ({ARCHIVE_MAGIC}) holds \
-             the database file and its salt."
-        )));
-    }
-    let dec = |k: &str| -> CliResult<Vec<u8>> {
-        b64()
-            .decode(env.get(k).and_then(|v| v.as_str()).unwrap_or(""))
-            .map_err(|_| CliError::invalid(format!("Archive field '{k}' is not valid base64")))
-    };
-    let kdf_salt = dec("salt")?;
-    let iv = dec("iv")?;
-    let ct = dec("ct")?;
-    let iters = env
-        .get("kdf")
-        .and_then(|k| k.get("iters"))
-        .and_then(|i| i.as_u64())
-        .unwrap_or(PBKDF2_ITERS as u64) as u32;
-
     let pw = ask_password(password, false)?;
-    let key = derive(&pw, &kdf_salt, iters);
-    let cipher = Aes256Gcm::new_from_slice(&key).map_err(|e| CliError::from(e.to_string()))?;
-    let plain = cipher
-        .decrypt(
-            Nonce::from_slice(&iv),
-            Payload {
-                msg: &ct,
-                aad: ARCHIVE_MAGIC.as_bytes(),
-            },
-        )
-        .map_err(|_| CliError::denied("Wrong archive password, or the archive is corrupt"))?;
-    let body: Value = serde_json::from_slice(&plain)
-        .map_err(|_| CliError::invalid("Archive payload is not JSON"))?;
-
-    let db = b64()
-        .decode(body.get("db").and_then(|v| v.as_str()).unwrap_or(""))
-        .map_err(|_| CliError::invalid("Archive database is not valid base64"))?;
-    let salt = b64()
-        .decode(body.get("salt").and_then(|v| v.as_str()).unwrap_or(""))
-        .map_err(|_| CliError::invalid("Archive salt is not valid base64"))?;
-
-    // Verify before writing, not after. A corrupt archive that has already
-    // overwritten a working vault is the one outcome worse than a failed restore.
-    if let Some(m) = body.get("manifest") {
-        let want_db = m.get("db_sha256").and_then(|v| v.as_str()).unwrap_or("");
-        let want_salt = m.get("salt_sha256").and_then(|v| v.as_str()).unwrap_or("");
-        if !want_db.is_empty() && crate::out::raw_sha256_hex(&db) != want_db {
-            return Err(CliError::invalid(
-                "Archive database does not match its manifest checksum — the file is damaged",
-            ));
-        }
-        if !want_salt.is_empty() && crate::out::raw_sha256_hex(&salt) != want_salt {
-            return Err(CliError::invalid(
-                "Archive salt does not match its manifest checksum — the file is damaged",
-            ));
-        }
-    }
-    if salt.len() != 16 {
-        return Err(CliError::invalid(format!(
-            "Archive salt is {} bytes, expected 16",
-            salt.len()
-        )));
-    }
+    // Verified before anything is written, not after: a corrupt archive that has
+    // already overwritten a working vault is the one outcome worse than a failed
+    // restore.
+    let (db, salt) = open_archive(&raw, &pw)?;
 
     let db_path = crate::access::default_db_path();
     let salt_path = crate::access::default_salt_path();
@@ -397,4 +291,156 @@ pub fn restore_archive(
         },
     );
     Ok(())
+}
+
+/// Encrypt a database file and its salt into one `.vaultarc` envelope. Pure over
+/// its arguments so the desktop app builds the same archive the CLI does
+/// (Phase 33.3). Returns the envelope text and its manifest.
+pub fn build_archive(db: &[u8], salt: &[u8], pw: &str) -> CliResult<(String, Value)> {
+    if pw.chars().count() < MIN_PASSWORD {
+        return Err(CliError::invalid(format!(
+            "Archive password must be at least {MIN_PASSWORD} characters"
+        )));
+    }
+    // The manifest is what makes a mispairing detectable. Restoring a database
+    // with the wrong salt derives the wrong key and reports "wrong password" for
+    // a password that is entirely correct: a failure that sends people looking
+    // in exactly the wrong place.
+    let manifest = json!({
+        "db_sha256":   crate::out::raw_sha256_hex(db),
+        "salt_sha256": crate::out::raw_sha256_hex(salt),
+        "db_bytes":    db.len(),
+        "created_at":  vault_core::iso_now(),
+        "version":     env!("CARGO_PKG_VERSION"),
+    });
+    let mut kdf_salt = [0u8; 16];
+    let mut iv = [0u8; 12];
+    rand::thread_rng().fill_bytes(&mut kdf_salt);
+    rand::thread_rng().fill_bytes(&mut iv);
+    let key = derive(pw, &kdf_salt, PBKDF2_ITERS);
+    let cipher = Aes256Gcm::new_from_slice(&key).map_err(|e| CliError::from(e.to_string()))?;
+    let plain = json!({
+        "db":       b64().encode(db),
+        "salt":     b64().encode(salt),
+        "manifest": manifest.clone(),
+    });
+    let plain = serde_json::to_vec(&plain).map_err(|e| CliError::from(e.to_string()))?;
+    let ct = cipher
+        .encrypt(
+            Nonce::from_slice(&iv),
+            Payload {
+                msg: &plain,
+                aad: ARCHIVE_MAGIC.as_bytes(),
+            },
+        )
+        .map_err(|_| CliError::from("Encryption failed"))?;
+    let envelope = json!({
+        "magic": ARCHIVE_MAGIC,
+        "kdf":   { "name": "PBKDF2", "hash": "SHA-256", "iters": PBKDF2_ITERS },
+        "salt":  b64().encode(kdf_salt),
+        "iv":    b64().encode(iv),
+        "ct":    b64().encode(&ct),
+    });
+    let text = serde_json::to_string(&envelope).map_err(|e| CliError::from(e.to_string()))?;
+    Ok((text, manifest))
+}
+
+/// Decrypt and verify an archive: `(database, salt)`. Checks the manifest
+/// checksums before returning, so a caller never writes a damaged archive over a
+/// working vault.
+pub fn open_archive(raw: &str, pw: &str) -> CliResult<(Vec<u8>, Vec<u8>)> {
+    let env: Value = serde_json::from_str(raw)
+        .map_err(|_| CliError::invalid("Not an archive file (invalid JSON)"))?;
+    if env.get("magic").and_then(|m| m.as_str()) != Some(ARCHIVE_MAGIC) {
+        return Err(CliError::invalid(format!(
+            "Not an EnvVault archive. A `.vaultbak` holds vault contents and is \
+             restored with `envv backup import`; an archive ({ARCHIVE_MAGIC}) holds \
+             the database file and its salt."
+        )));
+    }
+    let dec = |k: &str| -> CliResult<Vec<u8>> {
+        b64()
+            .decode(env.get(k).and_then(|v| v.as_str()).unwrap_or(""))
+            .map_err(|_| CliError::invalid(format!("Archive field '{k}' is not valid base64")))
+    };
+    let kdf_salt = dec("salt")?;
+    let iv = dec("iv")?;
+    let ct = dec("ct")?;
+    let iters = env
+        .get("kdf")
+        .and_then(|k| k.get("iters"))
+        .and_then(|i| i.as_u64())
+        .unwrap_or(PBKDF2_ITERS as u64) as u32;
+    let key = derive(pw, &kdf_salt, iters);
+    let cipher = Aes256Gcm::new_from_slice(&key).map_err(|e| CliError::from(e.to_string()))?;
+    let plain = cipher
+        .decrypt(
+            Nonce::from_slice(&iv),
+            Payload {
+                msg: &ct,
+                aad: ARCHIVE_MAGIC.as_bytes(),
+            },
+        )
+        .map_err(|_| CliError::denied("Wrong archive password, or the archive is corrupt"))?;
+    let body: Value = serde_json::from_slice(&plain)
+        .map_err(|_| CliError::invalid("Archive payload is not JSON"))?;
+    let db = b64()
+        .decode(body.get("db").and_then(|v| v.as_str()).unwrap_or(""))
+        .map_err(|_| CliError::invalid("Archive database is not valid base64"))?;
+    let salt = b64()
+        .decode(body.get("salt").and_then(|v| v.as_str()).unwrap_or(""))
+        .map_err(|_| CliError::invalid("Archive salt is not valid base64"))?;
+    if let Some(m) = body.get("manifest") {
+        let want_db = m.get("db_sha256").and_then(|v| v.as_str()).unwrap_or("");
+        let want_salt = m.get("salt_sha256").and_then(|v| v.as_str()).unwrap_or("");
+        if !want_db.is_empty() && crate::out::raw_sha256_hex(&db) != want_db {
+            return Err(CliError::invalid(
+                "Archive database does not match its manifest checksum: the file is damaged",
+            ));
+        }
+        if !want_salt.is_empty() && crate::out::raw_sha256_hex(&salt) != want_salt {
+            return Err(CliError::invalid(
+                "Archive salt does not match its manifest checksum: the file is damaged",
+            ));
+        }
+    }
+    if salt.len() != 16 {
+        return Err(CliError::invalid(format!(
+            "Archive salt is {} bytes, expected 16",
+            salt.len()
+        )));
+    }
+    Ok((db, salt))
+}
+
+#[cfg(test)]
+mod archive_tests {
+    use super::*;
+
+    #[test]
+    fn an_archive_round_trips_and_refuses_a_wrong_password_or_a_flipped_byte() {
+        let db = vec![7u8; 5000];
+        let salt = vec![9u8; 16];
+        let (text, manifest) = build_archive(&db, &salt, "correct horse battery").unwrap();
+        assert_eq!(manifest["db_bytes"], 5000);
+        let (db2, salt2) = open_archive(&text, "correct horse battery").unwrap();
+        assert_eq!((db2, salt2), (db, salt));
+        assert!(open_archive(&text, "wrong password here").is_err());
+        let mut tampered = text.clone();
+        let at = tampered.rfind("\"ct\":\"").unwrap() + 8;
+        tampered.replace_range(
+            at..at + 1,
+            if &tampered[at..at + 1] == "A" {
+                "B"
+            } else {
+                "A"
+            },
+        );
+        assert!(open_archive(&tampered, "correct horse battery").is_err());
+        assert!(
+            build_archive(&[1], &[2; 16], "short").is_err(),
+            "password length floor"
+        );
+        assert!(open_archive("{\"magic\":\"nope\"}", "x").is_err());
+    }
 }
