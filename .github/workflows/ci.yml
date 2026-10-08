@@ -145,7 +145,8 @@ jobs:
       - name: Dependency policy (cargo-deny)
         if: runner.os == 'Linux'
         run: |
-          cargo install cargo-deny --locked --version 0.18.5
+          # 0.18.5 cannot parse the advisory database's CVSS 4.0 scores ("unsupported CVSS version").
+          cargo install cargo-deny --locked --version 0.20.2
           cargo deny check advisories bans licenses sources
 
       # `--locked` below refuses to build if a Cargo.toml edit was committed
