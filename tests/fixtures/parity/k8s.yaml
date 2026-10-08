@@ -15,3 +15,38 @@ metadata:
   namespace: default
 data:
   LOG_LEVEL: "info"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web
+  namespace: default
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: web
+  template:
+    metadata:
+      labels:
+        app: web
+    spec:
+      containers:
+        - name: web
+          image: nginx:1.27
+          ports:
+            - containerPort: 80
+          envFrom:
+            - secretRef:
+                name: app-secrets
+          volumeMounts:
+            - name: secret-app-secrets
+              mountPath: /etc/app
+              readOnly: true
+            - name: secret-app-secrets
+              mountPath: /etc/other
+              readOnly: true
+      volumes:
+        - name: secret-app-secrets
+          secret:
+            secretName: app-secrets
