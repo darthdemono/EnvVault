@@ -68,10 +68,14 @@
 
 .sidebar-item {
   width: 100%;
+  min-height: var(--sidebar-row-h);
+  /* A row never grows past the token: a long label truncates (below) instead of
+     wrapping to a second line and making one row taller than its neighbours. */
+  max-height: var(--sidebar-row-h);
   background: transparent;
   border: none;
   border-radius: 7px;
-  padding: 6px 9px;
+  padding: 0 9px;
   display: flex;
   align-items: center;
   gap: 7px;
@@ -240,4 +244,23 @@
   font-size: 9.5px;
   color: var(--text3);
   padding: 4px 9px;
+}
+
+/* A tag or pool chip in a sidebar row truncates like a label does. Without this
+   a long tag wrapped and its row measured 34px beside its neighbours' 30px —
+   found by the UI lab's row-height assertion on the hostile seed. */
+.sidebar-item .tag-chip-sidebar,
+.sidebar-item .pool-chip-sidebar {
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  display: block;
+}
+
+/* Phase 27: the ellipsis box cut 3px off descenders because its line box was
+   shorter than the glyphs; give it room instead of letting overflow slice it. */
+.sidebar-item .sidebar-label {
+  line-height: 1.4;
 }
