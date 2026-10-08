@@ -1632,7 +1632,24 @@ enum PermCmd {
 
 // ── Entry point ───────────────────────────────────────────────────────────────
 
+/// The command tree is large enough that parsing it and walking it for
+/// `describe` overflows Windows' 1 MB main-thread stack in a debug build (Linux
+/// gives the main thread 8 MB): the process died with no output, which the
+/// capability test saw as an empty `describe`. Everything runs on a thread with an
+/// explicit stack instead of relying on the platform default.
 fn main() {
+    let worker = std::thread::Builder::new()
+        .name("envv".into())
+        .stack_size(32 * 1024 * 1024)
+        .spawn(real_main)
+        .expect("cannot start the main worker thread");
+    if worker.join().is_err() {
+        // A panic has already printed its message; keep the conventional code.
+        std::process::exit(101);
+    }
+}
+
+fn real_main() {
     let cli = Cli::parse();
 
     // `error` by default, and the default is the whole point: this binary's
