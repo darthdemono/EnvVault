@@ -47,12 +47,16 @@
 import type { VaultEntry } from './types';
 import {
   envName,
+  primaryEnvName,
   quoteEnvValue,
   namesGeneratedBy,
   disambiguateNames,
   type EnvNameCase,
+  type GeneratedName,
 } from './state';
 import { normalizeRateLimit } from './ratelimit';
+import { renderBundleComposite, resolveBundleTemplate } from './bundle-scope';
+import { resolveFieldRef } from './chunk-ops';
 
 /** How much of an entry a copy emits. */
 export type CopyProfile = 'basic' | 'extended' | 'full';
@@ -188,4 +192,207 @@ export function buildCopyText(entry: VaultEntry, opts: CopyOpts = {}): string {
 /** The whole selection, blank-line separated — the shape `Exporter.dotenv` already had. */
 export function buildCopyTextAll(entries: VaultEntry[], opts: CopyOpts = {}): string {
   return entries.map((e) => buildCopyText(e, opts)).join('\n\n');
+}
+
+export type BundleExportFormat =
+  'dotenv' | 'python' | 'javascript' | 'typescript' | 'json' | 'yaml' | 'toml' | 'shell';
+
+/** Export every member/local value under collision-safe generated names. */
+export function buildBundleExport(
+  bundle: VaultEntry,
+  members: VaultEntry[],
+  format: BundleExportFormat,
+): string {
+  const entries = [bundle, ...members];
+  const generated: GeneratedName[] = [];
+  type Out = { value: string; kind?: string; template?: string; varKey?: string };
+  const values: Out[] = [];
+  const resolveGlobal = (reference: string) => resolveFieldRef(`\${${reference}}`, true).resolved;
+  for (const entry of entries) {
+    const names = namesGeneratedBy(entry);
+    const out: Out[] = [];
+    if (entry.api_key) out.push({ value: entry.api_key });
+    if (entry.api_secret) out.push({ value: entry.api_secret });
+    if (entry.api_url) out.push({ value: entry.api_url });
+    for (const variable of entry.extra_vars ?? []) {
+      if (!variable.key) continue;
+      let value = variable.value ?? '';
+      if (variable.kind === 'template' && entry.id === bundle.id) {
+        const resolved = resolveBundleTemplate(bundle, members, value, [], (reference) => {
+          const result = resolveFieldRef(`\${${reference}}`, true);
+          return result.resolved;
+        });
+        if (!resolved.ok)
+          throw new Error(`Cannot export ${variable.key}: ${resolved.error.kind} reference`);
+        value = resolved.value.value;
+      }
+      out.push({
+        value,
+        kind: variable.kind,
+        ...(entry.id === bundle.id ? { varKey: variable.key } : {}),
+        ...(variable.kind === 'template' && entry.id === bundle.id
+          ? { template: variable.value }
+          : {}),
+      });
+    }
+    if (entry.secretType === 'composite' && entry.composite_template) {
+      const rendered = renderBundleComposite(
+        bundle,
+        members,
+        entry.composite_template,
+        entry.extra_vars ?? [],
+        entry.composite_kind ?? 'custom',
+        resolveGlobal,
+      );
+      if (!rendered.ok) throw new Error(`Cannot export ${entry.provider}: unresolved composite`);
+      const keyValue = out.find((_, i) => names[i]?.role === '');
+      if (keyValue) keyValue.value = rendered.value;
+      else {
+        names.unshift({ name: primaryEnvName(entry), entry, role: '' });
+        out.unshift({ value: rendered.value });
+      }
+    }
+    generated.push(...names);
+    values.push(...out);
+  }
+  const names = disambiguateNames(generated);
+  const rows = names.map((name, i) => ({ name, ...values[i] }));
+  // Bundle-local template variables exported under the name they were given, so
+  // a Python/JS export can reference them (an f-string / template literal over
+  // names) instead of baking in the rendered text.
+  const localName = new Map<string, string>();
+  rows.forEach((row) => {
+    if (row.varKey) localName.set(row.varKey, row.name);
+  });
+  const segments = (template: string) => {
+    const parts: ({ lit: string } | { ref: string })[] = [];
+    let lit = '';
+    for (let k = 0; k < template.length; k++) {
+      const ch = template[k];
+      if ((ch === '{' || ch === '}') && template[k + 1] === ch) {
+        lit += ch === '{' ? '{{' : '}}';
+        k++;
+      } else if (ch === '{') {
+        const end = template.indexOf('}', k);
+        if (end < 0) return null;
+        if (lit) parts.push({ lit });
+        lit = '';
+        parts.push({ ref: template.slice(k + 1, end) });
+        k = end;
+      } else lit += ch;
+    }
+    if (lit) parts.push({ lit });
+    return parts;
+  };
+  /** Names a template row depends on, or null when it cannot stay symbolic. */
+  const deps = (row: (typeof rows)[number]): string[] | null => {
+    if (!row.template) return [];
+    const parts = segments(row.template);
+    if (!parts) return null;
+    const names: string[] = [];
+    for (const part of parts) {
+      if ('ref' in part) {
+        const target = localName.get(part.ref);
+        if (!target) return null; // sibling field or global reference
+        names.push(target);
+      }
+    }
+    return names;
+  };
+  const symbolic = (row: (typeof rows)[number], lang: 'py' | 'js'): string | null => {
+    const parts = row.template ? segments(row.template) : null;
+    if (!parts || deps(row) === null) return null;
+    if (lang === 'py') {
+      const body = parts
+        .map((part) =>
+          'ref' in part
+            ? `{${localName.get(part.ref)}}`
+            : part.lit.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n'),
+        )
+        .join('');
+      return `f"${body}"`;
+    }
+    const body = parts
+      .map((part) =>
+        'ref' in part
+          ? `\${${localName.get(part.ref)}}`
+          : part.lit
+              .replace(/\\/g, '\\\\')
+              .replace(/`/g, '\\`')
+              .replace(/\$\{/g, '\\${')
+              .replace(/\{\{/g, '{')
+              .replace(/\}\}/g, '}'),
+      )
+      .join('');
+    return `\`${body}\``;
+  };
+  /** Dependencies first; a row whose dependencies cannot be placed goes last. */
+  const inDependencyOrder = () => {
+    const placed = new Set<string>();
+    const pending = [...rows];
+    const ordered: typeof rows = [];
+    while (pending.length) {
+      const at = pending.findIndex((row) => (deps(row) ?? []).every((d) => placed.has(d)));
+      const [next] = pending.splice(at < 0 ? 0 : at, 1);
+      placed.add(next.name);
+      ordered.push(next);
+    }
+    return ordered;
+  };
+  const pyValue = (row: (typeof rows)[number]) => {
+    if (row.template) {
+      const symbol = symbolic(row, 'py');
+      if (symbol) return symbol;
+    }
+    if (row.kind === 'int' && /^[-+]?\d+$/.test(row.value)) return String(BigInt(row.value));
+    if (row.kind === 'float' && /^[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?$/.test(row.value))
+      return row.value;
+    if (row.kind === 'bool') return row.value === 'true' ? 'True' : 'False';
+    if (row.kind !== 'hex_int') return JSON.stringify(row.value);
+    if (!/^(?:0[xX][\da-fA-F]+|\d+)$/.test(row.value))
+      throw new Error(`${row.name} is marked hex_int but is not an integer`);
+    return `0x${BigInt(row.value).toString(16)}`;
+  };
+  const jsValue = (row: (typeof rows)[number]) => {
+    if (row.template) {
+      const symbol = symbolic(row, 'js');
+      if (symbol) return symbol;
+    }
+    // A JS number silently rounds above 2^53, so only safe integers go bare.
+    if (
+      row.kind === 'int' &&
+      /^[-+]?\d+$/.test(row.value) &&
+      Number.isSafeInteger(Number(row.value))
+    )
+      return row.value;
+    if (row.kind === 'bool') return row.value;
+    return JSON.stringify(row.value);
+  };
+  switch (format) {
+    case 'dotenv':
+      return rows.map(({ name, value }) => `${name}=${quoteEnvValue(value)}`).join('\n');
+    case 'shell':
+      return rows
+        .map(({ name, value }) => `export ${name}='${value.replace(/'/g, "'\\''")}'`)
+        .join('\n');
+    case 'python':
+      return inDependencyOrder()
+        .map((row) => `${row.name} = ${pyValue(row)}`)
+        .join('\n');
+    case 'javascript':
+    case 'typescript':
+      return inDependencyOrder()
+        .map((row) => `export const ${row.name} = ${jsValue(row)};`)
+        .join('\n');
+    case 'toml':
+      return rows.map(({ name, value }) => `${name} = ${JSON.stringify(value)}`).join('\n');
+    case 'yaml':
+      return rows.map(({ name, value }) => `${name}: ${JSON.stringify(value)}`).join('\n');
+    case 'json':
+      return JSON.stringify(
+        Object.fromEntries(rows.map(({ name, value }) => [name, value])),
+        null,
+        2,
+      );
+  }
 }
