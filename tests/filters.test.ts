@@ -7,7 +7,7 @@ import {
   sorted,
 } from '../src/ts/filters';
 import { st } from '../src/ts/state';
-import { makeEntry, makeProject, makeVault, resetState } from './helpers';
+import { makeEntry, makeProject, resetState } from './helpers';
 
 beforeEach(() => resetState(st));
 
