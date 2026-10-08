@@ -84,6 +84,13 @@ describe('form element contract with index.html', () => {
     'f-totp-algorithm',
     'f-totp-digits',
     'f-totp-period',
+    'f-storage-tokens',
+    'f-key-generate-caret',
+    'f-gen-popover',
+    'gp-generate-btn',
+    'gp-output',
+    'gp-use-btn',
+    'gp-copy-btn',
     'modal-overlay',
     'modal-title',
     'modal-duplicate',
@@ -187,6 +194,13 @@ describe('dynamicSecretFields', () => {
     typeIs('file_blob');
     expect($('f-blob-group').style.display).toBe('flex');
     expect($('f-key-group').style.display).toBe('none');
+  });
+
+  it('shows browser storage tokens only for web sessions', () => {
+    typeIs('cookie');
+    expect($('f-storage-tokens-group').style.display).toBe('flex');
+    typeIs('api_key');
+    expect($('f-storage-tokens-group').style.display).toBe('none');
   });
 
   it('shows the username row for password and ssh_key only', () => {
@@ -347,6 +361,27 @@ describe('formToEntry', () => {
     const entry = formToEntry();
     expect(entry.purpose).toBe('CI builds for the EnvVault repo');
     expect(entry.pool).toBe('github-ci');
+  });
+
+  it('validates and round-trips web-session storage tokens', () => {
+    setVal('f-secret-type', 'cookie');
+    setVal(
+      'f-storage-tokens',
+      JSON.stringify([
+        { origin: 'https://example.com', storage: 'session', key: 'csrf', value: 'secret' },
+      ]),
+    );
+    const entry = formToEntry();
+    expect(entry.storage_tokens).toEqual([
+      { origin: 'https://example.com', storage: 'session', key: 'csrf', value: 'secret' },
+    ]);
+    fillForm(entry);
+    expect(formToEntry().storage_tokens).toEqual(entry.storage_tokens);
+    setVal(
+      'f-storage-tokens',
+      '[{"origin":"https://example.com/path","storage":"local","key":"x","value":"y"}]',
+    );
+    expect(() => formToEntry()).toThrow('exact http(s) origin');
   });
 
   it('reads the rate limit as a count and a period, and regenerates the legacy string', () => {
@@ -562,6 +597,31 @@ describe('fillForm → formToEntry round trip', () => {
     ]);
   });
 
+  it('preserves variable kind and export metadata across edits', () => {
+    const original = makeEntry({
+      extra_vars: [
+        {
+          key: 'snowflake',
+          value: '9007199254740993',
+          secret: false,
+          public: true,
+          role: 'id',
+          tier: 'extended',
+          kind: 'large_id',
+        },
+      ],
+    });
+    fillForm(original);
+    expect(formToEntry(original).extra_vars?.[0]).toMatchObject({
+      key: 'snowflake',
+      value: '9007199254740993',
+      public: true,
+      role: 'id',
+      tier: 'extended',
+      kind: 'large_id',
+    });
+  });
+
   it('clears fields left over from the previously edited entry', () => {
     fillForm(makeEntry({ provider: 'First', api_key: 'k1', key_id: 'leftover' }));
     fillForm(makeEntry({ provider: 'Second', api_key: 'k2' }));
@@ -591,6 +651,103 @@ describe('fillForm → formToEntry round trip', () => {
     fillForm(makeEntry({ provider: '<img src=x onerror=alert(1)>' }));
     expect(document.querySelector('#modal-overlay img')).toBeNull();
     expect(formToEntry().provider).toBe('<img src=x onerror=alert(1)>');
+  });
+});
+
+describe('bundle template validation', () => {
+  it('refuses to save a bundle with a derived-variable cycle', async () => {
+    const bundle = makeEntry({
+      id: 'bundle-cycle',
+      provider: 'Discord bot',
+      api_key: '',
+      secretType: 'bundle',
+      extra_vars: [
+        { key: 'invite', value: '{stats}', kind: 'template' },
+        { key: 'stats', value: '{invite}', kind: 'template' },
+      ],
+    });
+    st.vault.api_keys = [bundle];
+    fillForm(bundle);
+    ($('edit-index') as HTMLInputElement).value = '0';
+
+    await saveModal();
+
+    expect(st.vault.api_keys[0].extra_vars).toEqual(bundle.extra_vars);
+    expect($('toast').textContent).toContain('Bundle template cycle');
+  });
+
+  it('cascades a bundle rename through bundle selectors on save', async () => {
+    const bundle = makeEntry({
+      id: 'bundle-old',
+      provider: 'Old',
+      api_key: '',
+      secretType: 'bundle',
+      extra_vars: [{ key: 'alias', value: '${bundle:Old/slot/id}', kind: 'template' }],
+    });
+    const consumer = makeEntry({
+      id: 'consumer',
+      provider: 'Config',
+      secretType: 'env_var',
+      extra_vars: [{ key: 'URL', value: '${bundle:Old/slot}', kind: 'template' }],
+    });
+    st.vault.api_keys = [bundle, consumer];
+    st.vault.projects = [
+      makeProject({
+        id: 'p1',
+        name: 'Deploy',
+        chunks: [
+          {
+            id: 'chunk',
+            name: 'Config',
+            chunk_type: 'env_file',
+            fields: [{ key: 'URL', value: '${bundle:Old/slot}', field_type: 'var' }],
+          },
+        ],
+      }),
+    ];
+    fillForm(bundle);
+    ($('edit-index') as HTMLInputElement).value = '0';
+    setVal('f-provider', 'New');
+
+    await saveModal();
+
+    expect(st.vault.api_keys[0].extra_vars?.[0].value).toBe('${bundle:New/slot/id}');
+    expect(st.vault.api_keys[1].extra_vars?.[0].value).toBe('${bundle:New/slot}');
+    expect(st.vault.projects[0].chunks?.[0].fields[0].value).toBe('${bundle:New/slot}');
+  });
+
+  it('cascades a bundle-local variable rename through local and global templates', async () => {
+    const bundle = makeEntry({
+      id: 'bundle',
+      provider: 'Discord Bot',
+      api_key: '',
+      secretType: 'bundle',
+      extra_vars: [
+        { key: 'prefix', value: '>', public: true },
+        { key: 'invite', value: 'https://x/{prefix}', kind: 'template' },
+      ],
+    });
+    const consumer = makeEntry({
+      id: 'consumer',
+      provider: 'Config',
+      extra_vars: [{ key: 'prefix', value: '${bundle:Discord Bot/prefix}', kind: 'template' }],
+    });
+    st.vault.api_keys = [bundle, consumer];
+    fillForm(bundle);
+    ($('edit-index') as HTMLInputElement).value = '0';
+    const row = [
+      ...document.querySelectorAll<HTMLElement>('#f-extra-vars-list .extra-var-row'),
+    ].find((candidate) => candidate.dataset.originalKey === 'prefix')!;
+    (row.querySelector('.extra-var-key') as HTMLInputElement).value = 'command_prefix';
+
+    await saveModal();
+
+    expect(st.vault.api_keys[0].extra_vars?.[0]).toMatchObject({
+      key: 'command_prefix',
+      public: true,
+    });
+    expect(st.vault.api_keys[0].extra_vars?.[1].value).toBe('https://x/{command_prefix}');
+    expect(st.vault.api_keys[1].extra_vars?.[0].value).toBe('${bundle:Discord Bot/command_prefix}');
   });
 });
 
@@ -896,6 +1053,45 @@ describe('the two-factor seed field (Phase 22)', () => {
     expect(st.vault.api_keys.length).toBe(before);
   });
 
+  it("bug 7 (2026-09-15): replacing a stored seed with an unrelated bare seed resets its algorithm, instead of carrying the old entry's algorithm onto it", () => {
+    // Reported as "some 2FA codes are wrong". Root cause: `refreshTotpStatus`
+    // only reset the algorithm/digits/period/kind selects when the parser had
+    // to *rewrite* the input (an otpauth:// URI split apart). Editing an entry
+    // whose seed already carried a non-default algorithm, then pasting an
+    // unrelated bare seed already in its final spelling, never took that
+    // branch — so the new, unrelated secret was saved under the *previous*
+    // entry's algorithm and produced confidently wrong codes.
+    fillForm({
+      provider: 'Old',
+      totp_secret: 'JBSWY3DPEHPK3PXP',
+      totp_algorithm: 'SHA256',
+    } as never);
+    expect($<HTMLSelectElement>('f-totp-algorithm').value).toBe('SHA256');
+
+    // A different service's seed, already normalised, pasted over the old one.
+    $('f-totp').value = 'KRUGS4ZANFZSA5DFEB2GQZLTORQXA';
+    refreshTotpStatus();
+
+    expect($<HTMLSelectElement>('f-totp-algorithm').value).toBe('SHA1');
+    expect(formToEntry().totp_algorithm).toBeUndefined();
+  });
+
+  it("editing an entry without touching its seed keeps that entry's own algorithm", () => {
+    // The other half of the same fix: it must not *always* reset on every
+    // status refresh, only when the secret actually changes — otherwise
+    // opening an entry for edit and touching an unrelated field would silently
+    // strip its stored non-default algorithm back to SHA1.
+    fillForm({
+      provider: 'Kept',
+      totp_secret: 'JBSWY3DPEHPK3PXP',
+      totp_algorithm: 'SHA256',
+      totp_digits: 8,
+    } as never);
+    refreshTotpStatus();
+    expect($<HTMLSelectElement>('f-totp-algorithm').value).toBe('SHA256');
+    expect($('f-totp-digits').value).toBe('8');
+  });
+
   it('the reveal button is bound by assignment, so opening twice does not stack it', () => {
     // Invariant 9. Two stacked handlers flip the type twice per click, which
     // looks exactly like a button that does nothing.
@@ -904,6 +1100,104 @@ describe('the two-factor seed field (Phase 22)', () => {
     $('f-totp').type = 'password';
     $('f-totp-reveal').click();
     expect($('f-totp').type).toBe('text');
+  });
+});
+
+describe('the generator popover (A8, 2026-09-15)', () => {
+  const $ = <T extends HTMLElement = HTMLInputElement>(id: string) =>
+    document.getElementById(id) as unknown as T;
+
+  beforeEach(() => {
+    openModal('Add Secret', -1);
+  });
+
+  it('is reachable — and closed — without opening the Tools panel', () => {
+    // The bug: the Tools panel's generators sit behind the modal overlay, so
+    // "generate in Tools, Inject into the open form" was two mutually
+    // exclusive states. This is the fix: the same generators, inside the form.
+    expect($('f-gen-popover').hidden).toBe(true);
+    $('f-key-generate-caret').click();
+    expect($('f-gen-popover').hidden).toBe(false);
+    expect($('f-key-generate-caret').getAttribute('aria-expanded')).toBe('true');
+  });
+
+  it('generates a secret on the default (bytes) tab and Use writes it into the primary field', () => {
+    $('f-key-generate-caret').click();
+    $('gp-generate-btn').click();
+    const generated = $('gp-output').textContent;
+    expect(generated).toBeTruthy();
+    expect($<HTMLButtonElement>('gp-use-btn').disabled).toBe(false);
+
+    $('gp-use-btn').click();
+    expect($('f-key').value).toBe(generated);
+    // Applying the value closes the popover — it did what it was opened for.
+    expect($('f-gen-popover').hidden).toBe(true);
+  });
+
+  it('generates a password on the password tab', () => {
+    $('f-key-generate-caret').click();
+    document.querySelector<HTMLButtonElement>('.gen-tab-btn[data-gen-tab="password"]')!.click();
+    $('gp-generate-btn').click();
+    // Default length is 20 (the length slider's markup default).
+    expect($('gp-output').textContent).toHaveLength(20);
+  });
+
+  it('refuses to generate a password with no character set selected', () => {
+    $('f-key-generate-caret').click();
+    document.querySelector<HTMLButtonElement>('.gen-tab-btn[data-gen-tab="password"]')!.click();
+    ($('gp-pw-upper') as HTMLInputElement).checked = false;
+    ($('gp-pw-lower') as HTMLInputElement).checked = false;
+    ($('gp-pw-digits') as HTMLInputElement).checked = false;
+    $('gp-generate-btn').click();
+    expect($('gp-output').textContent).toBe('');
+    expect($<HTMLButtonElement>('gp-use-btn').disabled).toBe(true);
+  });
+
+  it('generates a value on the API-key tab', () => {
+    $('f-key-generate-caret').click();
+    document.querySelector<HTMLButtonElement>('.gen-tab-btn[data-gen-tab="apikey"]')!.click();
+    ($('gp-ak-pattern') as HTMLSelectElement).value = 'sk-prefix';
+    $('gp-generate-btn').click();
+    expect($('gp-output').textContent).toMatch(/^sk-/);
+  });
+
+  it('hashes on the hash tab', async () => {
+    $('f-key-generate-caret').click();
+    document.querySelector<HTMLButtonElement>('.gen-tab-btn[data-gen-tab="hash"]')!.click();
+    ($('gp-hash-input') as HTMLTextAreaElement).value = 'envvault';
+    $('gp-generate-btn').click();
+    await new Promise((r) => setTimeout(r, 20));
+    expect($('gp-output').textContent).toMatch(/^[0-9a-f]{64}$/); // SHA-256 hex, the default
+  });
+
+  it("is closed and cleared on every form open, so one entry's generated value cannot leak onto the next", () => {
+    $('f-key-generate-caret').click();
+    $('gp-generate-btn').click();
+    expect($('gp-output').textContent).toBeTruthy();
+
+    fillForm({ provider: 'Next' } as never);
+    openModal('Add Secret', -1);
+
+    expect($('f-gen-popover').hidden).toBe(true);
+    expect($('gp-output').textContent).toBe('');
+    expect($<HTMLButtonElement>('gp-use-btn').disabled).toBe(true);
+  });
+
+  it('is bound by assignment, so opening the form twice does not double-generate per click', () => {
+    // Invariant 9. `openModal` runs on every open; a stacked click handler
+    // here would write two random values into `f-key` and the entropy meter
+    // (and the hash fetch) would run twice per click.
+    openModal('Add Secret', -1);
+    $('f-key-generate-caret').click();
+    let clicks = 0;
+    const original = crypto.getRandomValues.bind(crypto);
+    vi.spyOn(crypto, 'getRandomValues').mockImplementation((arr) => {
+      clicks++;
+      return original(arr as any);
+    });
+    $('gp-generate-btn').click();
+    expect(clicks).toBe(1);
+    vi.restoreAllMocks();
   });
 });
 
