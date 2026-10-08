@@ -5,14 +5,36 @@
  * worse than no preview at all.
  */
 import { describe, it, expect } from 'vitest';
-import { globMatches, parse, evaluate, evaluateSrc, validate } from '../src/ts/permex';
+import { readFileSync } from 'node:fs';
+import {
+  combine,
+  globMatches,
+  parse,
+  evaluate,
+  evaluateSrc,
+  requireAll,
+  validate,
+} from '../src/ts/permex';
 import { makeEntry, makeProject } from './helpers';
+import type { Project, VaultEntry } from '../src/ts/types';
 
 const PROJECTS = [
   makeProject({ id: 'Universal', name: 'Universal' }),
   makeProject({ id: 'p-acme', name: 'Acme' }),
   makeProject({ id: 'p-web', name: 'Acme/Web' }),
 ];
+
+const parity = JSON.parse(readFileSync('tests/fixtures/parity/permex.json', 'utf8')) as {
+  projects: Project[];
+  entries: VaultEntry[];
+  cases: {
+    name: string;
+    class: string | null;
+    individual: string | null;
+    strict: boolean;
+    matches: boolean[];
+  }[];
+};
 
 describe('globMatches', () => {
   it.each([
@@ -147,6 +169,20 @@ describe('evaluate', () => {
   it('accepts a pre-parsed expression', () => {
     expect(evaluate(parse('tag:prod'), makeEntry({ tags: ['prod'] }), PROJECTS)).toBe(true);
   });
+});
+
+describe('shared Rust parity fixture', () => {
+  for (const c of parity.cases) {
+    it(c.name, () => {
+      const classExpr = c.class ? parse(c.class) : undefined;
+      const individualExpr = c.individual ? parse(c.individual) : undefined;
+      const combined = combine(classExpr, individualExpr);
+      const effective = combined && (c.strict ? requireAll(combined) : combined);
+      expect(
+        parity.entries.map((entry) => !!effective && evaluate(effective, entry, parity.projects)),
+      ).toEqual(c.matches);
+    });
+  }
 });
 
 describe('evaluateSrc', () => {
