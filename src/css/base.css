@@ -37,6 +37,7 @@
   --env-test-t: #58b4dc;
   --shadow: rgba(0, 0, 0, 0.4);
   --r: 10px;
+  --sidebar-row-h: 30px;
   /* Aliases for tool workspace compatibility */
   --surface0: var(--surface);
   --surface1: var(--surface2);
