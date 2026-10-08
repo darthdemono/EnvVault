@@ -6,7 +6,6 @@
 use argon2::{Algorithm, Argon2, Params, Version};
 pub use rusqlite::Connection as SqlConnection;
 use rusqlite::{Connection, OpenFlags, OptionalExtension};
-use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::Path;
 pub use zeroize::Zeroize;
@@ -31,6 +30,17 @@ pub mod uid_registry;
 pub mod secret_types;
 // Phase 24.5: FIDO CXF import/export.
 pub mod cxf;
+// Phase 24.1: bundle-local and sibling-value template resolution.
+pub mod bundle_import;
+pub mod bundle_scope;
+pub mod catalogue;
+pub mod config_check;
+pub mod oauth;
+pub mod session_import;
+pub mod storage;
+pub mod templates;
+pub mod toml_import;
+pub mod type_emit;
 
 pub mod permex;
 pub mod pool;
@@ -243,6 +253,14 @@ pub fn init_schema(conn: &Connection) -> Result<(), String> {
     // Who performed the action. Rows written before this column exists stay NULL
     // and verify against the v1 hash formula (see `compute_audit_hash`).
     let _ = conn.execute_batch("ALTER TABLE vault_audit ADD COLUMN actor TEXT;");
+    // Audit lookups by entry and by time were full scans of the only table in the
+    // schema that could have been indexed from the start.
+    let _ = conn.execute_batch(
+        "CREATE INDEX IF NOT EXISTS vault_audit_provider ON vault_audit (entry_provider);
+         CREATE INDEX IF NOT EXISTS vault_audit_time ON vault_audit (timestamp);",
+    );
+    // Row-per-entry storage (Phase 30).
+    storage::init_schema(conn)?;
     // Multi-user tables (Phase 5)
     users::init_users_schema(conn)?;
     // Calendar feed tokens (Phase 24.3)
@@ -292,10 +310,14 @@ pub fn entry_ck(entry: &serde_json::Value) -> String {
 /// Bump this when a change makes a document unreadable to the previous build —
 /// not for an added optional field, which older readers ignore harmlessly.
 ///
-/// Version 1 is the document shape as of 0.8.1. Vaults written before this
-/// constant existed carry no version at all; that is treated as 1, because it
-/// is, and the next save stamps it.
-pub const VAULT_SCHEMA_VERSION: u32 = 1;
+/// Version 1 is the document shape as of 0.8.1: the whole vault as one JSON
+/// string in one row. Vaults written before this constant existed carry no
+/// version at all; that is treated as 1, because it is.
+///
+/// **Version 2 (Phase 30) is row-per-entry storage** (see [`storage`]). A v1 vault
+/// is converted on first open, after a `vault.db.v1.bak` copy; a v1 build then
+/// refuses the file with [`SCHEMA_ERR`] instead of reading an empty blob.
+pub const VAULT_SCHEMA_VERSION: u32 = 2;
 
 /// Marker prefix on the error returned when the stored vault was written by a
 /// newer build than this one. Callers match on it to tell "upgrade me" from a
@@ -351,16 +373,32 @@ pub fn check_schema_version(conn: &Connection) -> Result<(), String> {
 /// than handing back a document it would silently truncate on the next save.
 pub fn load_vault(conn: &Connection) -> Result<Option<serde_json::Value>, String> {
     check_schema_version(conn)?;
-    let raw: Option<String> = conn
-        .query_row("SELECT data FROM vault WHERE id = 1", [], |row| row.get(0))
-        .optional()
-        .map_err(|e| e.to_string())?;
-    match raw {
-        None => Ok(None),
-        Some(s) => serde_json::from_str(&s)
-            .map(Some)
-            .map_err(|e| e.to_string()),
-    }
+    // A v1 vault is converted the first time anything opens it.
+    storage::migrate_if_needed(conn, &iso_now())?;
+    storage::load(conn)
+}
+
+/// Appended to the version returned by a save that folded in other writers'
+/// changes (Phase 30). The part before it is the current version token; a writer
+/// that sends the whole thing back as `expect_version` is understood.
+pub const MERGED_SUFFIX: &str = "+merged";
+
+/// Refuse a newer schema and convert a v1 vault, so that a version read *after*
+/// this is a version of the converted vault. A caller that reads the version
+/// before the data (the safe order, see the server's PUT handler) must call this
+/// first, or it pairs a v1 hash with a v2 document and its first save conflicts.
+pub fn ensure_current_schema(conn: &Connection) -> Result<(), String> {
+    check_schema_version(conn)?;
+    storage::migrate_if_needed(conn, &iso_now())
+}
+
+/// The vault document without any entry's `version_history`: what a selective
+/// read needs, without the 50-revision secret trail per entry that a full read
+/// carries (Phase 30).
+pub fn load_vault_lite(conn: &Connection) -> Result<Option<serde_json::Value>, String> {
+    check_schema_version(conn)?;
+    storage::migrate_if_needed(conn, &iso_now())?;
+    storage::load_lite(conn)
 }
 
 /// Marker prefix on the error returned when a compare-and-swap write is refused.
@@ -389,13 +427,7 @@ pub struct SaveCtx<'a> {
 /// the hash of exactly the bytes on disk — no re-serialisation, no assumptions
 /// about map ordering.
 pub fn vault_version(conn: &Connection) -> Result<Option<String>, String> {
-    conn.query_row(
-        "SELECT value FROM vault_meta WHERE key = 'data_hash'",
-        [],
-        |r| r.get(0),
-    )
-    .optional()
-    .map_err(|e| e.to_string())
+    storage::version(conn)
 }
 
 /// Entry fields whose change is worth a `version_history` snapshot.
@@ -479,72 +511,60 @@ pub fn save_vault(
 }
 
 /// Body of [`save_vault`]. Must only be called inside a write transaction.
+///
+/// Phase 30: the document is split into rows, a stale writer is merged with what
+/// others saved since (see [`storage`]), and only rows whose content changed are
+/// written, audited and given history.
 fn save_vault_txn(
     conn: &Connection,
     data: serde_json::Value,
     ctx: SaveCtx<'_>,
 ) -> Result<String, String> {
-    use std::collections::{HashMap, HashSet};
-
     let actor = ctx.actor;
     let now_str = iso_now();
 
     // Refuse before doing any work: a newer document read by this build would
     // lose every field this build does not know about.
     check_schema_version(conn)?;
+    // A v1 blob still waiting is converted inside this same transaction.
+    storage::migrate_in_txn(conn, &now_str)?;
 
-    // Compare-and-swap. Inside the transaction, so no writer can slip between
-    // this check and the write below.
-    if let Some(expected) = ctx.expect_version {
-        let current = vault_version(conn)?;
-        // An absent version means an empty vault; a caller expecting a specific
-        // version against an empty vault is out of date either way.
-        if current.as_deref() != Some(expected) {
-            return Err(format!(
-                "{CONFLICT_ERR}: the vault changed since you last read it — reload and retry"
-            ));
+    // Compare-and-swap, now per row: inside the transaction, so no writer can slip
+    // between this check and the write below. An absent version means an empty
+    // vault; a caller expecting a specific version against one is out of date.
+    let snap = storage::snapshot(conn)?;
+    let (mut ents, merged) = storage::merge(conn, &snap, storage::split(data), ctx.expect_version)?;
+
+    let stored: std::collections::HashMap<&str, &str> = snap
+        .iter()
+        .filter(|((kind, _), _)| kind == "entry")
+        .map(|((_, key), (rev, _))| (key.as_str(), rev.as_str()))
+        .collect();
+    let kept: std::collections::HashSet<&str> = ents
+        .iter()
+        .filter(|e| e.kind == "entry")
+        .map(|e| e.key.as_str())
+        .collect();
+    for key in stored.keys() {
+        if !kept.contains(*key) {
+            if let Some(old) = storage::load_ent(conn, "entry", key)? {
+                append_audit(conn, "delete", &old.provider(), &now_str, None, actor)?;
+            }
         }
     }
 
-    let existing: Option<serde_json::Value> = conn
-        .query_row("SELECT data FROM vault WHERE id = 1", [], |row| {
-            row.get::<_, String>(0)
-        })
-        .optional()
-        .map_err(|e| e.to_string())?
-        .and_then(|s| serde_json::from_str(&s).ok());
-
-    let old_map: HashMap<String, serde_json::Value> = existing
-        .as_ref()
-        .and_then(|v| v.get("api_keys"))
-        .and_then(|v| v.as_array())
-        .map(|arr| arr.iter().map(|e| (entry_ck(e), e.clone())).collect())
-        .unwrap_or_default();
-
-    let new_keys: HashSet<String> = data
-        .get("api_keys")
-        .and_then(|v| v.as_array())
-        .map(|arr| arr.iter().map(entry_ck).collect())
-        .unwrap_or_default();
-
-    for (ck, old_e) in &old_map {
-        if !new_keys.contains(ck) {
-            let provider = old_e.get("provider").and_then(|v| v.as_str()).unwrap_or("");
-            append_audit(conn, "delete", provider, &now_str, None, actor)?;
-        }
-    }
-
-    let mut new_data = data;
-    if let Some(arr) = new_data.get_mut("api_keys").and_then(|v| v.as_array_mut()) {
-        for entry in arr.iter_mut() {
-            let provider = entry
-                .get("provider")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
-            let ck = entry_ck(entry);
-
-            if let Some(old_e) = old_map.get(&ck) {
+    for ent in ents.iter_mut().filter(|e| e.kind == "entry") {
+        match stored.get(ent.key.as_str()) {
+            // Content unchanged: no history, no audit, no write.
+            Some(rev) if *rev == ent.rev => continue,
+            Some(_) => {
+                let Some(old) = storage::load_ent(conn, "entry", &ent.key)? else {
+                    continue;
+                };
+                let old_e = old.full();
+                let mut entry = ent.full();
+                let provider = ent.provider();
+                let entry = &mut entry;
                 // Every secret-carrying value the entry holds, snapshot into one
                 // history. `api_key` writes no `field` discriminator so a vault
                 // stays readable to a build that predates the others — an
@@ -605,7 +625,7 @@ fn save_vault_txn(
                 // user deleting a row is exactly as unable to recover it as the
                 // user overwriting one, and the row's absence is not evidence
                 // that they meant to lose it.
-                let old_vars = historied_extra_vars(old_e);
+                let old_vars = historied_extra_vars(&old_e);
                 if !old_vars.is_empty() {
                     let new_vars: std::collections::HashMap<String, String> =
                         historied_extra_vars(entry).into_iter().collect();
@@ -648,26 +668,22 @@ fn save_vault_txn(
                         )?;
                     }
                 }
-            } else {
-                append_audit(conn, "add", &provider, &now_str, None, actor)?;
+                // Split the (possibly extended) history back off the row.
+                if let Some(h) = entry
+                    .as_object_mut()
+                    .and_then(|o| o.remove("version_history"))
+                {
+                    ent.history = Some(h);
+                }
+            }
+            None => {
+                append_audit(conn, "add", &ent.provider(), &now_str, None, actor)?;
             }
         }
     }
 
-    let raw = serde_json::to_string(&new_data).map_err(|e| e.to_string())?;
-    let hash = format!("{:x}", Sha256::digest(raw.as_bytes()));
-
-    // Data and hash move together, so the integrity check never sees a mismatch.
-    conn.execute(
-        "INSERT OR REPLACE INTO vault (id, data) VALUES (1, ?1)",
-        rusqlite::params![raw],
-    )
-    .map_err(|e| e.to_string())?;
-    conn.execute(
-        "INSERT OR REPLACE INTO vault_meta (key, value) VALUES ('data_hash', ?1)",
-        rusqlite::params![hash],
-    )
-    .map_err(|e| e.to_string())?;
+    // Data and token move together, so the integrity check never sees a mismatch.
+    let token = storage::write(conn, &snap, &ents, &now_str)?;
     // Stamp the shape alongside the data, in the same transaction. A vault that
     // has been written by this build is by definition in this build's schema,
     // so there is no separate migration step to forget to run.
@@ -677,32 +693,23 @@ fn save_vault_txn(
     )
     .map_err(|e| e.to_string())?;
 
-    Ok(hash)
+    // When other writers' changes were folded in, the caller's copy of the vault
+    // is *behind* what was just stored. Treating the new token as its base would
+    // let it overwrite those changes on its next save, and keeping its old base
+    // would make that save conflict with its own previous one. So the token comes
+    // back marked [`MERGED_SUFFIX`]: a client that holds a document reloads it; a
+    // one-shot client (the CLI) never looks.
+    if merged {
+        Ok(format!("{token}{MERGED_SUFFIX}"))
+    } else {
+        Ok(token)
+    }
 }
 
 /// Verifies the stored vault data against its SHA-256 integrity hash.
 /// Returns `Ok(true)` if hash matches, `Ok(false)` if tampered or hash absent, `Err` on I/O.
 pub fn verify_vault_integrity(conn: &Connection) -> Result<bool, String> {
-    let raw: Option<String> = conn
-        .query_row("SELECT data FROM vault WHERE id = 1", [], |r| r.get(0))
-        .optional()
-        .map_err(|e| e.to_string())?;
-    let stored_hash: Option<String> = conn
-        .query_row(
-            "SELECT value FROM vault_meta WHERE key = 'data_hash'",
-            [],
-            |r| r.get(0),
-        )
-        .optional()
-        .map_err(|e| e.to_string())?;
-    match (raw, stored_hash) {
-        (Some(data), Some(expected)) => {
-            let actual = format!("{:x}", Sha256::digest(data.as_bytes()));
-            Ok(actual == expected)
-        }
-        (None, _) => Ok(true),       // empty vault: trivially intact
-        (Some(_), None) => Ok(true), // no hash stored yet (pre-migration): trust it
-    }
+    storage::verify(conn)
 }
 
 /// Returns vault entries whose `expires_at` date falls within `within_days` days
@@ -892,12 +899,8 @@ pub fn load_audit(conn: &Connection) -> Result<Vec<AuditRow>, String> {
 /// Inserts raw JSON from a legacy `vault.json` into the `vault` table.
 /// Called once on first unlock after a Phase 1 → Phase 2 upgrade.
 pub fn migrate_legacy_json(conn: &Connection, raw_json: &str) -> Result<(), String> {
-    conn.execute(
-        "INSERT OR REPLACE INTO vault (id, data) VALUES (1, ?1)",
-        rusqlite::params![raw_json],
-    )
-    .map(|_| ())
-    .map_err(|e| e.to_string())
+    let doc: serde_json::Value = serde_json::from_str(raw_json).map_err(|e| e.to_string())?;
+    save_vault(conn, doc, SaveCtx::default()).map(|_| ())
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
@@ -1393,8 +1396,8 @@ mod tests {
         .unwrap();
         // Rewrite the row behind save_vault's back, leaving the stored hash stale.
         conn.execute(
-            "UPDATE vault SET data = ?1 WHERE id = 1",
-            rusqlite::params![r#"{"api_keys":[{"id":"1","provider":"EVIL","api_key":"k"}]}"#],
+            "UPDATE vault_rows SET data = ?1 WHERE kind = 'entry'",
+            rusqlite::params![r#"{"id":"1","provider":"EVIL","api_key":"k"}"#],
         )
         .unwrap();
         assert!(
@@ -1519,20 +1522,37 @@ mod tests {
             SaveCtx::default(),
         )
         .unwrap();
-        save_vault(&conn, json!({ "api_keys": [] }), SaveCtx::default()).unwrap();
+        // Another writer edits the same entry.
+        save_vault(
+            &conn,
+            json!({
+                "api_keys": [{ "id": "1", "provider": "A-theirs", "api_key": "k" }]
+            }),
+            SaveCtx::default(),
+        )
+        .unwrap();
 
         let audit_before = load_audit(&conn).unwrap().len();
         let version_before = vault_version(&conn).unwrap();
 
-        let _ = save_vault(
+        let err = save_vault(
             &conn,
             json!({
-                "api_keys": [{ "id": "9", "provider": "GHOST", "api_key": "k" }]
+                "api_keys": [
+                    { "id": "1", "provider": "A-mine", "api_key": "k" },
+                    { "id": "9", "provider": "GHOST", "api_key": "k" }
+                ]
             }),
             SaveCtx {
                 actor: None,
                 expect_version: Some(&v1),
             },
+        )
+        .expect_err("both sides edited entry 1");
+        assert!(err.starts_with(CONFLICT_ERR), "{err}");
+        assert!(
+            err.contains("A-mine"),
+            "the conflict names the entry: {err}"
         );
 
         assert_eq!(
@@ -1545,6 +1565,9 @@ mod tests {
             .unwrap()
             .iter()
             .any(|r| r.entry_provider.as_deref() == Some("GHOST")));
+        let stored = load_vault(&conn).unwrap().unwrap();
+        assert_eq!(stored["api_keys"].as_array().unwrap().len(), 1);
+        assert_eq!(stored["api_keys"][0]["provider"], "A-theirs");
     }
 
     #[test]
@@ -1822,4 +1845,40 @@ mod salt_pairing_tests {
         assert_eq!(mode, 0o600, "database was created world-readable");
         let _ = fs::remove_dir_all(&d);
     }
+}
+
+/// True for a value safe to write bare in a `.env`. Deliberately narrow.
+fn env_bare_ok(v: &str) -> bool {
+    !v.is_empty()
+        && v.chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '/' | ':' | '@' | '-'))
+}
+
+/// A value as it must appear after the `=` in a `.env` (Phase 23, E1).
+///
+/// The empty string quotes to `""` rather than to nothing, because a bare `KEY=`
+/// is how "unset" is spelled and a deliberately empty value must not read as
+/// one. A newline is escaped rather than emitted, so the parser's backslash
+/// line-continuation can never see one. Twin of `quoteEnvValue` in
+/// `src/ts/state.ts`, pinned by `parity/env-names.json`.
+pub fn env_quote(value: &str) -> String {
+    if env_bare_ok(value) {
+        return value.to_string();
+    }
+    let mut out = String::with_capacity(value.len() + 2);
+    out.push('"');
+    for ch in value.chars() {
+        match ch {
+            '\\' | '"' | '$' | '`' => {
+                out.push('\\');
+                out.push(ch);
+            }
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            _ => out.push(ch),
+        }
+    }
+    out.push('"');
+    out
 }
