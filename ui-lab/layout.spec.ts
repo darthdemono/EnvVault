@@ -38,7 +38,20 @@ const SCREENS: { name: string; go: (p: Page) => Promise<void> }[] = [
   { name: 'tools-diff', go: async (p) => void (await openTool(p, 'diff')) },
   { name: 'tools-import-export', go: async (p) => void (await openTool(p, 'import-export')) },
   { name: 'panel-remote', go: async (p) => void (await openPanel(p, 'remote')) },
-  { name: 'panel-users', go: async (p) => void (await openPanel(p, 'users')) },
+  {
+    name: 'panel-users',
+    go: async (p) => {
+      // The Users entry is hidden for a local vault on purpose
+      // (`usersPanelAvailable()`: users are a server concept). The lab boots a
+      // local vault, so reveal the button to audit the panel's layout; the gate
+      // itself is unit-tested.
+      await p.evaluate(() => {
+        const b = document.querySelector<HTMLElement>('#activity-bar [data-panel="users"]');
+        if (b) b.style.display = '';
+      });
+      await openPanel(p, 'users');
+    },
+  },
   {
     name: 'modal-add-entry',
     go: async (p) => {
@@ -112,6 +125,20 @@ async function boot(page: Page) {
 }
 
 const all: (LayoutFinding & { viewport: string; screen: string })[] = [];
+
+test('visible Secrets sidebar rows share one height', async ({ page }) => {
+  const errors = await boot(page);
+  const heights = await page
+    .locator('#secrets-panel .sidebar-item')
+    .evaluateAll((nodes) =>
+      nodes
+        .filter((node) => node.getClientRects().length > 0)
+        .map((node) => (node as HTMLElement).getBoundingClientRect().height),
+    );
+  expect(errors, 'page errors before layout measurement').toEqual([]);
+  expect(heights.length, 'the seed should expose multiple sidebar rows').toBeGreaterThan(1);
+  expect(Math.max(...heights) - Math.min(...heights)).toBeLessThanOrEqual(1);
+});
 
 for (const vp of VIEWPORTS) {
   test.describe(`${vp.name} (${vp.width}×${vp.height} @${vp.dpr}) — ${vp.why}`, () => {
