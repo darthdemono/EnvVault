@@ -27,6 +27,8 @@ export interface SecretTypeDescriptor {
   probe: boolean;
   mask_whole: boolean;
   cxf: string | null;
+  /** Output formats the Copy menu offers (`vault_core::type_emit`). */
+  emitters: string[];
 }
 
 const REGISTRY: SecretTypeDescriptor[] = (registryJson as { types: SecretTypeDescriptor[] }).types;
@@ -70,4 +72,9 @@ export function secretTypesByGroup(): Map<string, SecretTypeDescriptor[]> {
 export function maskWholeFor(secretType: string | null | undefined): boolean {
   if (!secretType) return false;
   return findSecretType(secretType)?.mask_whole ?? false;
+}
+
+/** The emit formats an entry's type offers (`.npmrc`, a DSN, a Wi-Fi string…). */
+export function emittersFor(secretType: string | null | undefined): string[] {
+  return secretType ? (findSecretType(secretType)?.emitters ?? []) : [];
 }
