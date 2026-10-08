@@ -104,6 +104,39 @@ pub fn provider_of(entry: &Value) -> &str {
 /// provider without renaming either.
 pub fn find_entry_index(vault: &Value, query: &str) -> CliResult<usize> {
     let list = entries(vault);
+    // `bundle:Name` is the bundle entry; `bundle:Name/slot` is that member.
+    if let Some(rest) = query.strip_prefix("bundle:") {
+        let (name, slot) = match rest.split_once('/') {
+            Some((n, s)) => (n, Some(s)),
+            None => (rest, None),
+        };
+        let bundles: Vec<usize> = list
+            .iter()
+            .enumerate()
+            .filter(|(_, e)| {
+                e.get("secretType").and_then(|v| v.as_str()) == Some("bundle")
+                    && provider_of(e).eq_ignore_ascii_case(name)
+            })
+            .map(|(i, _)| i)
+            .collect();
+        let bi = match bundles.len() {
+            1 => bundles[0],
+            0 => return Err(CliError::not_found(format!("No bundle named '{name}'"))),
+            _ => return Err(ambiguous(query, &bundles, &list)),
+        };
+        let Some(slot) = slot else { return Ok(bi) };
+        let id = list[bi].get("id").and_then(|v| v.as_str()).unwrap_or("");
+        return list
+            .iter()
+            .position(|e| {
+                !id.is_empty()
+                    && e.get("bundle_id").and_then(|v| v.as_str()) == Some(id)
+                    && e.get("bundle_slot")
+                        .and_then(|v| v.as_str())
+                        .is_some_and(|s| s.eq_ignore_ascii_case(slot))
+            })
+            .ok_or_else(|| CliError::not_found(format!("No slot '{slot}' in bundle '{name}'")));
+    }
     if let Some((prov, kid)) = query.split_once(':') {
         let hits: Vec<usize> = list
             .iter()
