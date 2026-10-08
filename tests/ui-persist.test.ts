@@ -134,6 +134,38 @@ describe('view persistence', () => {
     expect(st.currentSelectedProjectIds).toEqual(['p-web']);
   });
 
+  it('persists expanded bundles but drops ids that are not bundles in this vault', () => {
+    st.vault = makeVault({
+      api_keys: [makeEntry({ id: 'bundle-live', secretType: 'bundle' })],
+    });
+    st.expandedBundles = new Set(['bundle-live', 'bundle-removed']);
+
+    saveViewState();
+    st.expandedBundles.clear();
+    expect(restoreViewState()).toBe(true);
+
+    expect([...st.expandedBundles]).toEqual(['bundle-live']);
+    expect(Settings.get('lastView')?.expandedBundleIds).toEqual(['bundle-live', 'bundle-removed']);
+  });
+
+  it('persists a bundle slot only while the member still belongs to that bundle', () => {
+    st.vault = makeVault({
+      api_keys: [
+        makeEntry({ id: 'bundle', secretType: 'bundle' }),
+        makeEntry({ id: 'member', bundle_id: 'bundle' }),
+      ],
+    });
+    st.bundleSlotTabs = { bundle: 'member', deleted: 'gone' };
+    saveViewState();
+    st.bundleSlotTabs = {};
+    expect(restoreViewState()).toBe(true);
+    expect(st.bundleSlotTabs).toEqual({ bundle: 'member' });
+
+    st.vault.api_keys[1].bundle_id = null;
+    restoreViewState();
+    expect(st.bundleSlotTabs).toEqual({});
+  });
+
   it('drops a project id the vault no longer has', () => {
     // The bug this prevents: a stale project id matches nothing in
     // getFiltered(), so the app opens to an empty grid with every secret
