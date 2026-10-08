@@ -119,6 +119,54 @@ fn check_integrity(access: &Access) -> Finding {
     }
 }
 
+/// Row-per-entry storage (Phase 30): the schema is current, every row still
+/// hashes to its recorded content hash, and no pre-conversion backup is left
+/// lying around.
+fn check_storage(access: &Access) -> Finding {
+    if matches!(access, Access::Remote(_)) {
+        return Finding::at(
+            "storage",
+            Level::Note,
+            "Skipped: the database lives on the server",
+            "",
+        );
+    }
+    let conn = match access.conn() {
+        Ok(c) => c,
+        Err(e) => return Finding::at("storage", Level::Fail, e.to_string(), ""),
+    };
+    let count = |sql: &str| -> i64 { conn.query_row(sql, [], |r| r.get(0)).unwrap_or(0) };
+    match vault_core::verify_vault_integrity(&conn) {
+        Ok(true) => {}
+        Ok(false) => {
+            return Finding::at(
+                "storage",
+                Level::Fail,
+                "A stored row no longer matches its content hash, or the rows no longer match the vault version",
+                "Something wrote to the database outside EnvVault. Restore from `envv backup restore-archive` or a .vaultbak.",
+            )
+        }
+        Err(e) => return Finding::at("storage", Level::Fail, e, ""),
+    }
+    let rows = count("SELECT COUNT(*) FROM vault_rows WHERE kind = 'entry'");
+    let hist = count("SELECT COUNT(*) FROM vault_history");
+    let mut bak = crate::access::default_db_path().into_os_string();
+    bak.push(".v1.bak");
+    if std::path::Path::new(&bak).exists() {
+        Finding::at(
+            "storage",
+            Level::Note,
+            format!("{rows} entry rows, {hist} with history. A pre-conversion backup still exists"),
+            "Once you are satisfied the vault opens correctly, delete the `.v1.bak` file beside it: it holds the same secrets in the old format.",
+        )
+    } else {
+        Finding::ok(
+            "storage",
+            format!("{rows} entry rows, {hist} with history; every row verifies"),
+        )
+    }
+}
+
 /// The salt is present and paired with the database.
 fn check_salt(access: Option<&Access>) -> Finding {
     if matches!(access, Some(Access::Remote(_))) {
@@ -370,6 +418,71 @@ fn check_entry_ids(vault: &Value) -> Finding {
     }
 }
 
+/// Membership that names a non-bundle or missing parent is safely read as
+/// unbundled, but should be surfaced and repairable after an older-build edit.
+fn check_bundle_membership(vault: &Value) -> Finding {
+    let bundle_ids: std::collections::HashSet<String> = crate::data::entries(vault)
+        .iter()
+        .filter(|entry| entry.get("secretType").and_then(Value::as_str) == Some("bundle"))
+        .filter_map(|entry| entry.get("id").and_then(Value::as_str).map(str::to_owned))
+        .collect();
+    let dangling: Vec<String> = crate::data::entries(vault)
+        .iter()
+        .filter(|entry| {
+            entry
+                .get("bundle_id")
+                .and_then(Value::as_str)
+                .is_some_and(|id| !bundle_ids.contains(id))
+        })
+        .map(|entry| {
+            entry
+                .get("provider")
+                .and_then(Value::as_str)
+                .unwrap_or("unnamed")
+                .to_owned()
+        })
+        .collect();
+    if dangling.is_empty() {
+        Finding::ok("bundle-membership", "every bundle member has a bundle")
+    } else {
+        Finding::at(
+            "bundle-membership",
+            Level::Warn,
+            format!(
+                "{} entr{} point to a missing bundle: {}",
+                dangling.len(),
+                if dangling.len() == 1 { "y" } else { "ies" },
+                dangling.join(", ")
+            ),
+            "Run `envv doctor --fix` to make these entries standalone.",
+        )
+    }
+}
+
+fn clear_dangling_bundle_memberships(vault: &mut Value) -> usize {
+    let bundle_ids: std::collections::HashSet<String> = crate::data::entries(vault)
+        .iter()
+        .filter(|entry| entry.get("secretType").and_then(Value::as_str) == Some("bundle"))
+        .filter_map(|entry| entry.get("id").and_then(Value::as_str).map(str::to_owned))
+        .collect();
+    let mut fixed = 0;
+    for entry in crate::data::entries_mut(vault) {
+        let dangling = entry
+            .get("bundle_id")
+            .and_then(Value::as_str)
+            .is_some_and(|id| !bundle_ids.contains(id));
+        if dangling {
+            for key in ["bundle_id", "bundle_slot", "bundle_order"] {
+                if let Some(object) = entry.as_object_mut() {
+                    let _ = object.remove(key);
+                }
+            }
+            fixed += 1;
+        }
+    }
+    fixed
+}
+
 fn count_idless(vault: &Value) -> usize {
     crate::data::entries(vault)
         .iter()
@@ -389,7 +502,7 @@ fn count_idless(vault: &Value) -> usize {
 /// for a missing salt, because nothing can reconstruct 16 bytes of CSPRNG output
 /// and a flag that appeared to offer it would be discovered as a lie during a
 /// restore.
-fn fix_entry_ids(access: &Access) -> CliResult<usize> {
+fn fix_entry_ids(access: &Access) -> CliResult<(usize, usize)> {
     let mut vault = access.load_vault_or_empty()?;
     let mut fixed = 0usize;
     for e in crate::data::entries_mut(&mut vault) {
@@ -403,10 +516,11 @@ fn fix_entry_ids(access: &Access) -> CliResult<usize> {
             fixed += 1;
         }
     }
-    if fixed > 0 {
+    let bundles_fixed = clear_dangling_bundle_memberships(&mut vault);
+    if fixed > 0 || bundles_fixed > 0 {
         access.save(&vault)?;
     }
-    Ok(fixed)
+    Ok((fixed, bundles_fixed))
 }
 
 /// Run every check.
@@ -416,6 +530,37 @@ fn fix_entry_ids(access: &Access) -> CliResult<usize> {
 /// reason is reported as a finding. An earlier version took `&Access` and
 /// therefore failed with "no vault found" on a vault with a missing salt: the
 /// one condition it most needed to diagnose.
+/// The checks that need the database file: structure, row hashes, the salt pairing,
+/// file permissions and the audit chain. The desktop app builds an `Access::Local`
+/// from the key it holds and calls this (Phase 33.2b); `envv doctor` runs the same
+/// functions.
+pub fn file_findings(access: &Access) -> Vec<Value> {
+    let mut all = vec![
+        check_integrity(access),
+        check_storage(access),
+        check_salt(Some(access)),
+    ];
+    all.extend(check_permissions());
+    all.push(check_audit(access));
+    all.iter().map(Finding::to_json).collect()
+}
+
+/// The checks that read only the vault document: schema, ids, bundle membership
+/// and pools. Pure, so the desktop app can run them over whichever vault it holds
+/// (local or remote, the A1 rule). The database-level checks (integrity, storage,
+/// salt, permissions, audit) need the file and remain `envv doctor`'s alone.
+pub fn document_findings(vault: &Value) -> Vec<Value> {
+    [
+        check_schema(vault),
+        check_entry_ids(vault),
+        check_bundle_membership(vault),
+        check_pools(vault),
+    ]
+    .iter()
+    .map(Finding::to_json)
+    .collect()
+}
+
 pub fn run(access: Option<&Access>, open_error: Option<String>, fix: bool) -> CliResult {
     let mut findings = Vec::new();
 
@@ -447,16 +592,14 @@ pub fn run(access: Option<&Access>, open_error: Option<String>, fix: bool) -> Cl
     // that still printed the warning it had just repaired would be read as a
     // failed repair.
     if fix {
-        let fixed = fix_entry_ids(access)?;
+        let (ids_fixed, bundles_fixed) = fix_entry_ids(access)?;
+        let total = ids_fixed + bundles_fixed;
         findings.push(Finding::ok(
             "fix",
-            if fixed == 0 {
+            if total == 0 {
                 "nothing to repair".to_string()
             } else {
-                format!(
-                    "backfilled {fixed} entry id{}",
-                    if fixed == 1 { "" } else { "s" }
-                )
+                format!("backfilled {ids_fixed} id(s), cleared {bundles_fixed} dangling bundle membership(s)")
             },
         ));
     }
@@ -467,8 +610,10 @@ pub fn run(access: Option<&Access>, open_error: Option<String>, fix: bool) -> Cl
     };
 
     findings.insert(0, check_integrity(access));
+    findings.insert(1, check_storage(access));
     findings.push(check_schema(&vault));
     findings.push(check_entry_ids(&vault));
+    findings.push(check_bundle_membership(&vault));
     findings.push(check_pools(&vault));
     findings.push(check_audit(access));
     report(findings)
@@ -506,5 +651,31 @@ fn report(findings: Vec<Finding>) -> CliResult {
             "Vault has failing checks — see the findings above",
         )),
         _ => Ok(()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn dangling_membership_is_reported_and_repaired_as_standalone() {
+        let mut vault = json!({
+            "api_keys": [
+                {"id": "member", "provider": "Orphan", "bundle_id": "deleted", "bundle_slot": "slot", "bundle_order": 10},
+                {"id": "bundle", "provider": "Valid", "secretType": "bundle"},
+                {"id": "child", "provider": "Child", "bundle_id": "bundle", "bundle_slot": "child"}
+            ]
+        });
+
+        let finding = check_bundle_membership(&vault);
+        assert_eq!(finding.level, Level::Warn);
+        assert!(finding.message.contains("Orphan"));
+        assert_eq!(clear_dangling_bundle_memberships(&mut vault), 1);
+        assert_eq!(check_bundle_membership(&vault).level, Level::Ok);
+        assert!(vault["api_keys"][0].get("bundle_id").is_none());
+        assert!(vault["api_keys"][0].get("bundle_slot").is_none());
+        assert_eq!(vault["api_keys"][2]["bundle_id"], "bundle");
     }
 }
