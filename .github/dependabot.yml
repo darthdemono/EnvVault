@@ -1,0 +1,36 @@
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule: { interval: weekly }
+    groups:
+      minor-and-patch:
+        update-types: [minor, patch]
+  - package-ecosystem: cargo
+    directory: /
+    schedule: { interval: weekly }
+    groups:
+      minor-and-patch:
+        update-types: [minor, patch]
+    ignore:
+      # Exact versions below are cryptographic/storage compatibility pins.
+      - dependency-name: rusqlite
+      - dependency-name: argon2
+      - dependency-name: rand
+      - dependency-name: hex
+      - dependency-name: zeroize
+      - dependency-name: time
+      - dependency-name: rcgen
+      - dependency-name: ssh-key
+  - package-ecosystem: github-actions
+    directory: /
+    schedule: { interval: weekly }
+    groups:
+      actions:
+        update-types: [minor, patch]
+  - package-ecosystem: docker
+    directory: /
+    schedule: { interval: weekly }
+    groups:
+      base-images:
+        update-types: [minor, patch]
