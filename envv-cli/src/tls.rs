@@ -163,6 +163,20 @@ pub fn build_public_client(
         .map_err(|e| CliError::from(format!("Cannot build HTTPS client: {e}")))
 }
 
+/// A client for a credential's **issuer** (an OAuth `token_url`): ordinary CA
+/// validation, like [`build_public_client`], and **no redirects**. A redirect from
+/// a token endpoint would forward the refresh token and client secret in the
+/// follow-up request to wherever it points.
+pub fn build_issuer_client(timeout: std::time::Duration) -> CliResult<reqwest::blocking::Client> {
+    let cfg = tls::client_config(&TlsPolicy::Ca).map_err(CliError::from)?;
+    reqwest::blocking::Client::builder()
+        .use_preconfigured_tls(cfg)
+        .timeout(timeout)
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .map_err(|e| CliError::from(format!("Cannot build HTTPS client: {e}")))
+}
+
 /// Learn a server's certificate fingerprint without sending credentials.
 ///
 /// The trust-on-first-use bootstrap, and the reason it is sound is that it is
