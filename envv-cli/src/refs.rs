@@ -296,6 +296,55 @@ fn render_composite_entry(entry: &Value) -> Option<String> {
         .map(|r| r.text)
 }
 
+/// `${bundle:Name}`, `${bundle:Name/slot}`, `${bundle:Name/slot/field}` and
+/// `${bundle:Name/local}`. Ambiguous bundle names and unknown slots resolve to
+/// nothing, like every other broken reference. Twin of `resolveBundleRef` in
+/// `src/ts/chunk-ops.ts`.
+fn resolve_bundle_ref(entries: &[Value], body: &str, env_field: &str) -> Option<String> {
+    let mut parts = body.splitn(3, '/');
+    let name = parts.next()?;
+    let second = parts.next();
+    let third = parts.next();
+    let mut bundles = entries.iter().filter(|e| {
+        e.get("secretType").and_then(|v| v.as_str()) == Some("bundle")
+            && e.get("provider")
+                .and_then(|v| v.as_str())
+                .is_some_and(|p| p.eq_ignore_ascii_case(name))
+    });
+    let bundle = bundles.next()?;
+    if bundles.next().is_some() {
+        return None;
+    }
+    let id = bundle.get("id").and_then(|v| v.as_str())?;
+    let member = |slot: &str| {
+        entries.iter().find(|e| {
+            e.get("bundle_id").and_then(|v| v.as_str()) == Some(id)
+                && e.get("bundle_slot").and_then(|v| v.as_str()) == Some(slot)
+        })
+    };
+    let primary = |e: &Value| {
+        e.get(env_field)
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+            .or_else(|| e.get("api_key").and_then(|v| v.as_str()))
+            .map(str::to_string)
+    };
+    match (second, third) {
+        (None, _) => {
+            let pid = bundle.get("bundle_primary").and_then(|v| v.as_str())?;
+            let e = entries
+                .iter()
+                .find(|e| e.get("id").and_then(|v| v.as_str()) == Some(pid))?;
+            primary(e)
+        }
+        (Some(slot), Some(field)) => entry_field(member(slot)?, field),
+        (Some(key), None) => match member(key) {
+            Some(e) => primary(e),
+            None => entry_field(bundle, key),
+        },
+    }
+}
+
 /// Resolve a `${...}` ref inner-string against vault entries and chunks.
 pub fn resolve_ref(
     entries: &[Value],
@@ -304,6 +353,10 @@ pub fn resolve_ref(
     env_field: &str,
     depth: u8,
 ) -> Option<String> {
+    if let Some(body) = inner.strip_prefix("bundle:") {
+        return resolve_bundle_ref(entries, body, env_field);
+    }
+
     if let Some(body) = inner.strip_prefix("chunk:") {
         let slash = body.find('/')?;
         let (chunk_name, field_key) = (&body[..slash], &body[slash + 1..]);
