@@ -40,7 +40,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       # rusqlite's `sqlcipher` feature links against the system SQLCipher, and
       # the Tauri crate needs the WebKitGTK stack even for `cargo check`. mold is
@@ -123,16 +123,16 @@ jobs:
           fi
           echo "Locale::Maketext::Simple loads — OpenSSL's Configure will run."
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
         with:
           components: clippy, rustfmt
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@bc2d2e71bd35c5549942babaa51a89c586b981d1 # v2.8.1
 
       # `cargo check`/`cargo test` reach the Tauri app crate, whose build script
       # fails outright when `frontendDist` ("../dist") is missing — and dist/ is
       # gitignored. Build it here so the Rust jobs have something to point at.
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
           cache: npm
@@ -141,6 +141,12 @@ jobs:
         run: |
           npm ci
           npx vite build
+
+      - name: Dependency policy (cargo-deny)
+        if: runner.os == 'Linux'
+        run: |
+          cargo install cargo-deny --locked --version 0.18.5
+          cargo deny check advisories bans licenses sources
 
       # `--locked` below refuses to build if a Cargo.toml edit was committed
       # without the matching Cargo.lock. Saying so here beats a resolver error
@@ -187,14 +193,17 @@ jobs:
     name: Frontend (typecheck + test + build)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
           cache: npm
 
       - run: npm ci
+
+      - name: Production dependency audit
+        run: npm audit --omit=dev --audit-level=high
 
       # First, because it is the cheapest and the one whose failure invalidates
       # a release rather than a commit. The version is stated in six files and
