@@ -1,7 +1,8 @@
 [package]
 name    = "envv-cli"
-version = "0.24.0"
+version = "0.33.0"
 edition = "2021"
+publish = false
 license = "MIT"
 
 [lib]
@@ -33,10 +34,13 @@ uuid          = { version = "1", features = ["v4"] }
 aes-gcm    = "0.10"
 pbkdf2     = { version = "0.12", default-features = false, features = ["hmac"] }
 sha2       = "0.10"
+hex        = "=0.4.3"
 hmac       = "0.12"
 base64     = "0.22"
 rand       = "=0.8.5"
 time       = { version = "=0.3.37", features = ["parsing"] }
+aho-corasick = "1"
+walkdir      = "2"
 
 # Deny warnings, per [workspace.lints.rust] at the repo root.
 [lints]
