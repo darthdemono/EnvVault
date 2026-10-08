@@ -22,6 +22,7 @@ updates:
       - dependency-name: time
       - dependency-name: rcgen
       - dependency-name: ssh-key
+      - dependency-name: toml
   - package-ecosystem: github-actions
     directory: /
     schedule: { interval: weekly }
