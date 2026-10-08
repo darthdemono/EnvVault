@@ -832,7 +832,14 @@ pub fn cmd_add(
     provider: &str,
     fields: &EntryFields,
     if_missing: bool,
+    template: Option<&str>,
 ) -> CliResult {
+    let template = match template {
+        Some(id) => Some(vault_core::templates::find(id).ok_or_else(|| {
+            CliError::not_found(format!("No template '{id}' — see `envv template ls`"))
+        })?),
+        None => None,
+    };
     let mut vault = access.load_vault_or_empty()?;
     let projs = projects(&vault);
     let existing = data::entries(&vault).iter().any(|e| {
@@ -872,6 +879,17 @@ pub fn cmd_add(
         // in either half of the product dates itself the same way.
         "created_at": vault_core::iso_now(),
     });
+    // A template pre-fills; explicit flags then override it, so
+    // `--preset github-pat --url …` does what it says.
+    if let Some(t) = &template {
+        entry["secretType"] = json!(t.secret_type);
+        for (k, v) in &t.defaults {
+            entry[k.as_str()] = v.clone();
+        }
+        // The name given on the command line is the entry's name, not the
+        // preset's display provider.
+        entry["provider"] = json!(provider);
+    }
     fields.apply(&mut entry, &projs)?;
     let fingerprint = out::fingerprint(entry.get("api_key").and_then(|v| v.as_str()).unwrap_or(""));
     let id = entry
@@ -975,7 +993,7 @@ pub fn cmd_set(access: &Access, query: &str, fields: &EntryFields, create: bool)
         // `--create` makes set an upsert, so a provisioning script can run once
         // or a hundred times with the same result.
         Err(e) if create && e.code == crate::error::Code::NotFound => {
-            return cmd_add(access, query, fields, false);
+            return cmd_add(access, query, fields, false, None);
         }
         Err(e) => return Err(e),
     };
@@ -1833,10 +1851,16 @@ pub fn cmd_get(access: &Access, query: &str, field: Option<&str>) -> CliResult {
         return Ok(());
     }
     let q = query.to_lowercase();
-    let found: Vec<Value> = data::entries(&vault)
-        .into_iter()
-        .filter(|e| data::provider_of(e).to_lowercase().contains(&q))
-        .collect();
+    // `bundle:Name[/slot]` names exactly one entry; everything else is the
+    // substring search it always was.
+    let found: Vec<Value> = if query.starts_with("bundle:") {
+        vec![data::entries(&vault)[find_entry_index(&vault, query)?].clone()]
+    } else {
+        data::entries(&vault)
+            .into_iter()
+            .filter(|e| data::provider_of(e).to_lowercase().contains(&q))
+            .collect()
+    };
     if found.is_empty() {
         return Err(CliError::not_found(format!("No entry matching '{query}'")));
     }
