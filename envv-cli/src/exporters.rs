@@ -673,6 +673,14 @@ pub fn export_postgres(project: &Value, r: &Resolver) -> String {
 /// `String.fromCharCode`, then `btoa`) because `btoa` is Latin-1 and blows the
 /// stack past ~100 KB. Here it is one call — but the *output* must be identical,
 /// which is what the k8s golden pins.
+/// Comma/whitespace separated list; the twin is `splitK8sList` in chunk-ops.ts.
+fn split_k8s_list(raw: &str) -> Vec<String> {
+    raw.split(|c: char| c == ',' || c.is_whitespace())
+        .filter(|x| !x.is_empty())
+        .map(String::from)
+        .collect()
+}
+
 fn b64_utf8(v: &str) -> String {
     use base64::Engine;
     base64::engine::general_purpose::STANDARD.encode(v.as_bytes())
@@ -717,8 +725,64 @@ pub fn export_k8s(project: &Value, r: &Resolver) -> String {
                     }
                     b
                 };
+                // Phase 29: Secrets the Deployment consumes (`secretEnv`, and
+                // `secretMounts` as `secret:/path`). The twin is `exportK8s`.
+                let mut secret_env = split_k8s_list(&rawfield(&chunk, "secretEnv"));
+                let mut seen_env: Vec<String> = Vec::new();
+                secret_env.retain(|n| {
+                    let fresh = !seen_env.contains(n);
+                    seen_env.push(n.clone());
+                    fresh
+                });
+                let secret_mounts: Vec<(String, String)> =
+                    split_k8s_list(&rawfield(&chunk, "secretMounts"))
+                        .into_iter()
+                        .filter_map(|m| {
+                            let i = m.find(':')?;
+                            (i > 0 && i < m.len() - 1)
+                                .then(|| (m[..i].to_string(), m[i + 1..].to_string()))
+                        })
+                        .collect();
+                let env_from = if secret_env.is_empty() {
+                    String::new()
+                } else {
+                    let mut b = String::from("\n          envFrom:");
+                    for n in &secret_env {
+                        b.push_str(&format!(
+                            "\n            - secretRef:\n                name: {n}"
+                        ));
+                    }
+                    b
+                };
+                let mounts = if secret_mounts.is_empty() {
+                    String::new()
+                } else {
+                    let mut b = String::from("\n          volumeMounts:");
+                    for (n, p) in &secret_mounts {
+                        b.push_str(&format!(
+                            "\n            - name: secret-{n}\n              mountPath: {p}\n              readOnly: true"
+                        ));
+                    }
+                    b
+                };
+                let volumes = if secret_mounts.is_empty() {
+                    String::new()
+                } else {
+                    let mut seen: Vec<&str> = Vec::new();
+                    let mut b = String::from("\n      volumes:");
+                    for (n, _) in &secret_mounts {
+                        if seen.contains(&n.as_str()) {
+                            continue;
+                        }
+                        seen.push(n);
+                        b.push_str(&format!(
+                            "\n        - name: secret-{n}\n          secret:\n            secretName: {n}"
+                        ));
+                    }
+                    b
+                };
                 manifests.push(format!(
-                    "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: {name}\n  namespace: {ns}\nspec:\n  replicas: {replicas}\n  selector:\n    matchLabels:\n      app: {name}\n  template:\n    metadata:\n      labels:\n        app: {name}\n    spec:\n      containers:\n        - name: {name}\n          image: {image}\n          ports:\n            - containerPort: {port}{env_block}"
+                    "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: {name}\n  namespace: {ns}\nspec:\n  replicas: {replicas}\n  selector:\n    matchLabels:\n      app: {name}\n  template:\n    metadata:\n      labels:\n        app: {name}\n    spec:\n      containers:\n        - name: {name}\n          image: {image}\n          ports:\n            - containerPort: {port}{env_block}{env_from}{mounts}{volumes}"
                 ));
             }
             "k8s_service" => {
@@ -1057,7 +1121,8 @@ pub fn dotenv(entries: &[Value]) -> String {
     entries
         .iter()
         .map(|e| {
-            let n = crate::envfile::primary_name(e, None, false);
+            let (c, p) = crate::envfile::export_naming();
+            let n = crate::envfile::primary_name(e, c, p);
             format!("{n}={}", crate::envfile::quote_env_value(s(e, "api_key")))
         })
         .collect::<Vec<_>>()
@@ -1067,7 +1132,8 @@ pub fn dotenv(entries: &[Value]) -> String {
 pub fn yaml(entries: &[Value]) -> String {
     let mut out = String::from("# EnvVault Export\n");
     for e in entries {
-        let p = crate::envfile::primary_name(e, None, false);
+        let (c, pre) = crate::envfile::export_naming();
+        let p = crate::envfile::primary_name(e, c, pre);
         out.push_str(&format!(
             "{p}: {}\n",
             serde_json::to_string(s(e, "api_key")).unwrap_or_default()
@@ -1086,10 +1152,11 @@ pub fn k8s_secret(entries: &[Value], name: &str) -> String {
         "type: Opaque".to_string(),
         "stringData:".to_string(),
     ];
+    let (c, pre) = crate::envfile::export_naming();
     for e in entries {
         lines.push(format!(
             "  {}: {}",
-            crate::envfile::primary_name(e, None, false),
+            crate::envfile::primary_name(e, c, pre),
             serde_json::to_string(s(e, "api_key")).unwrap_or_default()
         ));
     }
