@@ -81,12 +81,12 @@ export default tseslint.config(
       // Vault data is untrusted input (invariant 4). Casting it to a union and
       // then trusting the union is how unescaped `environment` and `secretType`
       // reached `innerHTML`.
-      '@typescript-eslint/no-unsafe-assignment': 'warn',
-      '@typescript-eslint/no-unsafe-member-access': 'warn',
-      '@typescript-eslint/no-unsafe-call': 'warn',
-      '@typescript-eslint/no-unsafe-argument': 'warn',
-      '@typescript-eslint/no-unsafe-return': 'warn',
-      '@typescript-eslint/no-explicit-any': 'warn',
+      '@typescript-eslint/no-unsafe-assignment': 'error',
+      '@typescript-eslint/no-unsafe-member-access': 'error',
+      '@typescript-eslint/no-unsafe-call': 'error',
+      '@typescript-eslint/no-unsafe-argument': 'error',
+      '@typescript-eslint/no-unsafe-return': 'error',
+      '@typescript-eslint/no-explicit-any': 'error',
 
       // An unused variable after a refactor is usually the half of a rename
       // that did not happen. `_`-prefixed is the documented opt-out.
@@ -108,17 +108,16 @@ export default tseslint.config(
       'no-throw-literal': 'off',
       '@typescript-eslint/only-throw-error': 'error',
 
-      // ---- Noise, downgraded deliberately ---------------------------------
+      // ---- Style preferences, enforced after the backlog reached zero -----
       //
-      // These are style preferences, not defects. They are warnings so a real
-      // error is never buried under three hundred of them.
+      // These preferences are enforced now that the existing backlog is clear.
       '@typescript-eslint/consistent-type-definitions': 'off',
       '@typescript-eslint/consistent-indexed-object-style': 'off',
       '@typescript-eslint/prefer-nullish-coalescing': 'off',
-      '@typescript-eslint/prefer-optional-chain': 'warn',
+      '@typescript-eslint/prefer-optional-chain': 'error',
       '@typescript-eslint/no-non-null-assertion': 'off',
       '@typescript-eslint/restrict-template-expressions': [
-        'warn',
+        'error',
         { allowNumber: true, allowBoolean: true, allowNullish: true },
       ],
       '@typescript-eslint/no-empty-function': 'off',
@@ -152,6 +151,30 @@ export default tseslint.config(
       '@typescript-eslint/class-methods-use-this': 'off',
       '@typescript-eslint/dot-notation': 'off',
       'no-empty': ['error', { allowEmptyCatch: true }],
+    },
+  },
+
+  {
+    // Escape by construction (Phase 28). Markup reaches the DOM through
+    // `setHtml(el, html`...`)`, which accepts nothing but `SafeHtml`; a raw
+    // string assigned to `innerHTML` is the unescaped-interpolation bug this
+    // project has shipped repeatedly (invariant 4). `src/ts/html.ts` is the one
+    // place allowed to write it.
+    files: ['src/**/*.ts'],
+    ignores: ['src/ts/html.ts'],
+    rules: {
+      'no-restricted-syntax': [
+        'error',
+        {
+          selector:
+            "AssignmentExpression[left.type='MemberExpression'][left.property.name=/^(innerHTML|outerHTML)$/]",
+          message: 'Use setHtml(el, html`...`) from ./html instead of assigning markup directly.',
+        },
+        {
+          selector: "CallExpression[callee.property.name='insertAdjacentHTML']",
+          message: 'Use setHtml(el, html`...`) from ./html instead of insertAdjacentHTML.',
+        },
+      ],
     },
   },
 
