@@ -67,7 +67,7 @@ impl Default for IcsOptions {
         IcsOptions {
             kinds: vec![EventKind::Created, EventKind::Expires, EventKind::Rotation],
             now: crate::iso_now(),
-            calendar_name: "EnvVault".to_string(),
+            calendar_name: "UnENVerse".to_string(),
         }
     }
 }
