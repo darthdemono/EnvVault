@@ -1,7 +1,7 @@
 //! Phase 33: the UI/CLI capability map, checked mechanically (invariant 10).
 //!
 //! `tests/fixtures/parity/capabilities.json` classifies every CLI leaf command
-//! (taken live from `envv describe`) and every registered Tauri command into a
+//! (taken live from `unv describe`) and every registered Tauri command into a
 //! capability, and says which half has it. This test fails when:
 //!
 //! - a CLI command or Tauri command exists that no capability mentions (someone
@@ -77,10 +77,10 @@ fn tauri_commands() -> BTreeSet<String> {
 
 #[test]
 fn the_capability_map_matches_both_halves() {
-    let out = Command::new(env!("CARGO_BIN_EXE_envv"))
+    let out = Command::new(env!("CARGO_BIN_EXE_unv"))
         .arg("describe")
         .output()
-        .expect("run envv describe");
+        .expect("run unv describe");
     let doc: Value = serde_json::from_slice(&out.stdout).expect("describe is JSON");
     let mut cli = BTreeSet::new();
     leaves(&doc["command"], &mut cli);
@@ -116,7 +116,7 @@ fn the_capability_map_matches_both_halves() {
         let describe_text = String::from_utf8_lossy(&out.stdout);
         for f in &c_flags {
             if !describe_text.contains(f.as_str()) {
-                problems.push(format!("{id}: flag `{f}` is not in `envv describe`"));
+                problems.push(format!("{id}: flag `{f}` is not in `unv describe`"));
             }
         }
         let note = c["note"].as_str().unwrap_or("");
