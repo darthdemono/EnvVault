@@ -60,6 +60,34 @@ describe('config check panel', () => {
     expect(calls[0].args.vaultNames).toEqual(['GitHub_prod', 'GitHub']);
   });
 
+  it('sends the services of every project only when the wide scope is on', async () => {
+    const { checkProject, elsewhereServices } = await load([]);
+    const { st, Settings } = await import('../src/ts/state');
+    st.vault.projects = [
+      {
+        id: 'b',
+        name: 'Backend',
+        chunks: [
+          {
+            id: '1',
+            name: 'My API',
+            chunk_type: 'docker_service',
+            fields: [{ key: 'container_name', value: 'Api-1' }],
+          },
+          { id: '2', name: 'off', chunk_type: 'docker_service', fields: [], disabled: true },
+          { id: '3', name: 'site', chunk_type: 'nginx_location', fields: [] },
+        ],
+      },
+    ] as any;
+    expect(elsewhereServices().sort()).toEqual(['api-1', 'my_api']);
+    await checkProject(project);
+    expect(calls[0].args.elsewhere).toEqual([]);
+    Settings.set('configCheckAll', true);
+    await checkProject(project);
+    expect(calls[1].args.elsewhere.sort()).toEqual(['api-1', 'my_api']);
+    Settings.set('configCheckAll', false);
+  });
+
   it('stays hidden when the project is clean', async () => {
     const { mountConfigCheck } = await load([]);
     const host = document.createElement('section');
