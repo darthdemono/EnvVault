@@ -71,6 +71,49 @@ beforeEach(() => {
 });
 
 describe('Nodes pane', () => {
+  it('loads enrolled nodes on opening the tool without pressing Refresh', async () => {
+    const calls = await boot(() => ({ status: 200, body: { nodes: [node()] } }));
+    const { switchTool } = await import('../src/ts/state');
+    switchTool('nodes');
+    await vi.waitFor(() => expect($('nodes-list').textContent).toContain('vps-01'));
+    expect(calls).toEqual([['GET', '/api/nodes', undefined]]);
+    switchTool('secret-gen');
+    switchTool('nodes');
+    await vi.waitFor(() => expect(calls).toHaveLength(2));
+  });
+
+  it('clears nodes from the previous vault when the current vault is local', async () => {
+    await boot(() => ({ status: 200, body: { nodes: [node()] } }));
+    const { switchTool, st, LocalVaultStore } = await import('../src/ts/state');
+    switchTool('nodes');
+    await vi.waitFor(() => expect($('nodes-list').textContent).toContain('vps-01'));
+    st.store = new LocalVaultStore();
+    switchTool('nodes');
+    await vi.waitFor(() =>
+      expect($('nodes-status').textContent).toMatch(/Connect to a remote vault/),
+    );
+    expect($('nodes-list').textContent).not.toContain('vps-01');
+  });
+
+  it('ignores a response from a vault that was switched away while loading nodes', async () => {
+    await boot(() => ({ status: 200, body: { nodes: [] } }));
+    const { switchTool, st, LocalVaultStore, RemoteVaultStore } = await import('../src/ts/state');
+    let finish!: (answer: Answer) => void;
+    const pending = new Promise<Answer>((resolve) => {
+      finish = resolve;
+    });
+    const request = vi.fn(() => pending);
+    const remote = st.store;
+    if (!(remote instanceof RemoteVaultStore)) throw new Error('Expected a remote vault');
+    remote.nodesRequest = request;
+    switchTool('nodes');
+    await vi.waitFor(() => expect(request).toHaveBeenCalled());
+    st.store = new LocalVaultStore();
+    finish({ status: 200, body: { nodes: [node()] } });
+    await flush();
+    expect($('nodes-list').textContent).not.toContain('vps-01');
+  });
+
   it('explains that nodes need a server when the vault is local', async () => {
     await boot();
     $('nodes-refresh-btn').click();
