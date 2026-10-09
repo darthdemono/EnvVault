@@ -19,6 +19,7 @@
     "./src/**/*.ts",
     "./tests/**/*.ts",
     "./ui-lab/**/*.ts",
+    "./vscode-extension/src/refs.ts",
     "./index.html",
     "./vitest.config.ts",
     "./playwright.config.ts"
