@@ -7,11 +7,11 @@
 //!    `secret-tool`, 1Password's CLI). It never appears in argv, in the
 //!    environment, or in an agent's transcript.
 //! 2. `--password-file` — a 0600 file the human placed there.
-//! 3. `envv login` — a human authenticates once; the session token lands in a
+//! 3. `unv login` — a human authenticates once; the session token lands in a
 //!    0600 file and every later command reuses it. The agent runs commands, not
 //!    logins.
 //!
-//! `ENVV_PASSWORD` still works and is still the wrong default for anything an
+//! `UNV_PASSWORD` still works and is still the wrong default for anything an
 //! agent can read.
 
 use crate::error::{CliError, CliResult};
@@ -25,7 +25,7 @@ use std::path::PathBuf;
 /// from roaming profiles, so a session token cannot be synced onto another
 /// machine by a domain profile the user never thinks about.
 pub fn session_path() -> PathBuf {
-    if let Some(explicit) = std::env::var_os("ENVV_SESSION_FILE") {
+    if let Some(explicit) = std::env::var_os("UNV_SESSION_FILE") {
         return PathBuf::from(explicit);
     }
     state_file("sessions.json")
@@ -37,7 +37,7 @@ pub fn session_path() -> PathBuf {
 /// *where* — and the Windows roaming-profile decision documented above — exists
 /// once rather than being re-derived by each caller.
 ///
-/// `ENVV_SESSION_FILE` is deliberately NOT consulted here: it names one file,
+/// `UNV_SESSION_FILE` is deliberately NOT consulted here: it names one file,
 /// not a directory, and honouring it would send `pools.json` to the same path
 /// as the session and have each overwrite the other.
 pub fn state_file(name: &str) -> PathBuf {
@@ -60,9 +60,9 @@ pub fn state_file(name: &str) -> PathBuf {
     // the choice for both.
     let Some(home) = dirs::home_dir() else {
         eprintln!(
-            "envv: cannot determine a home directory for per-user state \
+            "unv: cannot determine a home directory for per-user state \
              (no $HOME on Unix, no %USERPROFILE% on Windows).\n\
-             Set ENVV_SESSION_FILE to choose the location explicitly."
+             Set UNV_SESSION_FILE to choose the location explicitly."
         );
         std::process::exit(crate::error::Code::Unavailable as i32);
     };
@@ -191,7 +191,7 @@ pub fn list_all() -> Value {
 }
 
 /// Cache a session. The newest login becomes the server's default identity,
-/// which is what makes `envv login --user alice` followed by a bare `envv list`
+/// which is what makes `unv login --user alice` followed by a bare `unv list`
 /// do the obvious thing.
 pub fn save(url: &str, token: &str, subject: &str) -> CliResult {
     let mut all = read_all();
@@ -224,7 +224,7 @@ pub fn save_fingerprint(url: &str, fingerprint: &str) -> CliResult {
     write_all(&all)
 }
 
-/// The pin remembered for this server, if `envv login --tofu` ever ran.
+/// The pin remembered for this server, if `unv login --tofu` ever ran.
 pub fn fingerprint(url: &str) -> Option<String> {
     read_all()
         .get(url)
@@ -278,7 +278,7 @@ pub fn clear_all() -> CliResult {
 
 /// Read `KEY=VALUE` pairs out of a Docker-style `.env` file.
 ///
-/// This is the file `docker compose` already reads to start `envv-server`, so
+/// This is the file `docker compose` already reads to start `unv-server`, so
 /// pointing the CLI at the same one means there is exactly one copy of the
 /// password on the machine, owned by the compose stack. Nothing is exported into
 /// the environment — the values are read, used, and dropped.
@@ -339,7 +339,7 @@ pub fn resolve_password(
     }
     if let Some(cmd) = command {
         // Run through the platform shell so the documented form
-        // ("pass show envv") works without the caller splitting arguments —
+        // ("pass show unv") works without the caller splitting arguments —
         // and so the same flag works on Windows, where there is no `sh`.
         let (shell, flag) = if cfg!(windows) {
             ("cmd", "/C")
