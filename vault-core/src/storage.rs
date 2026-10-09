@@ -9,7 +9,7 @@
 //! v2 stores one row per entry and per project, a row for the category list and a
 //! row for every other top-level key. The public document API is unchanged
 //! (`load_vault` returns the same JSON, `save_vault` takes it), so the desktop app,
-//! `envv-server` and `envv` need no change; what changes is what a save *does*:
+//! `unv-server` and `unv` need no change; what changes is what a save *does*:
 //!
 //! * only rows whose content changed are written;
 //! * `version_history` lives in its own table and is attached on load;
@@ -41,15 +41,73 @@ use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 
-/// How many saves of change history to keep for merging stale writers.
+/// The newest saves of change history that are always kept for merging stale
+/// writers, however old they are.
 pub const KEEP_SAVES: i64 = 2000;
+
+/// Saves newer than this many days are kept too (Phase 30.2): a script saving
+/// thousands of times a day used to burn through 2,000 saves in hours, and an
+/// hour-old token then became a whole-vault conflict.
+pub const KEEP_DAYS: i64 = 30;
+
+/// An absolute ceiling, so a runaway loop cannot grow the change log without bound.
+pub const HARD_KEEP_SAVES: i64 = 200_000;
+
+/// `now` minus [`KEEP_DAYS`], in the same ISO form `at` is stored in.
+fn retention_cutoff(now: &str) -> Option<String> {
+    let t =
+        time::OffsetDateTime::parse(now, &time::format_description::well_known::Rfc3339).ok()?;
+    let c = t.checked_sub(time::Duration::days(KEEP_DAYS))?;
+    Some(format!(
+        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z",
+        c.year(),
+        c.month() as u8,
+        c.day(),
+        c.hour(),
+        c.minute(),
+        c.second()
+    ))
+}
+
+/// Drop change history a stale writer can no longer be merged against: older than
+/// the newest `keep` saves **and** older than [`KEEP_DAYS`], or beyond `hard`.
+/// With an unreadable `now` only the counts apply. A writer older than what is
+/// left gets a whole-vault conflict.
+fn prune_saves(conn: &Connection, seq: i64, now: &str, keep: i64, hard: i64) -> Result<(), String> {
+    let cutoff = retention_cutoff(now).unwrap_or_else(|| "0".into());
+    conn.execute(
+        "DELETE FROM vault_saves WHERE (seq <= ?1 AND at < ?2) OR seq <= ?3",
+        params![seq - keep, cutoff, seq - hard],
+    )
+    .map_err(|e| e.to_string())?;
+    conn.execute(
+        "DELETE FROM vault_changes WHERE seq < COALESCE((SELECT MIN(seq) FROM vault_saves), ?1)",
+        params![seq],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// How far back a stale writer can still be merged: the oldest kept save's time and
+/// how many saves are kept. `None` for a vault never saved.
+pub fn merge_window(conn: &Connection) -> Result<Option<(String, i64)>, String> {
+    conn.query_row("SELECT MIN(at), COUNT(*) FROM vault_saves", [], |r| {
+        Ok((r.get::<_, Option<String>>(0)?, r.get::<_, i64>(1)?))
+    })
+    .map(|(at, n)| at.map(|a| (a, n)))
+    .map_err(|e| e.to_string())
+}
 
 const KIND_ENTRY: &str = "entry";
 const KIND_PROJECT: &str = "project";
+const KIND_CHUNK: &str = "chunk";
 const KIND_CATEGORIES: &str = "categories";
 const KIND_DOC: &str = "doc";
 
 /// The three top-level keys that get their own rows; everything else rides in `doc`.
+/// Joins a project row key to its chunk's key in a chunk row.
+const CHUNK_SEP: char = '\u{3}';
+
 const SPLIT_KEYS: [&str; 3] = ["api_keys", "projects", "user_categories"];
 
 pub fn init_schema(conn: &Connection) -> Result<(), String> {
@@ -203,9 +261,35 @@ pub fn split(mut doc: Value) -> Vec<Ent> {
     }
     let projects = take("projects");
     let keys = unique_keys(projects.iter().map(project_ck).collect());
-    for (p, key) in projects.into_iter().zip(keys) {
+    let mut chunk_rows = Vec::new();
+    for (mut p, key) in projects.into_iter().zip(keys) {
+        // Phase 30.2 (ADR-0146): a project's chunks are rows of their own, so two people
+        // editing different chunks do not touch the same row. The project row keeps
+        // an empty `chunks` array to say the chunks live elsewhere.
+        if let Some(Value::Array(chunks)) = p.get_mut("chunks").map(Value::take) {
+            p["chunks"] = Value::Array(Vec::new());
+            let cks = unique_keys(
+                chunks
+                    .iter()
+                    .enumerate()
+                    .map(|(i, c)| match c.get("id").and_then(Value::as_str) {
+                        Some(id) if !id.is_empty() => format!("id\u{1}{id}"),
+                        _ => format!("pos\u{1}{i}"),
+                    })
+                    .collect(),
+            );
+            for (c, ck) in chunks.into_iter().zip(cks) {
+                chunk_rows.push(Ent::new(
+                    KIND_CHUNK,
+                    format!("{key}{CHUNK_SEP}{ck}"),
+                    c,
+                    None,
+                ));
+            }
+        }
         out.push(Ent::new(KIND_PROJECT, key, p, None));
     }
+    out.extend(chunk_rows);
     let cats = take("user_categories");
     out.push(Ent::new(
         KIND_CATEGORIES,
@@ -234,7 +318,8 @@ pub fn split(mut doc: Value) -> Vec<Ent> {
 pub fn join(ents: Vec<Ent>) -> Value {
     let mut doc = Map::new();
     let mut entries = Vec::new();
-    let mut projects = Vec::new();
+    let mut projects: Vec<(String, Value)> = Vec::new();
+    let mut chunks: HashMap<String, Vec<Value>> = HashMap::new();
     let mut cats = Value::Array(vec![]);
     for e in ents {
         match e.kind {
@@ -245,7 +330,12 @@ pub fn join(ents: Vec<Ent>) -> Value {
                 }
                 entries.push(v);
             }
-            KIND_PROJECT => projects.push(e.data),
+            KIND_PROJECT => projects.push((e.key, e.data)),
+            KIND_CHUNK => {
+                if let Some((pk, _)) = e.key.split_once(CHUNK_SEP) {
+                    chunks.entry(pk.to_string()).or_default().push(e.data);
+                }
+            }
             KIND_CATEGORIES => cats = e.data,
             KIND_DOC => {
                 if let Value::Object(o) = e.data {
@@ -258,12 +348,54 @@ pub fn join(ents: Vec<Ent>) -> Value {
         }
     }
     doc.insert("api_keys".into(), Value::Array(entries));
+    let projects = projects
+        .into_iter()
+        .map(|(key, mut p)| {
+            // Rows win over a legacy inline array (a v2 vault not yet re-saved).
+            if let Some(c) = chunks.remove(&key) {
+                p["chunks"] = Value::Array(c);
+            }
+            p
+        })
+        .collect();
     doc.insert("projects".into(), Value::Array(projects));
     doc.insert("user_categories".into(), cats);
     Value::Object(doc)
 }
 
 // ── Reading ──────────────────────────────────────────────────────────────────
+
+/// Parse many JSON strings, on worker threads once there are enough of them to
+/// pay for the threads (Phase 30.2: a full load of a large vault is dominated by
+/// parsing, and every string is independent).
+fn par_parse(texts: Vec<String>) -> Vec<Result<Value, serde_json::Error>> {
+    const MIN_PER_THREAD: usize = 512;
+    let threads = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1)
+        .min(texts.len() / MIN_PER_THREAD)
+        .max(1);
+    if threads == 1 {
+        return texts.iter().map(|t| serde_json::from_str(t)).collect();
+    }
+    let per = texts.len().div_ceil(threads);
+    std::thread::scope(|sc| {
+        let handles: Vec<_> = texts
+            .chunks(per)
+            .map(|c| {
+                sc.spawn(move || {
+                    c.iter()
+                        .map(|t| serde_json::from_str(t))
+                        .collect::<Vec<_>>()
+                })
+            })
+            .collect();
+        handles
+            .into_iter()
+            .flat_map(|h| h.join().unwrap_or_default())
+            .collect()
+    })
+}
 
 fn history_map(conn: &Connection) -> Result<HashMap<String, Value>, String> {
     let mut stmt = conn
@@ -272,14 +404,16 @@ fn history_map(conn: &Connection) -> Result<HashMap<String, Value>, String> {
     let rows = stmt
         .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
         .map_err(|e| e.to_string())?;
-    let mut m = HashMap::new();
-    for r in rows {
-        let (k, d) = r.map_err(|e| e.to_string())?;
-        if let Ok(v) = serde_json::from_str(&d) {
-            m.insert(k, v);
-        }
-    }
-    Ok(m)
+    let (keys, texts): (Vec<String>, Vec<String>) = rows
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .unzip();
+    Ok(keys
+        .into_iter()
+        .zip(par_parse(texts))
+        .filter_map(|(k, v)| v.ok().map(|v| (k, v)))
+        .collect())
 }
 
 fn ent_from_row(
@@ -302,6 +436,7 @@ fn kind_static(k: &str) -> &'static str {
     match k {
         KIND_ENTRY => KIND_ENTRY,
         KIND_PROJECT => KIND_PROJECT,
+        KIND_CHUNK => KIND_CHUNK,
         KIND_CATEGORIES => KIND_CATEGORIES,
         _ => KIND_DOC,
     }
@@ -329,30 +464,45 @@ pub fn load_ents_opts(conn: &Connection, with_history: bool) -> Result<Option<Ve
             ))
         })
         .map_err(|e| e.to_string())?;
-    let hist = if with_history {
+    let mut hist = if with_history {
         history_map(conn)?
     } else {
         HashMap::new()
     };
-    let mut by_kind: HashMap<&'static str, Vec<Ent>> = HashMap::new();
+    let mut stored = Vec::new();
+    let mut texts = Vec::new();
     for r in rows {
         let (kind, key, data, rev) = r.map_err(|e| e.to_string())?;
+        stored.push((kind, key, rev));
+        texts.push(data);
+    }
+    let mut by_kind: HashMap<&'static str, Vec<Ent>> = HashMap::new();
+    for ((kind, key, rev), parsed) in stored.into_iter().zip(par_parse(texts)) {
         let k = kind_static(&kind);
         let h = if k == KIND_ENTRY {
-            hist.get(&key).cloned()
+            hist.remove(&key)
         } else {
             None
         };
-        by_kind
-            .entry(k)
-            .or_default()
-            .push(ent_from_row(k, key, &data, rev, h)?);
+        by_kind.entry(k).or_default().push(Ent {
+            kind: k,
+            key,
+            data: parsed.map_err(|e| e.to_string())?,
+            rev,
+            history: h,
+        });
     }
     if !by_kind.contains_key(KIND_DOC) {
         return Ok(None); // the doc row exists iff something was ever saved
     }
     let mut out = Vec::new();
-    for k in [KIND_ENTRY, KIND_PROJECT, KIND_CATEGORIES, KIND_DOC] {
+    for k in [
+        KIND_ENTRY,
+        KIND_PROJECT,
+        KIND_CHUNK,
+        KIND_CATEGORIES,
+        KIND_DOC,
+    ] {
         out.extend(by_kind.remove(k).unwrap_or_default());
     }
     Ok(Some(out))
@@ -426,28 +576,34 @@ pub fn load_ent(conn: &Connection, kind: &'static str, key: &str) -> Result<Opti
     )?))
 }
 
-/// Entries only (no projects, no history) matching `keep`, parsed individually.
-/// Used for selective reads: the server no longer has to materialise the whole
-/// document to answer "which entries mention X".
-pub fn load_entries_where(
-    conn: &Connection,
-    keep: impl Fn(&Value) -> bool,
-) -> Result<Vec<Value>, String> {
-    let mut stmt = conn
-        .prepare("SELECT data FROM vault_rows WHERE kind = 'entry' ORDER BY pos")
-        .map_err(|e| e.to_string())?;
-    let rows = stmt
-        .query_map([], |r| r.get::<_, String>(0))
-        .map_err(|e| e.to_string())?;
-    let mut out = Vec::new();
-    for r in rows {
-        let v: Value =
-            serde_json::from_str(&r.map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
-        if keep(&v) {
-            out.push(v);
-        }
+/// One entry's `version_history`, read without loading anything else (Phase 30.2).
+/// `None` when no entry has that id; an empty array when it has no history.
+pub fn entry_history(conn: &Connection, id: &str) -> Result<Option<Value>, String> {
+    let key = format!("id\u{1}{id}");
+    let exists: bool = conn
+        .query_row(
+            "SELECT 1 FROM vault_rows WHERE kind = 'entry' AND key = ?1",
+            params![key],
+            |_| Ok(true),
+        )
+        .optional()
+        .map_err(|e| e.to_string())?
+        .unwrap_or(false);
+    if !exists {
+        return Ok(None);
     }
-    Ok(out)
+    let text: Option<String> = conn
+        .query_row(
+            "SELECT data FROM vault_history WHERE key = ?1",
+            params![key],
+            |r| r.get(0),
+        )
+        .optional()
+        .map_err(|e| e.to_string())?;
+    Ok(Some(match text {
+        Some(t) => serde_json::from_str(&t).map_err(|e| e.to_string())?,
+        None => Value::Array(Vec::new()),
+    }))
 }
 
 // ── Version token ────────────────────────────────────────────────────────────
@@ -682,9 +838,23 @@ pub fn merge(
     let order = |k: &str| match k {
         KIND_ENTRY => 0,
         KIND_PROJECT => 1,
-        KIND_CATEGORIES => 2,
-        _ => 3,
+        KIND_CHUNK => 2,
+        KIND_CATEGORIES => 3,
+        _ => 4,
     };
+    // A chunk whose project is gone (the other writer deleted it, ours added a
+    // chunk) would be an orphan row nothing reads: drop it.
+    let live: HashSet<String> = out
+        .iter()
+        .filter(|e| e.kind == KIND_PROJECT)
+        .map(|e| e.key.clone())
+        .collect();
+    out.retain(|e| {
+        e.kind != KIND_CHUNK
+            || e.key
+                .split_once(CHUNK_SEP)
+                .is_some_and(|(pk, _)| live.contains(pk))
+    });
     out.sort_by_key(|e| order(e.kind)); // stable: preserves relative order within a kind
     Ok((out, adopted_theirs))
 }
@@ -705,6 +875,15 @@ fn label(e: &Ent) -> String {
             .and_then(Value::as_str)
             .unwrap_or(&e.key)
             .to_string(),
+        KIND_CHUNK => {
+            let name = e.data.get("name").and_then(Value::as_str).unwrap_or("");
+            let project = e.key.split_once(CHUNK_SEP).map_or("", |(pk, _)| pk);
+            let project = project.split_once('\u{1}').map_or(project, |(_, v)| v);
+            format!(
+                "{project}: {}",
+                if name.is_empty() { "a chunk" } else { name }
+            )
+        }
         KIND_CATEGORIES => "categories".into(),
         _ => "vault settings".into(),
     }
@@ -871,17 +1050,7 @@ pub fn write(
         )
         .map_err(|e| e.to_string())?;
     }
-    // Bounded history: a writer older than this gets a whole-vault conflict.
-    conn.execute(
-        "DELETE FROM vault_saves WHERE seq <= ?1",
-        params![seq - KEEP_SAVES],
-    )
-    .map_err(|e| e.to_string())?;
-    conn.execute(
-        "DELETE FROM vault_changes WHERE seq <= ?1",
-        params![seq - KEEP_SAVES],
-    )
-    .map_err(|e| e.to_string())?;
+    prune_saves(conn, seq, now, KEEP_SAVES, HARD_KEEP_SAVES)?;
     let tok = token(seq, &hash);
     conn.execute(
         "INSERT OR REPLACE INTO vault_meta (key, value) VALUES ('data_hash', ?1)",
@@ -1085,6 +1254,186 @@ mod tests {
         );
         assert!(out.is_ok(), "{out:?}");
         assert_eq!(names(&conn), vec!["A-one", "B-two"]);
+    }
+
+    fn proj(id: &str, chunks: Value) -> Value {
+        json!({ "id": id, "name": id, "chunks": chunks })
+    }
+    fn ch(id: &str, v: &str) -> Value {
+        json!({ "id": id, "name": id, "value": v })
+    }
+    fn chunk_values(conn: &Connection, p: usize) -> Vec<String> {
+        load_vault(conn).unwrap().unwrap()["projects"][p]["chunks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|c| c["value"].as_str().unwrap().to_string())
+            .collect()
+    }
+
+    #[test]
+    fn chunks_are_rows_of_their_own_and_the_document_round_trips() {
+        let (conn, _d) = open("chunk-rows");
+        let doc = json!({
+            "api_keys": [],
+            "projects": [
+                proj("p1", json!([ch("c1", "a"), ch("c2", "b")])),
+                proj("p2", json!([])),
+                { "id": "p3", "name": "no chunks key" }
+            ]
+        });
+        save(&conn, doc.clone(), None).unwrap();
+        let rows: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM vault_rows WHERE kind='chunk'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(rows, 2);
+        let got = load_vault(&conn).unwrap().unwrap();
+        assert_eq!(got["projects"], doc["projects"]);
+    }
+
+    #[test]
+    fn inline_chunks_from_an_unconverted_vault_still_load() {
+        let doc = json!({ "api_keys": [], "projects": [proj("p1", json!([ch("c1", "a")]))] });
+        let ents = split(doc.clone());
+        // Rebuild what a v2 build stored: the chunks inside the project row.
+        let mut legacy = ents
+            .into_iter()
+            .filter(|e| e.kind != KIND_CHUNK)
+            .collect::<Vec<_>>();
+        for e in legacy.iter_mut().filter(|e| e.kind == KIND_PROJECT) {
+            e.data["chunks"] = json!([ch("c1", "a")]);
+        }
+        assert_eq!(join(legacy)["projects"], doc["projects"]);
+    }
+
+    #[test]
+    fn two_writers_editing_different_chunks_of_one_project_both_land() {
+        let (conn, _d) = open("chunk-disjoint");
+        let base = json!({ "api_keys": [], "projects": [proj("p", json!([ch("c1", "a"), ch("c2", "b")]))] });
+        let v1 = save(&conn, base, None).unwrap();
+        save(
+            &conn,
+            json!({ "api_keys": [], "projects": [proj("p", json!([ch("c1", "a-one"), ch("c2", "b")]))] }),
+            Some(&v1),
+        )
+        .unwrap();
+        let out = save(
+            &conn,
+            json!({ "api_keys": [], "projects": [proj("p", json!([ch("c1", "a"), ch("c2", "b-two")]))] }),
+            Some(&v1),
+        );
+        assert!(out.is_ok(), "{out:?}");
+        assert_eq!(chunk_values(&conn, 0), vec!["a-one", "b-two"]);
+    }
+
+    #[test]
+    fn two_writers_editing_the_same_chunk_conflict_and_name_it() {
+        let (conn, _d) = open("chunk-conflict");
+        let base = json!({ "api_keys": [], "projects": [proj("p", json!([ch("c1", "a")]))] });
+        let v1 = save(&conn, base, None).unwrap();
+        save(
+            &conn,
+            json!({ "api_keys": [], "projects": [proj("p", json!([ch("c1", "one")]))] }),
+            Some(&v1),
+        )
+        .unwrap();
+        let err = save(
+            &conn,
+            json!({ "api_keys": [], "projects": [proj("p", json!([ch("c1", "two")]))] }),
+            Some(&v1),
+        )
+        .unwrap_err();
+        assert!(err.starts_with(CONFLICT_ERR) && err.contains("c1"), "{err}");
+    }
+
+    #[test]
+    fn deleting_a_project_removes_its_chunk_rows_and_a_stale_chunk_add_is_dropped() {
+        let (conn, _d) = open("chunk-orphan");
+        let v1 = save(
+            &conn,
+            json!({ "api_keys": [], "projects": [proj("p", json!([ch("c1", "a")]))] }),
+            None,
+        )
+        .unwrap();
+        // Someone deletes the project; the stale writer adds a chunk to it.
+        save(&conn, json!({ "api_keys": [], "projects": [] }), Some(&v1)).unwrap();
+        save(
+            &conn,
+            json!({ "api_keys": [], "projects": [proj("p", json!([ch("c1", "a"), ch("c2", "new")]))] }),
+            Some(&v1),
+        )
+        .unwrap();
+        let rows: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM vault_rows WHERE kind='chunk'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(rows, 0, "no orphan chunk rows");
+        assert!(verify(&conn).unwrap());
+    }
+
+    #[test]
+    fn change_history_is_kept_by_age_as_well_as_by_count() {
+        let (conn, _d) = open("retention");
+        for i in 0..12 {
+            save(
+                &conn,
+                json!({ "api_keys": [e("1", &format!("v{i}"))] }),
+                None,
+            )
+            .unwrap();
+        }
+        // Age the first six saves to a year ago; the rest are "now".
+        conn.execute(
+            "UPDATE vault_saves SET at = '2000-01-01T00:00:00Z' WHERE seq <= 6",
+            [],
+        )
+        .unwrap();
+        let max: i64 = conn
+            .query_row("SELECT MAX(seq) FROM vault_saves", [], |r| r.get(0))
+            .unwrap();
+        let now = crate::iso_now();
+        // keep=4: old AND beyond the newest four goes; the recent ones stay even beyond four.
+        prune_saves(&conn, max, &now, 4, 1000).unwrap();
+        let left: i64 = conn
+            .query_row("SELECT COUNT(*) FROM vault_saves", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(left, 6, "six old saves dropped, six recent kept");
+        let low: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM vault_changes WHERE seq <= 6",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(low, 0, "their change rows go with them");
+        // The hard cap beats age.
+        prune_saves(&conn, max, &now, 4, 3).unwrap();
+        let left: i64 = conn
+            .query_row("SELECT COUNT(*) FROM vault_saves", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(left, 3);
+        assert_eq!(merge_window(&conn).unwrap().unwrap().1, 3);
+    }
+
+    #[test]
+    fn one_entrys_history_can_be_read_alone() {
+        let (conn, _d) = open("hist-one");
+        let mut a = e("a", "A");
+        a["version_history"] = json!([{ "value": "old", "saved_at": "2026-01-01T00:00:00Z" }]);
+        save(&conn, json!({ "api_keys": [a, e("b", "B")] }), None).unwrap();
+        assert_eq!(
+            entry_history(&conn, "a").unwrap().unwrap()[0]["value"],
+            "old"
+        );
+        assert_eq!(entry_history(&conn, "b").unwrap().unwrap(), json!([]));
+        assert!(entry_history(&conn, "missing").unwrap().is_none());
     }
 
     #[test]
@@ -1418,7 +1767,10 @@ mod tests {
 
         let got = load_vault(&conn).unwrap().unwrap();
         assert_eq!(got, doc, "same document, new storage");
-        assert_eq!(crate::vault_schema_version(&conn).unwrap(), Some(2));
+        assert_eq!(
+            crate::vault_schema_version(&conn).unwrap(),
+            Some(crate::VAULT_SCHEMA_VERSION)
+        );
         assert!(
             dir.join("vault.db.v1.bak").exists(),
             "the one-way conversion is backed up first"
