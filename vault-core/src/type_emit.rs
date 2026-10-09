@@ -2,7 +2,7 @@
 //!
 //! The registry (`secret-types.json`) says which types exist; this is what a few
 //! of them *do* beyond holding fields. Everything is pure over the entry JSON, so
-//! the desktop app (over IPC) and `envv emit` produce the same bytes.
+//! the desktop app (over IPC) and `unv emit` produce the same bytes.
 //!
 //! **These are materialising paths.** An emitted `.npmrc`, `config.json` or DSN
 //! contains the credential, so the CLI treats them like `export`: refused to
@@ -57,8 +57,16 @@ pub fn formats_for(secret_type: &str) -> &'static [&'static str] {
         ],
         "database" => &["dsn", "libpq", "jdbc"],
         "wifi" => &["wifi-uri"],
+        "signing_key" => &["jwks"],
         _ => &[],
     }
+}
+
+/// True for a format that holds no credential, so a caller need not ask for
+/// `--reveal` before printing it. A key set is the *public* half by construction
+/// (`vault_core::jwks` strips private members and refuses a private PEM).
+pub fn is_public_format(format: &str) -> bool {
+    format == "jwks"
 }
 
 pub fn emit(entry: &Value, format: &str) -> Result<String, String> {
@@ -75,6 +83,24 @@ pub fn emit(entry: &Value, format: &str) -> Result<String, String> {
         }
         "dsn" | "libpq" | "jdbc" => database(entry, format),
         "wifi-uri" => wifi_uri(entry),
+        "jwks" => {
+            let set = crate::jwks::key_set(
+                (
+                    need("public_key", var(entry, "public_key"))?,
+                    var(entry, "kid"),
+                    "",
+                ),
+                (
+                    var(entry, "previous_public_key"),
+                    var(entry, "previous_kid"),
+                ),
+                var(entry, "alg"),
+                var(entry, "usage"),
+            )?;
+            serde_json::to_string_pretty(&set)
+                .map(|t| t + "\n")
+                .map_err(|e| e.to_string())
+        }
         _ => unreachable!("formats_for gates this"),
     }
 }
@@ -671,5 +697,47 @@ mod tests {
         );
         let zoo = "zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo wrong";
         assert!(bip39_validate(zoo).is_ok(), "all-ones entropy vector");
+    }
+
+    #[test]
+    fn a_signing_key_emits_a_public_jwks_with_the_previous_key_during_a_rotation() {
+        let v: Value =
+            serde_json::from_str(include_str!("../tests/fixtures/jwk-vectors.json")).unwrap();
+        let e = |vars: Vec<(&str, &str)>| {
+            serde_json::json!({
+                "secretType": "signing_key",
+                "extra_vars": vars.into_iter().map(|(k, v)| serde_json::json!({"key": k, "value": v})).collect::<Vec<_>>(),
+            })
+        };
+        assert_eq!(formats_for("signing_key"), ["jwks"]);
+        assert!(is_public_format("jwks") && !is_public_format("npmrc"));
+        let pem = v["ed25519"]["pem"].as_str().unwrap();
+        let old = v["p256"]["pem"].as_str().unwrap();
+        let out = emit(
+            &e(vec![
+                ("public_key", pem),
+                ("kid", "2026-10"),
+                ("alg", "EdDSA"),
+                ("previous_public_key", old),
+                ("previous_kid", "2026-04"),
+                (
+                    "private_key",
+                    "-----BEGIN PRIVATE KEY-----SECRETSECRET-----END PRIVATE KEY-----",
+                ),
+            ]),
+            "jwks",
+        )
+        .unwrap();
+        let set: Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(set["keys"][0]["kid"], "2026-10");
+        assert_eq!(set["keys"][1]["kid"], "2026-04");
+        assert_eq!(set["keys"][0]["x"], v["ed25519"]["jwk"]["x"]);
+        assert!(
+            !out.contains("SECRETSECRET"),
+            "the private key leaked into the key set"
+        );
+        // Nothing to publish yet, and the wrong type, are errors that say so.
+        assert!(emit(&e(vec![]), "jwks").unwrap_err().contains("public_key"));
+        assert!(emit(&serde_json::json!({"secretType": "api_key"}), "jwks").is_err());
     }
 }
