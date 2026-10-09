@@ -1,7 +1,7 @@
 /**
  * @file
  * The config-view panel for cross-chunk checks (Phase 29).
- * @description Asks Rust (`vault_core::config_check`, the same code `envv check`
+ * @description Asks Rust (`vault_core::config_check`, the same code `unv check`
  *              runs) and paints the answer. There is deliberately no rule here:
  *              a second implementation is a second opinion about what a project
  *              means, and these rules exist to remove exactly that.
@@ -11,7 +11,7 @@
  * noise, and a message that the check could not run would be shown to everyone
  * who develops in `npm run dev`.
  */
-import { st } from './state';
+import { st, Settings } from './state';
 import { html, setHtml } from './html';
 import { invokeTauri, isTauri } from './tauri';
 import type { Project } from './types';
@@ -38,6 +38,30 @@ export function vaultNames(): string[] {
   return out;
 }
 
+/**
+ * Compose service names (and container names) of every project, lowercased: what
+ * `unv check --all-projects` resolves a `proxy_pass` host against.
+ */
+export function elsewhereServices(): string[] {
+  const out = new Set<string>();
+  for (const p of st.vault.projects) {
+    for (const c of p.chunks ?? []) {
+      if (c.disabled || c.chunk_type !== 'docker_service') continue;
+      const field = (k: string) =>
+        c.fields
+          .find((f) => f.key === k && f.value.trim())
+          ?.value.trim()
+          .toLowerCase();
+      // Compose names a service the way the exporter does: whitespace to `_`, lowercase.
+      out.add((c.name || '').split(/\s+/).filter(Boolean).join('_').toLowerCase());
+      const cn = field('container_name');
+      if (cn) out.add(cn);
+    }
+  }
+  out.delete('');
+  return [...out];
+}
+
 /** `null` outside the desktop app or when the check could not run. */
 export async function checkProject(project: Project): Promise<ConfigFinding[] | null> {
   if (!isTauri()) return null;
@@ -45,6 +69,8 @@ export async function checkProject(project: Project): Promise<ConfigFinding[] | 
     return await invokeTauri<ConfigFinding[]>('config_check_project', {
       project,
       vaultNames: vaultNames(),
+      // Services of every project, when the user asked for the wide scope.
+      elsewhere: Settings.get('configCheckAll') ? elsewhereServices() : [],
     });
   } catch {
     return null;
@@ -88,9 +114,20 @@ export async function mountConfigCheck(project: Project, host: HTMLElement): Pro
             <span class="config-check-msg">${f.message}</span>
           </li>`,
         )}
-      </ul>`,
+      </ul>
+      <label class="config-check-scope">
+        <input type="checkbox" id="config-check-all" ${Settings.get('configCheckAll') ? 'checked' : ''} />
+        Resolve proxy_pass against services in every project
+      </label>`,
   );
   host.hidden = false;
+  const scope = host.querySelector<HTMLInputElement>('#config-check-all');
+  if (scope) {
+    scope.onchange = () => {
+      Settings.set('configCheckAll', scope.checked);
+      void mountConfigCheck(project, host);
+    };
+  }
   for (const b of host.querySelectorAll<HTMLElement>('[data-check-chunk]')) {
     b.onclick = () => focusChunk(b.dataset.checkChunk ?? '');
   }
