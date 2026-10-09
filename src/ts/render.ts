@@ -24,6 +24,7 @@ import {
 } from './state';
 import { getFiltered, sorted, buildProjectTree, getDescendantProjectIds } from './filters';
 import { timeUntil } from './ui-qol';
+import { newStackChunk, stackAdapter, stackAdapters, stackChunkSpec } from './stack';
 import { iconHTML } from './icons';
 import { normalizeRateLimit } from './ratelimit';
 import { poolsOf, poolBadgeInfo } from './pools';
@@ -58,6 +59,7 @@ import {
   exportK8s,
   exportSshConfig,
   exportTraefik,
+  exportStack,
   exportApache,
   exportHaproxy,
   exportAnsible,
@@ -122,6 +124,8 @@ function renderProjectList(container: HTMLElement, projects: Project[], all: Vau
       kubernetes: 'K8s',
       ssh_config: 'SSH',
       traefik: 'TF',
+      // Stack integrations (Phase 38) name their own badge in the descriptor.
+      ...Object.fromEntries(stackAdapters().map((a) => [a.id, a.abbr])),
     };
     const ptBadge =
       !node.virtual && node.project_type && node.project_type !== 'generic'
@@ -1103,7 +1107,7 @@ function buildBundleCard(
 
 /**
  * One card for every entry sharing a key pool (Phase 24.2), collapsed by
- * default. Copy takes the pool cursor (`envv pool next`), which is why it is
+ * default. Copy takes the pool cursor (`unv pool next`), which is why it is
  * wired separately from a member's own Copy button — that one never advances
  * the cursor, this one always does.
  *
@@ -2813,6 +2817,44 @@ function renderConfigView(project: Project) {
         proj.chunks.push(addChunkFns[action]!());
         void persist();
         render();
+        return;
+      }
+
+      // A stack integration's chunk (Prometheus job, Grafana datasource, Homepage
+      // service): what it holds comes from the descriptor, not from code here.
+      if (action === 'add-stack-chunk') {
+        const adapter = stackAdapter(proj.project_type);
+        const spec = adapter && stackChunkSpec(adapter, el.dataset.chunkType ?? '');
+        if (!spec) return;
+        const have = (proj.chunks || []).filter((c) => c.chunk_type === spec.type).length;
+        if (spec.singleton && have) {
+          showToast(`This project already has its ${spec.label.toLowerCase()} section`, 'err');
+          return;
+        }
+        if (!proj.chunks) proj.chunks = [];
+        const base = spec.type.replace(/^[a-z]+_/, '').replace(/_/g, '-');
+        proj.chunks.push(newStackChunk(spec, `${base}-${have + 1}`));
+        void persist();
+        render();
+        return;
+      }
+
+      if (action === 'export-stack') {
+        const file = stackAdapter(proj.project_type)?.file ?? 'config.yml';
+        const content = exportStack(proj);
+        showDropdown(el, [
+          {
+            label: `Copy ${file}`,
+            fn: () => clipboardWrite(content).then(() => showToast('Copied ✓', 'ok')),
+          },
+          {
+            label: `Download ${file}`,
+            fn: () => {
+              dlText(content, file);
+              showToast('Downloaded', 'ok');
+            },
+          },
+        ]);
         return;
       }
 
