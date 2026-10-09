@@ -27,7 +27,7 @@ const SCREENS: { name: string; go: (p: Page) => Promise<void> }[] = [
   {
     name: 'secrets-expanded',
     go: async (p) => {
-      await p.locator('.card').first().click();
+      await p.locator('.card:visible').first().click();
       await p.waitForTimeout(120);
     },
   },
