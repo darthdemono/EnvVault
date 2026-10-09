@@ -1,7 +1,7 @@
 //! Generators — the Tools panel's secret / password / certificate / SSH panes.
 //!
 //! None of these touch the vault, so they work with no password and no server.
-//! Pipe the output into `envv entry set --key-stdin` to store it.
+//! Pipe the output into `unv entry set --key-stdin` to store it.
 
 use crate::error::{CliError, CliResult};
 use vault_core::entropy::Source;
