@@ -49,7 +49,7 @@ mem_forget = "deny"
 # variables are secrets, a stray one is a disclosure.
 dbg_macro = "deny"
 
-# Printing IS the CLI's job — `envv describe`, `envv get`, every exporter.
+# Printing IS the CLI's job — `unv describe`, `unv get`, every exporter.
 print_stdout = "allow"
 
 # Used deliberately and pervasively; converting the codebase to fallible access
@@ -68,7 +68,7 @@ integer_division = "allow"
 # cannot truncate anything that reaches it.
 cast_possible_truncation = "allow"
 
-# `Result<(), axum::response::Response>` in envv-server. The Err variant is an
+# `Result<(), axum::response::Response>` in unv-server. The Err variant is an
 # axum Response because that is what the handler must return; boxing it to save
 # 128 bytes on a path that runs once per rejected request trades clarity for
 # nothing measurable.
