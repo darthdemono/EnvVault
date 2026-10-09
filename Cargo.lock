@@ -5248,7 +5248,7 @@ checksum = "b6f5e870be6c3b371b77fe0ee0bafb859fa4964b4404c27de1d380043c4dda20"
 
 [[package]]
 name = "unenverse"
-version = "0.42.3"
+version = "0.42.4"
 dependencies = [
  "dirs 5.0.1",
  "gtk",
@@ -5343,7 +5343,7 @@ checksum = "8ecb6da28b8a351d773b68d5825ac39017e680750f980f3a1a85cd8dd28a47c1"
 
 [[package]]
 name = "unv-cli"
-version = "0.42.3"
+version = "0.42.4"
 dependencies = [
  "aes-gcm",
  "aho-corasick",
@@ -5370,7 +5370,7 @@ dependencies = [
 
 [[package]]
 name = "unv-server"
-version = "0.42.3"
+version = "0.42.4"
 dependencies = [
  "axum",
  "axum-server",
@@ -5477,7 +5477,7 @@ checksum = "ba73ea9cf16a25df0c8caa16c51acb937d5712a8429db78a3ee29d5dcacd3a65"
 
 [[package]]
 name = "vault-core"
-version = "0.42.3"
+version = "0.42.4"
 dependencies = [
  "argon2",
  "base64 0.22.1",
