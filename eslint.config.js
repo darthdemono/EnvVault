@@ -39,6 +39,12 @@ export default tseslint.config(
       'docs/**',
       'site/**',
       'public/**',
+      // The VS Code extension is its own project (own tsconfig, `vscode` types).
+      // Only its editor-free logic, `refs.ts`, is part of this one so the suite can test it.
+      'vscode-extension/node_modules/**',
+      'vscode-extension/out/**',
+      'vscode-extension/src/extension.ts',
+      'vscode-extension/src/unv.ts',
       '**/*.d.ts',
     ],
   },
@@ -173,6 +179,35 @@ export default tseslint.config(
         {
           selector: "CallExpression[callee.property.name='insertAdjacentHTML']",
           message: 'Use setHtml(el, html`...`) from ./html instead of insertAdjacentHTML.',
+        },
+      ],
+    },
+  },
+
+  {
+    // Phase 28.1: a renderer written in the old style (a plain template literal
+    // with a tag in it) is the unescaped-interpolation bug. Inside the renderer
+    // modules markup must be `html`...`` (or plain text). Exporters, which write
+    // XML/INI on purpose, are not in this list.
+    files: [
+      'src/ts/{render,modals,users,tools,lan,onboarding,remote-panel,settings-panel,auth-panel,nodes-pane,history-pane,pools,audit,icons,perm-editor,vault,lock}.ts',
+    ],
+    rules: {
+      'no-restricted-syntax': [
+        'error',
+        {
+          selector:
+            "AssignmentExpression[left.type='MemberExpression'][left.property.name=/^(innerHTML|outerHTML)$/]",
+          message: 'Use setHtml(el, html`...`) from ./html instead of assigning markup directly.',
+        },
+        {
+          selector: "CallExpression[callee.property.name='insertAdjacentHTML']",
+          message: 'Use setHtml(el, html`...`) from ./html instead of insertAdjacentHTML.',
+        },
+        {
+          selector:
+            ':not(TaggedTemplateExpression) > TemplateLiteral > TemplateElement[value.raw=/<[a-zA-Z][^>]*>/]',
+          message: 'A template literal holding markup must be tagged: use html`...` from ./html.',
         },
       ],
     },
