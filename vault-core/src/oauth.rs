@@ -1,4 +1,4 @@
-//! OAuth refresh-token grants, shared by `envv oauth refresh` and the desktop
+//! OAuth refresh-token grants, shared by `unv oauth refresh` and the desktop
 //! app's "Refresh access token" (Phase 24.5). Pure over JSON: the HTTP call is
 //! the caller's (the CLI's blocking client, the app's pinned `remote_request`),
 //! so there is exactly one reading of what an issuer's answer means and one rule
