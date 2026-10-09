@@ -103,6 +103,19 @@ export const SEED_VAULT = {
       projectIds: ['Universal', 'vpn'],
       tags: [],
     },
+    {
+      // Phase 28.1: a stored second factor, so the Authenticator panel has a card
+      // to lay out, with a provider long enough to test its truncation.
+      id: 'e-auth',
+      provider: 'An Authenticator Entry With A Provider Name That Runs On And On Forever',
+      account_name: 'someone@example.com',
+      api_key: '',
+      secretType: 'password',
+      totp_secret: 'JBSWY3DPEHPK3PXP',
+      categories: [],
+      projectIds: ['Universal'],
+      tags: [],
+    },
   ],
   user_categories: [
     'AI',
