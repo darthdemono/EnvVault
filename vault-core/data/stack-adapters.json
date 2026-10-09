@@ -1,0 +1,447 @@
+{
+  "version": 1,
+  "comment": "Phase 38. One descriptor per stack integration, read by Rust (vault-core/src/stack.rs) and TypeScript (src/ts/stack.ts) so a new integration is data, not a new exporter in each language. Node grammar: a string/number/bool is a literal; {f} a field of the current chunk (as: list|bool|int, fmt: 'Bearer {}'); {map:[[key,node],...]} an ordered map that drops empty entries; {list:[node,...]}; {each:type,node}; {singleton:type,node}; {group:{of,by,default,item}}; {entry:{key,value}}; {when:[fields],node}. '@name' is the chunk's name. keep:true emits an empty list/map instead of dropping it.",
+  "adapters": [
+    {
+      "id": "prometheus",
+      "label": "Prometheus",
+      "abbr": "PM",
+      "description": "prometheus.yml: global settings, scrape jobs and remote_write, with their credentials inline",
+      "file": "prometheus.yml",
+      "chunks": [
+        {
+          "type": "prom_global",
+          "label": "Global",
+          "singleton": true,
+          "fields": [
+            { "key": "scrape_interval", "default": "15s" },
+            { "key": "evaluation_interval", "default": "15s" },
+            { "key": "scrape_timeout" }
+          ]
+        },
+        {
+          "type": "prom_scrape",
+          "label": "Scrape job",
+          "fields": [
+            {
+              "key": "targets",
+              "kind": "list",
+              "default": "localhost:9090",
+              "help": "host:port, one per line"
+            },
+            { "key": "metrics_path" },
+            { "key": "scheme", "choices": ["http", "https"] },
+            { "key": "username" },
+            { "key": "password", "secret": true },
+            { "key": "bearer_token", "secret": true },
+            { "key": "ca_file" },
+            { "key": "insecure_skip_verify", "kind": "bool" }
+          ]
+        },
+        {
+          "type": "prom_remote_write",
+          "label": "Remote write",
+          "fields": [
+            { "key": "url" },
+            { "key": "username" },
+            { "key": "password", "secret": true },
+            { "key": "bearer_token", "secret": true }
+          ]
+        }
+      ],
+      "starter": [
+        { "type": "prom_global", "name": "global" },
+        { "type": "prom_scrape", "name": "prometheus" }
+      ],
+      "output": {
+        "map": [
+          [
+            "global",
+            {
+              "singleton": "prom_global",
+              "node": {
+                "map": [
+                  ["scrape_interval", { "f": "scrape_interval" }],
+                  ["evaluation_interval", { "f": "evaluation_interval" }],
+                  ["scrape_timeout", { "f": "scrape_timeout" }]
+                ]
+              }
+            }
+          ],
+          [
+            "scrape_configs",
+            {
+              "each": "prom_scrape",
+              "keep": true,
+              "node": {
+                "map": [
+                  ["job_name", { "f": "@name" }],
+                  ["metrics_path", { "f": "metrics_path" }],
+                  ["scheme", { "f": "scheme" }],
+                  [
+                    "basic_auth",
+                    {
+                      "when": ["username", "password"],
+                      "node": {
+                        "map": [
+                          ["username", { "f": "username" }],
+                          ["password", { "f": "password" }]
+                        ]
+                      }
+                    }
+                  ],
+                  [
+                    "authorization",
+                    {
+                      "when": ["bearer_token"],
+                      "node": {
+                        "map": [
+                          ["type", "Bearer"],
+                          ["credentials", { "f": "bearer_token" }]
+                        ]
+                      }
+                    }
+                  ],
+                  [
+                    "tls_config",
+                    {
+                      "when": ["ca_file", "insecure_skip_verify"],
+                      "node": {
+                        "map": [
+                          ["ca_file", { "f": "ca_file" }],
+                          ["insecure_skip_verify", { "f": "insecure_skip_verify", "as": "bool" }]
+                        ]
+                      }
+                    }
+                  ],
+                  [
+                    "static_configs",
+                    { "list": [{ "map": [["targets", { "f": "targets", "as": "list" }]] }] }
+                  ]
+                ]
+              }
+            }
+          ],
+          [
+            "remote_write",
+            {
+              "each": "prom_remote_write",
+              "node": {
+                "map": [
+                  ["url", { "f": "url" }],
+                  [
+                    "basic_auth",
+                    {
+                      "when": ["username", "password"],
+                      "node": {
+                        "map": [
+                          ["username", { "f": "username" }],
+                          ["password", { "f": "password" }]
+                        ]
+                      }
+                    }
+                  ],
+                  [
+                    "authorization",
+                    {
+                      "when": ["bearer_token"],
+                      "node": {
+                        "map": [
+                          ["type", "Bearer"],
+                          ["credentials", { "f": "bearer_token" }]
+                        ]
+                      }
+                    }
+                  ]
+                ]
+              }
+            }
+          ]
+        ]
+      },
+      "rules": [
+        {
+          "id": "duplicate-job",
+          "kind": "unique",
+          "type": "prom_scrape",
+          "field": "@name",
+          "severity": "error",
+          "message": "two scrape jobs are named '{name}'; Prometheus refuses a duplicate job_name"
+        },
+        {
+          "id": "job-without-targets",
+          "kind": "required",
+          "type": "prom_scrape",
+          "field": "targets",
+          "severity": "error",
+          "message": "scrape job '{name}' has no targets"
+        },
+        {
+          "id": "auth-conflict",
+          "kind": "exclusive",
+          "type": "prom_scrape",
+          "fields": ["bearer_token", "username"],
+          "severity": "error",
+          "message": "scrape job '{name}' sets both basic auth and a bearer token; Prometheus accepts only one"
+        },
+        {
+          "id": "basic-auth-incomplete",
+          "kind": "together",
+          "type": "prom_scrape",
+          "fields": ["username", "password"],
+          "severity": "error",
+          "message": "scrape job '{name}' needs both a username and a password for basic auth"
+        },
+        {
+          "id": "bad-scheme",
+          "kind": "choices",
+          "type": "prom_scrape",
+          "field": "scheme",
+          "values": ["http", "https"],
+          "severity": "error",
+          "message": "scrape job '{name}' has a scheme other than http or https"
+        },
+        {
+          "id": "remote-write-without-url",
+          "kind": "required",
+          "type": "prom_remote_write",
+          "field": "url",
+          "severity": "error",
+          "message": "remote write '{name}' has no url"
+        },
+        {
+          "id": "remote-write-auth-conflict",
+          "kind": "exclusive",
+          "type": "prom_remote_write",
+          "fields": ["bearer_token", "username"],
+          "severity": "error",
+          "message": "remote write '{name}' sets both basic auth and a bearer token; Prometheus accepts only one"
+        },
+        {
+          "id": "remote-write-basic-auth-incomplete",
+          "kind": "together",
+          "type": "prom_remote_write",
+          "fields": ["username", "password"],
+          "severity": "error",
+          "message": "remote write '{name}' needs both a username and a password for basic auth"
+        }
+      ]
+    },
+    {
+      "id": "grafana",
+      "label": "Grafana",
+      "abbr": "GF",
+      "description": "Grafana datasource provisioning YAML, with credentials in secureJsonData",
+      "file": "datasources.yml",
+      "chunks": [
+        {
+          "type": "grafana_datasource",
+          "label": "Datasource",
+          "fields": [
+            {
+              "key": "type",
+              "default": "prometheus",
+              "help": "prometheus, loki, postgres, influxdb, ..."
+            },
+            { "key": "url" },
+            { "key": "access", "default": "proxy", "choices": ["proxy", "direct"] },
+            { "key": "is_default", "kind": "bool" },
+            { "key": "basic_auth_user" },
+            { "key": "basic_auth_password", "secret": true },
+            {
+              "key": "api_token",
+              "secret": true,
+              "help": "sent as an Authorization: Bearer header"
+            },
+            { "key": "user" },
+            { "key": "password", "secret": true },
+            { "key": "database" }
+          ]
+        }
+      ],
+      "starter": [{ "type": "grafana_datasource", "name": "Prometheus" }],
+      "output": {
+        "map": [
+          ["apiVersion", 1],
+          [
+            "datasources",
+            {
+              "each": "grafana_datasource",
+              "keep": true,
+              "node": {
+                "map": [
+                  ["name", { "f": "@name" }],
+                  ["type", { "f": "type" }],
+                  ["access", { "f": "access" }],
+                  ["url", { "f": "url" }],
+                  ["isDefault", { "f": "is_default", "as": "bool" }],
+                  ["basicAuth", { "when": ["basic_auth_user"], "node": true }],
+                  ["basicAuthUser", { "f": "basic_auth_user" }],
+                  ["user", { "f": "user" }],
+                  ["database", { "f": "database" }],
+                  [
+                    "jsonData",
+                    {
+                      "when": ["api_token"],
+                      "node": { "map": [["httpHeaderName1", "Authorization"]] }
+                    }
+                  ],
+                  [
+                    "secureJsonData",
+                    {
+                      "when": ["basic_auth_password", "password", "api_token"],
+                      "node": {
+                        "map": [
+                          ["basicAuthPassword", { "f": "basic_auth_password" }],
+                          ["password", { "f": "password" }],
+                          ["httpHeaderValue1", { "f": "api_token", "fmt": "Bearer {}" }]
+                        ]
+                      }
+                    }
+                  ]
+                ]
+              }
+            }
+          ]
+        ]
+      },
+      "rules": [
+        {
+          "id": "duplicate-datasource",
+          "kind": "unique",
+          "type": "grafana_datasource",
+          "field": "@name",
+          "severity": "error",
+          "message": "two datasources are named '{name}'; Grafana provisions only the last one and the first disappears without a warning"
+        },
+        {
+          "id": "datasource-without-type",
+          "kind": "required",
+          "type": "grafana_datasource",
+          "field": "type",
+          "severity": "error",
+          "message": "datasource '{name}' has no type"
+        },
+        {
+          "id": "bad-access",
+          "kind": "choices",
+          "type": "grafana_datasource",
+          "field": "access",
+          "values": ["proxy", "direct"],
+          "severity": "error",
+          "message": "datasource '{name}' has an access mode other than proxy or direct"
+        },
+        {
+          "id": "basic-auth-incomplete",
+          "kind": "together",
+          "type": "grafana_datasource",
+          "fields": ["basic_auth_user", "basic_auth_password"],
+          "severity": "error",
+          "message": "datasource '{name}' needs both a basic auth user and password"
+        },
+        {
+          "id": "auth-conflict",
+          "kind": "exclusive",
+          "type": "grafana_datasource",
+          "fields": ["api_token", "basic_auth_user"],
+          "severity": "error",
+          "message": "datasource '{name}' sets both basic auth and a bearer token"
+        }
+      ]
+    },
+    {
+      "id": "homepage",
+      "label": "Homepage",
+      "abbr": "HP",
+      "description": "Homepage's services.yaml: grouped services, each with the widget key it needs",
+      "file": "services.yaml",
+      "chunks": [
+        {
+          "type": "homepage_service",
+          "label": "Service",
+          "fields": [
+            { "key": "group", "default": "Services" },
+            { "key": "href" },
+            { "key": "icon" },
+            { "key": "description" },
+            { "key": "widget_type", "help": "sonarr, radarr, jellyfin, qbittorrent, ..." },
+            { "key": "widget_url" },
+            { "key": "widget_key", "secret": true },
+            { "key": "widget_username" },
+            { "key": "widget_password", "secret": true }
+          ]
+        }
+      ],
+      "starter": [{ "type": "homepage_service", "name": "Jellyfin" }],
+      "output": {
+        "group": {
+          "of": "homepage_service",
+          "by": "group",
+          "default": "Services",
+          "item": {
+            "entry": {
+              "key": { "f": "@name" },
+              "value": {
+                "map": [
+                  ["icon", { "f": "icon" }],
+                  ["href", { "f": "href" }],
+                  ["description", { "f": "description" }],
+                  [
+                    "widget",
+                    {
+                      "when": ["widget_type"],
+                      "node": {
+                        "map": [
+                          ["type", { "f": "widget_type" }],
+                          ["url", { "f": "widget_url" }],
+                          ["key", { "f": "widget_key" }],
+                          ["username", { "f": "widget_username" }],
+                          ["password", { "f": "widget_password" }]
+                        ]
+                      }
+                    }
+                  ]
+                ]
+              }
+            }
+          }
+        }
+      },
+      "rules": [
+        {
+          "id": "duplicate-service",
+          "kind": "unique",
+          "type": "homepage_service",
+          "field": "@name",
+          "severity": "error",
+          "message": "two services are named '{name}'; Homepage keys them by name and the second would replace the first"
+        },
+        {
+          "id": "widget-without-url",
+          "kind": "together",
+          "type": "homepage_service",
+          "fields": ["widget_type", "widget_url"],
+          "severity": "warning",
+          "message": "service '{name}' has a widget type but no widget url, or the reverse"
+        },
+        {
+          "id": "widget-without-credential",
+          "kind": "needs_one_of",
+          "type": "homepage_service",
+          "when": "widget_type",
+          "fields": ["widget_key", "widget_username"],
+          "severity": "warning",
+          "message": "service '{name}' has a widget but no key, or username and password, for it"
+        },
+        {
+          "id": "widget-key-and-password",
+          "kind": "exclusive",
+          "type": "homepage_service",
+          "fields": ["widget_key", "widget_password"],
+          "severity": "warning",
+          "message": "service '{name}' sets both a widget key and a widget password"
+        }
+      ]
+    }
+  ]
+}
