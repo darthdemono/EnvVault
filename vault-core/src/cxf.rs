@@ -30,10 +30,10 @@
 //! seed, a field *on* whichever entry the rest of the item produced, matching
 //! how this project already refuses to give TOTP its own `SecretType`.
 //!
-//! Every EnvVault type without a native CXF shape — the majority of the 26 in
+//! Every UnENVerse type without a native CXF shape — the majority of the 26 in
 //! `secret_types` — exports as `custom-fields` carrying an
 //! `_envvault_type` field, so another manager sees labelled fields and
-//! EnvVault-to-EnvVault round-trips losslessly. Import of `custom-fields`
+//! UnENVerse-to-UnENVerse round-trips losslessly. Import of `custom-fields`
 //! reads `_envvault_type` back when present and falls back to `extra_vars`
 //! otherwise, so a CXF file honestly written by some other tool still imports
 //! as something rather than being refused.
@@ -163,7 +163,7 @@ fn totp_credential(entry: &Value) -> CxfCredential {
 }
 
 /// Every field CXF has no native slot for, as `custom-fields`, tagged with the
-/// EnvVault type so a re-import (from this program or another EnvVault
+/// UnENVerse type so a re-import (from this program or another UnENVerse
 /// instance) recovers it exactly. This is the fallback every type without a
 /// native mapping below uses, and it is what keeps the export lossless.
 fn custom_fields_credential(entry: &Value) -> CxfCredential {
