@@ -20,7 +20,7 @@
 //!
 //! Linux with systemd only. Needs root.
 
-use crate::error::{CliError, CliResult, Code};
+use crate::error::{CliError, CliResult};
 use std::path::PathBuf;
 
 pub const USER: &str = "unv-node";
@@ -146,7 +146,12 @@ pub fn parse_target(spec: &str) -> CliResult<TargetSpec> {
         // so the unprivileged check is structural only. The real syntax check is
         // `wg syncconf` inside the root-owned reload unit, which leaves the
         // running tunnel untouched when it fails.
-        t.validate = Some("grep -q '^\\[Interface\\]'".into());
+        //
+        // The command must name the file: `validate` runs with the new bytes
+        // already in place and gives the command no stdin, so a bare `grep` read
+        // an empty stream, failed every time, and the agent wrote and restored the
+        // file on every beat (each write also triggered a reload).
+        t.validate = Some(format!("grep -q \"^.Interface\" '{}'", t.path.display()));
     }
     Ok(t)
 }
@@ -361,6 +366,7 @@ pub fn plan(o: &Options) -> CliResult<Vec<Step>> {
 
 #[cfg(unix)]
 pub fn execute(steps: &[Step], enrol: &mut dyn FnMut() -> CliResult, dry_run: bool) -> CliResult {
+    use crate::error::Code;
     use std::io::Write;
     use std::os::unix::fs::PermissionsExt;
     for (i, s) in steps.iter().enumerate() {
@@ -468,8 +474,41 @@ mod tests {
     #[test]
     fn a_wireguard_push_gets_an_unprivileged_structural_check() {
         let t = wg(true);
-        assert!(t.validate.as_deref().unwrap().contains("[Interface"));
-        assert!(!t.validate.unwrap().contains("wg-quick"));
+        let v = t.validate.unwrap();
+        assert!(v.contains("Interface"));
+        assert!(
+            v.contains("/etc/wireguard/wg0.conf"),
+            "the check must name the file: {v}"
+        );
+        assert!(!v.contains("wg-quick"));
+    }
+
+    #[test]
+    fn the_default_wireguard_check_passes_a_real_config_and_refuses_junk() {
+        use vault_core::nodes_apply::apply;
+        let dir = std::env::temp_dir().join(format!("unv-install-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("wg0.conf");
+        std::fs::write(&file, "[Interface]\nAddress = 10.0.0.1/24\n").unwrap();
+        let t = parse_target(&format!(
+            "id=wg0,path={},project=p,exporter=wireguard,apply=true",
+            file.display()
+        ))
+        .unwrap();
+        let cfg = NodeConfig::parse(&node_toml(&opts(vec![t]))).unwrap();
+        let target = &cfg.targets[0];
+        let good = b"[Interface]\nAddress = 10.0.0.1/24\nListenPort = 51820\n";
+        let sha = |b: &[u8]| vault_core::nodes_apply::sha256_hex(b);
+        apply(target, good, &sha(good), &dir).expect("a real config must pass the check");
+        let bad = b"nothing useful\n";
+        let e = apply(target, bad, &sha(bad), &dir).unwrap_err();
+        assert!(e.contains("validate failed"), "{e}");
+        assert_eq!(
+            std::fs::read(&file).unwrap(),
+            good,
+            "the refused file was not restored"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
