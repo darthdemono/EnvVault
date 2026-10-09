@@ -1,4 +1,4 @@
-//! `envv doctor` — everything that can be checked about a vault without
+//! `unv doctor` — everything that can be checked about a vault without
 //! changing it.
 //!
 //! One command, several independent checks, each reporting on its own. The
@@ -91,7 +91,7 @@ fn check_integrity(access: &Access) -> Finding {
             "integrity",
             Level::Note,
             "Skipped: the database lives on the server",
-            "Run `envv doctor` on the machine hosting the vault.",
+            "Run `unv doctor` on the machine hosting the vault.",
         ),
         Access::Local(_) => {
             let conn = match access.conn() {
@@ -106,7 +106,7 @@ fn check_integrity(access: &Access) -> Finding {
                     "integrity",
                     Level::Fail,
                     format!("SQLCipher reports: {s}"),
-                    "Restore from `envv backup restore-archive` or a .vaultbak.",
+                    "Restore from `unv backup restore-archive` or a .vaultbak.",
                 ),
                 Err(e) => Finding::at(
                     "integrity",
@@ -143,12 +143,17 @@ fn check_storage(access: &Access) -> Finding {
                 "storage",
                 Level::Fail,
                 "A stored row no longer matches its content hash, or the rows no longer match the vault version",
-                "Something wrote to the database outside EnvVault. Restore from `envv backup restore-archive` or a .vaultbak.",
+                "Something wrote to the database outside UnENVerse. Restore from `unv backup restore-archive` or a .vaultbak.",
             )
         }
         Err(e) => return Finding::at("storage", Level::Fail, e, ""),
     }
     let rows = count("SELECT COUNT(*) FROM vault_rows WHERE kind = 'entry'");
+    // Phase 30.2: say how stale a writer can be and still be merged.
+    let window = match vault_core::storage::merge_window(&conn) {
+        Ok(Some((since, n))) => format!("; a writer that last read the vault after {since} can still be merged ({n} saves kept)"),
+        _ => String::new(),
+    };
     let hist = count("SELECT COUNT(*) FROM vault_history");
     let mut bak = crate::access::default_db_path().into_os_string();
     bak.push(".v1.bak");
@@ -156,13 +161,13 @@ fn check_storage(access: &Access) -> Finding {
         Finding::at(
             "storage",
             Level::Note,
-            format!("{rows} entry rows, {hist} with history. A pre-conversion backup still exists"),
+            format!("{rows} entry rows, {hist} with history{window}. A pre-conversion backup still exists"),
             "Once you are satisfied the vault opens correctly, delete the `.v1.bak` file beside it: it holds the same secrets in the old format.",
         )
     } else {
         Finding::ok(
             "storage",
-            format!("{rows} entry rows, {hist} with history; every row verifies"),
+            format!("{rows} entry rows, {hist} with history; every row verifies{window}"),
         )
     }
 }
@@ -184,7 +189,7 @@ fn check_salt(access: Option<&Access>) -> Finding {
             ),
             "There is no repair for this. The salt is random bytes written once and \
              stored nowhere else; nothing can recompute it. Restore from an archive \
-             (`envv backup restore-archive`), which carries both files.",
+             (`unv backup restore-archive`), which carries both files.",
         );
     }
     match std::fs::metadata(&salt_path) {
@@ -197,7 +202,7 @@ fn check_salt(access: Option<&Access>) -> Finding {
         Ok(_) => Finding::ok(
             "salt",
             format!(
-                "Present beside {} — back both up together (`envv backup archive`)",
+                "Present beside {} — back both up together (`unv backup archive`)",
                 db_path
                     .file_name()
                     .map(|n| n.to_string_lossy().to_string())
@@ -268,7 +273,7 @@ fn check_permissions() -> Vec<Finding> {
             "permissions",
             Level::Note,
             "Not enforceable on this platform — files inherit the directory ACL",
-            "Keep the EnvVault data directory out of shared locations.",
+            "Keep the UnENVerse data directory out of shared locations.",
         )]
     }
 }
@@ -337,7 +342,7 @@ fn check_pools(vault: &Value) -> Finding {
                 dangling.len(),
                 dangling.join(", ")
             ),
-            "Run `envv pool reset <pool>`, or re-add the entries.",
+            "Run `unv pool reset <pool>`, or re-add the entries.",
         )
     }
 }
@@ -392,7 +397,7 @@ fn check_schema(vault: &Value) -> Finding {
 /// Entries with no stable `id` (Phase 23, E12).
 ///
 /// `entry_ck` falls back to `provider|account_name|key_id` for an entry without
-/// one, and that tuple is what RBAC scoped writes, `envv entry rm` and the
+/// one, and that tuple is what RBAC scoped writes, `unv entry rm` and the
 /// merge path all match on. Two entries differing only by their `label` would
 /// collide there — so a scoped write meant for one would act on the other.
 ///
@@ -413,7 +418,7 @@ fn check_entry_ids(vault: &Value) -> Finding {
                 if n == 1 { "y has" } else { "ies have" }
             ),
             "Such an entry is identified by provider|account|key_id, which two entries \
-             can share. Run `envv doctor --fix` to backfill; the app does it on unlock.",
+             can share. Run `unv doctor --fix` to backfill; the app does it on unlock.",
         )
     }
 }
@@ -454,7 +459,7 @@ fn check_bundle_membership(vault: &Value) -> Finding {
                 if dangling.len() == 1 { "y" } else { "ies" },
                 dangling.join(", ")
             ),
-            "Run `envv doctor --fix` to make these entries standalone.",
+            "Run `unv doctor --fix` to make these entries standalone.",
         )
     }
 }
@@ -532,7 +537,7 @@ fn fix_entry_ids(access: &Access) -> CliResult<(usize, usize)> {
 /// one condition it most needed to diagnose.
 /// The checks that need the database file: structure, row hashes, the salt pairing,
 /// file permissions and the audit chain. The desktop app builds an `Access::Local`
-/// from the key it holds and calls this (Phase 33.2b); `envv doctor` runs the same
+/// from the key it holds and calls this (Phase 33.2b); `unv doctor` runs the same
 /// functions.
 pub fn file_findings(access: &Access) -> Vec<Value> {
     let mut all = vec![
@@ -548,7 +553,7 @@ pub fn file_findings(access: &Access) -> Vec<Value> {
 /// The checks that read only the vault document: schema, ids, bundle membership
 /// and pools. Pure, so the desktop app can run them over whichever vault it holds
 /// (local or remote, the A1 rule). The database-level checks (integrity, storage,
-/// salt, permissions, audit) need the file and remain `envv doctor`'s alone.
+/// salt, permissions, audit) need the file and remain `unv doctor`'s alone.
 pub fn document_findings(vault: &Value) -> Vec<Value> {
     [
         check_schema(vault),
@@ -643,7 +648,7 @@ fn report(findings: Vec<Finding>) -> CliResult {
         }
     });
 
-    // The exit code is the point: a script runs `envv doctor` and branches on
+    // The exit code is the point: a script runs `unv doctor` and branches on
     // it. `fail` is a broken vault, which is `invalid` rather than `unavailable`
     // because retrying will not help.
     match worst {
