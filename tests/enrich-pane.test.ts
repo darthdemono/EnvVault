@@ -99,7 +99,7 @@ describe('Enrich pane', () => {
   });
 });
 
-describe('Diagnose (envv doctor: document and file checks)', () => {
+describe('Diagnose (unv doctor: document and file checks)', () => {
   it('lists document and file findings together', async () => {
     const invoke = vi.fn(async (cmd: string) =>
       cmd === 'doctor_document'
@@ -108,7 +108,7 @@ describe('Diagnose (envv doctor: document and file checks)', () => {
               check: 'entry-ids',
               level: 'warn',
               message: '2 entries have no id',
-              remedy: 'run envv doctor --fix',
+              remedy: 'run unv doctor --fix',
             },
           ]
         : cmd === 'doctor_file'
