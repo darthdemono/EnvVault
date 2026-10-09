@@ -1,4 +1,4 @@
-//! `envv exec` — run a command with secrets in its environment.
+//! `unv exec` — run a command with secrets in its environment.
 //!
 //! This is the command that makes "an agent never touches a key" true rather
 //! than aspirational. The orchestrator decides *what to run*; the values travel
@@ -6,8 +6,8 @@
 //! context. What comes back is the child's own output and exit status.
 //!
 //! ```text
-//! envv exec --project Stack -- ./deploy.sh
-//! envv exec --entry GitHub=GH_TOKEN -- gh pr list
+//! unv exec --project Stack -- ./deploy.sh
+//! unv exec --entry GitHub=GH_TOKEN -- gh pr list
 //! ```
 
 use crate::access::Access;
@@ -43,8 +43,8 @@ pub fn build_env(access: &Access, opts: &ExecOpts<'_>) -> CliResult<BTreeMap<Str
     if !files.is_empty() {
         return Err(CliError::invalid(
             "This selection holds a file-shaped credential, which has to be written to disk \
-             before it means anything. Use `envv exec` (which writes it to a temp file and \
-             removes it afterwards) or `envv file write`.",
+             before it means anything. Use `unv exec` (which writes it to a temp file and \
+             removes it afterwards) or `unv file write`.",
         ));
     }
     Ok(env)
@@ -189,7 +189,7 @@ pub fn manifest(env: &BTreeMap<String, String>) -> Value {
 pub fn run(access: &Access, opts: &ExecOpts<'_>, argv: &[String]) -> CliResult<i32> {
     let Some((program, args)) = argv.split_first() else {
         return Err(CliError::invalid(
-            "No command given — use `envv exec … -- <command>`",
+            "No command given — use `unv exec … -- <command>`",
         ));
     };
     let (mut env, files) = build_env_and_files(access, opts)?;
@@ -230,6 +230,14 @@ pub fn run(access: &Access, opts: &ExecOpts<'_>, argv: &[String]) -> CliResult<i
         return Ok(0);
     }
 
+    // The values are about to enter a child's environment: note which vault
+    // secrets, so a later compromise of this machine can be scoped.
+    crate::matlog::note(
+        "exec",
+        &argv.join(" "),
+        &env.values().cloned().collect::<Vec<_>>().join("\n"),
+    );
+
     let mut cmd = std::process::Command::new(program);
     cmd.args(args);
     if opts.clean {
@@ -268,6 +276,6 @@ pub fn run(access: &Access, opts: &ExecOpts<'_>, argv: &[String]) -> CliResult<i
         .status()
         .map_err(|e| CliError::not_found(format!("Cannot run '{program}': {e}")))?;
     // The child's exit code is the useful signal, so it becomes ours. A caller
-    // scripting `envv exec … -- pytest` gets pytest's result, not a wrapper's.
+    // scripting `unv exec … -- pytest` gets pytest's result, not a wrapper's.
     Ok(status.code().unwrap_or(1))
 }
