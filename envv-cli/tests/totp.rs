@@ -201,8 +201,8 @@ fn the_seeds_fingerprint_is_stable_and_carries_none_of_it() {
 /// The third parity table: what an entry's four stored fields *mean*.
 ///
 /// These were read three different ways in Rust alone before
-/// [`Params::from_fields`] existed — `envv totp code` clamped out-of-range
-/// values, `envv totp ls` printed them raw, and the desktop app's
+/// [`Params::from_fields`] existed — `unv totp code` clamped out-of-range
+/// values, `unv totp ls` printed them raw, and the desktop app's
 /// `entry_totp_code` did neither and answered an out-of-range `digits` with an
 /// error where the CLI answered with a code. One entry, three answers, none of
 /// them reported. `tests/totp.test.ts` asserts `totpParamsOf` against this same
@@ -256,14 +256,14 @@ fn params_from_fields_matches_the_golden_table() {
     }
 }
 
-/// `envv get X --field totp_secret` must mask, exactly as `--field api_key` does.
+/// `unv get X --field totp_secret` must mask, exactly as `--field api_key` does.
 ///
 /// It did not. There were two lists of "which fields hold secret material" —
 /// `out::SECRET_FIELDS`, used when a whole entry is printed, and a second copy
 /// in `entries.rs` used by the single-field path and by `pool next --field`.
 /// Phase 22 added `totp_secret` to the first and not the second, so the same
-/// seed masked in `envv get GitHub` and printed in clear in
-/// `envv get GitHub --field totp_secret`, which is the form an agent or a script
+/// seed masked in `unv get GitHub` and printed in clear in
+/// `unv get GitHub --field totp_secret`, which is the form an agent or a script
 /// reaches for. The second list is gone; this pins the property rather than the
 /// list, so re-introducing a copy fails here too.
 #[test]
