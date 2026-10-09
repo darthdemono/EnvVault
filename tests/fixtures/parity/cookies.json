@@ -249,7 +249,7 @@
           "expires": 0
         }
       ],
-      "expect": "# Netscape HTTP Cookie File\n# Written by EnvVault. Move it somewhere safe and delete it when done.\n.example.com\tTRUE\t/\tTRUE\t1790000000\tsid\tabc\n#HttpOnly_.example.com\tTRUE\t/app\tFALSE\t0\tcsrf\tdef\n"
+      "expect": "# Netscape HTTP Cookie File\n# Written by UnENVerse. Move it somewhere safe and delete it when done.\n.example.com\tTRUE\t/\tTRUE\t1790000000\tsid\tabc\n#HttpOnly_.example.com\tTRUE\t/app\tFALSE\t0\tcsrf\tdef\n"
     },
     {
       "why": "the include-subdomains column is the leading dot, restated",
@@ -264,7 +264,7 @@
           "expires": 0
         }
       ],
-      "expect": "# Netscape HTTP Cookie File\n# Written by EnvVault. Move it somewhere safe and delete it when done.\nexample.com\tFALSE\t/\tFALSE\t0\tk\tv\n"
+      "expect": "# Netscape HTTP Cookie File\n# Written by UnENVerse. Move it somewhere safe and delete it when done.\nexample.com\tFALSE\t/\tFALSE\t0\tk\tv\n"
     }
   ],
   "to_txt_refused": [
