@@ -2002,7 +2002,7 @@
 
 /*
  * Mono, like every other sidebar badge. A pool name is an identifier the user
- * also types into the `pool` field and into `envv pool report <pool>`, so it is
+ * also types into the `pool` field and into `unv pool report <pool>`, so it is
  * set in the same face as the CLI prints it — a display face here made the two
  * look like different strings.
  */
@@ -2361,7 +2361,7 @@ mark.search-hl {
   color: var(--text3);
 }
 
-/* A cooling key is skipped by `envv get --pool`, so it needs to read as
+/* A cooling key is skipped by `unv get --pool`, so it needs to read as
    temporarily out of service rather than as an error. */
 .pool-row-cooling .pool-member {
   opacity: 0.6;
