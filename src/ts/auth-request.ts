@@ -103,6 +103,26 @@ function b64(text: string): string {
 }
 
 /**
+ * What a `header` entry sends: the key, or the key placed into `auth_template`
+ * (Jellyfin's `MediaBrowser Token="{key}"`). A template with no `{key}`, a line
+ * break, a NUL or over 128 bytes is ignored rather than guessed at: a header that
+ * silently lacks the key is a 401 that names nothing. Twin of `header_value` in
+ * `authreq.rs`.
+ */
+export function authHeaderValue(entry: VaultEntry, key: string): string {
+  const t = (entry.auth_template ?? '').toString();
+  if (
+    !t ||
+    new TextEncoder().encode(t).length > 128 ||
+    !t.includes('{key}') ||
+    /[\r\n\0]/.test(t)
+  ) {
+    return key;
+  }
+  return t.split('{key}').join(key);
+}
+
+/**
  * The header this entry contributes to a request, or `null` for the schemes that
  * do not use one.
  */
@@ -113,7 +133,7 @@ export function authHeaderFor(entry: VaultEntry): AuthHeader | null {
     case 'bearer':
       return { name: 'Authorization', value: `Bearer ${value}` };
     case 'header':
-      return { name: authParamOf(entry), value };
+      return { name: authParamOf(entry), value: authHeaderValue(entry, value) };
     case 'basic':
       return {
         name: 'Authorization',
@@ -152,7 +172,7 @@ export function authUrlFor(entry: VaultEntry, url: string): string {
  *
  * This is a **materialising** path: it contains the real credential. The CLI
  * refuses it to stdout without `--reveal` and writes it with `--out`, exactly as
- * `envv export` does; in the app it is a copy, which is the UI's `--reveal`.
+ * `unv export` does; in the app it is a copy, which is the UI's `--reveal`.
  */
 export function curlFor(entry: VaultEntry, url?: string): string {
   const target = url || entry.api_url || 'https://example.invalid/';
