@@ -1,9 +1,11 @@
-//! `envv emit` and `envv codes` — what the Phase 24.5 types do beyond holding
+//! `unv emit` and `unv codes` — what the Phase 24.5 types do beyond holding
 //! fields. The logic is `vault_core::type_emit`; this file is I/O and policy.
 //!
 //! **`emit` is a materialising path.** The output is a `.npmrc`, a Docker
 //! `config.json`, a DSN or a Wi-Fi string, so it holds the credential: refused to
 //! stdout unless `--reveal`, written `0600` by `--out` (Phase 14, unchanged).
+//! The one exception is a format that is public by construction (`jwks`: the
+//! public half of a signing key), which prints.
 
 use crate::access::Access;
 use crate::data::{self, entries_mut, find_entry_index};
@@ -39,7 +41,7 @@ pub fn emit(
     };
     // Refuse for the data first (equally true with --out), then for the policy.
     let text = te::emit(&entry, format).map_err(CliError::invalid)?;
-    if out_path.is_none() && !out::revealing() {
+    if out_path.is_none() && !out::revealing() && !te::is_public_format(format) {
         return Err(out::refuse_reveal(&format!("A {format} file")));
     }
     match out_path {
