@@ -11,7 +11,7 @@
 //! 1. **Logs go to stderr, always.** The CLI's stdout is a machine-readable
 //!    contract (`{"ok":true,…}`); a log line written there corrupts the JSON
 //!    envelope an agent is parsing. `with_writer(std::io::stderr)` is what makes
-//!    `envv … --json | jq` keep working with `ENVV_LOG=debug` set.
+//!    `unv … --json | jq` keep working with `UNV_LOG=debug` set.
 //! 2. **Never log a secret value.** Log the fingerprint (`out::fingerprint`),
 //!    the entry id, or the provider name — never `api_key`, never a password,
 //!    never a session token. A log file is not encrypted and is routinely
@@ -25,9 +25,9 @@
 //!
 //! | Variable | Effect |
 //! | -------- | ------ |
-//! | `ENVV_LOG` | `tracing` filter directive (`info`, `envv_server=debug`, …). Checked first. |
-//! | `RUST_LOG` | Same, checked only when `ENVV_LOG` is unset, so an unrelated `RUST_LOG` in the environment still works. |
-//! | `ENVV_LOG_FORMAT` | `json` for one JSON object per line; anything else is the human format. |
+//! | `UNV_LOG` | `tracing` filter directive (`info`, `envv_server=debug`, …). Checked first. |
+//! | `RUST_LOG` | Same, checked only when `UNV_LOG` is unset, so an unrelated `RUST_LOG` in the environment still works. |
+//! | `UNV_LOG_FORMAT` | `json` for one JSON object per line; anything else is the human format. |
 //!
 //! An unparseable filter falls back to the caller's default rather than
 //! panicking: a typo in an environment variable must not stop a server booting.
@@ -36,7 +36,7 @@ use std::sync::OnceLock;
 
 /// Set once by the first successful [`init`], so a second call is a no-op
 /// rather than a panic from `tracing`'s global-subscriber guard. The desktop
-/// app can host `envv-server`'s router in-process, which is exactly the case
+/// app can host `unv-server`'s router in-process, which is exactly the case
 /// where two `init` calls happen in one program.
 static INITIALISED: OnceLock<()> = OnceLock::new();
 
@@ -44,21 +44,21 @@ static INITIALISED: OnceLock<()> = OnceLock::new();
 /// first call has any effect.
 ///
 /// `service` names the binary and is attached to the startup line so a merged
-/// log tells `envv-server` apart from a desktop app hosting the same router.
-/// `default_level` applies when neither `ENVV_LOG` nor `RUST_LOG` is set.
+/// log tells `unv-server` apart from a desktop app hosting the same router.
+/// `default_level` applies when neither `UNV_LOG` nor `RUST_LOG` is set.
 pub fn init(service: &str, default_level: &str) {
     if INITIALISED.set(()).is_err() {
         return;
     }
 
-    let directive = std::env::var("ENVV_LOG")
+    let directive = std::env::var("UNV_LOG")
         .or_else(|_| std::env::var("RUST_LOG"))
         .unwrap_or_else(|_| default_level.to_string());
 
     let filter = tracing_subscriber::EnvFilter::try_new(&directive)
         .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(default_level));
 
-    let json = std::env::var("ENVV_LOG_FORMAT")
+    let json = std::env::var("UNV_LOG_FORMAT")
         .map(|v| v.eq_ignore_ascii_case("json"))
         .unwrap_or(false);
 
