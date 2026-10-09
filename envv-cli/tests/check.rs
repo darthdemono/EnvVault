@@ -1,4 +1,4 @@
-//! `envv check` through the real binary (Phase 29). The rule logic is unit-tested
+//! `unv check` through the real binary (Phase 29). The rule logic is unit-tested
 //! in `vault-core/src/config_check.rs`; this pins what only the command can show:
 //! the envelope, `--fail-on` exit codes, and that a secret field's value never
 //! appears in the report.
@@ -6,12 +6,15 @@
 use serde_json::Value;
 use std::process::Command;
 
-fn envv(dir: &std::path::Path, args: &[&str]) -> (Option<i32>, Value, String) {
-    let out = Command::new(env!("CARGO_BIN_EXE_envv"))
+fn unv(dir: &std::path::Path, args: &[&str]) -> (Option<i32>, Value, String) {
+    let out = Command::new(env!("CARGO_BIN_EXE_unv"))
+        .env_remove("UNV_SERVER_URL")
         .env_remove("ENVV_SERVER_URL")
+        .env_remove("UNV_ENV_FILE")
         .env_remove("ENVV_ENV_FILE")
+        .env_remove("UNV_PROJECT")
         .env_remove("ENVV_PROJECT")
-        .env("ENVV_PASSWORD", "correct-horse-battery")
+        .env("UNV_PASSWORD", "correct-horse-battery")
         .args([
             "--db-path",
             dir.join("vault.db").to_str().unwrap(),
@@ -37,7 +40,7 @@ fn reports_cross_chunk_findings_and_fails_on_request() {
     std::fs::create_dir_all(&dir).unwrap();
 
     let must = |args: &[&str]| {
-        let (code, _, text) = envv(&dir, args);
+        let (code, _, text) = unv(&dir, args);
         assert_eq!(code, Some(0), "{args:?}: {text}");
     };
     must(&["project", "add", "Mixed", "--type", "generic"]);
@@ -105,7 +108,7 @@ fn reports_cross_chunk_findings_and_fails_on_request() {
         "--secret",
     ]);
 
-    let (code, j, text) = envv(&dir, &["check", "Mixed"]);
+    let (code, j, text) = unv(&dir, &["check", "Mixed"]);
     assert_eq!(code, Some(0), "{text}");
     assert_eq!(j["command"], "check");
     let rules: Vec<&str> = j["data"]["findings"]
@@ -129,14 +132,71 @@ fn reports_cross_chunk_findings_and_fails_on_request() {
     );
 
     // Warnings alone do not fail the default run, but --fail-on does.
-    let (code, j, _) = envv(&dir, &["check", "Mixed", "--fail-on", "error"]);
+    let (code, j, _) = unv(&dir, &["check", "Mixed", "--fail-on", "error"]);
     assert_eq!(code, Some(10));
     assert_eq!(j["error"]["code"], "invalid");
     assert!(j["error"]["details"]["findings"].is_array());
 
     // A clean project exits 0 even with --fail-on warning.
     must(&["project", "add", "Clean", "--type", "generic"]);
-    let (code, _, text) = envv(&dir, &["check", "Clean", "--fail-on", "warning"]);
+    let (code, _, text) = unv(&dir, &["check", "Clean", "--fail-on", "warning"]);
     assert_eq!(code, Some(0), "{text}");
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn all_projects_resolves_a_proxy_pass_against_services_in_other_projects() {
+    let dir = std::env::temp_dir().join(format!("envv-check-wide-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let must = |args: &[&str]| {
+        let (code, _, text) = unv(&dir, args);
+        assert_eq!(code, Some(0), "{args:?}: {text}");
+    };
+    // `Edge` proxies to `api` and has a service of its own; `Backend` defines `api`.
+    must(&["project", "add", "Edge", "--type", "generic"]);
+    must(&[
+        "project",
+        "chunk",
+        "add",
+        "Edge",
+        "own",
+        "--type",
+        "docker_service",
+    ]);
+    must(&[
+        "project",
+        "chunk",
+        "add",
+        "Edge",
+        "site",
+        "--type",
+        "nginx_location",
+    ]);
+    must(&[
+        "project",
+        "chunk",
+        "set",
+        "Edge",
+        "site",
+        "proxy_pass=http://api:8080",
+    ]);
+    must(&["project", "add", "Backend", "--type", "generic"]);
+    must(&[
+        "project",
+        "chunk",
+        "add",
+        "Backend",
+        "api",
+        "--type",
+        "docker_service",
+    ]);
+
+    let (_, j, text) = unv(&dir, &["check", "Edge"]);
+    assert_eq!(j["data"]["findings"].as_array().unwrap().len(), 1, "{text}");
+    assert_eq!(j["data"]["scope"], "project");
+    let (code, j, text) = unv(&dir, &["check", "Edge", "--all-projects"]);
+    assert_eq!(code, Some(0), "{text}");
+    assert_eq!(j["data"]["findings"].as_array().unwrap().len(), 0, "{text}");
+    assert_eq!(j["data"]["scope"], "all-projects");
 }
