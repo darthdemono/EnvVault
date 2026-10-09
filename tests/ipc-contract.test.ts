@@ -78,7 +78,7 @@ describe('IPC contract — frontend invoke names vs registered Tauri commands', 
     // They are separate features that share only the RFC 6238 arithmetic, and
     // dropping either from `generate_handler!` is invisible until a window opens.
     for (const cmd of ['totp_status', 'totp_enroll', 'totp_confirm', 'totp_disable']) {
-      expect(be.has(cmd), `${cmd} (Phase 19: EnvVault's own second factor)`).toBe(true);
+      expect(be.has(cmd), `${cmd} (Phase 19: UnENVerse's own second factor)`).toBe(true);
     }
     for (const cmd of ['entry_totp_code', 'totp_import_merge', 'totp_export_build']) {
       expect(be.has(cmd), `${cmd} (Phase 22: a seed held for a third party)`).toBe(true);
