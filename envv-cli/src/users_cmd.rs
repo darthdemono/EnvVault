@@ -895,7 +895,7 @@ pub fn totp_enroll(access: &Access, query: &str, out_path: Option<&std::path::Pa
         )?,
         Access::Local(_) => {
             let conn = access.conn()?;
-            serde_json::to_value(vault_core::users::totp_enroll(&conn, &id, "EnvVault")?)
+            serde_json::to_value(vault_core::users::totp_enroll(&conn, &id, "UnENVerse")?)
                 .unwrap_or(Value::Null)
         }
     };
@@ -909,7 +909,7 @@ pub fn totp_enroll(access: &Access, query: &str, out_path: Option<&std::path::Pa
             json!({ "user": query, "enabled": false, "written": p.display().to_string() }),
             || {
                 println!("Secret written to {}", p.display());
-                println!("Confirm with: envv user totp confirm {query} <code>");
+                println!("Confirm with: unv user totp confirm {query} <code>");
             },
         );
         return Ok(());
@@ -926,7 +926,7 @@ pub fn totp_enroll(access: &Access, query: &str, out_path: Option<&std::path::Pa
             // factor is not on yet, so a mistyped secret costs a retype rather
             // than an account.
             println!("Not enabled yet. Add it to your authenticator, then run:");
-            println!("  envv user totp confirm {query} <code>");
+            println!("  unv user totp confirm {query} <code>");
         },
     );
     Ok(())
