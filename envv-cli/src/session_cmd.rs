@@ -1,4 +1,4 @@
-//! `envv cookie import` — Phase 24.5. Turns a DevTools capture (Copy as cURL,
+//! `unv cookie import` — Phase 24.5. Turns a DevTools capture (Copy as cURL,
 //! HAR, `Set-Cookie` lines, a Firefox `cookies.sqlite`) into a web-session entry.
 //!
 //! All parsing is `vault_core::session_import`; this file is only the vault
