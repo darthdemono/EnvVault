@@ -1,6 +1,6 @@
 /**
  * Tools -> Import -> "From another password manager" (Phase 33.3): the app side
- * of `envv import-vault`. The parsing and merge rules are Rust
+ * of `unv import-vault`. The parsing and merge rules are Rust
  * (`envv_cli::import_vaults::plan_import`, over `import_vault_plan`), so a
  * preview here is exactly what the CLI would write. The preview carries
  * fingerprints, never secrets; applying replaces the entry array with the plan's
@@ -26,6 +26,8 @@ interface Plan {
   unchanged: number;
   skipped: number;
   preview: PlanRow[];
+  /** Parts of the source that could not be read (Nextcloud's PHP). */
+  warnings?: string[];
 }
 
 let pending: Plan | null = null;
@@ -36,7 +38,7 @@ function readFile(): Promise<string | null> {
     // ghost widget in WebKitGTK (AGENTS.md, Phase 3).
     const inp = document.createElement('input');
     inp.type = 'file';
-    inp.accept = '.json,.1pif,.txt';
+    inp.accept = '.json,.1pif,.txt,.php';
     inp.style.display = 'none';
     document.body.appendChild(inp);
     const done = (v: string | null) => {
@@ -56,7 +58,7 @@ function paint(plan: Plan): void {
   const host = document.getElementById('vi-preview')!;
   setHtml(
     host,
-    html`<table class="diff-table">
+    html`${(plan.warnings ?? []).map((w) => html`<p class="tool-status">${w}</p>`)}<table class="diff-table">
       <tbody>${plan.preview.map(
         (r) => html`<tr>
           <td>${r.provider}</td>
@@ -75,7 +77,7 @@ export function initVendorImportPane(): void {
   const status = document.getElementById('vi-status');
   if (!fileBtn || !applyBtn || !status) return;
   if (!inTauri) {
-    status.textContent = 'Available in the desktop app. In a terminal: envv import-vault.';
+    status.textContent = 'Available in the desktop app. In a terminal: unv import-vault.';
     fileBtn.disabled = true;
     return;
   }
