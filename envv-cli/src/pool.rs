@@ -4,7 +4,7 @@
 //! # Membership is explicit
 //!
 //! An entry joins a pool by carrying `"pool": "<name>"`. Two keys for the same
-//! provider do **not** pool automatically. That is deliberate: `envv get GitHub`
+//! provider do **not** pool automatically. That is deliberate: `unv get GitHub`
 //! refusing an ambiguous match is what stops a command from silently acting on
 //! a credential the caller did not mean, and quietly turning that refusal into
 //! "pick one" would undo it everywhere at once, including for `entry rm`.
@@ -16,9 +16,9 @@
 //! badly the alternative fails:
 //!
 //! 1. `save_vault` appends a `vault_audit` row on every update. A CI loop
-//!    calling `envv exec` would grow the hash-chained log without bound, which
+//!    calling `unv exec` would grow the hash-chained log without bound, which
 //!    is exactly why read events stopped being audited.
-//! 2. `save_vault` is a compare-and-swap. Concurrent `envv get` calls against
+//! 2. `save_vault` is a compare-and-swap. Concurrent `unv get` calls against
 //!    one vault would collide and start returning conflicts (exit 6) for reads.
 //! 3. A vault is shared; a rotation cursor is not. Two CI runners pulling from
 //!    the same remote vault want independent cursors, not a shared one they
@@ -138,7 +138,7 @@ pub fn members(
     if list.is_empty() {
         return Err(CliError::not_found(format!(
             "No entries in pool '{name}'. Add one with \
-             `envv entry set <provider> --pool {name}`."
+             `unv entry set <provider> --pool {name}`."
         )));
     }
     Ok(list)
@@ -210,7 +210,7 @@ pub fn select(access: &crate::access::Access, vault: &Value, name: &str) -> CliR
     // on stderr and carry on with a cursor that does not advance.
     state::record_use(&mut state, &vk, name, &chosen.ck, (i + 1) % n, now);
     if let Err(e) = state::save(&state) {
-        eprintln!("envv: pool state not saved ({e}); cursor will not advance");
+        eprintln!("unv: pool state not saved ({e}); cursor will not advance");
     }
 
     Ok(chosen)
@@ -218,7 +218,7 @@ pub fn select(access: &crate::access::Access, vault: &Value, name: &str) -> CliR
 
 /// Put a member on cooldown, or clear its cooldown.
 ///
-/// `envv exec` hands the secret to a child process and never sees the child's
+/// `unv exec` hands the secret to a child process and never sees the child's
 /// HTTP responses, so the CLI cannot detect a 429 on its own. The caller — which
 /// did see it — reports it.
 pub fn report(
@@ -263,7 +263,7 @@ pub fn report(
         None => last_used(access, name, &list).ok_or_else(|| {
             CliError::invalid(format!(
                 "Nothing has been taken from pool '{name}' on this machine yet — \
-                 name the key explicitly, e.g. `envv pool report {name} <provider>:<key-id>`"
+                 name the key explicitly, e.g. `unv pool report {name} <provider>:<key-id>`"
             ))
         })?,
     };
@@ -354,14 +354,14 @@ pub fn snapshot(members: &[Member]) -> Vec<Value> {
 
 // ── Commands ─────────────────────────────────────────────────────────────────
 
-/// `envv pool ls` — every pool in the vault, with member counts and cooldowns.
+/// `unv pool ls` — every pool in the vault, with member counts and cooldowns.
 pub fn cmd_ls(access: &crate::access::Access) -> CliResult {
     let vault = access.load_vault()?;
     let names = pool_names(&vault);
     if names.is_empty() {
         out::ok("pool.ls", json!({ "count": 0, "pools": [] }), || {
             println!(
-                "No key pools. Add an entry to one with `envv entry set <provider> --pool <name>`."
+                "No key pools. Add an entry to one with `unv entry set <provider> --pool <name>`."
             );
         });
         return Ok(());
@@ -398,7 +398,7 @@ pub fn cmd_ls(access: &crate::access::Access) -> CliResult {
     Ok(())
 }
 
-/// `envv pool show <name>` — per-member state.
+/// `unv pool show <name>` — per-member state.
 ///
 /// Never prints a secret: a member is identified by provider and key id, and the
 /// only numbers here are usage counts.
@@ -431,10 +431,10 @@ pub fn cmd_show(access: &crate::access::Access, name: &str) -> CliResult {
     Ok(())
 }
 
-/// `envv pool next <name>` — take the next key and advance the cursor.
+/// `unv pool next <name>` — take the next key and advance the cursor.
 ///
 /// Redacted by default like every other stdout path; `--reveal` opts in, and
-/// `envv exec --pool` is the way to use the value without ever seeing it.
+/// `unv exec --pool` is the way to use the value without ever seeing it.
 pub fn cmd_next(access: &crate::access::Access, name: &str, field: Option<&str>) -> CliResult {
     let vault = access.load_vault()?;
     let picked = select(access, &vault, name)?;
@@ -469,7 +469,7 @@ pub fn cmd_next(access: &crate::access::Access, name: &str, field: Option<&str>)
     Ok(())
 }
 
-/// `envv pool report <name> [target] --limited|--ok`
+/// `unv pool report <name> [target] --limited|--ok`
 pub fn cmd_report(
     access: &crate::access::Access,
     name: &str,
@@ -507,7 +507,7 @@ pub fn cmd_report(
     Ok(())
 }
 
-/// `envv pool reset <name>`
+/// `unv pool reset <name>`
 pub fn cmd_reset(access: &crate::access::Access, name: &str) -> CliResult {
     // Resolve first: resetting a pool that does not exist is almost always a
     // typo, and silently succeeding hides it.
