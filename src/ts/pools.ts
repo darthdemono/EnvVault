@@ -85,7 +85,7 @@ export async function renderPoolsPane(): Promise<void> {
         <p class="tool-note">
           Put two or more credentials for one service in a pool by setting
           <strong>Key Pool</strong> on each of them in the edit form, then swap between them with
-          <code>envv get --pool &lt;name&gt;</code> or <code>envv exec --pool &lt;name&gt;</code>.
+          <code>unv get --pool &lt;name&gt;</code> or <code>unv exec --pool &lt;name&gt;</code>.
         </p>
         <p class="tool-note">
           Membership is explicit on purpose. Two keys for the same provider do not pool
@@ -137,7 +137,7 @@ export async function renderPoolsPane(): Promise<void> {
         <td class="pool-member">${label(e)}</td>
         <td class="pool-uses mono">${usage}</td>
         <td class="pool-last mono">${lastUsed}</td>
-        <td class="pool-status">${cooling ? html`<span class="badge badge-cooling" title="Skipped by envv get --pool until ${until ?? ''}">cooling</span>` : html`<span class="pool-ok">available</span>`}</td>
+        <td class="pool-status">${cooling ? html`<span class="badge badge-cooling" title="Skipped by unv get --pool until ${until ?? ''}">cooling</span>` : html`<span class="pool-ok">available</span>`}</td>
         <td class="pool-actions">${stateAvailable ? (cooling ? html`<button class="btn btn-sm" data-pool-action="clear" data-pool="${name}" data-member="${String(i)}">Clear</button>` : html`<button class="btn btn-sm" data-pool-action="limit" data-pool="${name}" data-member="${String(i)}">Mark limited</button>`) : ''}</td>
       </tr>`;
     });
@@ -176,7 +176,7 @@ export async function renderPoolsPane(): Promise<void> {
         </p>`
       : html`<p class="tool-note">
           Counts and cooldowns live in <code>${statePath || 'pools.json'}</code> — per machine,
-          outside the vault and outside backups, and shared with the <code>envv</code> CLI.
+          outside the vault and outside backups, and shared with the <code>unv</code> CLI.
           Resetting affects this machine only.
         </p>`;
 
@@ -209,7 +209,7 @@ export async function poolBadgeInfo(
 
 /**
  * Picks the next non-cooling member and advances the cursor — the pool card's
- * Copy button, and the exact selection `envv pool next` makes. `null` outside
+ * Copy button, and the exact selection `unv pool next` makes. `null` outside
  * Tauri (nothing to read the cursor from) or when every member is cooling.
  */
 export async function poolNext(name: string, members: VaultEntry[]): Promise<VaultEntry | null> {
