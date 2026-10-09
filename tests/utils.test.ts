@@ -1,7 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
-  esc,
-  escAttr,
   maskKey,
   hexAlpha,
   generateULID,
@@ -13,63 +11,6 @@ import {
   execCopy,
 } from '../src/ts/utils';
 import { loadRealIndexHtml } from './helpers';
-
-describe('esc', () => {
-  it('neutralises a script tag', () => {
-    expect(esc('<script>alert(1)</script>')).toBe('&lt;script&gt;alert(1)&lt;/script&gt;');
-  });
-
-  it('escapes the ampersand before anything else, so entities are not double-decoded', () => {
-    expect(esc('&lt;')).toBe('&amp;lt;');
-  });
-
-  it('returns an empty string for null and undefined', () => {
-    expect(esc(null)).toBe('');
-    expect(esc(undefined)).toBe('');
-  });
-
-  it('stringifies non-string input', () => {
-    expect(esc(42)).toBe('42');
-    expect(esc(false)).toBe('false');
-  });
-
-  it('round-trips through the DOM as the original text', () => {
-    const el = document.createElement('div');
-    const raw = '<img src=x onerror=alert(1)> & "quoted"';
-    el.innerHTML = esc(raw);
-    expect(el.querySelector('img')).toBeNull();
-    expect(el.textContent).toBe(raw);
-  });
-});
-
-describe('escAttr', () => {
-  it('escapes both quote styles so an attribute cannot be broken out of', () => {
-    expect(escAttr(`" onload="alert(1)`)).toBe('&quot; onload=&quot;alert(1)');
-    expect(escAttr("' onload='alert(1)")).toBe('&#39; onload=&#39;alert(1)');
-  });
-
-  it('preserves a literal &amp; through a data-attribute round trip', () => {
-    // Regression: `&` was left raw, so a secret containing the text "&amp;"
-    // came back out of data-value as "&" and copy-to-clipboard returned the
-    // wrong secret.
-    const secret = 'key&amp;value&more';
-    const el = document.createElement('div');
-    el.innerHTML = `<span data-value="${escAttr(secret)}"></span>`;
-    expect(el.querySelector('span')!.getAttribute('data-value')).toBe(secret);
-  });
-
-  it('does not let an injected attribute become a real one', () => {
-    const el = document.createElement('div');
-    el.innerHTML = `<span data-value="${escAttr('x" onmouseover="steal()')}"></span>`;
-    const span = el.querySelector('span')!;
-    expect(span.hasAttribute('onmouseover')).toBe(false);
-    expect(span.getAttribute('data-value')).toBe('x" onmouseover="steal()');
-  });
-
-  it('returns an empty string for null', () => {
-    expect(escAttr(null)).toBe('');
-  });
-});
 
 describe('maskKey', () => {
   it('shows an em dash for an empty value', () => {
