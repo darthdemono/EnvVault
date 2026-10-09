@@ -1,4 +1,4 @@
-//! `envv cxf import|export` — FIDO Credential Exchange (CXF), Phase 24.5.
+//! `unv cxf import|export` — FIDO Credential Exchange (CXF), Phase 24.5.
 //!
 //! Both directions call `vault_core::cxf` and nothing else, the same split
 //! every multi-format importer in this project uses and for the same reason:
@@ -12,10 +12,10 @@ use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 use vault_core::cxf;
 
-/// `envv cxf import FILE [--project …] [--category …]`
+/// `unv cxf import FILE [--project …] [--category …]`
 ///
 /// Every imported entry is **appended**, never merged into an existing one —
-/// unlike `envv totp import`'s conflict-aware merge, there is no single field
+/// unlike `unv totp import`'s conflict-aware merge, there is no single field
 /// here ("the seed") whose collision defines a conflict; a CXF item can carry
 /// an entirely different credential shape than anything already in the
 /// vault. Re-running this against the same file therefore produces
@@ -38,7 +38,7 @@ pub fn cmd_import(
             .any(|p| p.get("id").and_then(|x| x.as_str()) == Some(id));
         if id != "Universal" && !known {
             return Err(CliError::not_found(format!(
-                "No such project id: '{id}' (see `envv project ls`)"
+                "No such project id: '{id}' (see `unv project ls`)"
             )));
         }
     }
@@ -119,11 +119,11 @@ pub fn cmd_import(
     Ok(())
 }
 
-/// `envv cxf export --out FILE [--provider NEEDLE]`
+/// `unv cxf export --out FILE [--provider NEEDLE]`
 ///
 /// Materialising by construction, per the Phase 14 rule every export in this
 /// project follows: the file is nothing but credentials, so `--out` is the
-/// only way it leaves. Unlike `envv totp export`, there is no `--reveal`
+/// only way it leaves. Unlike `unv totp export`, there is no `--reveal`
 /// escape to stdout — a CXF document does not have TOTP's thirty-second decay
 /// to fall back on, and nothing here is safe to print in a transcript.
 pub fn cmd_export(access: &Access, out_path: &PathBuf, only: Option<&str>) -> CliResult {
