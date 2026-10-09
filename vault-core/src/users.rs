@@ -1,4 +1,4 @@
-//! User management, token management, and RBAC for EnvVault.
+//! User management, token management, and RBAC for UnENVerse.
 //!
 //! Users are stored in the SQLCipher-encrypted vault database — they can only
 //! be read or created when the owner has unlocked the vault (i.e. the vault key
@@ -2909,7 +2909,7 @@ mod totp_user_tests {
         // routine outcome, not an edge case.
         let c = db();
         let id = a_user(&c);
-        let st = totp_enroll(&c, &id, "EnvVault").unwrap();
+        let st = totp_enroll(&c, &id, "UnENVerse").unwrap();
         assert!(st.enrolled && !st.enabled);
         assert!(st.secret.is_some() && st.uri.is_some());
         assert!(!totp_required(&c, &id).unwrap());
@@ -2922,7 +2922,7 @@ mod totp_user_tests {
     fn confirming_enables_it_and_burns_the_confirming_code() {
         let c = db();
         let id = a_user(&c);
-        let secret = totp_enroll(&c, &id, "EnvVault").unwrap().secret.unwrap();
+        let secret = totp_enroll(&c, &id, "UnENVerse").unwrap().secret.unwrap();
         let code = totp::totp_at(&secret, totp::now_unix()).unwrap();
 
         assert!(totp_confirm(&c, &id, &code).unwrap());
@@ -2938,7 +2938,7 @@ mod totp_user_tests {
         // second factor is the attack it exists to stop.
         let c = db();
         let id = a_user(&c);
-        let secret = totp_enroll(&c, &id, "EnvVault").unwrap().secret.unwrap();
+        let secret = totp_enroll(&c, &id, "UnENVerse").unwrap().secret.unwrap();
         // Confirm with a code from the previous step so the current one is still
         // usable for the login this test is about.
         let prev = totp::totp_at(&secret, totp::now_unix() - totp::STEP_SECS).unwrap();
@@ -2958,7 +2958,7 @@ mod totp_user_tests {
         // replay on the login path.
         let c = db();
         let id = a_user(&c);
-        let secret = totp_enroll(&c, &id, "EnvVault").unwrap().secret.unwrap();
+        let secret = totp_enroll(&c, &id, "UnENVerse").unwrap().secret.unwrap();
         let now = totp::now_unix();
 
         let code = totp::totp_at(&secret, now).unwrap();
@@ -3005,7 +3005,7 @@ mod totp_user_tests {
         // Otherwise every read of the user list is a way to clone the factor.
         let c = db();
         let id = a_user(&c);
-        totp_enroll(&c, &id, "EnvVault").unwrap();
+        totp_enroll(&c, &id, "UnENVerse").unwrap();
         let st = totp_status(&c, &id).unwrap();
         assert!(st.enrolled && !st.enabled);
         assert!(st.secret.is_none() && st.uri.is_none());
@@ -3015,7 +3015,7 @@ mod totp_user_tests {
     fn disabling_destroys_the_secret_rather_than_only_the_flag() {
         let c = db();
         let id = a_user(&c);
-        let secret = totp_enroll(&c, &id, "EnvVault").unwrap().secret.unwrap();
+        let secret = totp_enroll(&c, &id, "UnENVerse").unwrap().secret.unwrap();
         let code = totp::totp_at(&secret, totp::now_unix()).unwrap();
         totp_confirm(&c, &id, &code).unwrap();
 
@@ -3031,12 +3031,12 @@ mod totp_user_tests {
         // code that only the abandoned secret can produce.
         let c = db();
         let id = a_user(&c);
-        let first = totp_enroll(&c, &id, "EnvVault").unwrap().secret.unwrap();
+        let first = totp_enroll(&c, &id, "UnENVerse").unwrap().secret.unwrap();
         let code = totp::totp_at(&first, totp::now_unix()).unwrap();
         totp_confirm(&c, &id, &code).unwrap();
         assert!(totp_required(&c, &id).unwrap());
 
-        let second = totp_enroll(&c, &id, "EnvVault").unwrap().secret.unwrap();
+        let second = totp_enroll(&c, &id, "UnENVerse").unwrap().secret.unwrap();
         assert_ne!(first, second);
         assert!(!totp_required(&c, &id).unwrap());
     }
@@ -3047,7 +3047,7 @@ mod totp_user_tests {
         // gates nothing while looking as though it gates everything.
         let c = db();
         let owner = ensure_owner_user(&c).unwrap();
-        assert!(totp_enroll(&c, &owner, "EnvVault").is_err());
+        assert!(totp_enroll(&c, &owner, "UnENVerse").is_err());
         assert!(totp_confirm(&c, &owner, "123456").is_err());
     }
 
