@@ -224,7 +224,7 @@ export function toCookiesTxt(cookies: Cookie[]): string {
   }
   const lines = [
     '# Netscape HTTP Cookie File',
-    '# Written by EnvVault. Move it somewhere safe and delete it when done.',
+    '# Written by UnENVerse. Move it somewhere safe and delete it when done.',
   ];
   for (const c of cookies) {
     const domain = c.domain!;
