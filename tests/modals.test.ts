@@ -356,10 +356,10 @@ describe('formToEntry', () => {
 
   it('reads purpose and pool', () => {
     setVal('f-provider', 'GitHub');
-    setVal('f-purpose', 'CI builds for the EnvVault repo');
+    setVal('f-purpose', 'CI builds for the UnENVerse repo');
     setVal('f-pool', 'github-ci');
     const entry = formToEntry();
-    expect(entry.purpose).toBe('CI builds for the EnvVault repo');
+    expect(entry.purpose).toBe('CI builds for the UnENVerse repo');
     expect(entry.pool).toBe('github-ci');
   });
 
