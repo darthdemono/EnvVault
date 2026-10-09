@@ -1,4 +1,4 @@
-//! `envv-server` binary — CLI wrapper around the [`envv_server`] library.
+//! `unv-server` binary — CLI wrapper around the [`envv_server`] library.
 //!
 //! Everything substantive lives in the library so the desktop app can host the
 //! identical router in-process for "Open to LAN". This file only parses argv,
@@ -13,7 +13,7 @@ use envv_server::{
 };
 
 #[derive(Parser)]
-#[command(name = "envv-server", version, about = "EnvVault remote vault server")]
+#[command(name = "unv-server", version, about = "UnENVerse remote vault server")]
 struct Args {
     #[arg(long, default_value_t = 8743)]
     port: u16,
@@ -58,9 +58,19 @@ struct Args {
     /// values per second, counted per value. Repeatable.
     #[arg(long = "uid-rate")]
     uid_rate: Vec<String>,
+    /// Enable Nodes (Phase 34): enrollment, heartbeats and push/pull for agents
+    /// on other hosts. Off by default; every `/api/nodes/*` route answers 404
+    /// until it is on, and `nodes.json` is never created.
+    #[arg(long)]
+    nodes: bool,
+    /// Where the node registry lives. Default: `nodes.json` beside the vault.
+    #[arg(long)]
+    nodes_file: Option<std::path::PathBuf>,
 }
 
 fn main() {
+    // Variables set before the rename (`ENVV_*`) keep working.
+    vault_core::compat::adopt_legacy_env();
     // Pick the crypto provider explicitly. The workspace enables both `ring`
     // (axum-server) and `aws_lc_rs` (vault-core's `tls` feature) on one rustls;
     // cargo unifies features across a build, so rustls sees two candidates,
@@ -76,8 +86,8 @@ fn main() {
     //
     // Two workers is ample: the work here is IO-bound, and the one CPU-heavy
     // step (Argon2id at 64 MB per unlock) is rare and deliberately serialised by
-    // its own cost. `ENVV_WORKER_THREADS` raises it for anyone who needs more.
-    let workers = std::env::var("ENVV_WORKER_THREADS")
+    // its own cost. `UNV_WORKER_THREADS` raises it for anyone who needs more.
+    let workers = std::env::var("UNV_WORKER_THREADS")
         .ok()
         .and_then(|v| v.parse::<usize>().ok())
         .filter(|n| *n > 0)
@@ -101,7 +111,7 @@ async fn async_main() {
     // refused bind is reported through the same channel as everything else.
     // `info` by default: a long-lived server should say what it did, unlike the
     // CLI, which must stay silent to keep its stdout envelope clean.
-    vault_core::telemetry::init("envv-server", "info");
+    vault_core::telemetry::init("unv-server", "info");
     // Where the vault lives when the operator has not said. There is no
     // hardcoded fallback path on purpose: `/var/lib` is meaningless on Windows,
     // where it resolves to `\var\lib` on whatever the current drive happens to
@@ -115,7 +125,7 @@ async fn async_main() {
         dirs::data_dir()
             .unwrap_or_else(|| {
                 eprintln!(
-                    "envv-server: cannot determine this platform's data directory \
+                    "unv-server: cannot determine this platform's data directory \
                      (no $XDG_DATA_HOME or $HOME on Unix, no %APPDATA% on Windows).\n\
                      Pass --db-path and --salt-path explicitly."
                 );
@@ -171,6 +181,7 @@ async fn async_main() {
         /* lan_mode */ false,
     )
     .with_uid_registry(args.uid_registry, Some(args.uid_max_bytes))
+    .with_nodes(args.nodes, args.nodes_file.clone())
     .with_uid_rates({
         let mut rates = envv_server::UidRates::default();
         for spec in &args.uid_rate {
@@ -181,17 +192,21 @@ async fn async_main() {
         }
         rates
     });
+    if args.nodes {
+        tracing::info!("nodes enabled");
+        state.start_node_poller();
+    }
     if args.uid_registry {
         tracing::info!(max_bytes = args.uid_max_bytes, "uid registry enabled");
     }
 
     // Unattended deployments (Docker) unlock from the environment.
-    if let Ok(pw) = std::env::var("ENVV_PASSWORD") {
+    if let Ok(pw) = std::env::var("UNV_PASSWORD") {
         if !pw.is_empty() {
             match auto_unlock(&state, &pw) {
                 Ok(()) => {
-                    tracing::info!("vault auto-unlocked from ENVV_PASSWORD");
-                    println!("Vault auto-unlocked (ENVV_PASSWORD)");
+                    tracing::info!("vault auto-unlocked from UNV_PASSWORD");
+                    println!("Vault auto-unlocked (UNV_PASSWORD)");
                 }
                 // The password itself never reaches the log; `e` is a reason,
                 // not an echo of the input.
@@ -213,7 +228,7 @@ async fn async_main() {
         session_max_hours = args.session_max_hours,
         "starting"
     );
-    println!("envv-server  →  {scheme}://{addr_str}");
+    println!("unv-server  →  {scheme}://{addr_str}");
     println!("OpenAPI JSON →  {scheme}://{addr_str}/api/openapi.json");
     if let Some(fp) = &fingerprint {
         println!("TLS fingerprint (SHA-256) → {fp}");
