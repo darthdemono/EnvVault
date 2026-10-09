@@ -1,16 +1,19 @@
 //! A v1 vault (the whole document in one row) opened by the real binary
 //! (Phase 30): it converts, keeps every entry and its history, leaves a backup,
-//! and `envv doctor` says what it found.
+//! and `unv doctor` says what it found.
 
 use serde_json::{json, Value};
 use std::process::Command;
 
-fn envv(dir: &std::path::Path, args: &[&str]) -> (Option<i32>, String) {
-    let out = Command::new(env!("CARGO_BIN_EXE_envv"))
+fn unv(dir: &std::path::Path, args: &[&str]) -> (Option<i32>, String) {
+    let out = Command::new(env!("CARGO_BIN_EXE_unv"))
+        .env_remove("UNV_SERVER_URL")
         .env_remove("ENVV_SERVER_URL")
+        .env_remove("UNV_ENV_FILE")
         .env_remove("ENVV_ENV_FILE")
+        .env_remove("UNV_PROJECT")
         .env_remove("ENVV_PROJECT")
-        .env("ENVV_PASSWORD", "correct-horse-battery")
+        .env("UNV_PASSWORD", "correct-horse-battery")
         .args([
             "--db-path",
             dir.join("vault.db").to_str().unwrap(),
@@ -57,7 +60,7 @@ fn a_v1_vault_is_converted_by_the_cli_and_nothing_is_lost() {
         .unwrap();
     }
 
-    let (code, text) = envv(&dir, &["entry", "ls"]);
+    let (code, text) = unv(&dir, &["entry", "ls"]);
     assert_eq!(code, Some(0), "{text}");
     assert!(text.contains("GitHub"), "{text}");
     assert!(
@@ -66,7 +69,7 @@ fn a_v1_vault_is_converted_by_the_cli_and_nothing_is_lost() {
     );
 
     // History survived, in its own table now.
-    let (code, text) = envv(&dir, &["entry", "history", "GitHub", "--reveal"]);
+    let (code, text) = unv(&dir, &["entry", "history", "GitHub", "--reveal"]);
     assert_eq!(code, Some(0), "{text}");
     assert!(text.contains("ghp_old"), "{text}");
 
@@ -86,7 +89,7 @@ fn a_v1_vault_is_converted_by_the_cli_and_nothing_is_lost() {
         assert_eq!((blobs, rows), (0, 1));
     }
 
-    let (code, text) = envv(&dir, &["doctor"]);
+    let (code, text) = unv(&dir, &["doctor"]);
     assert_eq!(code, Some(0), "{text}");
     let j: Value = serde_json::from_str(text.trim()).unwrap_or(Value::Null);
     let storage = j["data"]["findings"]
