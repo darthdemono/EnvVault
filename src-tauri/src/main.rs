@@ -1,7 +1,7 @@
 // Prevents a console window from appearing on Windows in release builds.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-//! Binary entry point for EnvVault.
+//! Binary entry point for UnENVerse.
 //!
 //! All application logic lives in [`env_vault_lib`].  This crate merely
 //! delegates to [`env_vault_lib::run`] so that `cargo tauri dev` and
@@ -11,5 +11,6 @@
 /// Application entry point.  Calls [`env_vault_lib::run`] which builds the
 /// Tauri application, registers all commands, and starts the event loop.
 fn main() {
+    vault_core::compat::adopt_legacy_env();
     env_vault_lib::run();
 }
