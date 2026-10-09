@@ -1,5 +1,5 @@
 /**
- * Tools -> Unique IDs (Phase 33.4): the app side of `envv uid ...`, over the
+ * Tools -> Unique IDs (Phase 33.4): the app side of `unv uid ...`, over the
  * server's `/api/uid/*` routes (Phase 24.4). The registry is server-side only, so
  * this works against a remote vault; against a local one the pane says so instead
  * of sitting there.
