@@ -17,11 +17,13 @@ fn scratch() -> std::path::PathBuf {
 }
 
 fn command(dir: &std::path::Path) -> Command {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_envv"));
+    let mut command = Command::new(env!("CARGO_BIN_EXE_unv"));
     command
+        .env_remove("UNV_SERVER_URL")
         .env_remove("ENVV_SERVER_URL")
+        .env_remove("UNV_ENV_FILE")
         .env_remove("ENVV_ENV_FILE")
-        .env("ENVV_PASSWORD", "correct-horse-battery")
+        .env("UNV_PASSWORD", "correct-horse-battery")
         .args([
             "--db-path",
             dir.join("vault.db").to_str().unwrap(),
@@ -45,13 +47,13 @@ fn shield_and_exposure_scan_redact_exact_vault_values() {
     assert!(added.status.success(), "{}", text(&added));
 
     let shielded = command(&dir)
-        .env("ENVV_PHASE_26_SECRET", SECRET)
+        .env("UNV_PHASE_26_SECRET", SECRET)
         .args([
             "shield",
             "--",
             "sh",
             "-c",
-            "printf '%s\\n' \"$ENVV_PHASE_26_SECRET\"; printf '%s\\n' \"$ENVV_PHASE_26_SECRET\" >&2; exit 23",
+            "printf '%s\\n' \"$UNV_PHASE_26_SECRET\"; printf '%s\\n' \"$UNV_PHASE_26_SECRET\" >&2; exit 23",
         ])
         .output()
         .unwrap();
