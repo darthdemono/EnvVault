@@ -1,4 +1,4 @@
-//! `envv describe` — the machine-readable contract.
+//! `unv describe` — the machine-readable contract.
 //!
 //! An agent that has to guess a CLI's flags spends its first three attempts
 //! learning them from error messages. This emits the whole command tree, the
@@ -85,11 +85,11 @@ fn command_json(cmd: &Command, path: &str) -> Value {
 /// The full contract document.
 pub fn describe(cmd: &Command) -> Value {
     json!({
-        "tool": "envv",
+        "tool": "unv",
         "version": env!("CARGO_PKG_VERSION"),
         "contract": 1,
         "summary": "Local-first secrets manager. Every command works against the local \
-                    SQLCipher vault or a remote envv-server (--server).",
+                    SQLCipher vault or a remote unv-server (--server).",
         "envelope": {
             "note": "Pass --json to any command. stdout is then exactly one JSON document.",
             "success": { "ok": true, "command": "<command.path>", "data": "<command-specific>" },
@@ -117,15 +117,15 @@ pub fn describe(cmd: &Command) -> Value {
                              can detect drift and duplication without ever reading a value.",
             "reveal": "--reveal prints real values. Intended for a human at a terminal.",
             "materialisation": [
-                "envv exec --project P -- <cmd>  — values enter the child process's environment only",
-                "envv project export P --out FILE — real values are written to FILE, never to stdout",
-                "envv render tpl --out FILE       — same rule for arbitrary templates",
-                "envv entry add X --generate      — the secret is created and stored without ever being printed",
+                "unv exec --project P -- <cmd>  — values enter the child process's environment only",
+                "unv project export P --out FILE — real values are written to FILE, never to stdout",
+                "unv render tpl --out FILE       — same rule for arbitrary templates",
+                "unv entry add X --generate      — the secret is created and stored without ever being printed",
             ],
             "authentication": [
-                "--password-command 'pass show envv' — password comes from a keyring helper",
+                "--password-command 'pass show unv' — password comes from a keyring helper",
                 "--password-file FILE               — password read from a 0600 file",
-                "envv login --server URL            — a human authenticates once; later commands reuse the session",
+                "unv login --server URL            — a human authenticates once; later commands reuse the session",
             ],
         },
         "conventions": {
