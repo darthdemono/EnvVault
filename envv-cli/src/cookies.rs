@@ -227,7 +227,7 @@ pub fn to_cookies_txt(cookies: &[Cookie]) -> Result<String, String> {
     }
     let mut lines = vec![
         "# Netscape HTTP Cookie File".to_string(),
-        "# Written by EnvVault. Move it somewhere safe and delete it when done.".to_string(),
+        "# Written by UnENVerse. Move it somewhere safe and delete it when done.".to_string(),
     ];
     for c in cookies {
         let domain = c.domain.clone().unwrap_or_default();
