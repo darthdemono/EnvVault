@@ -5,8 +5,8 @@ locally with Argon2id; the derived key is not written to disk and is cleared
 when the vault is locked. The database salt is required to recover a vault, so
 backups must keep it with the encrypted database.
 
-`envv` defaults to redacted output. Commands that would expose stored values on
-stdout require an explicit reveal option; use file output or `envv exec` when a
+`unv` defaults to redacted output. Commands that would expose stored values on
+stdout require an explicit reveal option; use file output or `unv exec` when a
 consumer needs a real secret. The optional server supports TLS pinning, scoped
 users, and compare-and-swap writes to avoid silent overwrite conflicts.
 
