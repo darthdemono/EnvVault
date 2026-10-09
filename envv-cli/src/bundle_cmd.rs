@@ -1,4 +1,4 @@
-//! `envv bundle` — Phase 24.1. A bundle is an ordinary entry of
+//! `unv bundle` — Phase 24.1. A bundle is an ordinary entry of
 //! `secretType: "bundle"`; members are ordinary entries pointing back at it
 //! with `bundle_id` / `bundle_slot` / `bundle_order`. Membership is stored once,
 //! on the member, so nothing here writes a member list onto the bundle.
@@ -50,7 +50,7 @@ fn bundle_id(vault: &Value, idx: usize) -> CliResult<String> {
     let e = &data::entries(vault)[idx];
     match s(e, "id") {
         "" => Err(CliError::invalid(
-            "That bundle has no id; run `envv doctor --fix` first.",
+            "That bundle has no id; run `unv doctor --fix` first.",
         )),
         id => Ok(id.to_string()),
     }
@@ -218,7 +218,13 @@ pub fn new(
         let vars: Vec<Value> = imported
             .vars
             .iter()
-            .map(|v| json!({ "key": v.key, "value": v.value, "kind": v.kind }))
+            .map(|v| {
+                let mut o = json!({ "key": v.key, "value": v.value, "kind": v.kind });
+                if v.public {
+                    o["public"] = json!(true);
+                }
+                o
+            })
             .collect();
         locals = vars.len();
         entries_mut(&mut vault)[last]["extra_vars"] = json!(vars);
