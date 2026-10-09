@@ -1,6 +1,6 @@
-//! `envv render` — substitute `${…}` references in an arbitrary template.
+//! `unv render` — substitute `${…}` references in an arbitrary template.
 //!
-//! The exporters cover the config formats EnvVault models. This covers
+//! The exporters cover the config formats UnENVerse models. This covers
 //! everything else: a systemd unit, a Helm values file, a CI config. The
 //! template is ordinary text an agent can write and read freely — it holds
 //! *references*, never values — and the substitution happens on the way to a
