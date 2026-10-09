@@ -25,6 +25,9 @@
 
 use std::sync::{Arc, Mutex};
 
+// The node listener (envv-cli) builds its server side from the same rustls.
+pub use rustls;
+
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
 use rustls::crypto::CryptoProvider;
 use rustls::{
@@ -84,21 +87,36 @@ fn provider() -> Arc<CryptoProvider> {
 
 /// Build a rustls client configuration for `policy`.
 pub fn client_config(policy: &TlsPolicy) -> Result<ClientConfig, String> {
+    client_config_with(policy, false)
+}
+
+/// As [`client_config`], but offering TLS 1.3 only. A node agent runs
+/// unattended on a host nobody is watching and carries rendered config, so it
+/// does not negotiate down (Phase 34).
+pub fn client_config_tls13(policy: &TlsPolicy) -> Result<ClientConfig, String> {
+    client_config_with(policy, true)
+}
+
+fn client_config_with(policy: &TlsPolicy, tls13_only: bool) -> Result<ClientConfig, String> {
+    let versions = |b: rustls::ConfigBuilder<ClientConfig, rustls::WantsVersions>| {
+        if tls13_only {
+            b.with_protocol_versions(&[&rustls::version::TLS13])
+        } else {
+            b.with_safe_default_protocol_versions()
+        }
+        .map_err(|e| e.to_string())
+    };
     match policy {
         TlsPolicy::Ca => {
             let mut roots = RootCertStore::empty();
             roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
-            Ok(ClientConfig::builder_with_provider(provider())
-                .with_safe_default_protocol_versions()
-                .map_err(|e| e.to_string())?
+            Ok(versions(ClientConfig::builder_with_provider(provider()))?
                 .with_root_certificates(roots)
                 .with_no_client_auth())
         }
         TlsPolicy::Pin(expected) => {
             let p = provider();
-            Ok(ClientConfig::builder_with_provider(p.clone())
-                .with_safe_default_protocol_versions()
-                .map_err(|e| e.to_string())?
+            Ok(versions(ClientConfig::builder_with_provider(p.clone()))?
                 .dangerous()
                 .with_custom_certificate_verifier(Arc::new(FingerprintVerifier {
                     expected: normalize_fingerprint(expected),
@@ -116,13 +134,51 @@ pub fn client_config(policy: &TlsPolicy) -> Result<ClientConfig, String> {
             if roots.is_empty() {
                 return Err("No certificates found in the supplied CA file".into());
             }
-            Ok(ClientConfig::builder_with_provider(provider())
-                .with_safe_default_protocol_versions()
-                .map_err(|e| e.to_string())?
+            Ok(versions(ClientConfig::builder_with_provider(provider()))?
                 .with_root_certificates(roots)
                 .with_no_client_auth())
         }
     }
+}
+
+/// A fresh self-signed certificate for a listener that is reached by pin, not by
+/// name: `(cert_pem, key_pem, fingerprint)`. The names go in the SAN list for
+/// tools that look; the pin ignores them.
+pub fn self_signed(names: Vec<String>) -> Result<(String, String, String), String> {
+    use rcgen::{CertificateParams, KeyPair};
+    let key = KeyPair::generate().map_err(|e| e.to_string())?;
+    let mut params = CertificateParams::new(names).map_err(|e| e.to_string())?;
+    params.not_after = time::OffsetDateTime::now_utc()
+        .checked_add(time::Duration::days(365 * 5))
+        .ok_or("date overflow")?;
+    let cert = params.self_signed(&key).map_err(|e| e.to_string())?;
+    Ok((
+        cert.pem(),
+        key.serialize_pem(),
+        fingerprint_of_der(cert.der().as_ref()),
+    ))
+}
+
+/// The SHA-256 of the first certificate in a PEM file, as the pin form.
+pub fn fingerprint_of_pem(cert_pem: &str) -> Result<String, String> {
+    let certs = certs_from_pem(cert_pem.as_bytes())?;
+    Ok(fingerprint_of_der(certs[0].as_ref()))
+}
+
+/// A server configuration that speaks TLS 1.3 only and asks for no client
+/// certificate: the caller proves itself with a signature on the request.
+pub fn server_config_tls13(cert_pem: &str, key_pem: &str) -> Result<rustls::ServerConfig, String> {
+    let chain = certs_from_pem(cert_pem.as_bytes())?;
+    let mut rd = std::io::BufReader::new(key_pem.as_bytes());
+    let key = rustls_pemfile::private_key(&mut rd)
+        .map_err(|e| format!("Cannot read the node's TLS key: {e}"))?
+        .ok_or("The node's TLS key file holds no private key")?;
+    rustls::ServerConfig::builder_with_provider(provider())
+        .with_protocol_versions(&[&rustls::version::TLS13])
+        .map_err(|e| e.to_string())?
+        .with_no_client_auth()
+        .with_single_cert(chain, key)
+        .map_err(|e| e.to_string())
 }
 
 /// Parse a PEM bundle into certificates for [`TlsPolicy::PrivateCa`].
@@ -323,5 +379,56 @@ mod tests {
         let err = certs_from_pem(b"-----BEGIN PRIVATE KEY-----\nzzz\n-----END PRIVATE KEY-----\n")
             .unwrap_err();
         assert!(err.contains("no CERTIFICATE"), "{err}");
+    }
+
+    #[test]
+    fn a_pinned_client_reaches_the_listener_only_with_the_right_certificate() {
+        use std::io::{Read, Write};
+        let (cert, key, fp) = self_signed(vec!["node.test".into()]).unwrap();
+        assert_eq!(fingerprint_of_pem(&cert).unwrap(), fp);
+        let cfg = Arc::new(server_config_tls13(&cert, &key).unwrap());
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            for _ in 0..3 {
+                let Ok((mut tcp, _)) = listener.accept() else {
+                    return;
+                };
+                let mut conn = rustls::ServerConnection::new(cfg.clone()).unwrap();
+                let mut tls = rustls::Stream::new(&mut conn, &mut tcp);
+                let mut buf = [0u8; 4];
+                if tls.read_exact(&mut buf).is_ok() {
+                    let _ = tls.write_all(b"pong");
+                }
+            }
+        });
+        let talk = |pin: &str, tls12: bool| -> Result<Vec<u8>, String> {
+            let cfg = if tls12 {
+                client_config(&TlsPolicy::Pin(pin.into()))
+            } else {
+                client_config_tls13(&TlsPolicy::Pin(pin.into()))
+            }?;
+            let name = ServerName::try_from("node.test").unwrap();
+            let mut conn =
+                rustls::ClientConnection::new(Arc::new(cfg), name).map_err(|e| e.to_string())?;
+            let mut tcp =
+                std::net::TcpStream::connect(("127.0.0.1", port)).map_err(|e| e.to_string())?;
+            let mut tls = rustls::Stream::new(&mut conn, &mut tcp);
+            tls.write_all(b"ping").map_err(|e| e.to_string())?;
+            let mut out = vec![0u8; 4];
+            tls.read_exact(&mut out).map_err(|e| e.to_string())?;
+            Ok(out)
+        };
+        assert_eq!(talk(&fp, false).unwrap(), b"pong");
+        assert!(
+            talk(&"00".repeat(32), false).is_err(),
+            "a wrong pin must not connect"
+        );
+        // The listener refuses to negotiate TLS 1.2 even for a client that offers it.
+        assert_eq!(
+            talk(&fp, true).unwrap(),
+            b"pong",
+            "a client offering 1.2 and 1.3 lands on 1.3"
+        );
     }
 }
