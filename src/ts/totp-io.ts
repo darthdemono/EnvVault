@@ -11,7 +11,7 @@
  * about what a file meant, and a disagreement here is a seed that imports with
  * the wrong period and produces codes the issuer rejects. So this module holds
  * no parser, no format writer and — the part with real consequences — **no merge
- * rules**. `vault_core::totp_import` owns all three; `envv totp import` and the
+ * rules**. `vault_core::totp_import` owns all three; `unv totp import` and the
  * button wired up here call the same functions.
  *
  * What is left here is the file picker, the confirmation, and turning the report
