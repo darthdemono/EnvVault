@@ -3,7 +3,7 @@
  * Notice when something *else* writes the vault, and pick the change up.
  *
  * The desktop app reads the vault once at unlock and then holds it in memory.
- * Nothing told it that `envv entry set` in a terminal, `envv totp advance`, or a
+ * Nothing told it that `unv entry set` in a terminal, `unv totp advance`, or a
  * LAN peer had written to the same database — so the window went on showing the
  * state it read at unlock, and the next save either overwrote the other writer's
  * work or (since the compare-and-swap landed) failed with a conflict the user
