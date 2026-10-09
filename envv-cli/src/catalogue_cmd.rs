@@ -1,4 +1,4 @@
-//! `envv catalogue` — the signed provider catalogue (Phase 31).
+//! `unv catalogue` — the signed provider catalogue (Phase 31).
 //!
 //! The format, signature and cache rules live in `vault_core::catalogue`; this
 //! file is I/O. Nothing here touches the vault, so none of it asks for a
@@ -124,14 +124,14 @@ pub fn run(cmd: &CatalogueCmd) -> CliResult {
                 ),
                 None => println!(
                     "No verified catalogue cached; using the compiled table ({} providers). \
-                     Run `envv catalogue update`.",
+                     Run `unv catalogue update`.",
                     bundled_providers().len()
                 ),
             });
         }
         CatalogueCmd::Diff => {
             let c = cat::load_cached().ok_or_else(|| {
-                CliError::not_found("No verified catalogue cached; run `envv catalogue update`.")
+                CliError::not_found("No verified catalogue cached; run `unv catalogue update`.")
             })?;
             let built = bundled_providers();
             let mut added = Vec::new();
