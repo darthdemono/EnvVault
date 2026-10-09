@@ -345,5 +345,111 @@
     "secret_type": "api_key",
     "icon": "stripe",
     "exposure": "verify_only"
+  },
+  {
+    "prefix": "tskey-",
+    "issuer": "Tailscale",
+    "secret_type": "api_key",
+    "icon": "tailscale",
+    "api_url": "https://api.tailscale.com",
+    "verified_on": "2026-10-09",
+    "source_url": "https://tailscale.com/kb/1085/auth-keys"
+  },
+  {
+    "prefix": "glsa_",
+    "issuer": "Grafana",
+    "secret_type": "api_key",
+    "icon": "grafana",
+    "acts_as": "service",
+    "verified_on": "2026-10-09",
+    "source_url": "https://grafana.com/docs/grafana/latest/administration/service-accounts/"
+  },
+  {
+    "prefix": "sntryu_",
+    "issuer": "Sentry",
+    "secret_type": "api_key",
+    "icon": "sentry",
+    "api_url": "https://sentry.io/api/0",
+    "acts_as": "user",
+    "verified_on": "2026-10-09",
+    "source_url": "https://docs.sentry.io/security-legal-pii/security/token-formats/"
+  },
+  {
+    "prefix": "sntrys_",
+    "issuer": "Sentry",
+    "secret_type": "api_key",
+    "icon": "sentry",
+    "api_url": "https://sentry.io/api/0",
+    "acts_as": "service",
+    "verified_on": "2026-10-09",
+    "source_url": "https://docs.sentry.io/security-legal-pii/security/token-formats/"
+  },
+  {
+    "prefix": "sb_publishable_",
+    "issuer": "Supabase",
+    "secret_type": "api_key",
+    "icon": "supabase",
+    "exposure": "publishable",
+    "verified_on": "2026-10-09",
+    "source_url": "https://supabase.com/docs/guides/api/api-keys"
+  },
+  {
+    "prefix": "sb_secret_",
+    "issuer": "Supabase",
+    "secret_type": "api_key",
+    "icon": "supabase",
+    "exposure": "server_only",
+    "verified_on": "2026-10-09",
+    "source_url": "https://supabase.com/docs/guides/api/api-keys"
+  },
+  {
+    "prefix": "hvs.",
+    "issuer": "HashiCorp Vault",
+    "secret_type": "api_key",
+    "icon": "vault",
+    "verified_on": "2026-10-09",
+    "source_url": "https://developer.hashicorp.com/vault/docs/concepts/tokens"
+  },
+  {
+    "prefix": "hvb.",
+    "issuer": "HashiCorp Vault",
+    "secret_type": "api_key",
+    "icon": "vault",
+    "verified_on": "2026-10-09",
+    "source_url": "https://developer.hashicorp.com/vault/docs/concepts/tokens"
+  },
+  {
+    "prefix": "hvr.",
+    "issuer": "HashiCorp Vault",
+    "secret_type": "api_key",
+    "icon": "vault",
+    "verified_on": "2026-10-09",
+    "source_url": "https://developer.hashicorp.com/vault/docs/concepts/tokens"
+  },
+  {
+    "prefix": "dp.st.",
+    "issuer": "Doppler",
+    "secret_type": "api_key",
+    "icon": "",
+    "acts_as": "service",
+    "verified_on": "2026-10-09",
+    "source_url": "https://docs.doppler.com/docs/service-tokens"
+  },
+  {
+    "prefix": "AGE-SECRET-KEY-1",
+    "issuer": "age",
+    "secret_type": "age_key",
+    "icon": "",
+    "verified_on": "2026-10-09",
+    "source_url": "https://github.com/FiloSottile/age/blob/main/README.md"
+  },
+  {
+    "prefix": "HRKU-",
+    "issuer": "Heroku",
+    "secret_type": "api_key",
+    "icon": "",
+    "api_url": "https://api.heroku.com",
+    "verified_on": "2026-10-09",
+    "source_url": "https://devcenter.heroku.com/articles/platform-api-quickstart"
   }
 ]
