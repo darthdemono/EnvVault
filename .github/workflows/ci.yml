@@ -155,7 +155,7 @@ jobs:
       - name: Cargo.lock is up to date
         run: cargo metadata --locked --format-version 1
 
-      # vault-core holds the crypto, storage and RBAC logic; envv-server holds the
+      # vault-core holds the crypto, storage and RBAC logic; unv-server holds the
       # session and LAN-hosting logic. Regressions in either are security bugs
       # rather than cosmetic ones.
       - name: Test
