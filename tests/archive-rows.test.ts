@@ -40,7 +40,7 @@ describe('archive rows', () => {
   it('are disabled with an explanation in a plain browser', async () => {
     await boot();
     expect(($('s-archive-btn') as HTMLButtonElement).disabled).toBe(true);
-    expect($('s-archive-btn').title).toMatch(/envv backup archive/);
+    expect($('s-archive-btn').title).toMatch(/unv backup archive/);
   });
 
   it('create asks Rust to build the archive and saves it through saveFile', async () => {
