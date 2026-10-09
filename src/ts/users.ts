@@ -170,7 +170,7 @@ export async function renderUsersPanel() {
 // ── Render user detail ────────────────────────────────────────────────────────
 
 /**
- * Strict write scoping (`envv user strict-write`, Phase 33.4): under it a write
+ * Strict write scoping (`unv user strict-write`, Phase 33.4): under it a write
  * must satisfy every scope the subject has, not any one. Shown as a checkbox in
  * the user and class detail. Owner-only on the server, as turning it off widens
  * what a sub-user can write.
