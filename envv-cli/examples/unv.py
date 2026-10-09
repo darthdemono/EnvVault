@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Minimal Python wrapper around the `envv` CLI.
+"""Minimal Python wrapper around the `unv` CLI.
 
 The point of this file is to show the shape of a correct integration, not to be
 a library. Three rules make it safe to hand to an automated caller:
@@ -36,11 +36,11 @@ class EnvvError(RuntimeError):
 
 
 class Envv:
-    def __init__(self, binary: str = "envv", server: str | None = None,
+    def __init__(self, binary: str = "unv", server: str | None = None,
                  db_path: str | None = None, password_command: str | None = None):
         self.binary = binary
         # Global flags every call inherits. No password lives in this object:
-        # authenticate with `envv login` once, or point --password-command at a
+        # authenticate with `unv login` once, or point --password-command at a
         # keyring helper, and this process never holds a credential.
         self.globals: list[str] = ["--json"]
         if server:
