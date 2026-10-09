@@ -6,7 +6,7 @@
 //! the vault. Three reasons, worst failure first:
 //!
 //! 1. [`save_vault`](crate::save_vault) appends a `vault_audit` row on every
-//!    update. A CI loop calling `envv exec` would grow the hash-chained log
+//!    update. A CI loop calling `unv exec` would grow the hash-chained log
 //!    without bound - the same reason read events stopped being audited.
 //! 2. `save_vault` is a compare-and-swap. Concurrent reads against one vault
 //!    would collide and start returning conflicts for *reads*.
@@ -15,7 +15,7 @@
 //!
 //! # Why this lives in vault-core
 //!
-//! Two programs read this file: `envv` and the desktop app. The app's
+//! Two programs read this file: `unv` and the desktop app. The app's
 //! `app_data_dir` and the CLI's `dirs::data_dir()/io.envvault` resolve to the
 //! same directory, so one vault produces the same [`local_vault_key`] in both -
 //! report a key rate limited from CI and the desktop shows it cooling.
@@ -65,7 +65,7 @@ use std::path::PathBuf;
 /// is its own quiet bug, where the same pool restarts at the first key every
 /// time you change directory.
 pub fn state_path() -> Option<PathBuf> {
-    if let Some(explicit) = std::env::var_os("ENVV_POOL_FILE") {
+    if let Some(explicit) = std::env::var_os("UNV_POOL_FILE") {
         return Some(PathBuf::from(explicit));
     }
     #[cfg(windows)]
@@ -110,7 +110,7 @@ pub fn load() -> Value {
 pub fn save(state: &Value) -> Result<(), String> {
     let path = state_path().ok_or_else(|| {
         "Cannot determine a home directory for per-user state (no $HOME on Unix, \
-         no %USERPROFILE% on Windows). Set ENVV_POOL_FILE to choose the location."
+         no %USERPROFILE% on Windows). Set UNV_POOL_FILE to choose the location."
             .to_string()
     })?;
     if let Some(parent) = path.parent() {
@@ -232,7 +232,7 @@ pub fn set_cooldown(
 /// The cursor indexes the **full** member list rather than a filtered one, so
 /// a member going on cooldown does not shift every other member's position
 /// and make the next call skip an unrelated key. `None` when every member is
-/// cooling. Shared by `envv pool next`/`envv get --pool` (`envv-cli/src/pool.rs`)
+/// cooling. Shared by `unv pool next`/`unv get --pool` (`envv-cli/src/pool.rs`)
 /// and the desktop card's Copy button (`pool_next` in `src-tauri`) — two
 /// callers picking a member by two different rules is exactly the shape that
 /// hands one caller a key the other just put on cooldown.
