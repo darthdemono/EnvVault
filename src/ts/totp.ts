@@ -2,9 +2,9 @@
  * @file
  * Stored TOTP seeds — the authenticator half of the vault (Phase 22).
  * @description A `totp_secret` on an entry is a seed a *third-party service*
- *              issued, from which EnvVault produces the six digits you type
+ *              issued, from which UnENVerse produces the six digits you type
  *              into that service. It is the mirror image of the Phase 19 TOTP,
- *              which is a second factor on EnvVault's own sub-user login and
+ *              which is a second factor on UnENVerse's own sub-user login and
  *              lives in the `users` table; the two share the RFC 6238
  *              arithmetic in `vault-core/src/totp.rs` and nothing else.
  *
