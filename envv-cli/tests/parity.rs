@@ -150,7 +150,7 @@ fn no_placeholders_survive_export() {
 // These goldens existed since Phase 18 and were asserted from `chunk-ops.ts`
 // alone, so "one format, two implementations, one golden file" covered 4 of 11.
 // The CLI meanwhile fell back to `.env` for all seven, which is how
-// `envv project export my-lb` on an haproxy project wrote something that was not
+// `unv project export my-lb` on an haproxy project wrote something that was not
 // an haproxy config. Both halves now assert the identical bytes.
 
 #[test]
@@ -275,7 +275,7 @@ fn disabled_chunks_are_excluded() {
 /// Every project type exports as its own format.
 ///
 /// The defect this pins (review-01 §3.2): the default-format match named three
-/// types and sent the other eight to `env`. `envv project export my-lb` on an
+/// types and sent the other eight to `env`. `unv project export my-lb` on an
 /// haproxy project therefore wrote a `.env` that was not `haproxy.cfg`, or died
 /// with "Project 'my-lb' has no env_file chunks" — a message naming neither the
 /// cause nor the fix, on project types Phase 18 had already graduated to stable.
@@ -394,7 +394,7 @@ fn calendar_ics() {
         &entries,
         &vault_core::calendar::IcsOptions {
             now: "2026-08-26T12:00:00Z".to_string(),
-            calendar_name: "EnvVault".to_string(),
+            calendar_name: "UnENVerse".to_string(),
             ..Default::default()
         },
     );
@@ -576,7 +576,7 @@ fn bundle_references_resolve_like_the_app() {
 /// Copy profiles — Phase 23, step 3. A sixth twin pair.
 ///
 /// It exists twice because the app's Copy button puts the text on the clipboard
-/// with no Rust in the loop, and `envv get --profile` writes the same text from
+/// with no Rust in the loop, and `unv get --profile` writes the same text from
 /// the terminal. A copy that differs between the two is a `.env` whose contents
 /// depend on which half of the product the user reached for.
 #[test]
@@ -620,7 +620,7 @@ fn copy_profiles_match_the_app() {
 /// How a credential is sent — Phase 23, E16. A seventh twin pair.
 ///
 /// The app's "Copy as request header" builds the header with no Rust in the
-/// loop and `envv curl` builds the same one from the terminal; a header that
+/// loop and `unv curl` builds the same one from the terminal; a header that
 /// differs between them is a request that works from one half of the product and
 /// 401s from the other, with the API explaining neither.
 ///
