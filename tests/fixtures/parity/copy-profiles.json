@@ -4,7 +4,7 @@
     "and envv-cli/src/profile.rs.",
     "",
     "A sixth twin pair. It exists twice because the app's Copy button puts the",
-    "text on the clipboard with no Rust in the loop, and `envv get --profile`",
+    "text on the clipboard with no Rust in the loop, and `unv get --profile`",
     "writes the same text from the terminal — and a copy that differs between",
     "the two is a `.env` whose contents depend on which half of the product the",
     "user reached for.",
