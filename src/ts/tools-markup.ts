@@ -262,6 +262,67 @@ export const TOOLS_PANES_HTML = String.raw`
           </div>
         </div>
 
+        <!-- Tool: Config history (Phase 35) -->
+        <div id="tool-history" class="tool-pane" style="display:none">
+          <div class="tool-header">
+            <h3>Config history</h3>
+            <p>A snapshot of every project's rendered config, kept whenever a save changes it. Secrets show as fingerprints, so a rotated key reads as a changed fingerprint; the real values need Reveal. Old snapshots are pruned by the policy below.</p>
+          </div>
+          <div class="tool-body">
+            <div class="tool-row">
+              <label class="tool-label" for="history-project">Project</label>
+              <select id="history-project" class="tool-input" style="max-width:200px"><option value="">All projects</option></select>
+              <label class="tool-label" for="history-exporter">Config</label>
+              <input id="history-exporter" class="tool-input" type="text" placeholder="nginx, compose, env…" style="max-width:140px">
+              <button id="history-list-btn" class="btn btn-accent btn-sm">List</button>
+              <button id="history-diff-btn" class="btn btn-ghost btn-sm">Diff newest two</button>
+              <button id="history-diff-file-btn" class="btn btn-ghost btn-sm" title="Compare the newest snapshot of the chosen config with a file, e.g. a node's live config fetched with Fetch file">Compare with a file…</button>
+              <button id="history-snapshot-btn" class="btn btn-ghost btn-sm">Snapshot now</button>
+              <button id="history-verify-btn" class="btn btn-ghost btn-sm">Verify</button>
+              <label class="tool-label" for="history-reveal"><input id="history-reveal" type="checkbox"> Reveal real values</label>
+            </div>
+            <div class="tool-row">
+              <label class="tool-label" for="history-enabled"><input id="history-enabled" type="checkbox" checked> Keep history</label>
+              <label class="tool-label" for="history-keep">Newest per config</label>
+              <input id="history-keep" class="tool-input" type="number" min="1" value="50" style="max-width:80px">
+              <label class="tool-label" for="history-days">and the last (days)</label>
+              <input id="history-days" class="tool-input" type="number" min="0" value="90" style="max-width:80px">
+              <button id="history-policy-load-btn" class="btn btn-ghost btn-sm">Load policy</button>
+              <button id="history-policy-btn" class="btn btn-ghost btn-sm">Save policy</button>
+              <button id="history-prune-btn" class="btn btn-ghost btn-sm">Prune…</button>
+            </div>
+            <div id="history-status" class="tool-status" style="font-size:11px;color:var(--text3)"></div>
+            <div id="history-list"></div>
+            <pre id="history-output" class="tool-output mono"></pre>
+          </div>
+        </div>
+
+        <!-- Tool: Nodes (Phase 34, hub routes /api/nodes/*) -->
+        <div id="tool-nodes" class="tool-pane" style="display:none">
+          <div class="tool-header">
+            <h3>Nodes</h3>
+            <p>Agents on other hosts that watch config files and, only where their own config says so, write what this vault renders. A node never holds a vault key. Needs a remote vault on a server started with --nodes.</p>
+          </div>
+          <div class="tool-body">
+            <div class="tool-row">
+              <label class="tool-label" for="nodes-name">Node name</label>
+              <input id="nodes-name" class="tool-input" type="text" placeholder="vps-01" style="max-width:160px">
+              <label class="tool-label" for="nodes-projects">Projects</label>
+              <input id="nodes-projects" class="tool-input" type="text" placeholder="edge, mail" style="max-width:200px">
+              <label class="tool-label" for="nodes-ttl">Token lifetime (min)</label>
+              <input id="nodes-ttl" class="tool-input" type="number" min="1" max="10080" value="15" style="max-width:80px">
+              <button id="nodes-token-btn" class="btn btn-accent btn-sm">New enrollment token</button>
+              <button id="nodes-refresh-btn" class="btn btn-ghost btn-sm">Refresh</button>
+              <button id="nodes-approver-btn" class="btn btn-ghost btn-sm" title="Register this machine's approver key with the hub, so approvals can be signed here">Use this device to approve</button>
+              <label class="tool-label" for="nodes-since">Blast radius since</label>
+              <input id="nodes-since" class="tool-input" type="date" style="max-width:150px">
+            </div>
+            <div id="nodes-status" class="tool-status" style="font-size:11px;color:var(--text3)"></div>
+            <pre id="nodes-output" class="tool-output mono"></pre>
+            <div id="nodes-list"></div>
+          </div>
+        </div>
+
         <!-- Tool: Unique IDs (Phase 33.4, server registry of Phase 24.4) -->
         <div id="tool-uid-registry" class="tool-pane" style="display:none">
           <div class="tool-header">
@@ -295,7 +356,7 @@ export const TOOLS_PANES_HTML = String.raw`
           </div>
         </div>
 
-        <!-- Tool: Enrich (Phase 33.1), envv enrich without --online -->
+        <!-- Tool: Enrich (Phase 33.1), unv enrich without --online -->
         <div id="tool-enrich" class="tool-pane" style="display:none">
           <div class="tool-header">
             <h3>Enrich</h3>
@@ -392,7 +453,7 @@ export const TOOLS_PANES_HTML = String.raw`
             </div>
             <div class="tool-header" style="margin-top:22px">
               <h3>From another password manager</h3>
-              <p>Bitwarden, 1Password or Proton Pass JSON exports. Shows what would change before anything is written; an existing entry with the same secret is left alone.</p>
+              <p>Bitwarden, 1Password or Proton Pass JSON exports, or a Nextcloud config.php (read, never run). Shows what would change before anything is written; an existing entry with the same secret is left alone.</p>
             </div>
             <div class="tool-row">
               <label class="tool-label" for="vi-vendor">Export from</label>
@@ -400,6 +461,7 @@ export const TOOLS_PANES_HTML = String.raw`
                 <option value="bitwarden">Bitwarden (JSON)</option>
                 <option value="onepassword">1Password (1pif or JSON)</option>
                 <option value="proton">Proton Pass (JSON)</option>
+                <option value="nextcloud">Nextcloud (config.php)</option>
               </select>
               <label class="tool-label" for="vi-folders"><input type="checkbox" id="vi-folders"> Keep folders as categories</label>
             </div>
@@ -495,7 +557,7 @@ export const TOOLS_PANES_HTML = String.raw`
             <div id="tl-feeds-section" class="tl-export" style="display:none">
               <h4>Subscribe (remote vaults only)</h4>
               <p class="tl-note">
-                A live URL your calendar app polls, served by <code>envv-server</code>. It carries a
+                A live URL your calendar app polls, served by <code>unv-server</code>. It carries a
                 bearer token — anyone holding the URL can read event names and dates until you revoke
                 it. Permissions are re-applied on every fetch, so a sub-user's feed shrinks the moment
                 you revoke their access.
