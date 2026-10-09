@@ -1,4 +1,4 @@
-# Doxygen configuration for the EnvVault frontend.
+# Doxygen configuration for the UnENVerse frontend.
 #
 # Minimal on purpose: anything not stated here keeps Doxygen's default, so this
 # file stays readable instead of becoming the 3,000-line dump `doxygen -g`
@@ -14,7 +14,7 @@
 # Doxygen at vault-core/ would produce a page of misparsed noise, not an
 # incomplete-but-useful reference.
 
-PROJECT_NAME           = "EnvVault"
+PROJECT_NAME           = "UnENVerse"
 PROJECT_NUMBER         = "$(ENVVAULT_VERSION)"
 PROJECT_BRIEF          = "Local-first desktop secrets manager — TypeScript frontend"
 
