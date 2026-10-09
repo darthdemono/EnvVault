@@ -39,9 +39,9 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const CRATES = ['src-tauri', 'vault-core', 'unv-server', 'unv-cli'];
 
 // Directory names and crate names differ for exactly one member: the Tauri app
-// lives in `src-tauri/` and is published as `envvault`. Cargo.lock keys on the
+// lives in `src-tauri/` and is published as `unenverse`. Cargo.lock keys on the
 // crate name, so the two lists cannot be collapsed into one.
-const CRATE_NAMES = ['envvault', 'vault-core', 'unv-server', 'unv-cli'];
+const CRATE_NAMES = ['unenverse', 'vault-core', 'unv-server', 'unv-cli'];
 
 /** Semver `major.minor.patch`, no pre-release or build metadata. */
 const SEMVER = /^(\d+)\.(\d+)\.(\d+)$/;

@@ -26,7 +26,7 @@ docker run --rm \
   unv-viewer bash -c '
     set -euo pipefail
     cd /src
-    cargo build -p envvault --release --features tauri/custom-protocol 2>&1 | tail -3
-    dbus-run-session -- python3 tools/viewer/shots.py /cargo-target/release/envvault /out "$@"
+    cargo build -p unenverse --release --features tauri/custom-protocol 2>&1 | tail -3
+    dbus-run-session -- python3 tools/viewer/shots.py /cargo-target/release/unenverse /out "$@"
   ' bash "$@"
 echo "Screenshots in $OUT"

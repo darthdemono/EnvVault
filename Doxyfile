@@ -2,7 +2,7 @@
 #
 # Minimal on purpose: anything not stated here keeps Doxygen's default, so this
 # file stays readable instead of becoming the 3,000-line dump `doxygen -g`
-# produces. Run it with `npm run docs`, which sets ENVVAULT_VERSION from
+# produces. Run it with `npm run docs`, which sets UNV_VERSION from
 # scripts/version.mjs rather than adding a seventh copy of the number.
 #
 # Scope: src/ts only.
@@ -15,7 +15,7 @@
 # incomplete-but-useful reference.
 
 PROJECT_NAME           = "UnENVerse"
-PROJECT_NUMBER         = "$(ENVVAULT_VERSION)"
+PROJECT_NUMBER         = "$(UNV_VERSION)"
 PROJECT_BRIEF          = "Local-first desktop secrets manager — TypeScript frontend"
 
 OUTPUT_DIRECTORY       = docs/ts

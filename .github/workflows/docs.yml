@@ -82,7 +82,7 @@ jobs:
       - name: Build the frontend (tauri-build needs ../dist to exist)
         run: npx vite build
 
-      # Writes docs/ts/. `npm run docs` injects ENVVAULT_VERSION from
+      # Writes docs/ts/. `npm run docs` injects UNV_VERSION from
       # scripts/version.mjs so the rendered pages carry the real version rather
       # than a seventh hand-maintained copy of it.
       - name: Doxygen (TypeScript frontend)

@@ -622,9 +622,9 @@ jobs:
           # Headless binaries get archived per platform, with a flat layout so
           # `tar xzf … && ./envv` works with no path juggling.
           ( cd artifacts/headless-linux-x86_64 && chmod +x unv unv-server \
-            && tar czf "$GITHUB_WORKSPACE/release-assets/envv-${VERSION}-linux-x86_64.tar.gz" . )
+            && tar czf "$GITHUB_WORKSPACE/release-assets/unv-${VERSION}-linux-x86_64.tar.gz" . )
           ( cd artifacts/headless-windows-x86_64 \
-            && zip -qr "$GITHUB_WORKSPACE/release-assets/envv-${VERSION}-windows-x86_64.zip" . )
+            && zip -qr "$GITHUB_WORKSPACE/release-assets/unv-${VERSION}-windows-x86_64.zip" . )
 
           # `--` so an asset whose name begins with a dash is read as a file
           # rather than an option, and the sums file keeps plain names.

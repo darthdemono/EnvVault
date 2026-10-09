@@ -96,13 +96,13 @@ jobs:
           sudo mkdir -p /srv/www
           sudo openssl req -x509 -newkey rsa:2048 -nodes -days 1 \
             -keyout /etc/ssl/privkey.pem -out /etc/ssl/fullchain.pem -subj "/CN=app.example.com"
-          sudo cp fixtures/apache.conf /etc/apache2/sites-available/envvault.conf
+          sudo cp fixtures/apache.conf /etc/apache2/sites-available/unenverse.conf
           # The fixture is a vhost fragment; SSLCertificateKeyFile is the one
           # directive Apache demands alongside the cert.
           sudo sed -i 's#</VirtualHost>#    SSLCertificateKeyFile /etc/ssl/privkey.pem\n</VirtualHost>#' \
-            /etc/apache2/sites-available/envvault.conf
+            /etc/apache2/sites-available/unenverse.conf
           sudo a2enmod ssl
-          sudo a2ensite envvault
+          sudo a2ensite unenverse
           sudo apachectl configtest
 
   haproxy:

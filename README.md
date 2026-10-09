@@ -133,14 +133,14 @@ Everything listed here is implemented and in the shipping build. The sections af
 
 Grab the artefact for your platform from the [Releases](../../releases) page.
 
-| File                         | Platform                                                                                                            |
-| ---------------------------- | ------------------------------------------------------------------------------------------------------------------- |
-| `*.AppImage`                 | Any Linux distribution. SQLCipher and OpenSSL are compiled in, so it does not care what your package manager ships. |
-| `*.deb`                      | Debian, Ubuntu                                                                                                      |
-| `*.rpm`                      | Fedora, RHEL, Nobara                                                                                                |
-| `*-setup.exe`                | Windows. Fetches WebView2 during install if the machine lacks it.                                                   |
-| `envv-*-linux-x86_64.tar.gz` | `unv` and `unv-server`, no GUI toolkit required                                                                     |
-| `envv-*-windows-x86_64.zip`  | The same two, for Windows                                                                                           |
+| File                        | Platform                                                                                                            |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| `*.AppImage`                | Any Linux distribution. SQLCipher and OpenSSL are compiled in, so it does not care what your package manager ships. |
+| `*.deb`                     | Debian, Ubuntu                                                                                                      |
+| `*.rpm`                     | Fedora, RHEL, Nobara                                                                                                |
+| `*-setup.exe`               | Windows. Fetches WebView2 during install if the machine lacks it.                                                   |
+| `unv-*-linux-x86_64.tar.gz` | `unv` and `unv-server`, no GUI toolkit required                                                                     |
+| `unv-*-windows-x86_64.zip`  | The same two, for Windows                                                                                           |
 
 Every asset carries a keyless Sigstore signature. If you want to confirm a download actually came out of this repository's CI and not from somewhere else:
 
@@ -148,7 +148,7 @@ Every asset carries a keyless Sigstore signature. If you want to confirm a downl
 cosign verify-blob \
   --certificate <asset>.pem \
   --signature   <asset>.sig \
-  --certificate-identity-regexp 'https://github.com/.*/EnvVault/.*' \
+  --certificate-identity-regexp 'https://github.com/.*/(UnENVerse|EnvVault)/.*' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
   <asset>
 ```
@@ -942,7 +942,7 @@ Since schema v2 the vault is stored one row per entry and project, and a save re
 docker run -d -p 8743:8743 \
   -v envv-data:/data \
   -e UNV_PASSWORD=... \
-  ghcr.io/darthdemono/envvault-server:latest
+  ghcr.io/darthdemono/unenverse/unv-server:latest
 ```
 
 Idle RSS is 1.32 MiB on a four-core host, and 1.36 MiB after an Argon2id unlock. It was 3.99 MiB before Phase 15, and the difference is worth explaining because none of it was application code.

@@ -1,5 +1,5 @@
 [package]
-name    = "envvault"
+name    = "unenverse"
 version = "0.42.1"
 edition = "2021"
 publish = false

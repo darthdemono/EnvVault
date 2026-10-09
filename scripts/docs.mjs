@@ -2,8 +2,8 @@
 /**
  * Runs Doxygen with the project version injected.
  *
- * The Doxyfile reads `PROJECT_NUMBER = $(ENVVAULT_VERSION)`. Setting that
- * inline (`ENVVAULT_VERSION=… doxygen`) is shell syntax this project cannot
+ * The Doxyfile reads `PROJECT_NUMBER = $(UNV_VERSION)`. Setting that
+ * inline (`UNV_VERSION=… doxygen`) is shell syntax this project cannot
  * rely on — the primary shell here is PowerShell, where it is a syntax error.
  * Spawning from Node sets the variable the same way on every platform.
  *
@@ -41,7 +41,7 @@ mkdirSync(OUT, { recursive: true });
 const r = spawnSync('doxygen', ['Doxyfile'], {
   cwd: ROOT,
   stdio: 'inherit',
-  env: { ...process.env, ENVVAULT_VERSION: version },
+  env: { ...process.env, UNV_VERSION: version },
 });
 
 if (r.error) {
