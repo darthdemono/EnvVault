@@ -1,6 +1,6 @@
 /**
  * Tools -> Unique IDs (Phase 33.4). The routes are tested over real HTTP in
- * envv-server; this drives the pane: what a user sees for each answer.
+ * unv-server; this drives the pane: what a user sees for each answer.
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { loadRealIndexHtml, resetState } from './helpers';
