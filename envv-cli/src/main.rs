@@ -1,12 +1,12 @@
-//! `envv` — EnvVault CLI.
+//! `unv` — UnENVerse CLI.
 //!
 //! Works in two modes:
 //! - **Local**: reads the Tauri app's SQLCipher DB directly
 //!   (`~/.local/share/io.envvault/vault.db`).
-//! - **Remote**: connects to a running `envv-server` via HTTP.
+//! - **Remote**: connects to a running `unv-server` via HTTP.
 //!
-//! Set `ENVV_SERVER_URL` or pass `--server` to switch to remote mode. Password is
-//! read from `ENVV_PASSWORD`, or prompted. `--user` / `--token` authenticate as a
+//! Set `UNV_SERVER_URL` or pass `--server` to switch to remote mode. Password is
+//! read from `UNV_PASSWORD`, or prompted. `--user` / `--token` authenticate as a
 //! scoped sub-user instead of the vault owner (remote only).
 //!
 //! Everything the desktop UI can do to vault *data* is reachable here: entries,
@@ -17,9 +17,10 @@
 
 use envv_cli::error::{CliError, CliResult};
 use envv_cli::{
-    access, agentio, backup, bundle_cmd, check_cmd, chunks, cxf_cmd, data, doctor, emit_cmd,
-    enrich, entries, envfile, exec, feed_cmd, fmt, gen, import_vaults, oauth_cmd, out, pool,
-    projects, render, scan, session, session_cmd, shield, uid_cmd, users_cmd,
+    access, agentio, backup, blast_cmd, bundle_cmd, check_cmd, chunks, cxf_cmd, data, doctor,
+    emit_cmd, enrich, entries, envfile, exec, feed_cmd, fmt, gen, history_cmd, import_vaults,
+    node_cmd, oauth_cmd, out, pool, projects, render, scan, session, session_cmd, shield, uid_cmd,
+    users_cmd,
 };
 use vault_core::calendar;
 
@@ -33,33 +34,33 @@ use std::path::PathBuf;
 
 #[derive(Parser)]
 #[command(
-    name = "envv",
+    name = "unv",
     // Single source of truth: the crate version in Cargo.toml. Never hardcode.
     version,
-    about = "EnvVault CLI — manage secrets from the terminal",
+    about = "UnENVerse CLI — manage secrets from the terminal",
     long_about = "Local mode reads the Tauri desktop app vault directly.\n\
-                  Remote mode (--server / $ENVV_SERVER_URL) connects to envv-server."
+                  Remote mode (--server / $UNV_SERVER_URL) connects to unv-server."
 )]
 struct Cli {
-    /// Remote envv-server URL, e.g. http://localhost:8743.
+    /// Remote unv-server URL, e.g. http://localhost:8743.
     /// If set, all commands go through the server instead of the local DB.
-    #[arg(long, env = "ENVV_SERVER_URL", global = true)]
+    #[arg(long, env = "UNV_SERVER_URL", global = true)]
     server: Option<String>,
 
-    /// Vault password (avoid in scripts — prefer ENVV_PASSWORD env var or interactive prompt).
-    #[arg(long, env = "ENVV_PASSWORD", global = true, hide_env_values = true)]
+    /// Vault password (avoid in scripts — prefer UNV_PASSWORD env var or interactive prompt).
+    #[arg(long, env = "UNV_PASSWORD", global = true, hide_env_values = true)]
     password: Option<String>,
 
     /// Authenticate as this sub-user instead of the vault owner (requires --server).
     ///
     /// The field is `as_user`, not `user`: a `global = true` argument shares its
     /// id with any subcommand argument of the same name, so a plain `user` id
-    /// made `envv user token ls deploy` set this flag to "deploy" and refuse to
+    /// made `unv user token ls deploy` set this flag to "deploy" and refuse to
     /// run without --server.
     #[arg(
         long = "user",
         value_name = "USERNAME",
-        env = "ENVV_USER",
+        env = "UNV_USER",
         global = true
     )]
     as_user: Option<String>,
@@ -69,14 +70,14 @@ struct Cli {
     /// Only the password path takes one. Token auth deliberately skips it —
     /// requiring a code from CI, where no human is present to read a phone, is a
     /// regression this project has already shipped once.
-    #[arg(long, value_name = "CODE", env = "ENVV_TOTP", global = true)]
+    #[arg(long, value_name = "CODE", env = "UNV_TOTP", global = true)]
     totp: Option<String>,
 
     /// Authenticate with an API token instead of a password (requires --server).
     #[arg(
         long = "token",
         value_name = "TOKEN",
-        env = "ENVV_TOKEN",
+        env = "UNV_TOKEN",
         global = true,
         hide_env_values = true
     )]
@@ -88,11 +89,11 @@ struct Cli {
     /// Without a pin or a --ca-cert, a self-signed server is refused: there is
     /// no --insecure, because the point of this flag is that the master password
     /// never reaches a server whose identity was not established first.
-    #[arg(long, value_name = "SHA256", env = "ENVV_FINGERPRINT", global = true)]
+    #[arg(long, value_name = "SHA256", env = "UNV_FINGERPRINT", global = true)]
     fingerprint: Option<String>,
 
     /// Trust this CA certificate (PEM) — and only this one — for --server.
-    #[arg(long, value_name = "FILE", env = "ENVV_CA_CERT", global = true)]
+    #[arg(long, value_name = "FILE", env = "UNV_CA_CERT", global = true)]
     ca_cert: Option<PathBuf>,
 
     /// Where random bytes come from: `os` (default) or `file:PATH`.
@@ -101,10 +102,10 @@ struct Cli {
     /// device that is wedged or hostile can then only fail to improve the
     /// result, not degrade it. A selected source that is unavailable is an
     /// error, not a silent fallback.
-    #[arg(long, value_name = "SPEC", env = "ENVV_ENTROPY_SOURCE", global = true)]
+    #[arg(long, value_name = "SPEC", env = "UNV_ENTROPY_SOURCE", global = true)]
     entropy_source: Option<String>,
 
-    /// On `envv login`: learn and pin the server's certificate on first contact.
+    /// On `unv login`: learn and pin the server's certificate on first contact.
     ///
     /// The probe is unauthenticated and sends no credentials. Refused if this
     /// server already has a pin.
@@ -116,11 +117,11 @@ struct Cli {
     yes: bool,
 
     /// Use this vault.db instead of the desktop app's (local mode only).
-    #[arg(long, env = "ENVV_DB_PATH", global = true)]
+    #[arg(long, env = "UNV_DB_PATH", global = true)]
     db_path: Option<PathBuf>,
 
     /// Use this vault.salt. Defaults to `vault.salt` beside --db-path.
-    #[arg(long, env = "ENVV_SALT_PATH", global = true)]
+    #[arg(long, env = "UNV_SALT_PATH", global = true)]
     salt_path: Option<PathBuf>,
 
     /// Create the local vault if it does not exist (use with --db-path).
@@ -133,18 +134,18 @@ struct Cli {
 
     /// Case of generated variable names in copies and exports: upper (default),
     /// preserve, or lower. The CLI side of the app's "copy case" setting.
-    #[arg(long, global = true, env = "ENVV_ENV_CASE", value_parser = ["upper", "preserve", "lower"])]
+    #[arg(long, global = true, env = "UNV_ENV_CASE", value_parser = ["upper", "preserve", "lower"])]
     env_case: Option<String>,
 
     /// Put the entry's first env prefix in front of generated names in copies and
     /// exports. The CLI side of the app's "include consumer prefix" setting.
-    #[arg(long, global = true, env = "ENVV_ENV_PREFIX")]
+    #[arg(long, global = true, env = "UNV_ENV_PREFIX")]
     env_prefix: bool,
 
     /// Print real secret values instead of `sha256:…` fingerprints.
     ///
     /// Redaction is the default so that an agent driving this CLI never takes a
-    /// secret into its context. `--out <file>` and `envv exec` move real values
+    /// secret into its context. `--out <file>` and `unv exec` move real values
     /// without printing them; this flag is for a human at a terminal.
     #[arg(long, global = true)]
     reveal: bool,
@@ -154,22 +155,22 @@ struct Cli {
     dry_run: bool,
 
     /// Read the vault password from this file (first line).
-    #[arg(long, env = "ENVV_PASSWORD_FILE", global = true)]
+    #[arg(long, env = "UNV_PASSWORD_FILE", global = true)]
     password_file: Option<PathBuf>,
 
-    /// Read ENVV_PASSWORD (and ENVV_SERVER_URL) from a Docker-style .env file.
+    /// Read UNV_PASSWORD (and UNV_SERVER_URL) from a Docker-style .env file.
     ///
-    /// This is the same file `docker compose` reads to start envv-server, so a
+    /// This is the same file `docker compose` reads to start unv-server, so a
     /// containerised server and the CLI driving it share exactly one copy of the
     /// password — owned by the compose stack, never pasted into a command line.
-    #[arg(long, env = "ENVV_ENV_FILE", global = true)]
+    #[arg(long, env = "UNV_ENV_FILE", global = true)]
     env_file: Option<PathBuf>,
 
     /// Run this command and use its stdout as the vault password.
     ///
     /// Keeps the password out of argv, out of the environment, and out of an
-    /// orchestrator's context — `--password-command "pass show envv"`.
-    #[arg(long, env = "ENVV_PASSWORD_COMMAND", global = true)]
+    /// orchestrator's context — `--password-command "pass show unv"`.
+    #[arg(long, env = "UNV_PASSWORD_COMMAND", global = true)]
     password_command: Option<String>,
 
     #[command(subcommand)]
@@ -223,7 +224,7 @@ enum Commands {
         /// Take the next key from this pool instead of naming an entry.
         ///
         /// Advances the pool's cursor, so two calls hand back two different
-        /// keys. Skips members that `envv pool report --limited` put on cooldown.
+        /// keys. Skips members that `unv pool report --limited` put on cooldown.
         #[arg(long, conflicts_with = "provider")]
         pool: Option<String>,
         /// Emit `.env` lines at this profile instead of the entry document.
@@ -231,7 +232,7 @@ enum Commands {
         /// `basic` is the values; `extended` adds version, expiry, rate limit,
         /// scopes, environment, account and pool; `full` adds the nine fields
         /// that describe a credential rather than drive it. The text carries
-        /// real values, so it follows the same rule as `envv export`: refused to
+        /// real values, so it follows the same rule as `unv export`: refused to
         /// stdout unless `--reveal`, written by `--out`.
         #[arg(long, value_parser = ["basic", "extended", "full"])]
         profile: Option<String>,
@@ -261,7 +262,7 @@ enum Commands {
         /// `full` is refused vault-wide the same way a plaintext export to
         /// stdout is: every entry's purposes, projects, tags and rotation dates
         /// in one file is a map of what matters in the vault. Name a project, or
-        /// use `envv get <entry> --profile full` for one entry.
+        /// use `unv get <entry> --profile full` for one entry.
         #[arg(long, value_parser = ["basic", "extended", "full"])]
         profile: Option<String>,
         /// Where profile metadata goes: `#` comments (default) or variables.
@@ -277,7 +278,7 @@ enum Commands {
     ///
     /// The command contains the real credential, so it follows the same rule as
     /// every other materialising path: redacted to stdout, written in full by
-    /// `--out`. `envv curl X -- https://…` names the URL; without one it uses the
+    /// `--out`. `unv curl X -- https://…` names the URL; without one it uses the
     /// entry's `api_url`.
     Curl {
         /// Provider name, or provider:key_id.
@@ -313,7 +314,7 @@ enum Commands {
         cmd: CookieCmd,
     },
     /// A one-shot iCalendar (.ics) export, or a subscribable feed served by
-    /// `envv-server` (Phase 24.3).
+    /// `unv-server` (Phase 24.3).
     Calendar {
         #[command(subcommand)]
         cmd: CalendarCmd,
@@ -323,6 +324,32 @@ enum Commands {
     Uid {
         #[command(subcommand)]
         cmd: UidCmd,
+    },
+    /// Which credentials were on a machine, and when (Phase 36): the entries to
+    /// rotate, only those whose exposed value is still live, and one command that
+    /// rotates exactly them. `--host NODE` asks the hub; `--host local` reads this
+    /// machine's materialisation log.
+    BlastRadius {
+        #[arg(long)]
+        host: String,
+        /// Only deployments at or after this ISO date.
+        #[arg(long)]
+        since: Option<String>,
+    },
+    /// The config time machine (Phase 35): a snapshot of every rendered config
+    /// whenever a save changes it, diffable, verifiable and pruned by policy.
+    /// Stdout shows secrets as fingerprints; `--reveal` or `--out` shows them.
+    History {
+        #[command(subcommand)]
+        cmd: HistoryCmd,
+    },
+    /// Nodes (Phase 34): agents on other hosts that observe, and when told to
+    /// apply, config files rendered from this vault. `token`, `ls`, `show`,
+    /// `revoke`, `pull` and `accept` manage them on a hub (`unv-server --nodes`);
+    /// `enroll`, `run` and `check` run on the managed host.
+    Node {
+        #[command(subcommand)]
+        cmd: NodeCmd,
     },
     /// FIDO Credential Exchange (CXF) import/export (Phase 24.5).
     Cxf {
@@ -476,7 +503,7 @@ enum Commands {
     /// that is not defined, two WireGuard peers claiming one network, a Traefik
     /// middleware that does not exist, and three more. Prints names, never values.
     Check {
-        /// Project to check. Defaults to `envv use` / $ENVV_PROJECT, else every project.
+        /// Project to check. Defaults to `unv use` / $UNV_PROJECT, else every project.
         project: Option<String>,
         /// Exit 10 when a finding at this severity or worse exists (for CI).
         #[arg(long, value_parser = ["error", "warning"])]
@@ -484,6 +511,10 @@ enum Commands {
         /// Emit JSON instead of a table.
         #[arg(long)]
         json: bool,
+        /// Resolve an nginx `proxy_pass` host against the services of every project,
+        /// not just its own. Widens the evidence a rule may use, so it is opt-in.
+        #[arg(long)]
+        all_projects: bool,
     },
     /// Health scan — weak, expiring, duplicated and stale-reference secrets.
     Scan {
@@ -502,13 +533,14 @@ enum Commands {
     },
     /// Where this CLI is pointed and what the vault holds.
     Status,
-    /// Import from another password manager (Bitwarden, 1Password, Proton Pass).
+    /// Import from another password manager (Bitwarden, 1Password, Proton Pass) or a
+    /// Nextcloud `config.php`.
     ///
     /// Preview by default — nothing is written without `--apply`, and the
     /// preview shows fingerprints rather than values.
     ImportVault {
         /// Which product the file came from.
-        #[arg(value_parser = ["bitwarden", "onepassword", "proton"])]
+        #[arg(value_parser = ["bitwarden", "onepassword", "proton", "nextcloud"])]
         vendor: String,
         /// The exported JSON file.
         file: PathBuf,
@@ -528,8 +560,8 @@ enum Commands {
     /// Pin a project and environment to this directory (writes `.envv.json`).
     ///
     /// Later commands run here inherit them, so `--project` stops being typed
-    /// on every line. An explicit flag still wins, and `ENVV_PROJECT` /
-    /// `ENVV_ENV` sit between the two — which is the order CI needs.
+    /// on every line. An explicit flag still wins, and `UNV_PROJECT` /
+    /// `UNV_ENV` sit between the two — which is the order CI needs.
     ///
     /// The file names things; it never holds a value, so it is safe to commit.
     Use {
@@ -648,7 +680,7 @@ enum Commands {
     },
     /// Authenticator codes from seeds this vault holds for other services.
     ///
-    /// Not to be confused with `envv user totp`, which is EnvVault's *own*
+    /// Not to be confused with `unv user totp`, which is UnENVerse's *own*
     /// second factor for a sub-user login. This one is the Bitwarden/1Password
     /// shape: the vault stores a seed some website issued, and hands you the six
     /// digits that website is about to ask for.
@@ -692,7 +724,7 @@ enum FileCmd {
 ///
 /// All four are materialising paths: the output *is* the session, so each is
 /// redacted to stdout and written in full only by `--out` — the same rule
-/// `envv export` follows, for the same reason.
+/// `unv export` follows, for the same reason.
 #[derive(Subcommand)]
 enum CookieCmd {
     /// The `Cookie:` header value — what a request actually sends.
@@ -751,8 +783,8 @@ enum CookieCmd {
     },
 }
 
-/// `envv calendar export` writes a one-shot .ics; `envv calendar feed` manages
-/// subscribable feed URLs served by `envv-server`.
+/// `unv calendar export` writes a one-shot .ics; `unv calendar feed` manages
+/// subscribable feed URLs served by `unv-server`.
 #[derive(Subcommand)]
 enum CalendarCmd {
     /// Write an iCalendar (.ics) feed of every date the vault knows.
@@ -776,7 +808,7 @@ enum CalendarCmd {
         #[arg(long, short = 'o')]
         out: Option<PathBuf>,
         /// Calendar display name (X-WR-CALNAME).
-        #[arg(long, default_value = "EnvVault")]
+        #[arg(long, default_value = "UnENVerse")]
         name: String,
     },
     #[command(subcommand)]
@@ -788,7 +820,7 @@ enum CalendarCmd {
 /// it from.
 #[derive(Subcommand)]
 enum FeedCmd {
-    /// Mint a feed. The token is shown **once** — `envv-server` stores only its
+    /// Mint a feed. The token is shown **once** — `unv-server` stores only its
     /// hash — so this refuses to print it without `--reveal`/`--out`, the same
     /// rule as `user token new`.
     New {
@@ -797,7 +829,7 @@ enum FeedCmd {
         #[arg(long = "kind", value_name = "KIND")]
         kinds: Vec<String>,
         /// Display name for the calendar (X-WR-CALNAME) and for `feed ls`.
-        #[arg(long, default_value = "EnvVault")]
+        #[arg(long, default_value = "UnENVerse")]
         name: String,
         /// Include account names in event titles/descriptions. Off by default —
         /// an account name is often an email address.
@@ -814,6 +846,232 @@ enum FeedCmd {
         id: String,
         #[arg(long)]
         yes: bool,
+    },
+}
+
+/// The config time machine (Phase 35, ADR-0141).
+#[derive(Subcommand)]
+enum HistoryCmd {
+    /// List snapshots, newest first. Shows names, times and hashes, never content.
+    Ls {
+        /// A project name or id.
+        project: Option<String>,
+        #[arg(long)]
+        exporter: Option<String>,
+        /// Only snapshots at or after this ISO date.
+        #[arg(long)]
+        since: Option<String>,
+        #[arg(long, default_value_t = 50)]
+        limit: i64,
+    },
+    /// Show one snapshot. Fingerprinted unless `--reveal`; `--out FILE` writes the
+    /// real file (0600).
+    Show {
+        seq: i64,
+        #[arg(long)]
+        out: Option<PathBuf>,
+    },
+    /// Unified diff between two snapshots of one config; by default the newest
+    /// two. A rotated secret shows as a changed fingerprint.
+    Diff {
+        project: Option<String>,
+        #[arg(long)]
+        exporter: Option<String>,
+        #[arg(long)]
+        from: Option<i64>,
+        #[arg(long)]
+        to: Option<i64>,
+        #[arg(long)]
+        out: Option<PathBuf>,
+    },
+    /// Compare a stored snapshot with a file on this machine - typically a node's
+    /// live config fetched with `unv node pull`. Without `--reveal` only the names
+    /// of the differing lines are shown, never what follows them.
+    DiffFile {
+        file: PathBuf,
+        project: Option<String>,
+        #[arg(long)]
+        exporter: Option<String>,
+        /// Which snapshot; the newest of the config when omitted.
+        #[arg(long)]
+        seq: Option<i64>,
+    },
+    /// Record a snapshot of every config that changed, now.
+    Snapshot { project: Option<String> },
+    /// Delete snapshots that are both beyond the newest `--keep` and older than
+    /// `--days`, leaving a checkpoint. Deletes the only record of what was deployed then.
+    Prune {
+        #[arg(long)]
+        keep: Option<i64>,
+        #[arg(long)]
+        days: Option<i64>,
+    },
+    /// Recompute every hash and chain and check each checkpoint against the audit chain.
+    Verify,
+    /// Show or change the retention policy and whether history is on.
+    Policy {
+        #[arg(long, conflicts_with = "disable")]
+        enable: bool,
+        #[arg(long)]
+        disable: bool,
+        #[arg(long)]
+        keep: Option<i64>,
+        #[arg(long)]
+        days: Option<i64>,
+    },
+    /// Which snapshot a file's SHA-256 came from (e.g. the hash a node reports).
+    Where { sha256: String },
+    /// Snapshot count, size and oldest.
+    Stats,
+}
+
+/// Nodes (Phase 34, ADR-0140).
+#[derive(Subcommand)]
+enum NodeCmd {
+    /// Mint a single-use enrollment token for a new node (hub, owner only).
+    Token {
+        #[command(subcommand)]
+        cmd: NodeTokenCmd,
+    },
+    /// List enrolled nodes and each target's status (hub).
+    Ls,
+    /// One node in full: key fingerprint, host, and every target (hub).
+    Show { node: String },
+    /// Stop a node receiving config. Files already written stay where they are.
+    Revoke { node: String },
+    /// Fetch a pull target's file from the node. Written with `--out` (0600);
+    /// there is no stdout form, because the file is the node's own and holds its
+    /// secrets.
+    ///
+    /// With `--into-chunk` the file is read back into an `env_file` chunk of the
+    /// target's project instead of being written (`.env`-style targets only; the
+    /// other formats' parsers live in the app). A preview unless `--apply`, and a
+    /// field that holds a `${reference}` is never overwritten with the literal.
+    Pull {
+        node: String,
+        target: String,
+        #[arg(long, required_unless_present = "into_chunk")]
+        out: Option<PathBuf>,
+        /// Read the file into this `env_file` chunk of the target's project.
+        #[arg(long, conflicts_with = "out")]
+        into_chunk: Option<String>,
+        /// With `--into-chunk`: write the change (otherwise it is only previewed).
+        #[arg(long, requires = "into_chunk")]
+        apply: bool,
+        /// Seconds to wait for the node's next beat.
+        #[arg(long, default_value_t = 60)]
+        timeout: u64,
+    },
+    /// Record a pull target's current file as accepted into the vault, so it
+    /// reads `in_sync` until it changes again.
+    Accept { node: String, target: String },
+    /// Hold every push to a node for a human (`required`), or stop (`none`).
+    Policy {
+        node: String,
+        #[arg(long)]
+        approval: String,
+    },
+    /// Approver devices: the key on this machine whose signature a node set to
+    /// `device` approval (and configured with `approver = "…"`) accepts as yours.
+    Approver {
+        #[command(subcommand)]
+        cmd: ApproverCmd,
+    },
+    /// Pushes waiting for a human, with `--all` the decided ones too.
+    Approvals {
+        node: Option<String>,
+        #[arg(long)]
+        all: bool,
+    },
+    /// Approve one held push. Shows the diff against what the node has and the
+    /// hash being approved first (secrets as fingerprints unless `--reveal`);
+    /// `--yes` skips the question for someone who has looked. The approval is for
+    /// those exact bytes and lapses in an hour.
+    Approve { approval: String },
+    /// Reject one held push; the same bytes are not asked about again.
+    Reject { approval: String },
+    /// On the managed host: spend an enrollment token and save this node's
+    /// identity. Nothing is read from the vault.
+    Enroll {
+        /// The hub, `https://…` (or `http://` to the loopback).
+        #[arg(long)]
+        hub: String,
+        /// Read the token from this file (it never appears in argv).
+        #[arg(long)]
+        token_file: Option<PathBuf>,
+        /// Read the token from standard input.
+        #[arg(long)]
+        token_stdin: bool,
+        /// The hub certificate's SHA-256, as `unv-server --tls` prints it.
+        #[arg(long)]
+        hub_fingerprint: Option<String>,
+        /// Learn the hub's certificate and ask you to confirm it by eye.
+        #[arg(long)]
+        tofu: bool,
+        /// Replace an existing identity (revoke the old node on the hub first).
+        #[arg(long)]
+        force: bool,
+        /// Listen for the hub instead of dialling it (a node with a public
+        /// address): bind here, e.g. `0.0.0.0:9443`. Needs `--advertise`.
+        #[arg(long, requires = "advertise")]
+        listen: Option<String>,
+        /// The `https://host:port` the hub should dial. A certificate for this node
+        /// is generated and pinned by the hub at enrollment.
+        #[arg(long, requires = "listen")]
+        advertise: Option<String>,
+        #[arg(long, env = "UNV_NODE_DIR")]
+        state_dir: Option<PathBuf>,
+    },
+    /// On the managed host: beat to the hub and carry out what this node's own
+    /// config allows. Runs until stopped. A node enrolled with `--listen` waits
+    /// for the hub to dial it instead.
+    Run {
+        #[arg(long)]
+        config: PathBuf,
+        /// One beat, then exit (cron, tests).
+        #[arg(long)]
+        once: bool,
+        #[arg(long, env = "UNV_NODE_DIR")]
+        state_dir: Option<PathBuf>,
+    },
+    /// Validate a node config and show what it would report. Contacts no one.
+    Check {
+        #[arg(long)]
+        config: PathBuf,
+    },
+}
+
+#[derive(Subcommand)]
+enum ApproverCmd {
+    /// This machine's approver public key and fingerprint (the key is made on
+    /// first use, 0600). Put the public key in a node's config as `approver`.
+    Show,
+    /// Tell the hub this machine's key counts as your approval (hub, owner only).
+    Register {
+        #[arg(long)]
+        label: String,
+    },
+    /// Devices the hub accepts.
+    Ls,
+    /// Stop accepting a device, by (at least 8 characters of) its fingerprint.
+    Rm { fingerprint: String },
+}
+
+#[derive(Subcommand)]
+enum NodeTokenCmd {
+    /// The token is a one-time credential: written to `--out` (0600), or printed
+    /// only with `--reveal`.
+    New {
+        /// Node name; becomes its identity on the hub.
+        name: String,
+        /// A project this node may be sent. Repeatable; at least one.
+        #[arg(long = "project", required = true)]
+        projects: Vec<String>,
+        /// How long the token lives: `90s`, `15m`, `2h`, `1d`.
+        #[arg(long, default_value = "15m")]
+        ttl: String,
+        #[arg(long)]
+        out: Option<PathBuf>,
     },
 }
 
@@ -907,7 +1165,7 @@ enum CxfCmd {
 
 #[derive(Subcommand)]
 enum EntryCmd {
-    /// List entries (same filters as `envv list`).
+    /// List entries (same filters as `unv list`).
     Ls {
         #[arg(long)]
         project: Option<String>,
@@ -939,7 +1197,7 @@ enum EntryCmd {
         /// Do nothing if an entry with this provider already exists.
         #[arg(long)]
         if_missing: bool,
-        /// Pre-fill from a preset (see `envv template ls`); explicit flags override
+        /// Pre-fill from a preset (see `unv template ls`); explicit flags override
         /// it. Not `--template`: that flag is a composite's `{part}` template.
         #[arg(long)]
         preset: Option<String>,
@@ -1016,10 +1274,10 @@ enum EntryCmd {
     Restore { provider: String, version: usize },
 }
 
-/// `envv totp …` — stored third-party authenticator seeds.
+/// `unv totp …` — stored third-party authenticator seeds.
 ///
-/// Named `EntryTotpCmd` because `TotpCmd` is taken by `envv user totp`, and the
-/// two must never be confused: that one enrolls a factor on an EnvVault login,
+/// Named `EntryTotpCmd` because `TotpCmd` is taken by `unv user totp`, and the
+/// two must never be confused: that one enrolls a factor on an UnENVerse login,
 /// this one reads a seed the vault holds for somebody else's login.
 #[derive(Subcommand)]
 enum EntryTotpCmd {
@@ -1046,7 +1304,7 @@ enum EntryTotpCmd {
     /// provider name) or create a bare `password`-typed one with an empty
     /// primary. Mirrors the desktop Authenticator panel's "Add 2FA" form.
     ///
-    /// Refuses when the target already carries a seed — `envv entry set
+    /// Refuses when the target already carries a seed — `unv entry set
     /// NAME --totp-stdin` is the re-enroll-on-purpose path.
     Add {
         /// Provider name — matched exactly against an existing entry, or used
@@ -1087,7 +1345,7 @@ enum EntryTotpCmd {
     /// Write the otpauth:// URI, for enrolling a replacement phone.
     ///
     /// The URI contains the seed, so it is refused to stdout without --reveal
-    /// and written in full by --out — the same rule `envv export` follows.
+    /// and written in full by --out — the same rule `unv export` follows.
     Uri {
         /// Provider name, or provider:key_id.
         provider: String,
@@ -1132,7 +1390,7 @@ enum EntryTotpCmd {
     /// Write every stored seed in a format another authenticator reads.
     ///
     /// The file is nothing but seeds, so it follows the same rule as
-    /// `envv backup export`: refused to stdout unless --reveal, written 0600
+    /// `unv backup export`: refused to stdout unless --reveal, written 0600
     /// by --out.
     Export {
         /// otpauth (also: ente — its plain export is an otpauth list), aegis, 2fas.
@@ -1156,7 +1414,7 @@ enum PoolCmd {
     /// Take the next usable key and advance the cursor.
     ///
     /// Redacted like every other stdout path — `--reveal` opts in, and
-    /// `envv exec --pool` uses the value without anyone reading it.
+    /// `unv exec --pool` uses the value without anyone reading it.
     Next {
         pool: String,
         /// Print a field other than the secret.
@@ -1165,7 +1423,7 @@ enum PoolCmd {
     },
     /// Report a key as rate limited (or recovered).
     ///
-    /// `envv exec` hands the secret to a child process and never sees the
+    /// `unv exec` hands the secret to a child process and never sees the
     /// child's HTTP responses, so the CLI cannot detect a 429 by itself. The
     /// caller — which did see it — reports it.
     Report {
@@ -1207,7 +1465,7 @@ enum ProjectCmd {
         #[arg(long)]
         slug: Option<String>,
         /// generic (default), wireguard, docker, nginx — or an experimental type with --experimental.
-        #[arg(long = "type", default_value = "generic", value_parser = data::ALL_PROJECT_TYPES)]
+        #[arg(long = "type", default_value = "generic", value_parser = clap::builder::PossibleValuesParser::new(data::all_project_types()))]
         ptype: String,
         #[arg(long)]
         desc: Option<String>,
@@ -1237,7 +1495,7 @@ enum ProjectCmd {
         project: String,
         /// Output format. Defaults to the exporter for the project's own type —
         /// all eleven of them, not the four that used to be wired up.
-        #[arg(long, value_parser = clap::builder::PossibleValuesParser::new(envv_cli::chunks::EXPORT_FORMATS))]
+        #[arg(long, value_parser = clap::builder::PossibleValuesParser::new(envv_cli::chunks::export_formats()))]
         format: Option<String>,
         /// Write to this file instead of stdout (compose also writes .env beside it).
         #[arg(long, short = 'o')]
@@ -1265,7 +1523,7 @@ enum ChunkCmd {
     Add {
         project: String,
         name: String,
-        #[arg(long = "type", value_parser = chunks::CHUNK_TYPES)]
+        #[arg(long = "type", value_parser = clap::builder::PossibleValuesParser::new(chunks::all_chunk_types()))]
         ctype: String,
     },
     /// Delete a chunk.
@@ -1638,8 +1896,10 @@ enum PermCmd {
 /// capability test saw as an empty `describe`. Everything runs on a thread with an
 /// explicit stack instead of relying on the platform default.
 fn main() {
+    // Variables set before the rename (`ENVV_*`) keep working.
+    vault_core::compat::adopt_legacy_env();
     let worker = std::thread::Builder::new()
-        .name("envv".into())
+        .name("unv".into())
         .stack_size(32 * 1024 * 1024)
         .spawn(real_main)
         .expect("cannot start the main worker thread");
@@ -1655,9 +1915,9 @@ fn real_main() {
     // `error` by default, and the default is the whole point: this binary's
     // stdout is a machine-readable contract, and its stderr is what a human or
     // an agent reads when something failed. Logs go to stderr (see
-    // `vault_core::telemetry`), so `ENVV_LOG=debug envv get X --json | jq`
-    // still parses. Raise it with `ENVV_LOG` when diagnosing.
-    vault_core::telemetry::init("envv", "error");
+    // `vault_core::telemetry`), so `UNV_LOG=debug unv get X --json | jq`
+    // still parses. Raise it with `UNV_LOG` when diagnosing.
+    vault_core::telemetry::init("unv", "error");
     tracing::debug!(json = cli.json, dry_run = cli.dry_run, "cli start");
 
     out::init(out::Mode {
@@ -1667,7 +1927,7 @@ fn real_main() {
     });
 
     // Establish who we trust before any client exists. An explicit flag always
-    // wins; otherwise a pin remembered by `envv login --tofu` for this server
+    // wins; otherwise a pin remembered by `unv login --tofu` for this server
     // applies, so pinning survives across invocations without repeating the
     // 64-character flag every time.
     if let Err(e) = envv_cli::tls::configure(cli.fingerprint.as_deref(), cli.ca_cert.as_deref()) {
@@ -1692,7 +1952,7 @@ fn real_main() {
     // password — they are the two commands a caller runs *before* it has one.
     match &cli.command {
         Commands::Completions { shell } => {
-            generate(*shell, &mut Cli::command(), "envv", &mut std::io::stdout());
+            generate(*shell, &mut Cli::command(), "unv", &mut std::io::stdout());
             return;
         }
         Commands::Describe => {
@@ -1712,6 +1972,13 @@ fn real_main() {
         access::set_paths(cli.db_path.clone(), cli.salt_path.clone());
         finish(envv_cli::reset_cmd::run(cli.yes, cli.dry_run));
         return;
+    }
+    // Nor does the agent half of `node`: it runs on a host that has no vault.
+    if let Commands::Node { cmd } = &cli.command {
+        if let Some(r) = run_node_agent_side(cmd) {
+            finish(r);
+            return;
+        }
     }
     // Nor does the catalogue: public reference data, no vault involved.
     if let Commands::Catalogue { cmd } = &cli.command {
@@ -1750,6 +2017,55 @@ fn real_main() {
     finish(run(&cli));
 }
 
+/// The `node` subcommands that run on the managed host. `None` means the
+/// command is a hub command and needs a connection.
+fn run_node_agent_side(cmd: &NodeCmd) -> Option<CliResult> {
+    let dir = |d: &Option<PathBuf>| d.clone().unwrap_or_else(envv_cli::node_agent::default_dir);
+    Some(match cmd {
+        NodeCmd::Enroll {
+            hub,
+            token_file,
+            token_stdin,
+            hub_fingerprint,
+            tofu,
+            force,
+            listen,
+            advertise,
+            state_dir,
+        } => (|| {
+            let token = match (token_file, token_stdin) {
+                (Some(_), true) => {
+                    return Err(CliError::invalid("Pass --token-file or --token-stdin, not both"))
+                }
+                (Some(p), false) => std::fs::read_to_string(p)
+                    .map_err(|e| CliError::not_found(format!("{}: {e}", p.display())))?,
+                (None, true) => fmt::read_stdin()?,
+                (None, false) => {
+                    return Err(CliError::invalid(
+                        "Give the enrollment token with --token-file or --token-stdin (never argv: it would show in `ps`)",
+                    ))
+                }
+            };
+            node_cmd::enroll(
+                &dir(state_dir),
+                hub,
+                token.trim(),
+                hub_fingerprint.as_deref(),
+                *tofu,
+                *force,
+                listen.as_deref().zip(advertise.as_deref()),
+            )
+        })(),
+        NodeCmd::Run {
+            config,
+            once,
+            state_dir,
+        } => node_cmd::run(&dir(state_dir), config, *once),
+        NodeCmd::Check { config } => node_cmd::check(config),
+        _ => return None,
+    })
+}
+
 fn run(cli: &Cli) -> CliResult {
     access::set_paths(cli.db_path.clone(), cli.salt_path.clone());
     envv_cli::envfile::set_naming(
@@ -1777,16 +2093,16 @@ fn run(cli: &Cli) -> CliResult {
         cli.password_file.as_deref(),
         cli.password_command.as_deref(),
     )?
-    .or_else(|| dotenv_get("ENVV_PASSWORD"));
+    .or_else(|| dotenv_get("UNV_PASSWORD"));
 
-    let server = cli.server.clone().or_else(|| dotenv_get("ENVV_SERVER_URL"));
+    let server = cli.server.clone().or_else(|| dotenv_get("UNV_SERVER_URL"));
 
     // A cached session stands in for a password, so an agent can run every
     // command in this CLI without ever holding a credential.
     //
     // `--user` used to disable this, which made the documented flow fail in the
-    // most confusing way available: `envv login --user alice` cached a session,
-    // and then `envv --user alice list` ignored it and prompted for a password
+    // most confusing way available: `unv login --user alice` cached a session,
+    // and then `unv --user alice list` ignored it and prompted for a password
     // every single time — while dropping `--user` worked. Sessions are filed by
     // subject now, so naming the subject selects one instead of suppressing it.
     //
@@ -1878,7 +2194,7 @@ fn run(cli: &Cli) -> CliResult {
                 .map(|s| format!(" --user {s}"))
                 .unwrap_or_default();
             return Err(CliError::denied(format!(
-                "{}\nThe cached session was rejected and has been cleared — run `envv login --server {server}{as_who}` again.",
+                "{}\nThe cached session was rejected and has been cleared — run `unv login --server {server}{as_who}` again.",
                 e.message
             )));
         }
@@ -1908,7 +2224,7 @@ fn finish(result: CliResult) {
 fn cmd_login(cli: &Cli, password: Option<&str>) -> CliResult {
     let Some(server) = cli.server.as_deref() else {
         return Err(CliError::invalid(
-            "`envv login` caches a session for a remote server — pass --server URL.\n\
+            "`unv login` caches a session for a remote server — pass --server URL.\n\
              Local vaults have no session to cache; use --password-command instead.",
         ));
     };
@@ -1927,7 +2243,7 @@ fn cmd_login(cli: &Cli, password: Option<&str>) -> CliResult {
         if let Some(existing) = session::fingerprint(server) {
             return Err(CliError::denied(format!(
                 "{server} already has a pinned certificate ({}…). If it genuinely \n\
-                 rotated, run `envv logout --server {server}` first — but if it did not, \n\
+                 rotated, run `unv logout --server {server}` first — but if it did not, \n\
                  something is presenting a different certificate.",
                 &existing[..16.min(existing.len())]
             )));
@@ -1990,13 +2306,13 @@ fn cmd_login(cli: &Cli, password: Option<&str>) -> CliResult {
 /// command and see whose data came back. A scoped user seeing fewer entries than
 /// expected cannot tell a permission problem from being logged in as the wrong
 /// person.
-/// `envv calendar` — an iCalendar feed of every date in the vault.
+/// `unv calendar` — an iCalendar feed of every date in the vault.
 ///
 /// Unlike the `.env` and config exporters, this one may write to stdout under
 /// the default redacting policy, and that is a deliberate exception rather than
 /// an oversight. Those exporters are refused because a masked `.env` still
 /// *looks* deployable; an `.ics` contains no values to mask in the first place.
-/// It carries names and dates, which `envv list` already prints.
+/// It carries names and dates, which `unv list` already prints.
 fn cmd_calendar(
     a: &Access,
     kinds: &[String],
@@ -2080,13 +2396,13 @@ fn cmd_calendar(
 
 /// `--project` with the per-directory context applied.
 ///
-/// A name that came from a context file or from `ENVV_PROJECT` is validated
+/// A name that came from a context file or from `UNV_PROJECT` is validated
 /// against the vault before it is used, and an explicit flag is not — the flag
 /// is checked by the command itself, and duplicating that here would report the
 /// same problem twice in different words.
 ///
 /// The validation exists because an unresolvable context is invisible
-/// otherwise: `envv list` in a directory pinned to a deleted project would
+/// otherwise: `unv list` in a directory pinned to a deleted project would
 /// simply list everything, which looks exactly like a vault with no scoping at
 /// all. Invariant 7, one directory at a time.
 fn scoped_project(a: &Access, explicit: Option<&str>) -> Result<Option<String>, CliError> {
@@ -2101,7 +2417,7 @@ fn scoped_project(a: &Access, explicit: Option<&str>) -> Result<Option<String>, 
     if envv_cli::context::resolve_in_vault(&vault, name).is_none() {
         return Err(CliError::not_found(format!(
             "This directory is pinned to project '{name}', which is not in the vault.\n\
-             Run `envv use <project>` to point it somewhere real, or `envv use --clear`."
+             Run `unv use <project>` to point it somewhere real, or `unv use --clear`."
         )));
     }
     Ok(resolved)
@@ -2137,12 +2453,12 @@ fn cmd_whoami(cli: &Cli) -> CliResult {
 
     let Some(subject) = subject else {
         return Err(CliError::denied(format!(
-            "No cached session for {server}. Run: envv login --server {server} [--user NAME]"
+            "No cached session for {server}. Run: unv login --server {server} [--user NAME]"
         )));
     };
     let Some(token) = session::load(server, Some(&subject)) else {
         return Err(CliError::denied(format!(
-            "No cached session for {subject} at {server}. Run: envv login --server {server} --user {subject}"
+            "No cached session for {subject} at {server}. Run: unv login --server {server} --user {subject}"
         )));
     };
 
@@ -2261,7 +2577,7 @@ fn cmd_sessions() -> CliResult {
         serde_json::json!({ "sessions": rows, "session_file": session::session_path().display().to_string() }),
         || {
             if rows.is_empty() {
-                println!("No cached sessions. Run: envv login --server URL [--user NAME]");
+                println!("No cached sessions. Run: unv login --server URL [--user NAME]");
                 return;
             }
             for r in &rows {
@@ -2315,7 +2631,7 @@ fn run_gen_offline(cmd: &GenCmd) -> Option<CliResult> {
                             println!("{pw}");
                         } else {
                             println!("{}", out::masked(&pw));
-                            eprintln!("Redacted. Use --reveal to print it, or `envv entry add NAME --generate --generate-format password` to store it directly.");
+                            eprintln!("Redacted. Use --reveal to print it, or `unv entry add NAME --generate --generate-format password` to store it directly.");
                         }
                         eprintln!("{entropy:.0} bits of entropy");
                     },
@@ -2386,7 +2702,7 @@ fn emit_generated(command: &str, value: &str) {
                 println!("{value}");
             } else {
                 println!("{}", out::masked(value));
-                eprintln!("Redacted. Use --reveal to print it, or store it directly with `envv entry add NAME --generate`.");
+                eprintln!("Redacted. Use --reveal to print it, or store it directly with `unv entry add NAME --generate`.");
             }
         },
     );
@@ -2570,6 +2886,113 @@ fn dispatch(cli: &Cli, a: &Access) -> CliResult {
                 *yes,
             ),
             UidCmd::Stats => uid_cmd::stats(a),
+        },
+        Commands::BlastRadius { host, since } => blast_cmd::run(a, host, since.as_deref()),
+        Commands::History { cmd } => match cmd {
+            HistoryCmd::Ls {
+                project,
+                exporter,
+                since,
+                limit,
+            } => history_cmd::ls(
+                a,
+                project.as_deref(),
+                exporter.as_deref(),
+                since.as_deref(),
+                *limit,
+            ),
+            HistoryCmd::Show { seq, out } => history_cmd::show(a, *seq, out.as_deref()),
+            HistoryCmd::DiffFile {
+                file,
+                project,
+                exporter,
+                seq,
+            } => history_cmd::diff_file(a, project.as_deref(), exporter.as_deref(), *seq, file),
+            HistoryCmd::Diff {
+                project,
+                exporter,
+                from,
+                to,
+                out,
+            } => history_cmd::diff(
+                a,
+                project.as_deref(),
+                exporter.as_deref(),
+                *from,
+                *to,
+                out.as_deref(),
+            ),
+            HistoryCmd::Snapshot { project } => history_cmd::snapshot(a, project.as_deref()),
+            HistoryCmd::Prune { keep, days } => history_cmd::prune(a, *keep, *days, yes),
+            HistoryCmd::Verify => history_cmd::verify(a),
+            HistoryCmd::Policy {
+                enable,
+                disable,
+                keep,
+                days,
+            } => history_cmd::policy(
+                a,
+                if *enable {
+                    Some(true)
+                } else if *disable {
+                    Some(false)
+                } else {
+                    None
+                },
+                *keep,
+                *days,
+            ),
+            HistoryCmd::Where { sha256 } => history_cmd::which(a, sha256),
+            HistoryCmd::Stats => history_cmd::stats(a),
+        },
+        Commands::Node { cmd } => match cmd {
+            NodeCmd::Token {
+                cmd:
+                    NodeTokenCmd::New {
+                        name,
+                        projects,
+                        ttl,
+                        out,
+                    },
+            } => node_cmd::token_new(
+                a,
+                name,
+                projects,
+                Some(node_cmd::parse_ttl(ttl)?),
+                out.as_deref(),
+            ),
+            NodeCmd::Ls => node_cmd::ls(a),
+            NodeCmd::Show { node } => node_cmd::show(a, node),
+            NodeCmd::Revoke { node } => node_cmd::revoke(a, node, yes),
+            NodeCmd::Pull {
+                node,
+                target,
+                out,
+                into_chunk,
+                apply,
+                timeout,
+            } => node_cmd::pull(
+                a,
+                node,
+                target,
+                out.as_deref(),
+                into_chunk.as_deref(),
+                *apply,
+                *timeout,
+            ),
+            NodeCmd::Accept { node, target } => node_cmd::accept(a, node, target),
+            NodeCmd::Policy { node, approval } => node_cmd::policy(a, node, approval),
+            NodeCmd::Approver { cmd } => match cmd {
+                ApproverCmd::Show => node_cmd::approver_show(),
+                ApproverCmd::Register { label } => node_cmd::approver_register(a, label),
+                ApproverCmd::Ls => node_cmd::approver_ls(a),
+                ApproverCmd::Rm { fingerprint } => node_cmd::approver_rm(a, fingerprint, yes),
+            },
+            NodeCmd::Approvals { node, all } => node_cmd::approvals(a, node.as_deref(), *all),
+            NodeCmd::Approve { approval } => node_cmd::decide(a, approval, true, yes),
+            NodeCmd::Reject { approval } => node_cmd::decide(a, approval, false, yes),
+            // Agent-side commands are handled before a connection exists.
+            NodeCmd::Enroll { .. } | NodeCmd::Run { .. } | NodeCmd::Check { .. } => Ok(()),
         },
         Commands::Cxf { cmd } => match cmd {
             CxfCmd::Import {
@@ -3016,7 +3439,14 @@ fn dispatch(cli: &Cli, a: &Access) -> CliResult {
             project,
             fail_on,
             json,
-        } => check_cmd::run(a, project.as_deref(), fail_on.as_deref(), *json),
+            all_projects,
+        } => check_cmd::run(
+            a,
+            project.as_deref(),
+            fail_on.as_deref(),
+            *json,
+            *all_projects,
+        ),
         Commands::Scan {
             severity,
             json,
