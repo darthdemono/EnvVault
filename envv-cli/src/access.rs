@@ -1,7 +1,7 @@
-//! Vault access: local SQLCipher DB or a remote `envv-server`, behind one enum.
+//! Vault access: local SQLCipher DB or a remote `unv-server`, behind one enum.
 //!
 //! Every command takes an [`Access`] rather than a connection, so the same code
-//! path serves `envv list` and `envv --server https://… list`.
+//! path serves `unv list` and `unv --server https://… list`.
 
 use crate::error::{CliError, CliResult};
 use std::cell::RefCell;
@@ -185,7 +185,7 @@ impl RemoteClient {
         Self::auth(base, &serde_json::json!({ "token": api_token }))
     }
 
-    /// Adopt an existing session token (from `envv login`).
+    /// Adopt an existing session token (from `unv login`).
     ///
     /// Fallible now that the client carries a TLS policy: a bad `--ca-cert` has
     /// to surface here rather than at the first request, where it would read as
@@ -392,6 +392,20 @@ pub enum Access {
 
 impl Access {
     pub fn load_vault(&self) -> CliResult<serde_json::Value> {
+        let doc = self.load_vault_raw()?;
+        // For the materialisation log (Phase 36): later writers can say which
+        // vault secrets they just handed out.
+        crate::matlog::remember(
+            &doc,
+            &match self {
+                Access::Local(_) => "local".to_string(),
+                Access::Remote(c) => c.base.clone(),
+            },
+        );
+        Ok(doc)
+    }
+
+    fn load_vault_raw(&self) -> CliResult<serde_json::Value> {
         match self {
             Access::Local(key) => {
                 let conn = open_db(&default_db_path(), key)?;
@@ -455,6 +469,9 @@ impl Access {
                     },
                 )
                 .map_err(CliError::from)?;
+                // Phase 35: keep a snapshot of every rendered config this save
+                // changed. Best effort by design; see `history::after_save`.
+                crate::history::after_save(&conn, data, actor.as_deref());
                 // After a save that merged someone else's changes this process's
                 // copy is behind. A second save in the same run must not be
                 // allowed to write that copy back over them, and no real version
@@ -470,6 +487,15 @@ impl Access {
                 Ok(())
             }
             Access::Remote(c) => c.save_vault(data),
+        }
+    }
+
+    /// An open connection to the local vault, or `None` for a remote one. The
+    /// history commands use it to call the shared dispatcher directly.
+    pub fn local_conn(&self) -> CliResult<Option<vault_core::SqlConnection>> {
+        match self {
+            Access::Local(key) => Ok(Some(open_db(&default_db_path(), key)?)),
+            Access::Remote(_) => Ok(None),
         }
     }
 
@@ -500,7 +526,7 @@ pub struct AuthOpts<'a> {
     pub password: Option<&'a str>,
     pub user: Option<&'a str>,
     pub token: Option<&'a str>,
-    /// A session token cached by `envv login`. Used only when no other
+    /// A session token cached by `unv login`. Used only when no other
     /// credential was supplied, so an explicit flag always wins.
     pub session_token: Option<&'a str>,
     /// Second-factor code, for a `--user` login whose account has one enabled.
@@ -534,12 +560,12 @@ pub fn open_access(opts: &AuthOpts<'_>) -> CliResult<Access> {
     }
     if opts.user.is_some() || opts.token.is_some() {
         return Err(CliError::invalid(
-            "--user / --token require --server (they authenticate against envv-server)",
+            "--user / --token require --server (they authenticate against unv-server)",
         ));
     }
     if !default_db_path().exists() && !opts.init {
         return Err(CliError::unavailable(format!(
-            "No vault found at {}\nMake sure EnvVault desktop app has been run at least once, or pass --init to create one here.",
+            "No vault found at {}\nMake sure UnENVerse desktop app has been run at least once, or pass --init to create one here.",
             default_db_path().display()
         )));
     }
