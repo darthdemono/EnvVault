@@ -482,7 +482,7 @@ pub fn cmd_scan(access: &Access, min_severity: &str, json_out: bool) -> CliResul
     Ok(())
 }
 
-/// `envv scan --exposed PATH --out REPORT`.
+/// `unv scan --exposed PATH --out REPORT`.
 ///
 /// The locations are valuable to an attacker, so this is deliberately unlike
 /// the health scan: it is never a stdout report, even with `--reveal`.
@@ -525,7 +525,7 @@ fn hex_encode(bytes: &[u8]) -> String {
 /// the *start* of the log verifies clean, which is the most useful part to erase.
 /// Verify the audit hash chain, returning the number of chained rows checked.
 ///
-/// Split out of `cmd_verify` in Phase 17 so `envv doctor` can run the same
+/// Split out of `cmd_verify` in Phase 17 so `unv doctor` can run the same
 /// check. Two implementations of a tamper check is one too many — the second
 /// one would eventually disagree with the first, and there is no way to tell
 /// which was right.
@@ -624,7 +624,7 @@ pub fn verify_chain(access: &Access) -> CliResult<usize> {
     Ok(chained.len())
 }
 
-/// `envv audit --verify` / `envv scan --verify`.
+/// `unv audit --verify` / `unv scan --verify`.
 pub fn cmd_verify(access: &Access) -> CliResult {
     let checked = verify_chain(access)?;
     if checked == 0 {
@@ -731,12 +731,12 @@ pub fn cmd_status(access: &Access) -> CliResult {
                 println!("Salt        {path}");
                 if *present {
                     println!(
-                        "            Back it up with the database — `envv backup archive` does both.\n\
+                        "            Back it up with the database — `unv backup archive` does both.\n\
                          \x20           A vault.db without its vault.salt cannot be opened by anyone,\n\
                          \x20           including you. Nothing can regenerate it."
                     );
                 } else {
-                    println!("            MISSING — this vault cannot be opened. See `envv backup restore-archive`.");
+                    println!("            MISSING — this vault cannot be opened. See `unv backup restore-archive`.");
                 }
             }
             if !by_type.is_empty() {
