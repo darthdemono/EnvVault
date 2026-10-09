@@ -4616,9 +4616,9 @@ mod tests {
         for _ in 0..10 {
             record_auth_failure(&mut buckets, "ip");
         }
-        // Age the window to the very last moment before it resets.
+        // Leave half a second for scheduling while still testing a sub-second wait.
         buckets.get_mut("ip").unwrap().window_start =
-            Some(Instant::now() - RATE_WINDOW + Duration::from_millis(1));
+            Some(Instant::now() - RATE_WINDOW + Duration::from_millis(500));
         assert_eq!(rate_retry_after(&mut buckets, "ip"), Some(1));
     }
 
