@@ -96,4 +96,19 @@ describe('local_service presets', () => {
     }
     expect(new Set(LOCAL_SERVICE_PRESETS.map((p) => p.id)).size).toBe(LOCAL_SERVICE_PRESETS.length);
   });
+
+  it('Jellyfin sends its key in a MediaBrowser value, and the template round-trips through the auth model', async () => {
+    const jf = LOCAL_SERVICE_PRESETS.find((p) => p.id === 'jellyfin')!;
+    expect(jf).toMatchObject({ scheme: 'header', param: 'Authorization' });
+    expect(jf.template).toContain('{key}');
+    const { authHeaderFor } = await import('../src/ts/auth-request');
+    const h = authHeaderFor({
+      provider: 'Jellyfin',
+      api_key: 'abc123',
+      auth_scheme: 'header',
+      auth_param: jf.param,
+      auth_template: jf.template,
+    } as never);
+    expect(h).toEqual({ name: 'Authorization', value: 'MediaBrowser Token="abc123"' });
+  });
 });
