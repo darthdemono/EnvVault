@@ -237,7 +237,27 @@ def main():
             wd.click(f'[data-tool="{t}"]')
 
         scenario("secrets-grid", lambda: None)
-        scenario("secrets-expanded", lambda: wd.click(".card"))
+        scenario("secrets-expanded", lambda: wd.click("#card-grid > .card"))
+
+        def bundle(expanded):
+            panel("secrets")
+            wd.type("#search", "TMDB")
+            selector = '.bundle-card-wrap[data-bundle="bundle-tmdb"]'
+            wait_for(lambda: wd.exists(selector), what="the TMDB bundle")
+            if wd.js("return document.querySelector(arguments[0]).classList.contains('expanded')", [selector]) != expanded:
+                wd.click(f'{selector} [data-action="bundle-toggle"]')
+            visible = wd.js("return getComputedStyle(document.querySelector(arguments[0] + ' > .pool-card-members')).display !== 'none'", [selector])
+            if visible != expanded:
+                raise RuntimeError("collapsed bundle members are still displayed")
+            if expanded:
+                widths = wd.js("return [document.getElementById('card-grid').getBoundingClientRect().width, document.querySelector(arguments[0]).getBoundingClientRect().width]", [selector])
+                if abs(widths[0] - widths[1]) > 1:
+                    raise RuntimeError("expanded bundle does not span the grid")
+
+        scenario("secrets-bundle-collapsed", lambda: bundle(False))
+        scenario("secrets-bundle-expanded", lambda: bundle(True))
+        if WANT.intersection({"secrets-bundle-collapsed", "secrets-bundle-expanded"}) or not WANT:
+            wd.js("const search = document.getElementById('search'); search.value = ''; search.dispatchEvent(new Event('input', {bubbles: true}))")
         scenario("tools-secret-gen", lambda: tool("secret-gen"))
         scenario("tools-health", lambda: (tool("health"), wd.click("#health-scan-btn")))
         scenario("tools-nodes", lambda: tool("nodes"))
