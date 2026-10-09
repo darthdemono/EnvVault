@@ -343,7 +343,7 @@ pub fn register(
 }
 
 /// Generate-check-register in one call, retrying up to `max_attempts` times on
-/// collision. `generate` is supplied by the caller (`envv-server`), which owns
+/// collision. `generate` is supplied by the caller (`unv-server`), which owns
 /// the id-shape decision this module has no opinion about.
 pub fn mint(
     conn: &Connection,
