@@ -1,4 +1,4 @@
-//! `envv enrich` — fill in an entry's metadata without reading its secret.
+//! `unv enrich` — fill in an entry's metadata without reading its secret.
 //!
 //! A vault filled by importing `.env` files is mostly bare: everything is an
 //! `env_var` called `DATABASE_URL` with no type, no environment, no description
@@ -137,6 +137,8 @@ pub fn bundled_providers() -> Vec<vault_core::catalogue::Provider> {
             docs_url: None,
             rotate_url: None,
             revoke_url: None,
+            verified_on: None,
+            source_url: None,
         })
         .collect()
 }
@@ -446,7 +448,7 @@ const SIGNATURES: &[Signature] = &[
     // A Slack app-level refresh token — same reasoning as `ghr_`.
     sig("xoxe-", "Slack", "oauth_client", "slack", None, None),
     // The browser-session half of Slack's `xoxc-`/`d`-cookie pair. Recognised
-    // alone since `envv enrich` sees one value at a time; the design's fuller
+    // alone since `unv enrich` sees one value at a time; the design's fuller
     // rule (xoxc- is only complete paired with the `d` cookie) needs a second
     // value this scan does not have.
     sig("xoxc-", "Slack", "cookie", "slack", None, None),
@@ -918,19 +920,184 @@ fn pick(body: &Value, paths: &[&str]) -> Option<String> {
 /// would contact no one (no recognised prefix, or a cookie, which is never
 /// probed). Lets the app name every recipient on its consent screen before any
 /// request is made.
-pub fn issuer_for(entry: &Value) -> Option<&'static str> {
+pub fn issuer_for(entry: &Value) -> Option<String> {
     if data::secret_type_of(entry) == "cookie" {
         return None;
     }
     let secret = entry.get("api_key").and_then(|v| v.as_str()).unwrap_or("");
+    if let Some(base) = grafana_base(entry) {
+        // A self-hosted service: name the host, because the host is the recipient.
+        return Some(format!("Grafana at {}", host_of(&base)));
+    }
     PROBES
         .iter()
         .find(|p| p.prefixes.iter().any(|pre| secret.starts_with(pre)))
-        .map(|p| p.issuer)
+        .map(|p| p.issuer.to_string())
+}
+
+// ── Self-hosted Grafana (Phase 38.1, ADR-0148) ──────────────────────────────────────────
+//
+// Every other probe talks to the issuer's own public host. Grafana is run by the
+// user, so the host is the entry's `api_url` - which in an imported or shared
+// vault is attacker-controlled text. The rules that make sending a token there
+// acceptable: the prefix must be a Grafana service-account token (`glsa_`), the
+// URL must be a plain origin with no userinfo or query, `https` goes anywhere, and
+// plain `http` only to a name that cannot be reached from the public internet.
+
+fn host_of(base: &str) -> String {
+    reqwest::Url::parse(base)
+        .ok()
+        .map(|u| match (u.host_str(), u.port()) {
+            (Some(h), Some(p)) => format!("{h}:{p}"),
+            (Some(h), None) => h.to_string(),
+            _ => String::new(),
+        })
+        .unwrap_or_default()
+}
+
+/// A host a plain-`http` request cannot leave the local network to reach.
+fn private_host(host: &str) -> bool {
+    use std::net::IpAddr;
+    let h = host
+        .trim_start_matches('[')
+        .trim_end_matches(']')
+        .to_lowercase();
+    if let Ok(ip) = h.parse::<IpAddr>() {
+        return match ip {
+            IpAddr::V4(v) => v.is_loopback() || v.is_private() || v.is_link_local(),
+            IpAddr::V6(v) => {
+                v.is_loopback()
+                    || (v.segments()[0] & 0xfe00) == 0xfc00
+                    || (v.segments()[0] & 0xffc0) == 0xfe80
+            }
+        };
+    }
+    !h.contains('.')
+        || [".local", ".lan", ".home.arpa", ".internal"]
+            .iter()
+            .any(|suffix| h.ends_with(suffix))
+}
+
+/// The base URL to probe for a Grafana service-account token, or `None`.
+pub fn grafana_base(entry: &Value) -> Option<String> {
+    let secret = entry.get("api_key").and_then(|v| v.as_str()).unwrap_or("");
+    if !secret.starts_with("glsa_") || data::secret_type_of(entry) == "cookie" {
+        return None;
+    }
+    let raw = entry.get("api_url").and_then(|v| v.as_str())?.trim();
+    let url = reqwest::Url::parse(raw).ok()?;
+    if !url.username().is_empty()
+        || url.password().is_some()
+        || url.query().is_some()
+        || url.fragment().is_some()
+    {
+        return None;
+    }
+    let host = url.host_str()?;
+    match url.scheme() {
+        "https" => {}
+        "http" if private_host(host) => {}
+        _ => return None,
+    }
+    Some(raw.trim_end_matches('/').to_string())
+}
+
+/// Ask a Grafana who a service-account token is and which organisation it acts in.
+///
+/// Checked against Grafana 11.2: `/api/user` names the service account, and
+/// `/api/org` the organisation. `/api/user/orgs` (which carries a role) answers a
+/// service-account token with "Endpoint only available for users", and
+/// `/api/serviceaccounts/{id}` needs a permission an ordinary token lacks, so the
+/// role is not available and is not guessed.
+fn probe_grafana(
+    entry: &Value,
+    base: &str,
+    secret: &str,
+    timeout_secs: u64,
+    force: bool,
+) -> Option<Live> {
+    let client = crate::tls::build_public_client(
+        std::time::Duration::from_secs(timeout_secs),
+        concat!("envv/", env!("CARGO_PKG_VERSION")),
+    )
+    .ok()?;
+    let issuer = "Grafana";
+    let who = client
+        .get(format!("{base}/api/user"))
+        .bearer_auth(secret)
+        .send();
+    let resp = match who {
+        Ok(r) => r,
+        Err(e) => {
+            return Some(Live {
+                issuer,
+                status: "unreachable",
+                detail: e.to_string(),
+                proposals: Vec::new(),
+            })
+        }
+    };
+    if !resp.status().is_success() {
+        return Some(Live {
+            issuer,
+            status: "rejected",
+            detail: format!("Grafana at {} answered {}", host_of(base), resp.status()),
+            proposals: Vec::new(),
+        });
+    }
+    let body: Value = resp.json().unwrap_or(Value::Null);
+    let login = pick(&body, &["login", "name"]);
+    // A failure here only costs the organisation name.
+    let org = client
+        .get(format!("{base}/api/org"))
+        .bearer_auth(secret)
+        .send()
+        .ok()
+        .filter(|r| r.status().is_success())
+        .and_then(|r| r.json::<Value>().ok())
+        .and_then(|v| pick(&v, &["name"]));
+
+    let mut proposals = Vec::new();
+    let mut push = |field: &str, value: Value, reason: String| {
+        if force || is_blank(entry, field) {
+            proposals.push(Proposal {
+                field: field.to_string(),
+                value,
+                reason,
+            });
+        }
+    };
+    if let Some(l) = &login {
+        push(
+            "account_name",
+            json!(l),
+            format!("Grafana says this token belongs to {l}"),
+        );
+    }
+    push(
+        "api_description",
+        json!(format!(
+            "Grafana service account token{} - verified {}",
+            org.as_deref()
+                .map(|o| format!(" for {o}"))
+                .unwrap_or_default(),
+            vault_core::iso_now().chars().take(10).collect::<String>()
+        )),
+        format!("confirmed live against {}", host_of(base)),
+    );
+    Some(Live {
+        issuer,
+        status: "ok",
+        detail: login.unwrap_or_else(|| "accepted".into()),
+        proposals,
+    })
 }
 
 pub fn probe_entry(entry: &Value, timeout_secs: u64, force: bool) -> Option<Live> {
     let secret = entry.get("api_key").and_then(|v| v.as_str()).unwrap_or("");
+    if let Some(base) = grafana_base(entry) {
+        return probe_grafana(entry, &base, secret, timeout_secs, force);
+    }
     let probe = PROBES
         .iter()
         .find(|p| p.prefixes.iter().any(|pre| secret.starts_with(pre)))?;
@@ -1324,5 +1491,125 @@ mod axis_tests {
             plan.proposals.iter().all(|p| p.field != "primary_public"),
             "exposure must never propose setting primary_public itself"
         );
+    }
+
+    fn grafana_entry(url: &str) -> Value {
+        json!({ "provider": "Grafana", "api_key": "glsa_exampleexampleexample", "api_url": url })
+    }
+
+    #[test]
+    fn a_grafana_token_is_only_sent_to_a_host_it_is_safe_to_send_it_to() {
+        // https anywhere; http only to names the public internet cannot reach.
+        for ok in [
+            "https://grafana.example.com",
+            "https://grafana.example.com/grafana/",
+            "http://grafana:3000",
+            "http://127.0.0.1:3000",
+            "http://192.168.1.5:3000",
+            "http://grafana.lan",
+            "http://[::1]:3000",
+        ] {
+            assert!(grafana_base(&grafana_entry(ok)).is_some(), "{ok}");
+        }
+        for bad in [
+            "http://grafana.example.com",
+            "http://8.8.8.8",
+            "https://user:pw@grafana.example.com",
+            "https://grafana.example.com/?next=1",
+            "ftp://grafana",
+            "not a url",
+            "",
+        ] {
+            assert!(grafana_base(&grafana_entry(bad)).is_none(), "{bad}");
+        }
+        // Only a service-account token, never a cookie, never another prefix.
+        let mut e = grafana_entry("https://g.example.com");
+        e["api_key"] = json!("ghp_notgrafana");
+        assert!(grafana_base(&e).is_none());
+        let mut e = grafana_entry("https://g.example.com");
+        e["secretType"] = json!("cookie");
+        assert!(grafana_base(&e).is_none());
+        // The consent screen names the host.
+        assert_eq!(
+            issuer_for(&grafana_entry("http://grafana:3000/")).as_deref(),
+            Some("Grafana at grafana:3000")
+        );
+    }
+
+    /// A Grafana that answers the two calls the probe makes and records the
+    /// `Authorization` header it was sent.
+    fn fake_grafana(user_status: u16) -> (String, std::sync::mpsc::Receiver<String>) {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            for _ in 0..2 {
+                let Ok((mut c, _)) = listener.accept() else {
+                    return;
+                };
+                let mut buf = [0u8; 4096];
+                let n = c.read(&mut buf).unwrap_or(0);
+                let req = String::from_utf8_lossy(&buf[..n]).to_string();
+                let auth = req
+                    .lines()
+                    .find(|l| l.to_lowercase().starts_with("authorization:"))
+                    .unwrap_or("")
+                    .to_string();
+                let _ = tx.send(format!("{} | {auth}", req.lines().next().unwrap_or("")));
+                let (status, body) = if req.contains("GET /api/org") {
+                    (200, r#"{"id":1,"name":"Main Org."}"#)
+                } else if user_status == 200 {
+                    (
+                        200,
+                        r#"{"login":"sa-ci","name":"ci","isServiceAccount":true}"#,
+                    )
+                } else {
+                    (user_status, r#"{"message":"Unauthorized"}"#)
+                };
+                let _ = write!(
+                    c,
+                    "HTTP/1.1 {status} X\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+            }
+        });
+        (format!("http://127.0.0.1:{port}"), rx)
+    }
+
+    #[test]
+    fn the_grafana_probe_reads_identity_and_org_and_sends_the_token_as_a_bearer() {
+        let (url, rx) = fake_grafana(200);
+        let live = probe_entry(&grafana_entry(&url), 5, false).unwrap();
+        assert_eq!(live.status, "ok");
+        assert_eq!(live.detail, "sa-ci");
+        let find = |f: &str| {
+            live.proposals
+                .iter()
+                .find(|p| p.field == f)
+                .map(|p| p.value.clone())
+        };
+        assert_eq!(find("account_name"), Some(json!("sa-ci")));
+        assert!(find("api_description")
+            .unwrap()
+            .as_str()
+            .unwrap()
+            .contains("for Main Org."));
+        let first = rx.recv().unwrap();
+        assert!(first.starts_with("GET /api/user "), "{first}");
+        assert!(
+            first
+                .to_lowercase()
+                .contains("bearer glsa_exampleexampleexample"),
+            "{first}"
+        );
+    }
+
+    #[test]
+    fn a_grafana_that_refuses_the_token_is_reported_rejected() {
+        let (url, _rx) = fake_grafana(401);
+        let live = probe_entry(&grafana_entry(&url), 5, false).unwrap();
+        assert_eq!(live.status, "rejected");
+        assert!(live.proposals.is_empty());
     }
 }
