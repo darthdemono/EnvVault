@@ -326,7 +326,7 @@ fn render_to_stdout_is_redacted() {
 /// the real command list — `describe` is generated from whatever `clap`
 /// definition it is handed, so it cannot describe a flag that does not exist.
 #[derive(clap::Parser)]
-#[command(name = "envv", about = "test double")]
+#[command(name = "unv", about = "test double")]
 struct DummyCli {
     /// Emit JSON.
     #[arg(long, global = true)]
@@ -371,7 +371,7 @@ fn describe_documents_every_exit_code_and_the_flags_that_exist() {
         .iter()
         .find(|c| c["name"] == json!("entry"))
         .expect("entry command");
-    assert_eq!(entry["path"], json!("envv entry"));
+    assert_eq!(entry["path"], json!("unv entry"));
     let args = entry["args"].as_array().unwrap();
     let kind = args
         .iter()
@@ -474,7 +474,7 @@ fn a_short_fingerprint_is_rejected_as_input_not_as_a_network_error() {
 ///
 /// Redaction used to be an allow-list of field *names to hide*, so anything not
 /// on it went to stdout verbatim — and a binary reading a vault written by a
-/// newer build is the ordinary case here, not an edge one. A 0.20.0 `envv list
+/// newer build is the ordinary case here, not an edge one. A 0.20.0 `unv list
 /// --json` against a vault holding a Phase 22 seed printed `api_key` as a
 /// fingerprint and `totp_secret` in clear, because the field did not exist when
 /// that binary was compiled. Nothing warned; the seed simply appeared.
