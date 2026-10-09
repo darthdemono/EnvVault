@@ -1,0 +1,667 @@
+{
+  "api_keys": [
+    {
+      "id": "e-scrape",
+      "provider": "PromScrape",
+      "api_key": "424242",
+      "secretType": "api_key",
+      "price_type": "free",
+      "categories": [],
+      "projectIds": [
+        "Universal"
+      ],
+      "scopes": []
+    },
+    {
+      "id": "e-token",
+      "provider": "PromToken",
+      "api_key": "tok_prom_abc123",
+      "secretType": "api_key",
+      "price_type": "free",
+      "categories": [],
+      "projectIds": [
+        "Universal"
+      ],
+      "scopes": []
+    },
+    {
+      "id": "e-rw",
+      "provider": "PromRemote",
+      "api_key": "rw-pass-xyz",
+      "secretType": "api_key",
+      "price_type": "free",
+      "categories": [],
+      "projectIds": [
+        "Universal"
+      ],
+      "scopes": []
+    },
+    {
+      "id": "e-graf",
+      "provider": "GrafanaApi",
+      "api_key": "glsa_graf_token_9",
+      "secretType": "api_key",
+      "price_type": "free",
+      "categories": [],
+      "projectIds": [
+        "Universal"
+      ],
+      "scopes": []
+    },
+    {
+      "id": "e-pg",
+      "provider": "GrafanaPg",
+      "api_key": "pg-password-7",
+      "secretType": "api_key",
+      "price_type": "free",
+      "categories": [],
+      "projectIds": [
+        "Universal"
+      ],
+      "scopes": []
+    },
+    {
+      "id": "e-jf",
+      "provider": "Jellyfin",
+      "api_key": "jf-api-key-1",
+      "secretType": "api_key",
+      "price_type": "free",
+      "categories": [],
+      "projectIds": [
+        "Universal"
+      ],
+      "scopes": []
+    },
+    {
+      "id": "e-sonarr",
+      "provider": "Sonarr",
+      "api_key": "sonarr-key-22",
+      "secretType": "api_key",
+      "price_type": "free",
+      "categories": [],
+      "projectIds": [
+        "Universal"
+      ],
+      "scopes": []
+    }
+  ],
+  "user_categories": [],
+  "projects": [
+    {
+      "id": "prom",
+      "name": "prom",
+      "project_type": "prometheus",
+      "chunks": [
+        {
+          "id": "c1",
+          "name": "global",
+          "chunk_type": "prom_global",
+          "fields": [
+            {
+              "key": "scrape_interval",
+              "value": "15s",
+              "field_type": "var"
+            },
+            {
+              "key": "evaluation_interval",
+              "value": "15s",
+              "field_type": "var"
+            },
+            {
+              "key": "scrape_timeout",
+              "value": "",
+              "field_type": "var"
+            }
+          ]
+        },
+        {
+          "id": "c2",
+          "name": "prometheus",
+          "chunk_type": "prom_scrape",
+          "fields": [
+            {
+              "key": "targets",
+              "value": "localhost:9090",
+              "field_type": "var"
+            },
+            {
+              "key": "metrics_path",
+              "value": "",
+              "field_type": "var"
+            },
+            {
+              "key": "scheme",
+              "value": "",
+              "field_type": "var"
+            },
+            {
+              "key": "username",
+              "value": "",
+              "field_type": "var"
+            },
+            {
+              "key": "password",
+              "value": "",
+              "field_type": "var"
+            },
+            {
+              "key": "bearer_token",
+              "value": "",
+              "field_type": "var"
+            },
+            {
+              "key": "ca_file",
+              "value": "",
+              "field_type": "var"
+            },
+            {
+              "key": "insecure_skip_verify",
+              "value": "",
+              "field_type": "var"
+            }
+          ]
+        },
+        {
+          "id": "c3",
+          "name": "node",
+          "chunk_type": "prom_scrape",
+          "fields": [
+            {
+              "key": "targets",
+              "value": "node1:9100\nnode2:9100",
+              "field_type": "var"
+            },
+            {
+              "key": "metrics_path",
+              "value": "/metrics",
+              "field_type": "var"
+            },
+            {
+              "key": "scheme",
+              "value": "",
+              "field_type": "var"
+            },
+            {
+              "key": "username",
+              "value": "",
+              "field_type": "var"
+            },
+            {
+              "key": "password",
+              "value": "",
+              "field_type": "var"
+            },
+            {
+              "key": "bearer_token",
+              "value": "",
+              "field_type": "var"
+            },
+            {
+              "key": "ca_file",
+              "value": "",
+              "field_type": "var"
+            },
+            {
+              "key": "insecure_skip_verify",
+              "value": "",
+              "field_type": "var"
+            }
+          ]
+        },
+        {
+          "id": "c4",
+          "name": "secured",
+          "chunk_type": "prom_scrape",
+          "fields": [
+            {
+              "key": "targets",
+              "value": "app:8443",
+              "field_type": "var"
+            },
+            {
+              "key": "metrics_path",
+              "value": "",
+              "field_type": "var"
+            },
+            {
+              "key": "scheme",
+              "value": "https",
+              "field_type": "var"
+            },
+            {
+              "key": "username",
+              "value": "scraper",
+              "field_type": "var"
+            },
+            {
+              "key": "password",
+              "value": "${PromScrape}",
+              "field_type": "var"
+            },
+            {
+              "key": "bearer_token",
+              "value": "",
+              "field_type": "var"
+            },
+            {
+              "key": "ca_file",
+              "value": "/etc/prometheus/ca.pem",
+              "field_type": "var"
+            },
+            {
+              "key": "insecure_skip_verify",
+              "value": "false",
+              "field_type": "var"
+            }
+          ]
+        },
+        {
+          "id": "c5",
+          "name": "bearer",
+          "chunk_type": "prom_scrape",
+          "fields": [
+            {
+              "key": "targets",
+              "value": "api:9000, api2:9000",
+              "field_type": "var"
+            },
+            {
+              "key": "metrics_path",
+              "value": "",
+              "field_type": "var"
+            },
+            {
+              "key": "scheme",
+              "value": "https",
+              "field_type": "var"
+            },
+            {
+              "key": "username",
+              "value": "",
+              "field_type": "var"
+            },
+            {
+              "key": "password",
+              "value": "",
+              "field_type": "var"
+            },
+            {
+              "key": "bearer_token",
+              "value": "${PromToken/api_key}",
+              "field_type": "var"
+            },
+            {
+              "key": "ca_file",
+              "value": "",
+              "field_type": "var"
+            },
+            {
+              "key": "insecure_skip_verify",
+              "value": "true",
+              "field_type": "var"
+            }
+          ]
+        },
+        {
+          "id": "c6",
+          "name": "paused",
+          "chunk_type": "prom_scrape",
+          "fields": [
+            {
+              "key": "targets",
+              "value": "old:9100",
+              "field_type": "var"
+            }
+          ],
+          "disabled": true
+        },
+        {
+          "id": "c7",
+          "name": "cloud",
+          "chunk_type": "prom_remote_write",
+          "fields": [
+            {
+              "key": "url",
+              "value": "https://prometheus.example.com/api/v1/write",
+              "field_type": "var"
+            },
+            {
+              "key": "username",
+              "value": "tenant-1",
+              "field_type": "var"
+            },
+            {
+              "key": "password",
+              "value": "${PromRemote}",
+              "field_type": "var"
+            },
+            {
+              "key": "bearer_token",
+              "value": "",
+              "field_type": "var"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "graf",
+      "name": "graf",
+      "project_type": "grafana",
+      "chunks": [
+        {
+          "id": "g1",
+          "name": "Prometheus",
+          "chunk_type": "grafana_datasource",
+          "fields": [
+            {
+              "key": "type",
+              "value": "prometheus",
+              "field_type": "var"
+            },
+            {
+              "key": "url",
+              "value": "http://prometheus:9090",
+              "field_type": "var"
+            },
+            {
+              "key": "access",
+              "value": "proxy",
+              "field_type": "var"
+            },
+            {
+              "key": "is_default",
+              "value": "true",
+              "field_type": "var"
+            },
+            {
+              "key": "basic_auth_user",
+              "value": "",
+              "field_type": "var"
+            },
+            {
+              "key": "basic_auth_password",
+              "value": "",
+              "field_type": "var"
+            },
+            {
+              "key": "api_token",
+              "value": "${GrafanaApi}",
+              "field_type": "var"
+            },
+            {
+              "key": "user",
+              "value": "",
+              "field_type": "var"
+            },
+            {
+              "key": "password",
+              "value": "",
+              "field_type": "var"
+            },
+            {
+              "key": "database",
+              "value": "",
+              "field_type": "var"
+            }
+          ]
+        },
+        {
+          "id": "g2",
+          "name": "Postgres",
+          "chunk_type": "grafana_datasource",
+          "fields": [
+            {
+              "key": "type",
+              "value": "postgres",
+              "field_type": "var"
+            },
+            {
+              "key": "url",
+              "value": "db:5432",
+              "field_type": "var"
+            },
+            {
+              "key": "access",
+              "value": "proxy",
+              "field_type": "var"
+            },
+            {
+              "key": "is_default",
+              "value": "",
+              "field_type": "var"
+            },
+            {
+              "key": "basic_auth_user",
+              "value": "",
+              "field_type": "var"
+            },
+            {
+              "key": "basic_auth_password",
+              "value": "",
+              "field_type": "var"
+            },
+            {
+              "key": "api_token",
+              "value": "",
+              "field_type": "var"
+            },
+            {
+              "key": "user",
+              "value": "grafana",
+              "field_type": "var"
+            },
+            {
+              "key": "password",
+              "value": "${GrafanaPg}",
+              "field_type": "var"
+            },
+            {
+              "key": "database",
+              "value": "app",
+              "field_type": "var"
+            }
+          ]
+        },
+        {
+          "id": "g3",
+          "name": "Old",
+          "chunk_type": "grafana_datasource",
+          "fields": [
+            {
+              "key": "type",
+              "value": "loki",
+              "field_type": "var"
+            },
+            {
+              "key": "url",
+              "value": "http://loki:3100",
+              "field_type": "var"
+            }
+          ],
+          "disabled": true
+        }
+      ]
+    },
+    {
+      "id": "home",
+      "name": "home",
+      "project_type": "homepage",
+      "chunks": [
+        {
+          "id": "h1",
+          "name": "Jellyfin",
+          "chunk_type": "homepage_service",
+          "fields": [
+            {
+              "key": "group",
+              "value": "Media",
+              "field_type": "var"
+            },
+            {
+              "key": "href",
+              "value": "http://jellyfin:8096",
+              "field_type": "var"
+            },
+            {
+              "key": "icon",
+              "value": "jellyfin.png",
+              "field_type": "var"
+            },
+            {
+              "key": "description",
+              "value": "Movies and shows",
+              "field_type": "var"
+            },
+            {
+              "key": "widget_type",
+              "value": "jellyfin",
+              "field_type": "var"
+            },
+            {
+              "key": "widget_url",
+              "value": "http://jellyfin:8096",
+              "field_type": "var"
+            },
+            {
+              "key": "widget_key",
+              "value": "${Jellyfin}",
+              "field_type": "var"
+            },
+            {
+              "key": "widget_username",
+              "value": "",
+              "field_type": "var"
+            },
+            {
+              "key": "widget_password",
+              "value": "",
+              "field_type": "var"
+            }
+          ]
+        },
+        {
+          "id": "h2",
+          "name": "Pi-hole",
+          "chunk_type": "homepage_service",
+          "fields": [
+            {
+              "key": "group",
+              "value": "Network",
+              "field_type": "var"
+            },
+            {
+              "key": "href",
+              "value": "http://pi.hole/admin",
+              "field_type": "var"
+            },
+            {
+              "key": "icon",
+              "value": "",
+              "field_type": "var"
+            },
+            {
+              "key": "description",
+              "value": "",
+              "field_type": "var"
+            },
+            {
+              "key": "widget_type",
+              "value": "",
+              "field_type": "var"
+            },
+            {
+              "key": "widget_url",
+              "value": "",
+              "field_type": "var"
+            },
+            {
+              "key": "widget_key",
+              "value": "",
+              "field_type": "var"
+            },
+            {
+              "key": "widget_username",
+              "value": "",
+              "field_type": "var"
+            },
+            {
+              "key": "widget_password",
+              "value": "",
+              "field_type": "var"
+            }
+          ]
+        },
+        {
+          "id": "h3",
+          "name": "Sonarr",
+          "chunk_type": "homepage_service",
+          "fields": [
+            {
+              "key": "group",
+              "value": "Media",
+              "field_type": "var"
+            },
+            {
+              "key": "href",
+              "value": "",
+              "field_type": "var"
+            },
+            {
+              "key": "icon",
+              "value": "sonarr.png",
+              "field_type": "var"
+            },
+            {
+              "key": "description",
+              "value": "",
+              "field_type": "var"
+            },
+            {
+              "key": "widget_type",
+              "value": "sonarr",
+              "field_type": "var"
+            },
+            {
+              "key": "widget_url",
+              "value": "http://sonarr:8989",
+              "field_type": "var"
+            },
+            {
+              "key": "widget_key",
+              "value": "${Sonarr}",
+              "field_type": "var"
+            },
+            {
+              "key": "widget_username",
+              "value": "",
+              "field_type": "var"
+            },
+            {
+              "key": "widget_password",
+              "value": "",
+              "field_type": "var"
+            }
+          ]
+        },
+        {
+          "id": "h4",
+          "name": "Bare",
+          "chunk_type": "homepage_service",
+          "fields": [
+            {
+              "key": "group",
+              "value": "",
+              "field_type": "var"
+            },
+            {
+              "key": "href",
+              "value": "http://bare.local",
+              "field_type": "var"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
