@@ -13,6 +13,7 @@ import { join } from 'node:path';
 import { st, resetViewState } from '../src/ts/state';
 import { render } from '../src/ts/render';
 import * as starters from '../src/ts/chunks/starters';
+import { stackAdapter, stackStarterChunks } from '../src/ts/stack';
 import type { ProjectType, SecretChunk } from '../src/ts/types';
 import { clearTransient, judge, probeKinds, type KindReport } from './probe';
 import { loadRealIndexHtml, makeEntry, makeProject, makeVault, resetState } from './helpers';
@@ -32,6 +33,10 @@ const factories: Record<string, () => SecretChunk[]> = {
   haproxy: starters.makeHaproxyStarterChunks,
   ansible: starters.makeAnsibleStarterChunks,
   postgres: starters.makePostgresStarterChunks,
+  // Stack integrations (Phase 38): starters come from their descriptors.
+  prometheus: () => stackStarterChunks(stackAdapter('prometheus')!),
+  grafana: () => stackStarterChunks(stackAdapter('grafana')!),
+  homepage: () => stackStarterChunks(stackAdapter('homepage')!),
 };
 
 /**
