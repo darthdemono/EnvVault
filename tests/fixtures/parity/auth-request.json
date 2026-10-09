@@ -4,7 +4,7 @@
     "src/ts/auth-request.ts and envv-cli/src/authreq.rs.",
     "",
     "A seventh twin pair. It exists twice because the app's \"Copy as request",
-    "header\" builds the header with no Rust in the loop, and `envv curl` builds",
+    "header\" builds the header with no Rust in the loop, and `unv curl` builds",
     "the same one from the terminal — and a header that differs between them is",
     "a request that works from one half of the product and 401s from the other,",
     "with the API explaining neither.",
@@ -110,6 +110,42 @@
       "url_in": "https://svc.example/",
       "url_out": "https://svc.example/",
       "curl": "curl 'https://svc.example/'"
+    },
+    {
+      "why": "a header value template places the key (Jellyfin's MediaBrowser scheme)",
+      "entry": {"provider": "Jellyfin", "api_key": "abc123", "auth_scheme": "header", "auth_param": "Authorization", "auth_template": "MediaBrowser Token=\"{key}\""},
+      "header": ["Authorization", "MediaBrowser Token=\"abc123\""],
+      "query": null,
+      "url_in": "https://jf.example/Users",
+      "url_out": "https://jf.example/Users",
+      "curl": "curl -H 'Authorization: MediaBrowser Token=\"abc123\"' 'https://jf.example/Users'"
+    },
+    {
+      "why": "a template without {key} is ignored, not guessed at",
+      "entry": {"provider": "Svc", "api_key": "abc123", "auth_scheme": "header", "auth_param": "Authorization", "auth_template": "Token fixed"},
+      "header": ["Authorization", "abc123"],
+      "query": null,
+      "url_in": "https://jf.example/Users",
+      "url_out": "https://jf.example/Users",
+      "curl": "curl -H 'Authorization: abc123' 'https://jf.example/Users'"
+    },
+    {
+      "why": "a template with a line break is ignored (header injection)",
+      "entry": {"provider": "Svc", "api_key": "abc123", "auth_scheme": "header", "auth_param": "X-K", "auth_template": "a {key}\r\nX-Evil: 1"},
+      "header": ["X-K", "abc123"],
+      "query": null,
+      "url_in": "https://jf.example/Users",
+      "url_out": "https://jf.example/Users",
+      "curl": "curl -H 'X-K: abc123' 'https://jf.example/Users'"
+    },
+    {
+      "why": "a template means nothing for bearer",
+      "entry": {"provider": "Svc", "api_key": "abc123", "auth_scheme": "bearer", "auth_template": "MediaBrowser Token=\"{key}\""},
+      "header": ["Authorization", "Bearer abc123"],
+      "query": null,
+      "url_in": "https://jf.example/Users",
+      "url_out": "https://jf.example/Users",
+      "curl": "curl -H 'Authorization: Bearer abc123' 'https://jf.example/Users'"
     }
   ],
 
