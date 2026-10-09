@@ -181,7 +181,7 @@ function buildSteps(): Step[] {
   return [
     {
       id: 'welcome',
-      title: 'Welcome to EnvVault',
+      title: 'Welcome to UnENVerse',
       blurb: 'Four short steps. You can skip them and change everything later.',
       render: () =>
         html` <ul class="onboard-facts">
@@ -278,8 +278,8 @@ function buildSteps(): Step[] {
             <button class="btn btn-sm" id="onboard-import">Import a .env file</button>
           </div>
           <p class="onboard-note">
-            Everything here is also on the command line — <code>envv entry add</code> and
-            <code>envv import</code>. The two halves are kept at deliberate parity, so anything you
+            Everything here is also on the command line — <code>unv entry add</code> and
+            <code>unv import</code>. The two halves are kept at deliberate parity, so anything you
             can do in one you can script in the other.
           </p>`;
       },
