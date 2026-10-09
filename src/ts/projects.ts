@@ -19,6 +19,7 @@ import {
   makeAnsibleStarterChunks,
   makePostgresStarterChunks,
 } from './chunk-ops';
+import { stackAdapter, stackStarterChunks } from './stack';
 
 // ── Filter setter ─────────────────────────────────────────────────────────
 
@@ -391,6 +392,9 @@ export function saveProjectCreate() {
     newProject.chunks = makeAnsibleStarterChunks();
   } else if (_projectCreateType === 'postgres') {
     newProject.chunks = makePostgresStarterChunks();
+  } else if (stackAdapter(_projectCreateType)) {
+    // Prometheus, Grafana, Homepage: the descriptor says what a new project starts with.
+    newProject.chunks = stackStarterChunks(stackAdapter(_projectCreateType)!);
   }
 
   const nameParts = trimmed.split('/');
