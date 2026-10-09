@@ -12,6 +12,6 @@ and disclosure timeline with the reporter.
 
 ## Scope
 
-EnvVault's encrypted storage, desktop IPC, CLI redaction, server API,
+UnENVerse's encrypted storage, desktop IPC, CLI redaction, server API,
 authentication, authorization, and release artefacts are in scope. Please test
 only against vaults and systems you own or are authorised to assess.
