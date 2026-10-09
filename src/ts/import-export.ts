@@ -476,6 +476,7 @@ export function handleFileSelect(input: HTMLInputElement) {
           key: v.key,
           value: v.value,
           kind: v.kind,
+          ...(v.public ? { public: true } : {}),
         }));
         st.vault.api_keys.push(bundle);
         await persist();
