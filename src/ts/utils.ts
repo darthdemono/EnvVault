@@ -2,49 +2,6 @@
 import { invokeTauri, isTauri } from './tauri';
 import { raw } from './html';
 
-/** Escape for HTML *text* content. */
-export function esc(s: unknown): string {
-  if (s == null) return '';
-  const text =
-    typeof s === 'string'
-      ? s
-      : typeof s === 'number' || typeof s === 'boolean' || typeof s === 'bigint'
-        ? String(s)
-        : (JSON.stringify(s) ?? '');
-  return text
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
-}
-
-/**
- * Escape for an HTML *attribute* value.
- *
- * `&` MUST be escaped first and always. This function used to escape only
- * backslash, `'` and `"` — leftovers from the pre-Phase-3 era when values were
- * interpolated into `onclick="..."` JavaScript string literals. That context no
- * longer exists, and leaving `&` raw was actively corrupting data: a secret
- * containing the literal text `&amp;` round-tripped through
- * `data-value="..."` as `&`, so **copy-to-clipboard silently returned the wrong
- * secret**. Any `&`-prefixed entity-looking sequence hit the same bug.
- */
-export function escAttr(s: unknown): string {
-  if (s == null) return '';
-  const text =
-    typeof s === 'string'
-      ? s
-      : typeof s === 'number' || typeof s === 'boolean' || typeof s === 'bigint'
-        ? String(s)
-        : (JSON.stringify(s) ?? '');
-  return text
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
-}
-
 export function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
@@ -263,7 +220,19 @@ export function showPromptLarge(msg: string, defaultVal = ''): Promise<string | 
 }
 
 // ── Clipboard ──────────────────────────────────────────────────────────────
+let copyObserver: ((text: string) => void) | null = null;
+
+/** Called with every string the app puts on the clipboard (the materialisation log). */
+export function onClipboardWrite(fn: ((text: string) => void) | null): void {
+  copyObserver = fn;
+}
+
 export async function clipboardWrite(text: string): Promise<void> {
+  try {
+    copyObserver?.(text);
+  } catch {
+    /* a log that fails must not fail a copy */
+  }
   if (navigator.clipboard?.writeText)
     return navigator.clipboard.writeText(text).catch(() => execCopy(text));
   return execCopy(text);
