@@ -1,12 +1,14 @@
-//! `envv reset-vault` (Phase 33.5): refuses without `--yes` off a terminal, and
+//! `unv reset-vault` (Phase 33.5): refuses without `--yes` off a terminal, and
 //! removes exactly the vault and its salt.
 use std::process::{Command, Stdio};
 
-fn envv(dir: &std::path::Path, args: &[&str]) -> std::process::Output {
-    Command::new(env!("CARGO_BIN_EXE_envv"))
+fn unv(dir: &std::path::Path, args: &[&str]) -> std::process::Output {
+    Command::new(env!("CARGO_BIN_EXE_unv"))
+        .env_remove("UNV_SERVER_URL")
         .env_remove("ENVV_SERVER_URL")
+        .env_remove("UNV_ENV_FILE")
         .env_remove("ENVV_ENV_FILE")
-        .env("ENVV_PASSWORD", "scratch-pass-123456")
+        .env("UNV_PASSWORD", "scratch-pass-123456")
         .stdin(Stdio::null())
         .arg("--db-path")
         .arg(dir.join("vault.db"))
@@ -19,19 +21,19 @@ fn envv(dir: &std::path::Path, args: &[&str]) -> std::process::Output {
 fn reset_needs_confirmation_and_removes_only_the_vault() {
     let dir = std::env::temp_dir().join(format!("envv-reset-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
-    assert!(envv(&dir, &["--init", "entry", "add", "A", "--key", "k"])
+    assert!(unv(&dir, &["--init", "entry", "add", "A", "--key", "k"])
         .status
         .success());
     std::fs::write(dir.join("vault.db.v1.bak"), b"backup").unwrap();
 
-    let refused = envv(&dir, &["reset-vault"]);
+    let refused = unv(&dir, &["reset-vault"]);
     assert_eq!(refused.status.code(), Some(8), "no terminal, no --yes");
     assert!(dir.join("vault.db").exists());
 
-    assert!(envv(&dir, &["reset-vault", "--dry-run"]).status.success());
+    assert!(unv(&dir, &["reset-vault", "--dry-run"]).status.success());
     assert!(dir.join("vault.db").exists(), "dry run removes nothing");
 
-    assert!(envv(&dir, &["reset-vault", "--yes"]).status.success());
+    assert!(unv(&dir, &["reset-vault", "--yes"]).status.success());
     assert!(!dir.join("vault.db").exists());
     assert!(!dir.join("vault.salt").exists());
     assert!(
