@@ -1,6 +1,6 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "title": "EnvVault Data",
+  "title": "UnENVerse Data",
   "description": "Root structure of the encrypted vault database. The UI reads this file to populate form tooltips. Field names match data-field attributes on form labels in index.html.",
   "type": "object",
   "required": ["api_keys", "user_categories", "projects"],
@@ -146,7 +146,7 @@
           },
           "pool": {
             "type": ["string", "null"],
-            "description": "Key pool this entry belongs to. Entries sharing a pool name are interchangeable credentials swapped between by `envv get --pool` and `envv exec --pool` when one is rate limited. Membership is explicit; two keys for the same provider do not pool automatically.",
+            "description": "Key pool this entry belongs to. Entries sharing a pool name are interchangeable credentials swapped between by `unv get --pool` and `unv exec --pool` when one is rate limited. Membership is explicit; two keys for the same provider do not pool automatically.",
             "default": null
           },
           "version": {
