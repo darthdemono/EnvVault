@@ -1,4 +1,4 @@
-//! EnvVault — Tauri backend.
+//! UnENVerse — Tauri backend.
 //!
 //! Thin wrappers around `vault-core`; resolves filesystem paths via Tauri's
 //! `AppHandle` and exposes each operation as a `#[tauri::command]`.
@@ -227,14 +227,154 @@ mod commands {
         // Local desktop edits are always the owner acting directly; attribute
         // them to the owner row so the audit log is uniform with the server's.
         let actor = vault_core::ensure_owner_user(&conn).ok();
-        vault_core::save_vault(
+        // Phase 35: the config history renders from the document that was saved.
+        let for_history = data.clone();
+        let version = vault_core::save_vault(
             &conn,
             data,
             vault_core::SaveCtx {
                 actor: actor.as_deref(),
                 expect_version: expect_version.as_deref(),
             },
+        )?;
+        // Best effort: a history that cannot record is logged, never a failed save.
+        envv_cli::history::after_save(&conn, &for_history, actor.as_deref());
+        Ok(version)
+    }
+
+    /// Phase 30.1: save a delta (see `vault_core::apply_row_patch`) instead of the
+    /// whole document. Same compare-and-swap, audit and history as `save_vault`.
+    #[tauri::command]
+    pub fn save_vault_rows(
+        app: AppHandle,
+        state: State<VaultState>,
+        patch: serde_json::Value,
+        expect_version: Option<String>,
+    ) -> Result<String, String> {
+        let g = state.0.lock().map_err(|_| "State lock poisoned")?;
+        let key = g.as_ref().ok_or("Vault is locked")?;
+        let conn = vault_core::open_db(&db_path(&app)?, key)?;
+        let actor = vault_core::ensure_owner_user(&conn).ok();
+        let doc = vault_core::load_vault(&conn)?.unwrap_or_else(
+            || serde_json::json!({ "api_keys": [], "user_categories": [], "projects": [] }),
+        );
+        let data = vault_core::apply_row_patch(doc, &patch)?;
+        let for_history = data.clone();
+        let version = vault_core::save_vault(
+            &conn,
+            data,
+            vault_core::SaveCtx {
+                actor: actor.as_deref(),
+                expect_version: expect_version.as_deref(),
+            },
+        )?;
+        envv_cli::history::after_save(&conn, &for_history, actor.as_deref());
+        Ok(version)
+    }
+
+    /// Phase 24.5: what an OpenPGP key says about itself (`gpg_key`). Pure over
+    /// its argument. Public values only: fingerprint, key id, user ids and when it
+    /// expires; the private half is never read.
+    #[tauri::command]
+    pub fn pgp_inspect(text: String) -> Result<serde_json::Value, String> {
+        let k = vault_core::pgp::inspect(text.as_bytes())?;
+        Ok(serde_json::json!({
+            "fingerprint": k.primary.fingerprint,
+            "key_id": k.primary.key_id,
+            "user_ids": k.user_ids,
+            "expires_at": k.soonest_expiry().map(vault_core::pgp::iso),
+        }))
+    }
+
+    /// Phase 34: what reading a pulled `.env` file back into an `env_file` chunk
+    /// would change. Pure over its arguments (the chunk's fields and the text), so
+    /// it needs no vault key and the rules are the CLI's, once. Returns names
+    /// only, plus the fields the chunk would have afterwards.
+    #[tauri::command]
+    pub fn env_import_plan(fields: Vec<serde_json::Value>, text: String) -> serde_json::Value {
+        let vars = envv_cli::envfile::parse_env_file(&text);
+        let plan = envv_cli::node_cmd::plan_env_import(&fields, &vars);
+        serde_json::json!({
+            "fields": plan.fields, "added": plan.added, "changed": plan.changed,
+            "removed": plan.removed, "kept_references": plan.kept_references,
+        })
+    }
+
+    /// Phase 36: the app's clipboard writes, for the materialisation log that
+    /// `unv blast-radius --host local` reads. The renderer sends the text it just
+    /// copied and the vault it holds; Rust records which vault secrets that text
+    /// contained, as entry, field and fingerprint, never the value, and writes
+    /// nothing when it contained none. Best effort: it never fails a copy.
+    #[tauri::command]
+    pub fn matlog_note(text: String, note: String, vault: serde_json::Value) {
+        if text.len() > 1 << 20 {
+            return;
+        }
+        envv_cli::matlog::remember(&vault, "app");
+        envv_cli::matlog::note("clipboard", &note, &text);
+    }
+
+    /// Phase 37.1: this machine's approver public key and fingerprint, the key made
+    /// on first use. The seed never crosses this boundary; only signatures do. The
+    /// CLI reads the same file (`unv node approver show`).
+    #[tauri::command]
+    pub fn approver_public(app: AppHandle) -> Result<serde_json::Value, String> {
+        let dir = db_path(&app)?
+            .parent()
+            .map(std::path::Path::to_path_buf)
+            .ok_or("no data directory")?;
+        let seed = vault_core::nodes::approver_seed(&dir)?;
+        let public = vault_core::nodes::hub_public(&seed)?;
+        let fingerprint = vault_core::nodes::key_fingerprint(&public)?;
+        Ok(serde_json::json!({ "public_key": public, "fingerprint": fingerprint }))
+    }
+
+    /// Phase 37.1: sign a yes for exactly one held push with this machine's
+    /// approver key. The renderer names the request; the token (lifetime, nonce,
+    /// approver) is built here, so a compromised page cannot choose any of them.
+    #[tauri::command]
+    pub fn approver_sign(
+        app: AppHandle,
+        node_id: String,
+        target: String,
+        sha256: String,
+        approval_id: String,
+    ) -> Result<vault_core::nodes::SignedApproval, String> {
+        let dir = db_path(&app)?
+            .parent()
+            .map(std::path::Path::to_path_buf)
+            .ok_or("no data directory")?;
+        let seed = vault_core::nodes::approver_seed(&dir)?;
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs() as i64);
+        vault_core::nodes::sign_device_approval(
+            &seed,
+            &node_id,
+            &target,
+            &sha256,
+            &approval_id,
+            now,
+            &vault_core::iso_now(),
         )
+    }
+
+    /// One config-history operation (Phase 35, ADR-0141). The desktop app, the
+    /// server's `POST /api/history` and `unv history` all call the same
+    /// dispatcher, so the three cannot disagree. Local vault only: a remote
+    /// vault's history is reached over HTTP by the frontend.
+    #[tauri::command]
+    pub fn history_call(
+        app: AppHandle,
+        state: State<VaultState>,
+        op: String,
+        args: serde_json::Value,
+    ) -> Result<serde_json::Value, String> {
+        let g = state.0.lock().map_err(|_| "State lock poisoned")?;
+        let key = g.as_ref().ok_or("Vault is locked")?;
+        let conn = vault_core::open_db(&db_path(&app)?, key)?;
+        let actor = vault_core::ensure_owner_user(&conn).ok();
+        envv_cli::history::call(&conn, &op, &args, actor.as_deref())
     }
 
     /// The version marker of what is on disk right now.
@@ -245,8 +385,8 @@ mod commands {
     /// indexed `SELECT` against a table with a handful of rows.
     ///
     /// It exists because the desktop app holds the vault in memory and had no
-    /// way to learn that something else had written to it: `envv entry set` from
-    /// a terminal, `envv totp advance`, or a LAN peer would change the database
+    /// way to learn that something else had written to it: `unv entry set` from
+    /// a terminal, `unv totp advance`, or a LAN peer would change the database
     /// under an app that went on showing — and saving — what it read at unlock.
     /// The app polls this and reloads when it moves (`src/ts/vault-watch.ts`).
     ///
@@ -379,7 +519,7 @@ mod commands {
 
     /// Picks the next non-cooling member, round-robin, and advances the
     /// cursor — Phase 24.2's pool card Copy button, and the pure IPC twin of
-    /// `envv pool next` / `envv get --pool`. `None` when every member is
+    /// `unv pool next` / `unv get --pool`. `None` when every member is
     /// cooling, so the caller can say so rather than copying nothing with no
     /// explanation.
     #[tauri::command]
@@ -509,10 +649,10 @@ mod commands {
             .collect()
     }
 
-    /// Phase 33.3: `envv backup archive` in the app. Returns the encrypted
+    /// Phase 33.3: `unv backup archive` in the app. Returns the encrypted
     /// `.vaultarc` text for the caller to save with `saveFile` (0600). The vault's
     /// connections are opened and closed per command, so the file on disk is whole;
-    /// an archive taken while another process (a LAN server, `envv`) is mid-write
+    /// an archive taken while another process (a LAN server, `unv`) is mid-write
     /// could still miss its last pages, so the pane says to lock first.
     #[tauri::command]
     pub fn backup_archive_build(app: AppHandle, password: String) -> Result<String, String> {
@@ -523,7 +663,7 @@ mod commands {
             .map_err(|e| e.message)
     }
 
-    /// Phase 33.3: `envv backup restore-archive` in the app. Verifies the archive
+    /// Phase 33.3: `unv backup restore-archive` in the app. Verifies the archive
     /// (password, checksums, salt length) before touching a file, then stops the
     /// LAN server, zeroizes the in-memory key like `reset_vault`, writes the salt
     /// first (a salt without a database is recoverable, the reverse is not), then
@@ -556,7 +696,7 @@ mod commands {
         Ok(())
     }
 
-    /// Phase 33.3: `envv import-vault` in the app. Pure over its arguments (the
+    /// Phase 33.3: `unv import-vault` in the app. Pure over its arguments (the
     /// renderer holds the decrypted vault, the A1 rule): parses a Bitwarden,
     /// 1Password or Proton export and returns what importing would do, plus the
     /// entry array after it. Nothing is written here; the caller applies it with
@@ -569,8 +709,7 @@ mod commands {
         project: Option<String>,
         keep_folders: bool,
     ) -> Result<serde_json::Value, String> {
-        let doc: serde_json::Value = serde_json::from_str(&text)
-            .map_err(|e| format!("Not JSON: {e}. Export from {vendor} in JSON format."))?;
+        let (doc, warnings) = envv_cli::import_vaults::source_value(&vendor, &text)?;
         let opts = envv_cli::import_vaults::ImportOpts {
             apply: false,
             project: project.as_deref(),
@@ -582,6 +721,7 @@ mod commands {
         Ok(serde_json::json!({
             "entries": plan.entries, "created": plan.created, "updated": plan.updated,
             "unchanged": plan.unchanged, "skipped": plan.skipped, "preview": plan.preview,
+            "warnings": warnings,
         }))
     }
 
@@ -813,7 +953,7 @@ mod commands {
         let g = state.0.lock().map_err(|_| "State lock poisoned")?;
         let key = g.as_ref().ok_or("Vault is locked")?;
         let conn = vault_core::open_db(&db_path(&app)?, key)?;
-        vault_core::users::totp_enroll(&conn, &user_id, "EnvVault")
+        vault_core::users::totp_enroll(&conn, &user_id, "UnENVerse")
     }
 
     #[tauri::command]
@@ -845,7 +985,7 @@ mod commands {
     //
     // The *other* TOTP: a seed a third-party service issued, held on an entry,
     // from which we generate the code the user types into that service. Above is
-    // the second factor on EnvVault's own login; the two never meet.
+    // the second factor on UnENVerse's own login; the two never meet.
 
     /// The code an entry's stored seed produces right now, with its countdown.
     ///
@@ -882,7 +1022,7 @@ mod commands {
         // other two callers of that one rule. Reading them here instead meant
         // this command answered an out-of-range `digits` with an error where the
         // CLI answered with a code, so the same entry showed a blank card and a
-        // working `envv totp code`.
+        // working `unv totp code`.
         let params = vault_core::totp::Params::from_fields(
             kind.as_deref(),
             algorithm.as_deref(),
@@ -895,16 +1035,21 @@ mod commands {
 
     /// Phase 29: the cross-chunk checks. Pure over its arguments, so it needs no
     /// vault key and works on a remote session (the A1 rule). The rules live in
-    /// `vault_core::config_check`, which `envv check` calls too.
+    /// `vault_core::config_check`, which `unv check` calls too.
     #[tauri::command]
     pub fn config_check_project(
         project: serde_json::Value,
         vault_names: Vec<String>,
+        elsewhere: Option<Vec<String>>,
     ) -> Vec<serde_json::Value> {
-        vault_core::config_check::check_project(&project, &vault_names)
-            .iter()
-            .map(vault_core::config_check::Finding::to_json)
-            .collect()
+        vault_core::config_check::check_project_scoped(
+            &project,
+            &vault_names,
+            &elsewhere.unwrap_or_default(),
+        )
+        .iter()
+        .map(vault_core::config_check::Finding::to_json)
+        .collect()
     }
 
     #[tauri::command]
@@ -915,7 +1060,7 @@ mod commands {
     /// Parses a DevTools capture (Copy as cURL, HAR, Set-Cookie lines) into
     /// cookies, a User-Agent and the headers worth keeping — Phase 24.5. Pure
     /// over its arguments, like `parse_toml_import`: one implementation in
-    /// `vault_core::session_import`, shared with `envv cookie import`.
+    /// `vault_core::session_import`, shared with `unv cookie import`.
     #[tauri::command]
     pub fn session_capture_parse(
         text: String,
@@ -932,7 +1077,7 @@ mod commands {
     /// before using the token**, because a rotating issuer has already killed the
     /// old refresh token. No redirects are followed — one would forward the client
     /// secret — and http is allowed to localhost only. Same
-    /// `vault_core::oauth` as `envv oauth refresh`.
+    /// `vault_core::oauth` as `unv oauth refresh`.
     #[tauri::command]
     pub async fn oauth_refresh(mut entry: serde_json::Value) -> Result<serde_json::Value, String> {
         let (url, form) = vault_core::oauth::refresh_request(&entry)?;
@@ -964,13 +1109,13 @@ mod commands {
 
     /// Renders a credential in the file its tool reads (`.npmrc`, a DSN, a Wi-Fi
     /// string…) — Phase 24.5. Pure over its arguments; the same
-    /// `vault_core::type_emit` as `envv emit`.
+    /// `vault_core::type_emit` as `unv emit`.
     #[tauri::command]
     pub fn type_emit(entry: serde_json::Value, format: String) -> Result<String, String> {
         vault_core::type_emit::emit(&entry, &format)
     }
 
-    /// Phase 33.1: `envv enrich` without `--online`. Pure over its arguments (the
+    /// Phase 33.1: `unv enrich` without `--online`. Pure over its arguments (the
     /// renderer already holds the decrypted vault, the A1 rule): returns, per
     /// entry, the proposals `plan_entry` makes with their reasons and the secret's
     /// fingerprint. The values it proposes are metadata, never the secret, and
@@ -1009,7 +1154,7 @@ mod commands {
             .collect()
     }
 
-    /// Phase 33.1b: `envv enrich --online`. Sends each given entry's secret over
+    /// Phase 33.1b: `unv enrich --online`. Sends each given entry's secret over
     /// TLS to the issuer that issued it, and nowhere else, then returns what the
     /// issuer said. Public-CA validation, no redirects (`probe_entry` builds the
     /// client). Blocking HTTP, so it runs off the async runtime. The renderer only
@@ -1042,9 +1187,9 @@ mod commands {
         .map_err(|e| e.to_string())
     }
 
-    /// Phase 33.2b: the file half of `envv doctor` (integrity, storage hashes, salt
+    /// Phase 33.2b: the file half of `unv doctor` (integrity, storage hashes, salt
     /// pairing, permissions, audit chain) over this machine's vault. Local only:
-    /// against a remote the database is the server's, and `envv doctor` there.
+    /// against a remote the database is the server's, and `unv doctor` there.
     #[tauri::command]
     pub fn doctor_file(
         app: AppHandle,
@@ -1058,13 +1203,13 @@ mod commands {
         ))
     }
 
-    /// Phase 33.2: the document half of `envv doctor`. Pure over its argument.
+    /// Phase 33.2: the document half of `unv doctor`. Pure over its argument.
     #[tauri::command]
     pub fn doctor_document(vault: serde_json::Value) -> Vec<serde_json::Value> {
         envv_cli::doctor::document_findings(&vault)
     }
 
-    /// Phase 31: which table `enrich` uses (`envv catalogue show`). Reads the
+    /// Phase 31: which table `enrich` uses (`unv catalogue show`). Reads the
     /// cache and re-verifies it; touches neither the vault nor the network.
     #[tauri::command]
     pub fn catalogue_status() -> serde_json::Value {
@@ -1076,7 +1221,7 @@ mod commands {
         }
     }
 
-    /// Phase 31: `envv catalogue update`. Fetches one whole file over https (CA
+    /// Phase 31: `unv catalogue update`. Fetches one whole file over https (CA
     /// validation, https only, 4 MiB cap), then `vault_core::catalogue::store`
     /// verifies the signature and refuses a rollback before caching.
     #[tauri::command]
@@ -1113,7 +1258,7 @@ mod commands {
 
     /// Converts a CXF document's text into entries ready to append — Phase
     /// 24.5's desktop path for the same `vault_core::cxf::import` the CLI's
-    /// `envv cxf import` calls. Pure over its argument: the caller already
+    /// `unv cxf import` calls. Pure over its argument: the caller already
     /// holds the decrypted vault and does the appending and the save, the
     /// same split `calendar_build_ics` uses.
     #[tauri::command]
@@ -1138,7 +1283,7 @@ mod commands {
     /// Phase 24.3: `src/ts/calendar.ts` used to be a second implementation of
     /// this format, pinned against `vault-core/src/calendar.rs` by a golden
     /// fixture — the twin-pair shape. It is gone now; this is the one builder,
-    /// exactly as `envv-server`'s `/ics/{token}.ics` route and `envv calendar
+    /// exactly as `unv-server`'s `/ics/{token}.ics` route and `unv calendar
     /// export` both already use it. Pure over its arguments rather than reading
     /// `VaultState` — the caller already holds the decrypted vault, local or
     /// remote, the same reasoning as `entry_totp_code` — so a Timeline export
@@ -1176,7 +1321,7 @@ mod commands {
     /// Parse, plan and apply in one call, returning the new entry array and a
     /// report. One round trip rather than three, and — the reason it exists at
     /// all — the merge rules stay in `vault_core::totp_import`, where
-    /// `envv totp import` also reads them. Whether a working second factor
+    /// `unv totp import` also reads them. Whether a working second factor
     /// survives an import must not be able to differ between the app and the
     /// terminal.
     ///
@@ -1242,7 +1387,7 @@ mod commands {
     ///
     /// **The returned string is nothing but secret material.** The frontend hands
     /// it straight to a save dialog; it never reaches a log, a toast or the
-    /// clipboard by default. Same rule as `envv totp export --out`.
+    /// clipboard by default. Same rule as `unv totp export --out`.
     ///
     /// **A11: no longer gated on `VaultState`** — pure over `items`.
     #[tauri::command]
@@ -1255,7 +1400,7 @@ mod commands {
         vault_core::totp_import::build(&items, fmt)
     }
 
-    /// Phase 33.4: `envv user strict-write` / `class` in the app. `subject_kind`
+    /// Phase 33.4: `unv user strict-write` / `class` in the app. `subject_kind`
     /// is `user` or `class`; the owner is the only caller the app can have.
     #[tauri::command]
     pub fn set_strict_write(
@@ -1385,7 +1530,7 @@ mod commands {
 
     /// Serve this vault to the local network.
     ///
-    /// Runs the `envv-server` router in-process against the vault that is
+    /// Runs the `unv-server` router in-process against the vault that is
     /// already open, so there is no second database, no second master password
     /// and no subprocess to supervise. The server dies with the app.
     ///
@@ -1440,7 +1585,7 @@ mod commands {
             (None, None)
         };
 
-        // Default 8744 so a Docker envv-server on 8743 can coexist; step forward
+        // Default 8744 so a Docker unv-server on 8743 can coexist; step forward
         // if something already holds it.
         let start_port = port.unwrap_or(8744);
         let bound = envv_server::find_free_port("0.0.0.0", start_port, 20)
@@ -1532,6 +1677,10 @@ mod commands {
     pub struct RemoteResponse {
         pub status: u16,
         pub body: String,
+        /// `ETag`, so a save over the pinned proxy can send the next `If-Match`.
+        pub etag: Option<String>,
+        /// `X-Vault-Merged: 1`: the save folded in another writer's changes.
+        pub merged: bool,
     }
 
     // The pinning and capturing verifiers used to be defined here, ~150 lines of
@@ -1679,10 +1828,21 @@ mod commands {
 
         let resp = req.send().await.map_err(|e| e.to_string())?;
         let status = resp.status().as_u16();
+        let etag = resp
+            .headers()
+            .get("etag")
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_string);
+        let merged = resp
+            .headers()
+            .get("x-vault-merged")
+            .is_some_and(|v| v == "1");
         let body_text = resp.text().await.unwrap_or_default();
         Ok(RemoteResponse {
             status,
             body: body_text,
+            etag,
+            merged,
         })
     }
 }
@@ -1776,6 +1936,13 @@ pub fn run() {
             commands::reset_vault,
             commands::load_vault,
             commands::save_vault,
+            commands::save_vault_rows,
+            commands::approver_public,
+            commands::matlog_note,
+            commands::env_import_plan,
+            commands::pgp_inspect,
+            commands::approver_sign,
+            commands::history_call,
             commands::get_vault_path,
             commands::pool_state,
             commands::pool_next,
@@ -1843,7 +2010,7 @@ pub fn run() {
         .setup(|app| {
             // ── System Tray (item 18) ────────────────────────────────────────
             let tray = tauri::tray::TrayIconBuilder::new()
-                .tooltip("EnvVault")
+                .tooltip("UnENVerse")
                 .on_tray_icon_event(|tray, event| {
                     if let tauri::tray::TrayIconEvent::Click { .. } = event {
                         let app = tray.app_handle();
@@ -1871,7 +2038,7 @@ pub fn run() {
             Ok(())
         })
         .run(tauri::generate_context!())
-        .expect("error while running EnvVault");
+        .expect("error while running UnENVerse");
 }
 
 #[cfg(test)]
