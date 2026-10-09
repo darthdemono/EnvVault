@@ -1,5 +1,5 @@
-//! `envv uid` — the unique-ID registry (Phase 24.4). Server-side only, and
-//! opt-in there (`envv-server --uid-registry`); every command refuses against
+//! `unv uid` — the unique-ID registry (Phase 24.4). Server-side only, and
+//! opt-in there (`unv-server --uid-registry`); every command refuses against
 //! `Access::Local` and against a server with the feature off, both by naming
 //! the reason rather than surfacing a raw HTTP error.
 
@@ -13,7 +13,7 @@ fn require_remote(a: &Access) -> CliResult<&crate::access::RemoteClient> {
     a.remote().ok_or_else(|| {
         CliError::unavailable(
             "The unique-ID registry is server-side only. Connect with --server, or run \
-             `envv-server --uid-registry` and point at it.",
+             `unv-server --uid-registry` and point at it.",
         )
     })
 }
