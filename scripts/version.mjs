@@ -6,8 +6,8 @@
  * `package.json` and four `Cargo.toml` files — because each of them is read by
  * a different tool and none of them can read another. Tauri stamps its copy
  * into every bundle filename and into the Windows installer metadata; Cargo
- * stamps its copy into `CARGO_PKG_VERSION`, which is what `envv --version` and
- * `envv describe` report.
+ * stamps its copy into `CARGO_PKG_VERSION`, which is what `unv --version` and
+ * `unv describe` report.
  *
  * Before this script existed, the only thing keeping the six in agreement was
  * the `meta` job in `.github/workflows/build.yml`, which *detects* drift and
