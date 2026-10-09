@@ -274,7 +274,7 @@ fn shield_stream(
     }
     if binary || !probe.finish() {
         return Err(CliError::invalid(format!(
-            "envv shield refused binary {stream_name}; it cannot safely redact partial binary output"
+            "unv shield refused binary {stream_name}; it cannot safely redact partial binary output"
         )));
     }
     writer
@@ -287,12 +287,12 @@ fn shield_stream(
 pub fn run(access: &Access, argv: &[String]) -> CliResult<i32> {
     if out::is_json() {
         return Err(CliError::invalid(
-            "envv shield forwards child output and cannot be combined with --json",
+            "unv shield forwards child output and cannot be combined with --json",
         ));
     }
     let Some((program, args)) = argv.split_first() else {
         return Err(CliError::invalid(
-            "No command given — use `envv shield -- <command>`",
+            "No command given — use `unv shield -- <command>`",
         ));
     };
     let engine = Arc::new(Engine::from_vault(&access.load_vault()?));
@@ -316,10 +316,10 @@ pub fn run(access: &Access, argv: &[String]) -> CliResult<i32> {
         .map_err(|error| CliError::from(error.to_string()))?;
     let stdout_result = stdout_task
         .join()
-        .map_err(|_| CliError::from("envv shield stdout reader panicked"))?;
+        .map_err(|_| CliError::from("unv shield stdout reader panicked"))?;
     let stderr_result = stderr_task
         .join()
-        .map_err(|_| CliError::from("envv shield stderr reader panicked"))?;
+        .map_err(|_| CliError::from("unv shield stderr reader panicked"))?;
     stdout_result?;
     stderr_result?;
     Ok(status.code().unwrap_or(1))
