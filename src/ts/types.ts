@@ -1,6 +1,6 @@
 /**
  * @file
- * Data models for EnvVault.
+ * Data models for UnENVerse.
  * @description Defines the structure of vault entries, projects, and application settings
  *              shared between the TypeScript frontend and the persisted JSON format.
  *              These types mirror the JSON blob stored in the SQLCipher `vault` table.
@@ -238,7 +238,7 @@ export interface VaultEntry {
    * Several entries sharing a pool name are interchangeable credentials for the
    * same service, held so that a caller can swap between them when one is rate
    * limited. Membership is **explicit**: two keys for the same provider do not
-   * pool automatically, because `envv get GitHub` refusing an ambiguous match
+   * pool automatically, because `unv get GitHub` refusing an ambiguous match
    * is the behaviour that stops a command from silently acting on a credential
    * the caller did not mean (see the invariants in CLAUDE.md).
    *
@@ -292,6 +292,11 @@ export interface VaultEntry {
    * `query`.
    */
   auth_param?: string | null;
+  /**
+   * For `header`: the value sent, with `{key}` standing for the credential, e.g.
+   * `MediaBrowser Token="{key}"`. Absent means the credential on its own.
+   */
+  auth_template?: string | null;
   /**
    * The User-Agent this credential was minted against (Phase 23, step 5).
    *
@@ -388,8 +393,8 @@ export interface VaultEntry {
   /**
    * Where the consumer expects to find this credential on disk (E17).
    *
-   * The delivery half of a file-shaped entry: `envv file write` materialises to
-   * it, `${Entry/path}` renders it, and `envv exec` writes a temp file and
+   * The delivery half of a file-shaped entry: `unv file write` materialises to
+   * it, `${Entry/path}` renders it, and `unv exec` writes a temp file and
    * removes it afterwards. Non-secret — it is a path, not a credential.
    */
   mount_path?: string | null;
@@ -564,11 +569,11 @@ export interface VaultEntry {
   }[];
   /**
    * Base32 TOTP seed this credential's service issued — the authenticator
-   * secret, from which EnvVault generates the six digits you type into that
+   * secret, from which UnENVerse generates the six digits you type into that
    * service's login form.
    *
    * **This is the reverse of the Phase 19 TOTP**, which is a second factor on
-   * *EnvVault's own* sub-user login and lives in the `users` table, never here.
+   * *UnENVerse's own* sub-user login and lives in the `users` table, never here.
    * Nothing reads both.
    *
    * Stored normalised: uppercase base32, no spaces, dashes or padding, so two
@@ -698,6 +703,14 @@ export type ChunkType =
   | 'ansible_task'
   | 'pg_connection'
   | 'pg_role'
+  // Stack integrations (Phase 38): the chunk types are declared in
+  // vault-core/data/stack-adapters.json; tests/stack.test.ts fails when this list
+  // and that file disagree.
+  | 'prom_global'
+  | 'prom_scrape'
+  | 'prom_remote_write'
+  | 'grafana_datasource'
+  | 'homepage_service'
   | 'generic';
 
 /** A named section within a structured project config. */
@@ -730,7 +743,12 @@ export type ProjectType =
   | 'apache'
   | 'haproxy'
   | 'ansible'
-  | 'postgres';
+  | 'postgres'
+  // Stack integrations (Phase 38). Experimental until their output has been
+  // accepted by the software they target in CI (.github/workflows/exporters.yml).
+  | 'prometheus'
+  | 'grafana'
+  | 'homepage';
 
 /**
  * Project types that have actually been exercised end to end.
@@ -986,6 +1004,8 @@ export interface AppSettings {
    */
   groupPools: boolean;
   groupBundles: boolean;
+  /** Config check: resolve an nginx `proxy_pass` host against every project's services (`unv check --all-projects`). */
+  configCheckAll: boolean;
   /** Case-folded providers whose "bundle them?" prompt was dismissed. */
   dismissedBundleSuggestions: string[];
   /** Position of the activity bar. */
