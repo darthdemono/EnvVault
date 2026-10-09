@@ -1,6 +1,6 @@
 [package]
 name    = "vault-core"
-version = "0.33.0"
+version = "0.39.0"
 edition = "2021"
 publish = false
 license = "MIT"
@@ -14,7 +14,7 @@ default = []
 # Debian box shipping a different soname, and "works on my distro" is the whole
 # problem a portable bundle exists to solve.
 bundled = ["rusqlite/bundled-sqlcipher-vendored-openssl"]
-# The shared TLS client policy (`tls.rs`). Off by default so `envv-server`, which
+# The shared TLS client policy (`tls.rs`). Off by default so `unv-server`, which
 # only ever serves TLS, does not link a TLS *client* stack it never calls. The
 # desktop app and the CLI both turn it on — and they must both build from it, or
 # the split that this module exists to close reopens.
