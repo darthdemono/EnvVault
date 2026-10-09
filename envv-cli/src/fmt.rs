@@ -92,6 +92,7 @@ pub fn write_secret_file(path: &std::path::Path, content: &str) -> CliResult {
         perms.set_mode(0o600);
         std::fs::set_permissions(path, perms).map_err(|e| CliError::from(e.to_string()))?;
     }
+    crate::matlog::note("file", &path.display().to_string(), content);
     Ok(())
 }
 
@@ -102,9 +103,13 @@ pub fn emit(content: &str, path: Option<&std::path::Path>) -> CliResult {
             std::fs::write(p, content)
                 .map_err(|e| CliError::from(format!("Cannot write {}: {e}", p.display())))?;
             eprintln!("Wrote {}", p.display());
+            crate::matlog::note("file", &p.display().to_string(), content);
             Ok(())
         }
         None => {
+            if crate::out::revealing() {
+                crate::matlog::note("stdout", "--reveal", content);
+            }
             print!("{content}");
             if !content.ends_with('\n') {
                 println!();
