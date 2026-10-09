@@ -1,5 +1,6 @@
 # ── Build stage ───────────────────────────────────────────────────────────────
-FROM rust:1.85-bookworm AS builder
+# 1.85 stopped building once the lockfile moved to crates needing rustc 1.88 (found by actually building the image, 2026-10-09).
+FROM rust:1.90-bookworm AS builder
 
 # mold: faster linking (matches .cargo/config.toml)
 # libsqlcipher-dev: rusqlite sqlcipher feature links against system SQLCipher
@@ -23,6 +24,7 @@ RUN mkdir -p vault-core/src envv-server/src envv-cli/src src-tauri/src && \
     printf 'pub fn placeholder() {}' > vault-core/src/lib.rs && \
     printf 'pub fn placeholder() {}' > envv-server/src/lib.rs && \
     printf 'fn main() {}' > envv-server/src/main.rs && \
+    printf 'pub fn placeholder() {}' > envv-cli/src/lib.rs && \
     printf 'fn main() {}' > envv-cli/src/main.rs && \
     printf 'pub fn placeholder() {}' > src-tauri/src/lib.rs && \
     printf 'fn main() {}' > src-tauri/src/main.rs
@@ -40,6 +42,9 @@ RUN cargo build --release -p envv-server 2>&1 | grep -v "^warning" || true
 COPY secret-types.json secret-templates.json ./
 COPY vault-core/data vault-core/data
 COPY vault-core/src vault-core/src
+# Phase 34: the hub renders node targets with the CLI's exporters, so unv-server
+# depends on the envv-cli library.
+COPY envv-cli/src envv-cli/src
 COPY envv-server/src envv-server/src
 
 # Touch to force rebuild after stub replacement
@@ -63,29 +68,29 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # that alone accounts for most of the resident memory of an otherwise idle
 # server. Two arenas is plenty for two worker threads.
 #
-# ENVV_WORKER_THREADS: tokio would otherwise start one worker per host CPU —
+# UNV_WORKER_THREADS: tokio would otherwise start one worker per host CPU —
 # threads this workload has no use for, each carrying a stack and an arena.
 # MALLOC_TRIM/MMAP_THRESHOLD_ return freed memory to the OS more eagerly. The
 # server allocates in bursts (a vault decrypt, a JSON round trip) and then sits
 # idle; without these the peak stays resident for the life of the process.
 # (A comment cannot live inside a continued ENV line — Docker does not allow it.)
 ENV MALLOC_ARENA_MAX=2 \
-    ENVV_WORKER_THREADS=2 \
+    UNV_WORKER_THREADS=2 \
     MALLOC_TRIM_THRESHOLD_=131072 \
     MALLOC_MMAP_THRESHOLD_=131072
 
 # Non-root user
-RUN useradd -r -u 1001 -s /bin/false envv
-RUN mkdir /data && chown envv:envv /data
+RUN useradd -r -u 1001 -s /bin/false unv
+RUN mkdir /data && chown unv:unv /data
 
-COPY --from=builder /build/target/release/envv-server /usr/local/bin/envv-server
+COPY --from=builder /build/target/release/unv-server /usr/local/bin/unv-server
 
-USER envv
+USER unv
 VOLUME ["/data"]
 EXPOSE 8743
 
 ENTRYPOINT [ \
-    "envv-server", \
+    "unv-server", \
     "--host", "0.0.0.0", \
     "--db-path",   "/data/vault.db", \
     "--salt-path", "/data/vault.salt" \
