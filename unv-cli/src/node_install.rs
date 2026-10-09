@@ -265,7 +265,8 @@ pub fn plan(o: &Options) -> CliResult<Vec<Step>> {
         return Err(CliError::invalid("Give at least one --target"));
     }
     for t in &o.targets {
-        if !t.path.is_absolute() {
+        // A Linux path is rooted but not absolute when planning on Windows.
+        if !(t.path.is_absolute() || t.path.has_root()) {
             return Err(CliError::invalid(format!(
                 "target '{}': path must be absolute",
                 t.id
@@ -483,6 +484,7 @@ mod tests {
         assert!(!v.contains("wg-quick"));
     }
 
+    #[cfg(unix)]
     #[test]
     fn the_default_wireguard_check_passes_a_real_config_and_refuses_junk() {
         use vault_core::nodes_apply::apply;
@@ -516,6 +518,12 @@ mod tests {
         assert!(parse_target("id=a,path=/x,project=p").is_err());
         assert!(parse_target("id=a,path=/x,project=p,exporter=e,colour=red").is_err());
         assert!(parse_target("id=a,path=/x,project=p,exporter=e,mode=sideways").is_err());
+        let err = plan(&opts(vec![parse_target(
+            "id=a,path=etc/a,project=p,exporter=env",
+        )
+        .unwrap()]))
+        .unwrap_err();
+        assert!(err.to_string().contains("path must be absolute"), "{err}");
         let err = plan(&opts(vec![parse_target(
             "id=a,path=/etc/a,project=p,exporter=env,reload=nginx",
         )
