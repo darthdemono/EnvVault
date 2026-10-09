@@ -1,5 +1,5 @@
 //! The provider catalogue: a signed, public table of issuer key prefixes that
-//! `envv enrich` consults before the table compiled into the binary.
+//! `unv enrich` consults before the table compiled into the binary.
 //!
 //! The compiled table can only be updated by a release. This one is published
 //! as a static file, fetched **whole** (a per-provider request would tell the
@@ -64,6 +64,12 @@ pub struct Provider {
     pub rotate_url: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub revoke_url: Option<String>,
+    /// Where the prefix is published and when somebody last checked it there
+    /// (Phase 31.3). Optional so older clients and older entries still parse.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verified_on: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_url: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -159,7 +165,7 @@ pub fn verify(raw: &[u8], key: &[u8; 32]) -> Result<Catalogue, String> {
 }
 
 /// Publisher side: sign `c` with a 32-byte Ed25519 seed. Used by
-/// `envv catalogue sign` in the scheduled workflow.
+/// `unv catalogue sign` in the scheduled workflow.
 pub fn sign(c: &Catalogue, seed: &[u8; 32]) -> Result<String, String> {
     validate(c)?;
     let payload = serde_json::to_string(c).map_err(|e| e.to_string())?;
@@ -169,7 +175,7 @@ pub fn sign(c: &Catalogue, seed: &[u8; 32]) -> Result<String, String> {
 }
 
 pub fn cache_path() -> Option<PathBuf> {
-    if let Some(p) = std::env::var_os("ENVV_CATALOGUE_FILE") {
+    if let Some(p) = std::env::var_os("UNV_CATALOGUE_FILE") {
         return Some(PathBuf::from(p));
     }
     dirs::data_dir().map(|d| d.join("io.envvault").join("catalogue.json"))
@@ -245,6 +251,8 @@ mod tests {
                 docs_url: None,
                 rotate_url: None,
                 revoke_url: None,
+                verified_on: None,
+                source_url: None,
             }],
         }
     }
@@ -287,7 +295,7 @@ mod tests {
     fn rollback_is_refused() {
         let dir = std::env::temp_dir().join(format!("envv-cat-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        std::env::set_var("ENVV_CATALOGUE_FILE", dir.join("c.json"));
+        std::env::set_var("UNV_CATALOGUE_FILE", dir.join("c.json"));
         let new = sign(&cat("2026-10-08T00:00:00Z"), &SEED).unwrap();
         let old = sign(&cat("2026-10-07T00:00:00Z"), &SEED).unwrap();
         store_with(new.as_bytes(), &key()).unwrap();
@@ -295,7 +303,34 @@ mod tests {
             .unwrap_err()
             .contains("roll back"));
         store_with(new.as_bytes(), &key()).unwrap();
-        std::env::remove_var("ENVV_CATALOGUE_FILE");
+        std::env::remove_var("UNV_CATALOGUE_FILE");
         std::fs::remove_dir_all(dir).ok();
+    }
+    #[test]
+    fn the_shipped_catalogue_file_parses_and_every_sourced_entry_is_complete() {
+        let list: Vec<Provider> =
+            serde_json::from_str(include_str!("../../catalogue/providers.json")).unwrap();
+        let mut seen = std::collections::HashSet::new();
+        for p in &list {
+            assert!(
+                seen.insert(p.prefix.clone()),
+                "duplicate prefix {}",
+                p.prefix
+            );
+            assert_eq!(
+                p.verified_on.is_some(),
+                p.source_url.is_some(),
+                "{}: verified_on and source_url go together",
+                p.prefix
+            );
+            if let Some(u) = &p.source_url {
+                assert!(
+                    u.starts_with("https://"),
+                    "{}: source must be https",
+                    p.prefix
+                );
+                assert!(p.prefix.len() >= 4, "{}: too short to be safe", p.prefix);
+            }
+        }
     }
 }
