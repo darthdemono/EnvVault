@@ -3,13 +3,17 @@
 //! use, and the defaults must not move.
 use std::process::{Command, Stdio};
 
-fn envv(dir: &std::path::Path, args: &[&str]) -> String {
-    let o = Command::new(env!("CARGO_BIN_EXE_envv"))
+fn unv(dir: &std::path::Path, args: &[&str]) -> String {
+    let o = Command::new(env!("CARGO_BIN_EXE_unv"))
+        .env_remove("UNV_SERVER_URL")
         .env_remove("ENVV_SERVER_URL")
+        .env_remove("UNV_ENV_FILE")
         .env_remove("ENVV_ENV_FILE")
+        .env_remove("UNV_ENV_CASE")
         .env_remove("ENVV_ENV_CASE")
+        .env_remove("UNV_ENV_PREFIX")
         .env_remove("ENVV_ENV_PREFIX")
-        .env("ENVV_PASSWORD", "scratch-pass-123456")
+        .env("UNV_PASSWORD", "scratch-pass-123456")
         .stdin(Stdio::null())
         .arg("--db-path")
         .arg(dir.join("vault.db"))
@@ -28,19 +32,19 @@ fn envv(dir: &std::path::Path, args: &[&str]) -> String {
 fn case_and_prefix_change_exported_names_and_nothing_else() {
     let dir = std::env::temp_dir().join(format!("envv-naming-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
-    envv(
+    unv(
         &dir,
         &["--init", "entry", "add", "Spotify", "--key", "abc123"],
     );
-    envv(&dir, &["entry", "set", "Spotify", "--env-prefixes", "ND"]);
+    unv(&dir, &["entry", "set", "Spotify", "--env-prefixes", "ND"]);
 
-    let plain = envv(&dir, &["--reveal", "export", "--format", "dotenv"]);
+    let plain = unv(&dir, &["--reveal", "export", "--format", "dotenv"]);
     assert!(
         plain.contains("SPOTIFY=abc123"),
         "default names unchanged: {plain}"
     );
 
-    let lower = envv(
+    let lower = unv(
         &dir,
         &[
             "--reveal",
@@ -53,13 +57,13 @@ fn case_and_prefix_change_exported_names_and_nothing_else() {
     );
     assert!(lower.contains("spotify=abc123"), "{lower}");
 
-    let prefixed = envv(
+    let prefixed = unv(
         &dir,
         &["--reveal", "--env-prefix", "export", "--format", "dotenv"],
     );
     assert!(prefixed.contains("ND_SPOTIFY=abc123"), "{prefixed}");
 
-    let profile = envv(
+    let profile = unv(
         &dir,
         &[
             "--reveal",
