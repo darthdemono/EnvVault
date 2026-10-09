@@ -28,6 +28,12 @@ export interface ImportedVar {
   key: string;
   value: string;
   kind: ValueKind;
+  /**
+   * Safe to print: a prefix, a colour, a title, a link with no credential in it.
+   * Set only when the importer is sure; everything else stays masked (redaction is
+   * fail-closed). Absent, not `false`, when not public.
+   */
+  public?: true;
 }
 
 export interface BundleImport {
@@ -73,6 +79,101 @@ function unescapePy(body: string, raw: boolean): string | null {
   return ok ? out : null;
 }
 
+function kindForString(name: string, body: string): ValueKind {
+  if (/^\d{15,}$/.test(body) || (/(^|_)ids?$/i.test(name) && /^\d{10,}$/.test(body)))
+    return 'large_id';
+  if (/^\[[^\]]*\]\(https?:\/\/[^)\s]+\)$/.test(body)) return 'markdown_link';
+  if (/^https?:\/\/\S+$/.test(body)) return 'url';
+  return 'string';
+}
+
+/** A name that says what it holds. Beats every other signal. */
+function secretishName(name: string): boolean {
+  return /key|token|secret|password|passwd|pwd|auth|credential|salt|signature|private|webhook|cert/i.test(
+    name,
+  );
+}
+
+/** Query-parameter names and path pieces that mean a credential rides in the URL. */
+function urlIsPublic(url: string): boolean {
+  const u = url.trim().replace(/^</, '').replace(/>$/, '');
+  const m = /^https?:\/\/(.*)$/.exec(u);
+  if (!m) return false;
+  const rest = m[1];
+  const slash = rest.indexOf('/');
+  const authority = slash < 0 ? rest : rest.slice(0, slash);
+  const tail = slash < 0 ? '' : rest.slice(slash + 1);
+  if (authority.includes('@')) return false; // user:password@host
+  const q = tail.indexOf('?');
+  const path = (q < 0 ? tail : tail.slice(0, q)).toLowerCase();
+  const query = q < 0 ? '' : tail.slice(q + 1);
+  if (path.includes('hook')) return false; // a webhook URL is the credential
+  const tokenish = (seg: string) =>
+    seg.length >= 24 && /^[A-Za-z0-9_-]+$/.test(seg) && /\d/.test(seg) && /[A-Za-z]/.test(seg);
+  if (path.split('/').some(tokenish)) return false;
+  return query
+    .split(/[&;]/)
+    .map((kv) => kv.split('=')[0].toLowerCase())
+    .every((k) => !/key|token|secret|pass|pwd|sig|auth|code|session/.test(k));
+}
+
+/** Prose: words with spaces and no assignment or long run of mixed characters. */
+function isProse(v: string): boolean {
+  return (
+    v.includes(' ') &&
+    !v.includes('=') &&
+    !v.split(/\s+/).some((w) => w.length >= 16 && /\d/.test(w) && /[A-Za-z]/.test(w))
+  );
+}
+
+/**
+ * Whether the importer is sure a value is safe to print. `publicKeys` are the keys
+ * already judged public, for templates: a template is public only if every input
+ * is, so a composite can never launder a secret into a printable value. Twin of
+ * `is_public` in `vault-core/src/bundle_import.rs`.
+ */
+function isPublic(name: string, kind: ValueKind, value: string, publicKeys: Set<string>): boolean {
+  if (secretishName(name)) return false;
+  switch (kind) {
+    case 'hex_int':
+    case 'bool':
+    case 'float':
+      return true;
+    case 'int':
+      return value.replace(/^[-+]/, '').length <= 6;
+    case 'url':
+      return urlIsPublic(value);
+    case 'markdown_link': {
+      const i = value.indexOf('](');
+      return i >= 0 && urlIsPublic(value.slice(i + 2).replace(/\)+$/, ''));
+    }
+    case 'template': {
+      let rest = value.split('{{').join('').split('}}').join('');
+      const refs: string[] = [];
+      for (;;) {
+        const i = rest.indexOf('{');
+        if (i < 0) break;
+        const j = rest.indexOf('}', i);
+        if (j < 0) return false;
+        refs.push(rest.slice(i + 1, j));
+        rest = rest.slice(0, i) + rest.slice(j + 1);
+      }
+      return (
+        refs.every((r) => publicKeys.has(r)) &&
+        (!rest.includes('://') || urlIsPublic(rest.split(' ').join('')) || isProse(rest))
+      );
+    }
+    case 'string': {
+      const t = value.trim();
+      if ([...t].length <= 2) return true;
+      if (t.startsWith('<') && t.endsWith('>') && t.includes('://')) return urlIsPublic(t);
+      return isProse(t);
+    }
+    default:
+      return false;
+  }
+}
+
 export function importPythonConfig(text: string): BundleImport {
   const vars: ImportedVar[] = [];
   const warnings: string[] = [];
@@ -80,6 +181,7 @@ export function importPythonConfig(text: string): BundleImport {
   const bound = new Map<string, string>();
   const taken = new Set<string>();
   const rewrites = new Map<string, { to: string; n: number }>();
+  const publicKeys = new Set<string>();
 
   const lines = text.split(/\r?\n/);
   lines.forEach((raw, index) => {
@@ -112,7 +214,9 @@ export function importPythonConfig(text: string): BundleImport {
           kind = 'string';
         } else {
           value = converted.text;
-          kind = 'template';
+          // An f-string with nothing to fill in is just a string; only a real hole
+          // (or a literal brace) makes it a template.
+          kind = /[{}]/.test(value) ? 'template' : kindForString(name, value);
           for (const [from, to] of converted.rewrote) {
             const hit = rewrites.get(from) ?? { to, n: 0 };
             rewrites.set(from, { to, n: hit.n + 1 });
@@ -120,11 +224,7 @@ export function importPythonConfig(text: string): BundleImport {
         }
       } else {
         value = body;
-        if (/^\d{15,}$/.test(body) || (/(^|_)ids?$/i.test(name) && /^\d{10,}$/.test(body)))
-          kind = 'large_id';
-        else if (/^\[[^\]]*\]\(https?:\/\/[^)\s]+\)$/.test(body)) kind = 'markdown_link';
-        else if (/^https?:\/\/\S+$/.test(body)) kind = 'url';
-        else kind = 'string';
+        kind = kindForString(name, body);
       }
     } else if (/^[-+]?(?:0[xX][\da-fA-F]+|0[oO][0-7]+|0[bB][01]+)$/.test(source)) {
       value = source;
@@ -160,7 +260,9 @@ export function importPythonConfig(text: string): BundleImport {
     }
     taken.add(key);
     bound.set(name, key);
-    vars.push({ key, value, kind });
+    const isPub = isPublic(name, kind, value, publicKeys);
+    if (isPub) publicKeys.add(key);
+    vars.push(isPub ? { key, value, kind, public: true } : { key, value, kind });
   });
 
   for (const [from, { to, n }] of rewrites)
