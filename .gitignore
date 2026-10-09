@@ -65,4 +65,5 @@ CLAUDE*.md
 CODEX*.md
 GEMINI*.md
 vscode-extension/out/
+vscode-extension/*.vsix
 shots/

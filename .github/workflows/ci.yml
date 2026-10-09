@@ -234,3 +234,9 @@ jobs:
 
       - name: Build
         run: npx vite build
+
+      - name: VS Code extension builds and packages
+        run: |
+          cd vscode-extension
+          npm ci
+          npm run package

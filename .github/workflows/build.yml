@@ -606,6 +606,23 @@ jobs:
             echo "$(basename "$d"): $(find "$d" -type f | wc -l) file(s)"
           done
 
+      # The editor extension ships beside the installers. It is a thin client of
+      # the `unv` CLI, so it is versioned with it (scripts/version.mjs) and built
+      # from the same commit.
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+
+      - name: Build the VS Code extension
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd vscode-extension
+          npm ci
+          npm run package
+          mkdir -p ../vsix
+          cp unenverse-*.vsix ../vsix/
+
       - name: Assemble release assets
         id: assets
         shell: bash
@@ -618,6 +635,7 @@ jobs:
           # installs, but the installer filename is what users read, and Tauri's
           # own naming already carries version and arch.
           cp artifacts/desktop-*/* release-assets/
+          cp vsix/*.vsix release-assets/
 
           # Headless binaries get archived per platform, with a flat layout so
           # `tar xzf … && ./unv` works with no path juggling.

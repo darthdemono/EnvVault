@@ -133,14 +133,15 @@ unv render config.tpl --out config.conf   # fill ${references} in a template
 
 Grab the artefact for your platform from the [Releases](../../releases) page.
 
-| File                        | Platform                                                                                                            |
-| --------------------------- | ------------------------------------------------------------------------------------------------------------------- |
-| `*.AppImage`                | Any Linux distribution. SQLCipher and OpenSSL are compiled in, so it does not care what your package manager ships. |
-| `*.deb`                     | Debian, Ubuntu                                                                                                      |
-| `*.rpm`                     | Fedora, RHEL, Nobara                                                                                                |
-| `*-setup.exe`               | Windows. Fetches WebView2 during install if the machine lacks it.                                                   |
-| `unv-*-linux-x86_64.tar.gz` | `unv` and `unv-server`, no GUI toolkit required                                                                     |
-| `unv-*-windows-x86_64.zip`  | The same two, for Windows                                                                                           |
+| File                        | Platform                                                                                                                        |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| `*.AppImage`                | Any Linux distribution. SQLCipher and OpenSSL are compiled in, so it does not care what your package manager ships.             |
+| `*.deb`                     | Debian, Ubuntu                                                                                                                  |
+| `*.rpm`                     | Fedora, RHEL, Nobara                                                                                                            |
+| `*-setup.exe`               | Windows. Fetches WebView2 during install if the machine lacks it.                                                               |
+| `unv-*-linux-x86_64.tar.gz` | `unv` and `unv-server`, no GUI toolkit required                                                                                 |
+| `unv-*-windows-x86_64.zip`  | The same two, for Windows                                                                                                       |
+| `unenverse-*.vsix`          | The VS Code extension: reference completion, hover fingerprints and secret-aware tasks. Install with `code --install-extension` |
 
 Every asset carries a keyless Sigstore signature. If you want to confirm a download actually came out of this repository's CI and not from somewhere else:
 

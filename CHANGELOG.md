@@ -14,6 +14,7 @@ All notable changes to UnENVerse, newest first, compiled from the development se
 ### Added
 
 - `unv node install`: sets up a managed node in one command (system user, hardened service, file access limited to the named targets, reload through a root-owned path unit, optional loopback relay to the hub). `--plan` shows the steps.
+- Every release now attaches `unenverse-<version>.vsix`, the VS Code extension, which is versioned with the rest.
 
 ### Fixed
 

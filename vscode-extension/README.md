@@ -22,7 +22,11 @@ npm install
 npm run compile
 ```
 
-Then press F5 in VS Code with this folder open to try it in an Extension Development Host. It is not packaged or published by this repository.
+Then press F5 in VS Code with this folder open to try it in an Extension Development Host.
+
+## Install
+
+Every release carries `unenverse-<version>.vsix`. In VS Code: Extensions, the `...` menu, **Install from VSIX...**, or `code --install-extension unenverse-<version>.vsix`. To build it yourself, `npm run package` in this folder writes the file here. It is not published to the Marketplace.
 
 ## Status
 

@@ -67,6 +67,12 @@ const SOURCES = [
     read: (s) => JSON.parse(s).version,
     write: (s, v) => replaceOnce(s, /("version"\s*:\s*")([^"]*)(")/, v, 'package.json'),
   },
+  {
+    file: 'vscode-extension/package.json',
+    read: (s) => JSON.parse(s).version,
+    write: (s, v) =>
+      replaceOnce(s, /("version"\s*:\s*")([^"]*)(")/, v, 'vscode-extension/package.json'),
+  },
   ...CRATES.map((c) => ({
     file: `${c}/Cargo.toml`,
     // `head -n1`-equivalent: the first `version = "…"` at column zero is the
