@@ -220,9 +220,11 @@ export function renderNodes(nodes: NodeRow[]): void {
   );
 }
 
-async function refresh(): Promise<void> {
+export async function refreshNodes(): Promise<void> {
+  const store = st.store;
+  setHtml($('nodes-list'), '');
   const a = await call('GET', '/api/nodes');
-  if (!a) return;
+  if (!a || st.store !== store) return;
   const nodes = ((a.body as { nodes?: NodeRow[] } | null)?.nodes ?? []) as NodeRow[];
   renderNodes(nodes);
   say(`${nodes.length} node${nodes.length === 1 ? '' : 's'}`);
@@ -452,7 +454,7 @@ async function approvalAction(
     if (
       await call('POST', `/api/nodes/${encodeURIComponent(nodeId)}/policy`, { approval: policy })
     ) {
-      await refresh();
+      await refreshNodes();
     }
     return;
   }
@@ -493,13 +495,13 @@ async function approvalAction(
   const a = await call('POST', `/api/node-approvals/${encodeURIComponent(id)}/${act}`, body);
   if (a) {
     say(act === 'approve' ? 'Approved. The node picks it up on its next beat.' : 'Rejected.');
-    await refresh();
+    await refreshNodes();
   }
 }
 
 export function initNodesPane(): void {
   if (!document.getElementById('nodes-refresh-btn')) return;
-  $('nodes-refresh-btn').onclick = () => void refresh();
+  $('nodes-refresh-btn').onclick = () => void refreshNodes();
   $('nodes-approver-btn').onclick = () => {
     void (async () => {
       if (!isTauri()) {
@@ -566,7 +568,7 @@ export function initNodesPane(): void {
           'Revoke this node? It stops receiving config at once. Files already written stay where they are.',
         );
         if (!ok) return;
-        if (await call('DELETE', `/api/nodes/${encodeURIComponent(nodeId)}`)) await refresh();
+        if (await call('DELETE', `/api/nodes/${encodeURIComponent(nodeId)}`)) await refreshNodes();
       })();
     } else if (act === 'pull') {
       void fetchFile(nodeId, btn.dataset.target ?? '');
@@ -582,7 +584,7 @@ export function initNodesPane(): void {
         const a = await call('POST', `/api/nodes/${encodeURIComponent(nodeId)}/accept`, {
           target: btn.dataset.target ?? '',
         });
-        if (a) await refresh();
+        if (a) await refreshNodes();
       })();
     }
   };
