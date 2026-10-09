@@ -1,0 +1,114 @@
+{
+  "vars": [
+    {
+      "key": "clientid",
+      "value": "XXXXXXXXXXXXXXXXXX",
+      "kind": "string"
+    },
+    {
+      "key": "ownerid",
+      "value": "XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
+      "kind": "string"
+    },
+    {
+      "key": "defprefix",
+      "value": ">",
+      "kind": "string",
+      "public": true
+    },
+    {
+      "key": "channel_id",
+      "value": "XXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
+      "kind": "string"
+    },
+    {
+      "key": "api_key",
+      "value": "XXXXXXXXXXXXXXXXXXXXXXXXXXX",
+      "kind": "string"
+    },
+    {
+      "key": "uselful_info",
+      "value": "XXXXXXXXXXXXXXXXXXXXXX",
+      "kind": "string"
+    },
+    {
+      "key": "serverid",
+      "value": "XXXXXXXXXXXXXXXXXXXXXXX",
+      "kind": "string"
+    },
+    {
+      "key": "Mainloop",
+      "value": "XXXXXXXXXXXXXXX",
+      "kind": "string"
+    },
+    {
+      "key": "url",
+      "value": "https://www.googleapis.com/youtube/v3/channels?part=statistics&id={channel_id}&key={api_key}",
+      "kind": "template"
+    },
+    {
+      "key": "api_key_2",
+      "value": "XXXXXXXXXXXXXXXXXXXXX",
+      "kind": "string"
+    },
+    {
+      "key": "blink",
+      "value": "<https://discordapp.com/oauth2/authorize?&client_id=YOUR_CLIENTID_HERE&scope=bot&permissions=YOUR_VALUE_HERE>",
+      "kind": "string",
+      "public": true
+    },
+    {
+      "key": "boturl",
+      "value": "[Click me!](https://discord.com/api/oauth2/authorize?client_id=708750009214042173&permissions=8&scope=bot)",
+      "kind": "markdown_link",
+      "public": true
+    },
+    {
+      "key": "subscriberCount",
+      "value": "subscriberCount",
+      "kind": "string"
+    },
+    {
+      "key": "inv",
+      "value": "[**Invite**](https://discord.gg/xRWYVCsw6P)",
+      "kind": "markdown_link",
+      "public": true
+    },
+    {
+      "key": "title",
+      "value": "Darth Demono Bot Stats and Server Stats",
+      "kind": "string",
+      "public": true
+    },
+    {
+      "key": "description",
+      "value": "This Bot Is created By Dark Terra / Darth Demono",
+      "kind": "string",
+      "public": true
+    },
+    {
+      "key": "colour",
+      "value": "0x800000",
+      "kind": "hex_int",
+      "public": true
+    },
+    {
+      "key": "username",
+      "value": "darthdemono",
+      "kind": "string"
+    },
+    {
+      "key": "failid",
+      "value": "XXXXXXXXXXXXXXXXXX",
+      "kind": "string"
+    },
+    {
+      "key": "failmessage",
+      "value": "XXXXXXXXXXXXXXXXXXXX",
+      "kind": "string"
+    }
+  ],
+  "warnings": [
+    "line 19: api_key is assigned more than once; the first stays api_key, this one is imported as api_key_2, and later references use api_key_2"
+  ]
+}
