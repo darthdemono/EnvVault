@@ -14,7 +14,7 @@
 //! somewhere this function cannot see — a `name@provider` Traefik reference, a
 //! `${bundle:…}` reference, a hostname with a dot — is skipped, not guessed at.
 //!
-//! The functions are pure over the project JSON, so the CLI (`envv check`) and the
+//! The functions are pure over the project JSON, so the CLI (`unv check`) and the
 //! desktop app (over IPC) cannot disagree about what a project means. Messages
 //! carry names and never values: a finding must be safe to print, and a hostname
 //! or chunk name is not a secret where a field value might be.
@@ -169,12 +169,13 @@ fn is_ref(v: &str) -> bool {
 
 // ── Rule 1: nginx proxy_pass → a Docker service the project does not define ──
 
-fn rule_nginx_proxy_pass(chunks: &[&Value], out: &mut Vec<Finding>) {
+fn rule_nginx_proxy_pass(chunks: &[&Value], elsewhere: &[String], out: &mut Vec<Finding>) {
     let services = of_type(chunks, "docker_service");
-    if services.is_empty() {
-        return; // no evidence this project defines services at all
+    if services.is_empty() && elsewhere.is_empty() {
+        return; // no evidence this project (or, with --all-projects, any) defines services
     }
     let mut known: HashSet<String> = services.iter().flat_map(|c| service_aliases(c)).collect();
+    known.extend(elsewhere.iter().cloned());
     for u in of_type(chunks, "nginx_upstream") {
         known.insert(s(u, "name").to_lowercase());
     }
@@ -643,24 +644,305 @@ fn rule_pg_network(chunks: &[&Value], out: &mut Vec<Finding>) {
     }
 }
 
+// ── Phase 29.1 rules ──────────────────────────────────────────────────────────
+//
+// Each fires only on positive evidence the project defines the thing it checks
+// against, and stays silent on anything that could live somewhere unseen.
+
+/// A Traefik router naming a `service` no `traefik_service` chunk defines.
+/// Silent when the project defines no service chunk at all (Traefik can build one
+/// from labels or another file), and for `name@provider` references.
+fn rule_traefik_service(chunks: &[&Value], out: &mut Vec<Finding>) {
+    let defined: HashSet<String> = of_type(chunks, "traefik_service")
+        .iter()
+        .map(|c| s(c, "name").to_lowercase())
+        .collect();
+    if defined.is_empty() {
+        return;
+    }
+    for router in of_type(chunks, "traefik_router") {
+        for raw in field_all(router, "service") {
+            if is_ref(raw) || raw.contains('@') || defined.contains(&raw.to_lowercase()) {
+                continue;
+            }
+            out.push(finding(
+                "traefik-service-missing",
+                "warning",
+                router,
+                "service",
+                format!(
+                    "router names service `{raw}`, which no traefik_service chunk defines (write `{raw}@file` if it lives in another file)"
+                ),
+                vec![],
+            ));
+        }
+    }
+}
+
+/// An `nginx_upstream` no `proxy_pass` in this project names. Silent when the
+/// project has no server or location chunk (the upstream may be used by a
+/// config this project does not hold).
+fn rule_nginx_upstream_unused(chunks: &[&Value], out: &mut Vec<Finding>) {
+    let users: Vec<&Value> = ["nginx_location", "nginx_server"]
+        .iter()
+        .flat_map(|t| of_type(chunks, t))
+        .collect();
+    if users.is_empty() {
+        return;
+    }
+    let mut used = HashSet::new();
+    for c in &users {
+        for target in field_all(c, "proxy_pass") {
+            if is_ref(target) {
+                return; // a reference could name any upstream: cannot judge
+            }
+            if let Some(h) = proxy_host(target) {
+                used.insert(h);
+            }
+        }
+    }
+    for u in of_type(chunks, "nginx_upstream") {
+        let name = s(u, "name").to_lowercase();
+        if !name.is_empty() && !used.contains(&name) {
+            out.push(finding(
+                "nginx-upstream-unused",
+                "warning",
+                u,
+                "name",
+                format!("upstream `{name}` is not named by any proxy_pass in this project"),
+                vec![],
+            ));
+        }
+    }
+}
+
+/// `depends_on` naming a service the project does not define. Silent with no
+/// `docker_service` chunk, and for references.
+fn rule_compose_depends_on(chunks: &[&Value], out: &mut Vec<Finding>) {
+    let services = of_type(chunks, "docker_service");
+    if services.is_empty() {
+        return;
+    }
+    let known: HashSet<String> = services.iter().flat_map(|c| service_aliases(c)).collect();
+    for svc in &services {
+        for raw in field_all(svc, "depends_on") {
+            if is_ref(raw) {
+                continue;
+            }
+            for dep in split_list(raw) {
+                if !known.contains(&dep.to_lowercase()) {
+                    out.push(finding(
+                        "compose-depends-on-unknown-service",
+                        "error",
+                        svc,
+                        "depends_on",
+                        format!("depends_on names `{dep}`, which is not a service in this project"),
+                        vec![],
+                    ));
+                }
+            }
+        }
+    }
+}
+
+/// `(ip, port, proto)` of a published port mapping, or `None` for a container-only
+/// port, a range, a reference or anything unreadable.
+fn published(spec: &str) -> Option<(String, String, String)> {
+    if is_ref(spec) {
+        return None;
+    }
+    let (body, proto) = spec.split_once('/').unwrap_or((spec, "tcp"));
+    let parts: Vec<&str> = body.split(':').collect();
+    let (ip, host) = match parts.as_slice() {
+        [host, _container] => ("", *host),
+        [ip, host, _container] => (*ip, *host),
+        _ => return None,
+    };
+    if host.is_empty() || !host.chars().all(|c| c.is_ascii_digit()) {
+        return None;
+    }
+    let ip = if ip == "0.0.0.0" { "" } else { ip };
+    Some((ip.to_string(), host.to_string(), proto.to_lowercase()))
+}
+
+/// Two services publishing the same host port. Compose refuses to start the second.
+fn rule_compose_port_clash(chunks: &[&Value], out: &mut Vec<Finding>) {
+    let services = of_type(chunks, "docker_service");
+    let mut seen: Vec<((String, String, String), &Value)> = Vec::new();
+    for svc in &services {
+        for raw in field_all(svc, "ports") {
+            for spec in split_list(raw) {
+                let Some(p) = published(&spec) else {
+                    continue;
+                };
+                let clash = seen.iter().find(|(q, other)| {
+                    !std::ptr::eq(*other, *svc)
+                        && q.1 == p.1
+                        && q.2 == p.2
+                        && (q.0 == p.0 || q.0.is_empty() || p.0.is_empty())
+                });
+                if let Some((_, other)) = clash {
+                    out.push(finding(
+                        "compose-port-clash",
+                        "error",
+                        svc,
+                        "ports",
+                        format!(
+                            "host port {}/{} is also published by service `{}`",
+                            p.1,
+                            p.2,
+                            service_name(other)
+                        ),
+                        vec![service_name(other)],
+                    ));
+                }
+                seen.push((p, svc));
+            }
+        }
+    }
+}
+
+// ── Rule: a service on a network no docker_network chunk declares ───────────
+//
+// Silent unless the project declares at least one network (positive evidence the
+// author manages them here); `default` always exists in Compose.
+
+fn rule_compose_network(chunks: &[&Value], out: &mut Vec<Finding>) {
+    let nets = of_type(chunks, "docker_network");
+    if nets.is_empty() {
+        return;
+    }
+    let mut declared: HashSet<String> = HashSet::from(["default".to_string()]);
+    for n in &nets {
+        let keys: Vec<String> = fields(n)
+            .into_iter()
+            .map(|f| s(f, "key").to_lowercase())
+            .filter(|k| !k.is_empty())
+            .collect();
+        if keys.is_empty() {
+            declared.insert(s(n, "name").to_lowercase());
+        }
+        declared.extend(keys);
+    }
+    for svc in of_type(chunks, "docker_service") {
+        for raw in field_all(svc, "networks") {
+            if is_ref(raw) {
+                continue;
+            }
+            for net in split_list(raw) {
+                if !declared.contains(&net.to_lowercase()) {
+                    out.push(finding(
+                        "compose-network-undeclared",
+                        "error",
+                        svc,
+                        "networks",
+                        format!(
+                            "Service joins network `{net}`, which no docker_network chunk declares"
+                        ),
+                        vec![],
+                    ));
+                }
+            }
+        }
+    }
+}
+
+// ── Rule: a k8s Service whose selector matches no Deployment ────────────────
+//
+// The starters generate `selector: app: <name>` and a Deployment's pod label
+// `app: <name>`, so the selector matches exactly the Deployment of the same name
+// and namespace. Silent when the project has no Deployment at all.
+
+fn rule_k8s_service_selector(chunks: &[&Value], out: &mut Vec<Finding>) {
+    let deps = of_type(chunks, "k8s_deployment");
+    if deps.is_empty() {
+        return;
+    }
+    let defined: HashSet<(String, String)> =
+        deps.iter().map(|c| (k8s_name(c), k8s_ns(c))).collect();
+    for svc in of_type(chunks, "k8s_service") {
+        let (n, ns) = (k8s_name(svc), k8s_ns(svc));
+        if is_ref(&n) || n.is_empty() || defined.contains(&(n.clone(), ns.clone())) {
+            continue;
+        }
+        out.push(finding(
+            "k8s-service-selector-unmatched",
+            "warning",
+            svc,
+            "name",
+            format!("Service `{n}` selects `app: {n}` in namespace `{ns}`, which no k8s_deployment chunk labels; it will have no endpoints"),
+            deps.iter().map(|c| k8s_name(c)).collect(),
+        ));
+    }
+}
+
 /// Run every rule over one project. `vault_names` are the vault's entry names
 /// (provider, and `provider_keyid`) so a `${…}` reference to a real entry is not
 /// reported; pass an empty slice to skip nothing and report every non-env_file ref.
 pub fn check_project(project: &Value, vault_names: &[String]) -> Vec<Finding> {
+    check_project_scoped(project, vault_names, &[])
+}
+
+/// Every Compose service name (and `container_name`) any of `projects` defines,
+/// lowercased. Passed to [`check_project_scoped`] as `elsewhere` so a `proxy_pass`
+/// is resolved against the whole stack, which is how people split one.
+pub fn services_of(projects: &[Value]) -> Vec<String> {
+    let mut v: Vec<String> = projects
+        .iter()
+        .flat_map(|p| {
+            let chunks = active_chunks(p);
+            of_type(&chunks, "docker_service")
+                .into_iter()
+                .flat_map(service_aliases)
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    v.sort();
+    v.dedup();
+    v
+}
+
+/// As [`check_project`], with `elsewhere` (see [`services_of`]) widening what an
+/// nginx `proxy_pass` host may resolve to. Off by default because it widens the
+/// evidence a rule may use: a name another project defines is not wired to this one.
+pub fn check_project_scoped(
+    project: &Value,
+    vault_names: &[String],
+    elsewhere: &[String],
+) -> Vec<Finding> {
     let chunks = active_chunks(project);
     let mut out = Vec::new();
-    rule_nginx_proxy_pass(&chunks, &mut out);
+    rule_nginx_proxy_pass(&chunks, elsewhere, &mut out);
     rule_wireguard_allowed_ips(&chunks, &mut out);
     rule_traefik_middleware(&chunks, &mut out);
     rule_k8s_secrets(&chunks, &mut out);
     rule_k8s_ingress(&chunks, &mut out);
     rule_compose_env(&chunks, vault_names, &mut out);
     rule_pg_network(&chunks, &mut out);
+    rule_traefik_service(&chunks, &mut out);
+    rule_nginx_upstream_unused(&chunks, &mut out);
+    rule_compose_depends_on(&chunks, &mut out);
+    rule_compose_port_clash(&chunks, &mut out);
+    rule_compose_network(&chunks, &mut out);
+    rule_k8s_service_selector(&chunks, &mut out);
+    // A stack integration (Phase 38) brings its own rules in its descriptor.
+    if let Some(a) = crate::stack::adapter(s(project, "project_type")) {
+        out.extend(crate::stack::check(a, project, vault_names));
+    }
     out
 }
 
-/// The rule ids, in the order they run — `envv describe` and the panel list them.
-pub const RULES: [&str; 8] = [
+/// The push gate: the error-severity findings that must stop a node from writing
+/// this project's config to a live host. Empty means go. A warning never gates.
+pub fn gate(project: &Value, vault_names: &[String]) -> Vec<Finding> {
+    check_project(project, vault_names)
+        .into_iter()
+        .filter(|f| f.severity == "error")
+        .collect()
+}
+
+/// The rule ids, in the order they run — `unv describe` and the panel list them.
+pub const RULES: [&str; 14] = [
     "nginx-proxy-pass-unknown-service",
     "wireguard-allowed-ips-duplicate",
     "wireguard-allowed-ips-overlap",
@@ -669,6 +951,12 @@ pub const RULES: [&str; 8] = [
     "k8s-ingress-service-missing",
     "compose-env-ref-unresolved",
     "pg-host-network-unreachable",
+    "traefik-service-missing",
+    "nginx-upstream-unused",
+    "compose-depends-on-unknown-service",
+    "compose-port-clash",
+    "compose-network-undeclared",
+    "k8s-service-selector-unmatched",
 ];
 
 #[cfg(test)]
@@ -1035,5 +1323,204 @@ mod tests {
         let app = chunk("app", "docker_service", vec![f("networks", "front"), env]);
         let got = rules(&project(vec![pg, db, app]), &[]);
         assert!(got.contains(&"pg-host-network-unreachable"), "{got:?}");
+    }
+    // ── Phase 29.1 ────────────────────────────────────────────────────────────
+
+    #[test]
+    fn traefik_service_missing_fires_and_stays_silent() {
+        let router = |svc: &str| {
+            chunk(
+                "r",
+                "traefik_router",
+                vec![f("rule", "Host(`a`)"), f("service", svc)],
+            )
+        };
+        let svc = chunk("api", "traefik_service", vec![f("url", "http://x")]);
+        assert_eq!(
+            rules(&project(vec![router("web"), svc.clone()]), &[]),
+            ["traefik-service-missing"]
+        );
+        assert!(rules(&project(vec![router("API"), svc.clone()]), &[]).is_empty());
+        assert!(rules(&project(vec![router("web@docker"), svc.clone()]), &[]).is_empty());
+        assert!(rules(&project(vec![router("${svc}"), svc]), &[]).is_empty());
+        // No service chunk at all: no evidence.
+        assert!(rules(&project(vec![router("web")]), &[]).is_empty());
+    }
+
+    #[test]
+    fn an_unused_upstream_fires_only_when_proxy_passes_can_be_read() {
+        let up = chunk("backend", "nginx_upstream", vec![f("server", "x:1")]);
+        let loc = |t: &str| {
+            chunk(
+                "l",
+                "nginx_location",
+                vec![f("path", "/"), f("proxy_pass", t)],
+            )
+        };
+        assert_eq!(
+            rules(&project(vec![up.clone(), loc("http://other")]), &[]),
+            ["nginx-upstream-unused"]
+        );
+        assert!(rules(&project(vec![up.clone(), loc("http://backend/")]), &[]).is_empty());
+        // A reference could name anything.
+        assert!(rules(&project(vec![up.clone(), loc("${x}")]), &[]).is_empty());
+        // No server/location chunk: the upstream may be used elsewhere.
+        assert!(rules(&project(vec![up]), &[]).is_empty());
+    }
+
+    #[test]
+    fn depends_on_an_unknown_service_is_an_error_but_not_without_services_or_for_refs() {
+        let svc = |n: &str, dep: &str| {
+            chunk(
+                n,
+                "docker_service",
+                vec![f("image", "x"), f("depends_on", dep)],
+            )
+        };
+        let db = chunk("db", "docker_service", vec![f("image", "pg")]);
+        assert_eq!(
+            rules(&project(vec![svc("web", "db, cache"), db.clone()]), &[]),
+            ["compose-depends-on-unknown-service"]
+        );
+        assert!(rules(&project(vec![svc("web", "DB"), db.clone()]), &[]).is_empty());
+        assert!(rules(&project(vec![svc("web", "${deps}"), db]), &["deps"]).is_empty());
+    }
+
+    #[test]
+    fn a_published_port_two_services_bind_is_an_error() {
+        let svc =
+            |n: &str, p: &str| chunk(n, "docker_service", vec![f("image", "x"), f("ports", p)]);
+        assert_eq!(
+            rules(
+                &project(vec![svc("a", "8080:80"), svc("b", "8080:3000")]),
+                &[]
+            ),
+            ["compose-port-clash"]
+        );
+        // Different protocol, different host ip, container-only, range, one service twice.
+        assert!(rules(
+            &project(vec![svc("a", "8080:80"), svc("b", "8080:80/udp")]),
+            &[]
+        )
+        .is_empty());
+        assert!(rules(
+            &project(vec![
+                svc("a", "127.0.0.1:8080:80"),
+                svc("b", "127.0.0.2:8080:80")
+            ]),
+            &[]
+        )
+        .is_empty());
+        assert_eq!(
+            rules(
+                &project(vec![
+                    svc("a", "127.0.0.1:8080:80"),
+                    svc("b", "0.0.0.0:8080:80")
+                ]),
+                &[]
+            ),
+            ["compose-port-clash"]
+        );
+        assert!(rules(&project(vec![svc("a", "80"), svc("b", "80")]), &[]).is_empty());
+        assert!(rules(
+            &project(vec![svc("a", "8000-8010:80"), svc("b", "8000-8010:80")]),
+            &[]
+        )
+        .is_empty());
+        assert!(rules(&project(vec![svc("a", "8080:80, 9090:80")]), &[]).is_empty());
+    }
+
+    #[test]
+    fn a_service_network_must_be_declared_once_networks_are_managed_here() {
+        let svc = |n: &str| chunk("web", "docker_service", vec![f("networks", n)]);
+        let net = chunk("n", "docker_network", vec![f("backend", "bridge")]);
+        assert!(rules(&project(vec![svc("backend"), net.clone()]), &[]).is_empty());
+        assert!(rules(&project(vec![svc("default, backend"), net.clone()]), &[]).is_empty());
+        assert_eq!(
+            rules(&project(vec![svc("backend, other"), net]), &[]),
+            ["compose-network-undeclared"]
+        );
+        assert!(rules(&project(vec![svc("anything")]), &[]).is_empty());
+    }
+
+    #[test]
+    fn a_k8s_service_needs_the_deployment_its_selector_names() {
+        let dep = chunk(
+            "d",
+            "k8s_deployment",
+            vec![f("name", "app"), f("namespace", "prod")],
+        );
+        let svc =
+            |n: &str, ns: &str| chunk("s", "k8s_service", vec![f("name", n), f("namespace", ns)]);
+        assert!(rules(&project(vec![dep.clone(), svc("app", "prod")]), &[]).is_empty());
+        assert_eq!(
+            rules(&project(vec![dep.clone(), svc("app", "dev")]), &[]),
+            ["k8s-service-selector-unmatched"]
+        );
+        assert_eq!(
+            rules(&project(vec![dep, svc("web", "prod")]), &[]),
+            ["k8s-service-selector-unmatched"]
+        );
+        assert!(rules(&project(vec![svc("web", "prod")]), &[]).is_empty());
+    }
+
+    #[test]
+    fn a_proxy_pass_host_may_be_a_service_of_another_project_only_in_wide_scope() {
+        let web = project(vec![chunk(
+            "n",
+            "nginx_location",
+            vec![f("proxy_pass", "http://api:8080")],
+        )]);
+        let own = chunk("web", "docker_service", vec![]);
+        let other = project(vec![chunk("api", "docker_service", vec![])]);
+        // Alone, the only evidence is this project's own service: `api` is unknown.
+        let alone = project(vec![
+            chunk(
+                "n",
+                "nginx_location",
+                vec![f("proxy_pass", "http://api:8080")],
+            ),
+            own,
+        ]);
+        assert_eq!(
+            check_project(&alone, &[])
+                .iter()
+                .map(|x| x.rule)
+                .collect::<Vec<_>>(),
+            ["nginx-proxy-pass-unknown-service"]
+        );
+        let els = services_of(&[other]);
+        assert_eq!(els, ["api"]);
+        assert!(check_project_scoped(&alone, &[], &els).is_empty());
+        // With no service in this project, the other projects are the evidence.
+        assert!(check_project_scoped(&web, &[], &els).is_empty());
+        assert!(
+            check_project(&web, &[]).is_empty(),
+            "no evidence, no finding"
+        );
+        // A name nobody defines is still reported in wide scope.
+        let missing = project(vec![chunk(
+            "n",
+            "nginx_location",
+            vec![f("proxy_pass", "http://ghost:1")],
+        )]);
+        assert_eq!(check_project_scoped(&missing, &[], &els).len(), 1);
+    }
+
+    #[test]
+    fn the_gate_lets_warnings_through_and_stops_errors() {
+        let net = chunk("web", "docker_service", vec![f("networks", "nope")]);
+        let decl = chunk("n", "docker_network", vec![f("backend", "bridge")]);
+        assert_eq!(gate(&project(vec![net, decl]), &[]).len(), 1);
+        let warn = project(vec![
+            chunk(
+                "n",
+                "nginx_location",
+                vec![f("proxy_pass", "http://ghost:1")],
+            ),
+            chunk("web", "docker_service", vec![]),
+        ]);
+        assert_eq!(check_project(&warn, &[]).len(), 1);
+        assert!(gate(&warn, &[]).is_empty());
     }
 }
