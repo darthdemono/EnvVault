@@ -1,4 +1,4 @@
-//! Per-directory project and environment context — `envv use` and `.envv.json`.
+//! Per-directory project and environment context — `unv use` and `.envv.json`.
 //!
 //! Every command that scopes to a project repeats `--project web` forever. This
 //! pins the answer to a directory once, the way a `.git` directory or a
@@ -8,7 +8,7 @@
 //! # Precedence, highest first
 //!
 //! 1. An explicit `--project` / `--env` flag.
-//! 2. `ENVV_PROJECT` / `ENVV_ENV` in the environment — what CI sets.
+//! 2. `UNV_PROJECT` / `UNV_ENV` in the environment — what CI sets.
 //! 3. The nearest `.envv.json`, searching upward from the working directory.
 //!
 //! # This file holds no secrets, and that is deliberate
@@ -58,7 +58,7 @@ fn one() -> u32 {
 /// root.
 ///
 /// Upward search, not just the current directory: the whole point is running
-/// `envv get` from `src/deep/nested/` in a checkout whose context sits at its
+/// `unv get` from `src/deep/nested/` in a checkout whose context sits at its
 /// top level.
 pub fn find_file(start: &Path) -> Option<PathBuf> {
     let mut dir = Some(start);
@@ -84,7 +84,7 @@ pub fn load_from(start: &Path) -> Result<Option<(PathBuf, Context)>, CliError> {
         .map_err(|e| CliError::from(format!("Cannot read {}: {e}", path.display())))?;
     let ctx: Context = serde_json::from_str(&raw).map_err(|e| {
         CliError::invalid(format!(
-            "{} is not valid context JSON: {e}\nFix it, or run `envv use --clear` in that directory.",
+            "{} is not valid context JSON: {e}\nFix it, or run `unv use --clear` in that directory.",
             path.display()
         ))
     })?;
@@ -106,7 +106,7 @@ pub fn project(explicit: Option<&str>) -> Result<Option<String>, CliError> {
     if let Some(p) = explicit {
         return Ok(Some(p.to_string()));
     }
-    if let Ok(p) = std::env::var("ENVV_PROJECT") {
+    if let Ok(p) = std::env::var("UNV_PROJECT") {
         if !p.is_empty() {
             return Ok(Some(p));
         }
@@ -119,7 +119,7 @@ pub fn environment(explicit: Option<&str>) -> Result<Option<String>, CliError> {
     if let Some(e) = explicit {
         return Ok(Some(e.to_string()));
     }
-    if let Ok(e) = std::env::var("ENVV_ENV") {
+    if let Ok(e) = std::env::var("UNV_ENV") {
         if !e.is_empty() {
             return Ok(Some(e));
         }
@@ -128,10 +128,10 @@ pub fn environment(explicit: Option<&str>) -> Result<Option<String>, CliError> {
 }
 
 /// True when this project name came from a context file rather than a flag —
-/// used to decide whether a failure to resolve it should mention `envv use`.
+/// used to decide whether a failure to resolve it should mention `unv use`.
 pub fn is_from_context(explicit: Option<&str>) -> bool {
     explicit.is_none()
-        && std::env::var("ENVV_PROJECT")
+        && std::env::var("UNV_PROJECT")
             .map(|v| v.is_empty())
             .unwrap_or(true)
 }
@@ -174,7 +174,7 @@ pub fn clear(dir: &Path) -> Result<bool, CliError> {
     Ok(true)
 }
 
-/// `envv use` — pin, show or clear the context for this directory.
+/// `unv use` — pin, show or clear the context for this directory.
 pub fn cmd_use(
     access: Option<&crate::access::Access>,
     project_name: Option<&str>,
@@ -203,8 +203,8 @@ pub fn cmd_use(
 
     if show || (project_name.is_none() && env_name.is_none()) {
         let found = load_from(&cwd)?;
-        let env_project = std::env::var("ENVV_PROJECT").ok().filter(|v| !v.is_empty());
-        let env_env = std::env::var("ENVV_ENV").ok().filter(|v| !v.is_empty());
+        let env_project = std::env::var("UNV_PROJECT").ok().filter(|v| !v.is_empty());
+        let env_env = std::env::var("UNV_ENV").ok().filter(|v| !v.is_empty());
         crate::out::ok(
             "use.show",
             serde_json::json!({
@@ -222,7 +222,7 @@ pub fn cmd_use(
                     // Stated because it is the confusing case: the file is right
                     // there and something else is winning.
                     if env_project.is_some() || env_env.is_some() {
-                        println!("\nENVV_PROJECT / ENVV_ENV are set and take precedence.");
+                        println!("\nENVV_PROJECT / UNV_ENV are set and take precedence.");
                     }
                 }
                 None => println!("No {FILE_NAME} found in this directory or any parent."),
@@ -238,7 +238,7 @@ pub fn cmd_use(
         let vault = a.load_vault()?;
         if resolve_in_vault(&vault, name).is_none() {
             return Err(CliError::not_found(format!(
-                "No project matches '{name}'. Run `envv project ls` to see what exists."
+                "No project matches '{name}'. Run `unv project ls` to see what exists."
             )));
         }
     }
@@ -250,7 +250,7 @@ pub fn cmd_use(
 
     let ctx = Context {
         version: 1,
-        // Each half is set independently: `envv use --env staging` in a
+        // Each half is set independently: `unv use --env staging` in a
         // directory already pinned to a project must not silently unpin it.
         project: project_name.map(str::to_string).or(existing.project),
         environment: env_name.map(str::to_string).or(existing.environment),
@@ -288,7 +288,7 @@ mod tests {
 
     #[test]
     fn finds_a_context_in_a_parent_directory() {
-        // The case the feature exists for: `envv get` run from deep inside a
+        // The case the feature exists for: `unv get` run from deep inside a
         // checkout whose context sits at the top.
         let root = scratch("parent");
         let deep = root.join("a").join("b").join("c");
