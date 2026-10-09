@@ -920,6 +920,9 @@
   gap: 10px;
   padding: 0 14px 14px;
 }
+.pool-card-members[hidden] {
+  display: none;
+}
 .bundle-slot-tabs {
   grid-column: 1 / -1;
   display: flex;
