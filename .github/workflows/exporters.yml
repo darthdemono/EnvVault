@@ -14,11 +14,18 @@ on:
     branches: [main]
     paths:
       - "src/ts/chunk-ops.ts"
+      - "src/ts/stack.ts"
+      - "vault-core/src/stack.rs"
+      - "vault-core/data/stack-adapters.json"
+      - "envv-cli/src/enrich.rs"
       - "tests/fixtures/parity/**"
       - ".github/workflows/exporters.yml"
   pull_request:
     paths:
       - "src/ts/chunk-ops.ts"
+      - "src/ts/stack.ts"
+      - "vault-core/src/stack.rs"
+      - "vault-core/data/stack-adapters.json"
       - "tests/fixtures/parity/**"
   workflow_dispatch:
 
@@ -40,13 +47,13 @@ jobs:
           cache: npm
       - run: npm ci
       - name: Generate
-        run: PARITY_UPDATE=1 npx vitest run tests/cli-parity.test.ts
+        run: PARITY_UPDATE=1 npx vitest run tests/cli-parity.test.ts tests/stack.test.ts
       - name: Fixtures must already match what the exporters produce
         run: |
           # A diff here means someone changed an exporter without regenerating,
           # so every job below would be validating stale bytes.
           git diff --exit-code tests/fixtures/parity/ || {
-            echo "::error::Golden fixtures are stale. Run: PARITY_UPDATE=1 npx vitest run tests/cli-parity.test.ts"
+            echo "::error::Golden fixtures are stale. Run: PARITY_UPDATE=1 npx vitest run tests/cli-parity.test.ts tests/stack.test.ts"
             exit 1
           }
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -263,3 +270,175 @@ jobs:
             echo "::error::a disabled chunk was exported into the manifest"
             exit 1
           fi
+
+  # Phase 38: the three stack integrations. Each is validated by running the real
+  # software against the golden file, with a control case that the same software
+  # rejects. Images are pinned by digest so a green tick means the same thing next
+  # month (prometheus 3.15.0, grafana 13.0.2, homepage 2.4.0 when pinned).
+  prometheus:
+    name: prometheus → promtool
+    needs: fixtures
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with: { name: fixtures, path: fixtures }
+      - name: promtool must accept it
+        run: |
+          set -euo pipefail
+          IMG=prom/prometheus@sha256:efd719c99d83b060d9daefdcf00360461adf279f45ef5391f8d111892118753e
+          # The file names a CA bundle; promtool checks it exists.
+          openssl req -x509 -newkey rsa:2048 -nodes -keyout /tmp/k.pem -out /tmp/ca.pem -days 1 -subj /CN=t
+          chmod 644 /tmp/ca.pem
+          docker run --rm \
+            -v "$PWD/fixtures/stack-prometheus.yml:/etc/prometheus/prometheus.yml:ro" \
+            -v /tmp/ca.pem:/etc/prometheus/ca.pem:ro \
+            --entrypoint promtool "$IMG" check config /etc/prometheus/prometheus.yml
+          # Control: a file the descriptor's own rules forbid must be rejected, or
+          # the check above proves nothing.
+          printf 'scrape_configs:\n  - job_name: x\n    basic_auth:\n      username: a\n      password: b\n    authorization:\n      credentials: c\n    static_configs:\n      - targets: [h:1]\n' > /tmp/bad.yml
+          if docker run --rm -v /tmp/bad.yml:/etc/prometheus/bad.yml:ro --entrypoint promtool "$IMG" check config /etc/prometheus/bad.yml >/dev/null 2>&1; then
+            echo "::error::promtool accepted an invalid config — this check proves nothing"
+            exit 1
+          fi
+
+  grafana:
+    name: grafana → provisioning
+    needs: fixtures
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with: { name: fixtures, path: fixtures }
+      - name: Grafana must provision both datasources, credentials as secure fields
+        run: |
+          set -euo pipefail
+          IMG=grafana/grafana-oss@sha256:5dad0df181cb644a14e13617b913b261a54f7d4fd4510721dba420929f35bea2
+          mkdir prov && cp fixtures/stack-grafana.yml prov/datasources.yml && chmod -R a+rX prov
+          docker run -d --name gf -p 13000:3000 -e GF_SECURITY_ADMIN_PASSWORD=pw123 \
+            -v "$PWD/prov:/etc/grafana/provisioning/datasources:ro" "$IMG"
+          for i in $(seq 1 60); do
+            curl -fs -u admin:pw123 http://127.0.0.1:13000/api/datasources >ds.json 2>/dev/null && break
+            sleep 2
+          done
+          python3 - <<'PY'
+          import json, urllib.request, base64
+          def get(path):
+              r = urllib.request.Request("http://127.0.0.1:13000" + path)
+              r.add_header("Authorization", "Basic " + base64.b64encode(b"admin:pw123").decode())
+              return json.load(urllib.request.urlopen(r))
+          names = sorted(d["name"] for d in get("/api/datasources"))
+          assert names == ["Postgres", "Prometheus"], names
+          prom = get("/api/datasources/name/Prometheus")
+          assert prom["isDefault"] is True
+          assert prom["secureJsonFields"].get("httpHeaderValue1") is True, prom["secureJsonFields"]
+          pg = get("/api/datasources/name/Postgres")
+          assert pg["secureJsonFields"].get("password") is True, pg["secureJsonFields"]
+          assert pg["user"] == "grafana" and pg["database"] == "app"
+          PY
+      - name: Control — Grafana must refuse a provisioning file that is not valid YAML
+        run: |
+          set -euo pipefail
+          docker rm -f gf >/dev/null
+          IMG=grafana/grafana-oss@sha256:5dad0df181cb644a14e13617b913b261a54f7d4fd4510721dba420929f35bea2
+          mkdir bad && chmod a+rX bad
+          printf 'apiVersion: 1\ndatasources:\n  - name: A\n    type: prometheus\n    url: http://x\n   bad: indent\n' > bad/d.yml
+          docker run -d --name gfbad -p 13001:3000 -e GF_SECURITY_ADMIN_PASSWORD=pw123 \
+            -v "$PWD/bad:/etc/grafana/provisioning/datasources:ro" "$IMG"
+          # A Grafana that cannot provision exits; one that shrugs keeps running.
+          for i in $(seq 1 30); do
+            [ "$(docker inspect -f '{{.State.Running}}' gfbad)" = "false" ] && break
+            sleep 2
+          done
+          if [ "$(docker inspect -f '{{.State.Running}}' gfbad)" = "true" ]; then
+            echo "::error::Grafana accepted an invalid provisioning file — this check proves nothing"
+            exit 1
+          fi
+      - name: The premise of the duplicate-name rule — the second datasource silently replaces the first
+        run: |
+          set -euo pipefail
+          IMG=grafana/grafana-oss@sha256:5dad0df181cb644a14e13617b913b261a54f7d4fd4510721dba420929f35bea2
+          mkdir dup && chmod a+rX dup
+          printf 'apiVersion: 1\ndatasources:\n  - name: A\n    type: prometheus\n    url: http://x\n  - name: A\n    type: prometheus\n    url: http://y\n' > dup/d.yml
+          docker run -d --name gfdup -p 13002:3000 -e GF_SECURITY_ADMIN_PASSWORD=pw123 \
+            -v "$PWD/dup:/etc/grafana/provisioning/datasources:ro" "$IMG"
+          for i in $(seq 1 60); do
+            curl -fs -u admin:pw123 http://127.0.0.1:13002/api/datasources >d.json 2>/dev/null && break
+            sleep 2
+          done
+          python3 -c "import json; d=json.load(open('d.json')); assert [(x['name'], x['url']) for x in d] == [('A', 'http://y')], d"
+
+  homepage:
+    name: homepage → services.yaml
+    needs: fixtures
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with: { name: fixtures, path: fixtures }
+      - name: Homepage must load the groups, services and widgets
+        run: |
+          set -euo pipefail
+          IMG=ghcr.io/gethomepage/homepage@sha256:643bd0be730d40f69d58028a55d1a896739333e8815786df42bc97f109ecbe61
+          mkdir cfg && cp fixtures/stack-homepage.yaml cfg/services.yaml && chmod -R a+rwX cfg
+          docker run -d --name hp -p 13100:3000 -e HOMEPAGE_ALLOWED_HOSTS=127.0.0.1:13100 -v "$PWD/cfg:/app/config" "$IMG"
+          for i in $(seq 1 60); do
+            curl -fs http://127.0.0.1:13100/api/services >svc.json 2>/dev/null && break
+            sleep 2
+          done
+          python3 - <<'PY'
+          import json
+          groups = {g["name"]: [s["name"] for s in g["services"]] for g in json.load(open("svc.json"))}
+          assert groups == {"Media": ["Jellyfin", "Sonarr"], "Network": ["Pi-hole"], "Services": ["Bare"]}, groups
+          media = {s["name"]: s for g in json.load(open("svc.json")) for s in g["services"]}
+          assert [w["type"] for w in media["Jellyfin"]["widgets"]] == ["jellyfin"]
+          assert [w["type"] for w in media["Sonarr"]["widgets"]] == ["sonarr"]
+          PY
+      - name: Control — Homepage must reject a file that is not valid YAML
+        run: |
+          set -euo pipefail
+          docker rm -f hp >/dev/null
+          IMG=ghcr.io/gethomepage/homepage@sha256:643bd0be730d40f69d58028a55d1a896739333e8815786df42bc97f109ecbe61
+          mkdir bad && printf -- '- Media:\n\t- Bad: [unclosed\n' > bad/services.yaml && chmod -R a+rwX bad
+          docker run -d --name hpbad -p 13101:3000 -e HOMEPAGE_ALLOWED_HOSTS=127.0.0.1:13101 -v "$PWD/bad:/app/config" "$IMG"
+          for i in $(seq 1 60); do
+            curl -fs http://127.0.0.1:13101/api/services >out.json 2>/dev/null && break
+            sleep 2
+          done
+          test "$(cat out.json)" = "[]" || { echo "::error::Homepage loaded an invalid services.yaml — this check proves nothing"; exit 1; }
+
+  # Phase 38.1: `unv enrich --online` against a real Grafana. The service-account
+  # token is minted by the running server, so a change in what /api/user or /api/org
+  # answer to such a token fails here rather than at a user's desk. The control is a
+  # token the server refuses.
+  grafana-probe:
+    name: grafana → enrich --online
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+      - uses: Swatinem/rust-cache@bc2d2e71bd35c5549942babaa51a89c586b981d1 # v2.8.1
+      - run: sudo apt-get update && sudo apt-get install -y libsqlcipher-dev
+      - run: cargo build -p envv-cli
+      - name: The probe must name the service account and the organisation
+        run: |
+          set -euo pipefail
+          IMG=grafana/grafana-oss@sha256:5dad0df181cb644a14e13617b913b261a54f7d4fd4510721dba420929f35bea2
+          docker run -d --name gf -p 13000:3000 -e GF_SECURITY_ADMIN_PASSWORD=pw123 "$IMG"
+          for i in $(seq 1 60); do curl -fs http://127.0.0.1:13000/api/health >/dev/null 2>&1 && break; sleep 2; done
+          ID=$(curl -fs -u admin:pw123 -H 'Content-Type: application/json' -d '{"name":"ci","role":"Editor"}' http://127.0.0.1:13000/api/serviceaccounts | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
+          TOK=$(curl -fs -u admin:pw123 -H 'Content-Type: application/json' -d '{"name":"t"}' "http://127.0.0.1:13000/api/serviceaccounts/$ID/tokens" | python3 -c 'import sys,json;print(json.load(sys.stdin)["key"])')
+          export UNV_PASSWORD=correct-horse-battery
+          E="./target/debug/unv --db-path /tmp/gf/vault.db --init --yes"
+          mkdir -p /tmp/gf
+          printf '%s' "$TOK" | $E entry add Grafana --type api_key --url http://127.0.0.1:13000 --key-stdin
+          out=$($E --json enrich --online)
+          echo "$out"
+          echo "$out" | grep -q '"account_name"' || { echo "::error::the probe did not read the service account"; exit 1; }
+          echo "$out" | grep -q 'sa-1-ci' || { echo "::error::the probe did not name sa-1-ci"; exit 1; }
+      - name: Control — a token Grafana refuses must be reported rejected
+        run: |
+          set -euo pipefail
+          export UNV_PASSWORD=correct-horse-battery
+          E="./target/debug/unv --db-path /tmp/gf2/vault.db --init --yes"
+          mkdir -p /tmp/gf2
+          printf 'glsa_bogusbogusbogusbogus' | $E entry add Grafana --type api_key --url http://127.0.0.1:13000 --key-stdin
+          out=$($E --json enrich --online)
+          echo "$out" | grep -qi 'rejected' || { echo "::error::a refused token was not reported — this check proves nothing"; exit 1; }
