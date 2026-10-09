@@ -157,7 +157,12 @@ describe('step 5 — E7, expiry below a day', () => {
 
   it('treats a bare date as the end of that day, not midnight', () => {
     // Otherwise every long-lived credential expires a day early.
-    const today = new Date().toISOString().slice(0, 10);
+    // The *local* calendar day: `timeUntil` reads a bare date as that day's end in
+    // local time, so a UTC date is yesterday for the first hours after local
+    // midnight in any zone east of Greenwich.
+    const d = new Date();
+    const pad = (n: number) => String(n).padStart(2, '0');
+    const today = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
     expect(timeUntil(today)).toMatch(/^expires in/);
   });
 
