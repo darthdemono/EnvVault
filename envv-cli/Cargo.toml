@@ -1,6 +1,6 @@
 [package]
 name    = "envv-cli"
-version = "0.33.0"
+version = "0.39.0"
 edition = "2021"
 publish = false
 license = "MIT"
@@ -10,7 +10,7 @@ name = "envv_cli"
 path = "src/lib.rs"
 
 [[bin]]
-name = "envv"
+name = "unv"
 path = "src/main.rs"
 
 [dependencies]
