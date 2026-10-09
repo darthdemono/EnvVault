@@ -8,12 +8,14 @@
     {
       "key": "defprefix",
       "value": ">",
-      "kind": "string"
+      "kind": "string",
+      "public": true
     },
     {
       "key": "colour",
       "value": "0x800000",
-      "kind": "hex_int"
+      "kind": "hex_int",
+      "public": true
     },
     {
       "key": "application_id",
@@ -33,12 +35,14 @@
     {
       "key": "title",
       "value": "Example Bot",
-      "kind": "string"
+      "kind": "string",
+      "public": true
     },
     {
       "key": "description",
       "value": "Plays {nothing}",
-      "kind": "string"
+      "kind": "string",
+      "public": true
     },
     {
       "key": "stats_url",
@@ -63,27 +67,32 @@
     {
       "key": "blink",
       "value": "https://example.invalid/blink?scope=bot&scope=bot&p={defprefix}",
-      "kind": "template"
+      "kind": "template",
+      "public": true
     },
     {
       "key": "click",
       "value": "[Click me!](https://discord.com/api/oauth2/authorize?client_id=708766134927442001)",
-      "kind": "markdown_link"
+      "kind": "markdown_link",
+      "public": true
     },
     {
       "key": "volume",
       "value": "0.5",
-      "kind": "float"
+      "kind": "float",
+      "public": true
     },
     {
       "key": "debug",
       "value": "true",
-      "kind": "bool"
+      "kind": "bool",
+      "public": true
     },
     {
       "key": "nothing",
       "value": "",
-      "kind": "string"
+      "kind": "string",
+      "public": true
     },
     {
       "key": "weird",
