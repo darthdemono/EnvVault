@@ -1,4 +1,4 @@
-//! `envv calendar feed` — subscribable `.ics` URLs served by `envv-server`
+//! `unv calendar feed` — subscribable `.ics` URLs served by `unv-server`
 //! (Phase 24.3). Server-side only: there is nothing local to serve a feed from,
 //! so every command here refuses against `Access::Local` with an explanation
 //! rather than a confusing HTTP error.
@@ -13,7 +13,7 @@ fn require_remote(a: &Access) -> CliResult<&crate::access::RemoteClient> {
     a.remote().ok_or_else(|| {
         CliError::unavailable(
             "Calendar feeds are server-side only. Connect with --server, or run \
-             `envv-server` and point at it.",
+             `unv-server` and point at it.",
         )
     })
 }
