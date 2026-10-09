@@ -8,8 +8,8 @@
 //! Three rules the whole module follows, all of them learned from bugs this
 //! project has already shipped:
 //!
-//! * **Upsert by identity, never append.** `envv import` used to append
-//!   unconditionally, so `envv watch` added a full copy of the file to the vault
+//! * **Upsert by identity, never append.** `unv import` used to append
+//!   unconditionally, so `unv watch` added a full copy of the file to the vault
 //!   on every save. Re-running an import must be a no-op.
 //! * **Preview by default.** Writing a hundred entries into someone's vault
 //!   because they wanted to see what would happen is not recoverable by undo.
@@ -47,6 +47,109 @@ fn s(v: Option<&Value>) -> Option<String> {
         .map(str::trim)
         .filter(|x| !x.is_empty())
         .map(str::to_string)
+}
+
+// ── Nextcloud (Phase 38.1) ───────────────────────────────────────────────────
+
+/// What a source file parses to, and what in it could not be read.
+///
+/// Every vendor but Nextcloud exports JSON. Nextcloud keeps its secrets in
+/// `config/config.php`, a PHP array literal, read by `vault_core::php_config`
+/// without running anything.
+pub fn source_value(vendor: &str, text: &str) -> Result<(Value, Vec<String>), String> {
+    if vendor == "nextcloud" {
+        let p = vault_core::php_config::parse_var(text, "CONFIG")?;
+        return Ok((p.value, p.warnings));
+    }
+    let doc = serde_json::from_str(text)
+        .map_err(|e| format!("Not JSON: {e}. Export from {vendor} in JSON format."))?;
+    Ok((doc, Vec::new()))
+}
+
+/// The secrets in a Nextcloud `config.php`, one record each.
+///
+/// The provider carries the instance id (`instanceid` is not secret; it is in
+/// every cookie name), so two instances do not overwrite each other and
+/// importing the same file twice is a no-op. Only values that are actually
+/// present are taken: an empty `dbpassword` is not a credential. A value PHP
+/// would have had to compute arrives as `null` and is counted as skipped.
+pub fn read_nextcloud(doc: &Value) -> (Vec<Incoming>, usize) {
+    let id = s(doc.get("instanceid")).unwrap_or_else(|| "instance".into());
+    let host = s(doc.get("overwrite.cli.url"))
+        .or_else(|| s(doc.get("trusted_domains").and_then(|d| d.get(0))));
+    let mut out = Vec::new();
+    let mut skipped = 0usize;
+    let mut add = |what: &str,
+                   secret: Option<&Value>,
+                   user: Option<String>,
+                   notes: Option<String>,
+                   ty: &str| {
+        match secret {
+            Some(Value::Null) => skipped += 1,
+            Some(v) => {
+                if let Some(secret) = s(Some(v)) {
+                    out.push(Incoming {
+                        provider: format!("Nextcloud {what} ({id})"),
+                        secret,
+                        username: user,
+                        url: host.clone(),
+                        notes,
+                        totp: None,
+                        secret_type: ty.into(),
+                        folder: Some("Nextcloud".into()),
+                    });
+                }
+            }
+            None => {}
+        }
+    };
+
+    add(
+        "passwordsalt",
+        doc.get("passwordsalt"),
+        None,
+        None,
+        "password",
+    );
+    add("secret", doc.get("secret"), None, None, "password");
+    // SQLite has no password; the others do.
+    let db = s(doc.get("dbtype")).unwrap_or_default();
+    add(
+        "database",
+        doc.get("dbpassword"),
+        s(doc.get("dbuser")),
+        Some(format!(
+            "{db} at {} / {}",
+            s(doc.get("dbhost")).unwrap_or_default(),
+            s(doc.get("dbname")).unwrap_or_default()
+        )),
+        "password",
+    );
+    add(
+        "SMTP",
+        doc.get("mail_smtppassword"),
+        s(doc.get("mail_smtpname")),
+        s(doc.get("mail_smtphost")).map(|h| format!("SMTP host {h}")),
+        "password",
+    );
+    add(
+        "Redis",
+        doc.get("redis").and_then(|r| r.get("password")),
+        None,
+        s(doc.get("redis").and_then(|r| r.get("host"))).map(|h| format!("Redis host {h}")),
+        "password",
+    );
+    add("license key", doc.get("license-key"), None, None, "api_key");
+    if let Some(args) = doc.get("objectstore").and_then(|o| o.get("arguments")) {
+        add(
+            "object store",
+            args.get("secret").or_else(|| args.get("password")),
+            s(args.get("key")).or_else(|| s(args.get("user"))),
+            s(args.get("bucket")).map(|b| format!("bucket {b}")),
+            "api_key",
+        );
+    }
+    (out, skipped)
 }
 
 // ── Bitwarden ────────────────────────────────────────────────────────────────
@@ -478,7 +581,7 @@ fn merge(
         match idx {
             Some(i) => {
                 // Upsert, not append. Importing the same export twice must not
-                // double the vault — `envv import` shipped that bug once.
+                // double the vault — `unv import` shipped that bug once.
                 let same =
                     entries[i].get("api_key").and_then(|v| v.as_str()) == Some(rec.secret.as_str());
                 if same {
@@ -535,7 +638,7 @@ fn merge(
 }
 
 /// Everything an import would do, computed without writing anything. Shared by
-/// `envv import-vault` and the desktop app's import pane (Phase 33.3), so what the
+/// `unv import-vault` and the desktop app's import pane (Phase 33.3), so what the
 /// app previews is what the CLI would write.
 pub struct ImportPlan {
     /// The whole entry array after the import.
@@ -558,6 +661,7 @@ pub fn plan_import(
         "bitwarden" => read_bitwarden(doc),
         "onepassword" => read_onepassword(doc),
         "proton" => read_proton(doc).map_err(CliError::invalid)?,
+        "nextcloud" => read_nextcloud(doc),
         other => return Err(CliError::invalid(format!("Unknown vendor '{other}'"))),
     };
     if incoming.is_empty() {
@@ -590,7 +694,7 @@ pub fn plan_import(
     })
 }
 
-/// `envv import bitwarden FILE` / `envv import onepassword FILE`.
+/// `unv import bitwarden FILE` / `unv import onepassword FILE`.
 pub fn run(
     access: &Access,
     vendor: &str,
@@ -599,12 +703,8 @@ pub fn run(
 ) -> CliResult {
     let raw = std::fs::read_to_string(file)
         .map_err(|e| CliError::not_found(format!("Cannot read {}: {e}", file.display())))?;
-    let doc: Value = serde_json::from_str(&raw).map_err(|e| {
-        CliError::invalid(format!(
-            "{} is not JSON: {e}. Export from {vendor} in JSON format.",
-            file.display()
-        ))
-    })?;
+    let (doc, warnings) = source_value(vendor, &raw)
+        .map_err(|e| CliError::invalid(format!("{}: {e}", file.display())))?;
 
     let vault = access.load_vault_or_empty()?;
     let ImportPlan {
@@ -623,9 +723,13 @@ pub fn run(
                 "applied": false,
                 "created": created, "updated": updated, "unchanged": unchanged,
                 "skipped": skipped,
+                "warnings": warnings,
                 "items": preview,
             }),
             || {
+                for w in &warnings {
+                    println!("warning: {w}");
+                }
                 println!(
                     "{} would create, {updated} update, {unchanged} unchanged, {skipped} skipped.",
                     created
