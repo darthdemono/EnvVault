@@ -1022,6 +1022,44 @@ enum NodeCmd {
         #[arg(long, env = "UNV_NODE_DIR")]
         state_dir: Option<PathBuf>,
     },
+    /// On the managed host, as root: install the agent as a hardened systemd
+    /// service, enrol it, and give it access to exactly the files you name.
+    /// `--plan` prints every step without running any.
+    Install {
+        /// The hub, `https://…` (or `http://` with `--relay`).
+        #[arg(long)]
+        hub: String,
+        #[arg(long)]
+        token_file: Option<PathBuf>,
+        #[arg(long)]
+        token_stdin: bool,
+        #[arg(long)]
+        hub_fingerprint: Option<String>,
+        /// Reach a plain-HTTP hub on another machine (`HOST:PORT`, e.g. over a
+        /// VPN) through a loopback relay; needs `socat`.
+        #[arg(long)]
+        relay: Option<String>,
+        #[arg(long, requires = "advertise")]
+        listen: Option<String>,
+        #[arg(long, requires = "listen")]
+        advertise: Option<String>,
+        /// A file to manage: `id=wg0,path=/etc/wireguard/wg0.conf,project=wg/vps,exporter=wireguard[,apply=true][,reload=wg-quick@wg0][,validate=CMD][,require_approval=true]`.
+        /// Repeatable. Without `apply=true` the node only observes.
+        #[arg(long = "target", required = true)]
+        targets: Vec<String>,
+        /// The owner's approver key (`unv node approver register`), so a push
+        /// needs a signature made on the owner's own machine.
+        #[arg(long)]
+        approver: Option<String>,
+        #[arg(long, default_value_t = 30)]
+        interval: u64,
+        /// Replace an existing identity.
+        #[arg(long)]
+        force: bool,
+        /// Print the steps and exit.
+        #[arg(long)]
+        plan: bool,
+    },
     /// On the managed host: beat to the hub and carry out what this node's own
     /// config allows. Runs until stopped. A node enrolled with `--listen` waits
     /// for the hub to dial it instead.
@@ -2054,6 +2092,66 @@ fn run_node_agent_side(cmd: &NodeCmd) -> Option<CliResult> {
                 listen.as_deref().zip(advertise.as_deref()),
             )
         })(),
+        NodeCmd::Install {
+            hub,
+            token_file,
+            token_stdin,
+            hub_fingerprint,
+            relay,
+            listen,
+            advertise,
+            targets,
+            approver,
+            interval,
+            force,
+            plan,
+        } => (|| {
+            let specs = targets
+                .iter()
+                .map(|t| unv_cli::node_install::parse_target(t))
+                .collect::<Result<Vec<_>, _>>()?;
+            let o = unv_cli::node_install::Options {
+                hub: hub.clone(),
+                relay: relay.clone(),
+                listen: listen.clone().zip(advertise.clone()),
+                targets: specs,
+                approver: approver.clone(),
+                interval_secs: *interval,
+            };
+            let steps = unv_cli::node_install::plan(&o)?;
+            let token = if *plan {
+                String::new()
+            } else {
+                match (token_file, token_stdin) {
+                    (Some(p), false) => std::fs::read_to_string(p)
+                        .map_err(|e| CliError::not_found(format!("{}: {e}", p.display())))?,
+                    (None, true) => fmt::read_stdin()?,
+                    _ => {
+                        return Err(CliError::invalid(
+                            "Give the enrollment token with --token-file or --token-stdin",
+                        ))
+                    }
+                }
+            };
+            let state = std::path::PathBuf::from("/var/lib/unv-node");
+            let hub_url = unv_cli::node_install::effective_hub(&o);
+            let mut enrol = || {
+                node_cmd::enroll(
+                    &state,
+                    &hub_url,
+                    token.trim(),
+                    hub_fingerprint.as_deref(),
+                    false,
+                    *force,
+                    o.listen.as_ref().map(|(a, b)| (a.as_str(), b.as_str())),
+                )
+            };
+            unv_cli::node_install::execute(&steps, &mut enrol, *plan)?;
+            if *plan {
+                println!("Plan only; nothing was changed.");
+            }
+            Ok(())
+        })(),
         NodeCmd::Run {
             config,
             once,
@@ -2990,7 +3088,10 @@ fn dispatch(cli: &Cli, a: &Access) -> CliResult {
             NodeCmd::Approve { approval } => node_cmd::decide(a, approval, true, yes),
             NodeCmd::Reject { approval } => node_cmd::decide(a, approval, false, yes),
             // Agent-side commands are handled before a connection exists.
-            NodeCmd::Enroll { .. } | NodeCmd::Run { .. } | NodeCmd::Check { .. } => Ok(()),
+            NodeCmd::Enroll { .. }
+            | NodeCmd::Install { .. }
+            | NodeCmd::Run { .. }
+            | NodeCmd::Check { .. } => Ok(()),
         },
         Commands::Cxf { cmd } => match cmd {
             CxfCmd::Import {

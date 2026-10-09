@@ -39,6 +39,7 @@ pub mod import_vaults;
 pub mod matlog;
 pub mod node_agent;
 pub mod node_cmd;
+pub mod node_install;
 pub mod node_listen;
 pub mod oauth_cmd;
 pub mod out;

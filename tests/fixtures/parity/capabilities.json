@@ -567,6 +567,7 @@
       "status": "exempt",
       "cli": [
         "unv node enroll",
+        "unv node install",
         "unv node run",
         "unv node check"
       ],

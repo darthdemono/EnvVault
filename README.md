@@ -762,6 +762,21 @@ The server closes itself after eight idle hours. Auto-lock is suspended while it
 
 ## Nodes
 
+### Setting up a node
+
+On the managed host, as root, one command installs the agent as a hardened systemd service, enrols it and grants it access to exactly the files you name:
+
+```bash
+# on the hub's machine: mint a single-use token
+unv node token new vps --project wg/vps --ttl 1h --out token
+
+# on the managed host
+unv node install --hub http://10.10.0.2:8743 --relay 10.10.0.2:8743 --token-file token \
+  --target "id=wg0,path=/etc/wireguard/wg0.conf,project=wg/vps,exporter=wireguard,apply=true,reload=wg-quick@wg0,require_approval=true"
+```
+
+Add `--plan` to print every step without running any. A target without `apply=true` only observes. A reload runs through a small root-owned systemd path unit that reloads that one service when that one file changes, so the agent never gains the right to reload anything else. `--relay` reaches a plain-HTTP hub over a private network through a loopback relay (needs `socat`); an HTTPS hub needs `--hub-fingerprint` instead.
+
 A **node** is an agent on another host that watches config files and, only where its own config says so, writes what this vault renders: the nginx config for a live site on a VPS, `wg0.conf` on a laptop. The server that holds the vault is the **hub**. It is opt-in (`unv-server --nodes`); without the flag every `/api/nodes/*` route answers 404.
 
 ```toml
