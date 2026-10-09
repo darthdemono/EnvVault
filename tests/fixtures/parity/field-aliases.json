@@ -6,7 +6,7 @@
     "",
     "This fixture exists because the two had already drifted: PASSWORD, PASS and",
     "PWD were present in TypeScript and absent in Rust, so ${PgProd/password}",
-    "resolved in the desktop app and reached .pgpass, envv render, envv exec and",
+    "resolved in the desktop app and reached .pgpass, unv render, unv exec and",
     "every CLI export as the literal text ${PgProd/password}. A broken deploy",
     "whose error message names nothing useful.",
     "",
