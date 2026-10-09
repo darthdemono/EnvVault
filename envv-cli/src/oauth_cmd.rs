@@ -1,4 +1,4 @@
-//! `envv oauth refresh` — Phase 24.5. Exchanges an `oauth_client` entry's refresh
+//! `unv oauth refresh` — Phase 24.5. Exchanges an `oauth_client` entry's refresh
 //! token for a new access token at the issuer's `token_url`.
 //!
 //! **This is an online act, opt-in and named as such**: it sends the refresh
