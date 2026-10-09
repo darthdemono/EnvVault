@@ -55,7 +55,7 @@ describe('vendor import pane', () => {
   it('needs the desktop app and says so', async () => {
     await boot();
     expect(($('vi-file-btn') as HTMLButtonElement).disabled).toBe(true);
-    expect($('vi-status').textContent).toMatch(/envv import-vault/);
+    expect($('vi-status').textContent).toMatch(/unv import-vault/);
   });
 
   it('previews counts and fingerprints, then replaces the entries once on Import', async () => {
