@@ -353,8 +353,8 @@ pub fn open_archive(raw: &str, pw: &str) -> CliResult<(Vec<u8>, Vec<u8>)> {
         .map_err(|_| CliError::invalid("Not an archive file (invalid JSON)"))?;
     if env.get("magic").and_then(|m| m.as_str()) != Some(ARCHIVE_MAGIC) {
         return Err(CliError::invalid(format!(
-            "Not an EnvVault archive. A `.vaultbak` holds vault contents and is \
-             restored with `envv backup import`; an archive ({ARCHIVE_MAGIC}) holds \
+            "Not an UnENVerse archive. A `.vaultbak` holds vault contents and is \
+             restored with `unv backup import`; an archive ({ARCHIVE_MAGIC}) holds \
              the database file and its salt."
         )));
     }
