@@ -35,7 +35,7 @@ pub struct SecretTypeDescriptor {
     pub id: String,
     pub label: String,
     pub group: String,
-    /// Which field `envv get`/Copy treats as the whole value, or `None` when
+    /// Which field `unv get`/Copy treats as the whole value, or `None` when
     /// the type has no single primary (`env_var`, `file_blob`, every
     /// bundle-shaped type whose payload lives in named `extra_vars`).
     pub primary: Option<String>,
@@ -52,10 +52,10 @@ pub struct SecretTypeDescriptor {
     pub mask_whole: bool,
     /// The FIDO CXF credential type this maps onto for import/export
     /// (`cxf.rs`), or `custom-fields` when nothing in the CXF spec matches —
-    /// still lossless, since `custom-fields` round-trips through EnvVault's
+    /// still lossless, since `custom-fields` round-trips through UnENVerse's
     /// own extension the way Phase 24.5's design requires.
     pub cxf: Option<String>,
-    /// Output formats `envv emit` / the card's Copy menu offer, implemented in
+    /// Output formats `unv emit` / the card's Copy menu offer, implemented in
     /// `type_emit.rs`. A test asserts this and `type_emit::formats_for` agree.
     #[serde(default)]
     pub emitters: Vec<String>,
