@@ -4,7 +4,7 @@
  *
  * Same split as `totp-io.ts`: this module holds no parser and no mapping
  * rule. `vault_core::cxf` owns both, reached over IPC exactly as
- * `envv cxf import|export` reaches them directly — one implementation, not a
+ * `unv cxf import|export` reaches them directly — one implementation, not a
  * twin, so the app and the CLI cannot disagree about what a CXF item meant.
  *
  * Import is **append-only** (see the module doc on the Rust side for why):
