@@ -213,7 +213,7 @@ pub fn secret_name(entry: &Value, case: Option<NameCase>, include_prefix: bool) 
 /// A name derived from a bare string rather than from an entry — a pool name, a
 /// `--pool github-ci` with no explicit variable.
 ///
-/// The same normaliser the template's segments use, so `envv exec --pool
+/// The same normaliser the template's segments use, so `unv exec --pool
 /// github-ci` and an export of a member of that pool agree about what is a legal
 /// character. It is deliberately *not* the template: a pool is not an entry and
 /// has no version, label or role.
@@ -435,7 +435,7 @@ pub struct ImportOpts<'a> {
 /// Import a `.env` into the vault.
 ///
 /// Existing keys are **updated** rather than appended by default. The previous
-/// behaviour appended unconditionally, which made `envv watch` grow the vault by
+/// behaviour appended unconditionally, which made `unv watch` grow the vault by
 /// a full copy of the file on every save — the command was unusable for the one
 /// job it exists to do.
 pub fn import(access: &Access, file: &PathBuf, opts: &ImportOpts<'_>) -> CliResult {
@@ -618,7 +618,7 @@ pub fn export_vault(
         return Err(CliError::invalid(
             "`--profile full` is per-entry or per-project: it writes every entry's purposes, \
              projects, tags and rotation dates, which is a map of the vault. Pass --project, or \
-             use `envv get <entry> --profile full`.",
+             use `unv get <entry> --profile full`.",
         ));
     }
 
@@ -636,7 +636,7 @@ pub fn export_vault(
         "yaml" => crate::exporters::yaml(&list),
         // `json` exports the whole vault document (projects and categories
         // included), matching the app's "Export as JSON" — that file is what
-        // `envv backup import` and the app's importer expect to read back.
+        // `unv backup import` and the app's importer expect to read back.
         "json" => {
             if project.is_some() {
                 serde_json::to_string_pretty(&list).unwrap_or_default()
