@@ -840,10 +840,10 @@ function buildBundleCard(
         class="pool-card-expand"
         data-action="bundle-toggle"
         data-bundle="${id}"
-        aria-expanded="${expanded}"
+        aria-expanded="${String(expanded)}"
         title="${expanded ? 'Collapse' : 'Expand'} bundle"
       >
-        ▸
+        <span class="pool-card-chevron" aria-hidden="true">▸</span>
       </button>
       <button
         type="button"
@@ -972,7 +972,7 @@ function buildBundleCard(
           data-action="bundle-slot-tab"
           data-bundle="${id}"
           data-member="${entryId(member)}"
-          aria-selected="${selected}"
+          aria-selected="${String(selected)}"
         >${label}</button>`;
       })}`,
     );
@@ -1139,7 +1139,7 @@ function buildPoolCard(
         class="pool-card-expand"
         data-action="pool-card-toggle"
         data-pool="${poolName}"
-        aria-expanded="${expanded}"
+        aria-expanded="${String(expanded)}"
         title="${expanded ? 'Collapse' : 'Expand'} pool"
       >
         <svg
@@ -1445,7 +1445,7 @@ function buildCard(entry: VaultEntry, idx: number, animIdx: number): HTMLElement
           class="card-chevron"
           data-action="toggle"
           data-idx="${idx}"
-          aria-expanded="${isExp}"
+          aria-expanded="${String(isExp)}"
           aria-label="${(isExp ? 'Collapse ' : 'Expand ') + entry.provider}"
         >
           <svg
