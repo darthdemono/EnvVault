@@ -172,7 +172,7 @@ function copyTotpFrom(el: HTMLElement): void {
 
 /**
  * The pool card's Copy button — advances the pool cursor and copies whatever
- * it landed on, exactly `envv pool next`. Members are read from the **live**
+ * it landed on, exactly `unv pool next`. Members are read from the **live**
  * vault via `poolsOf`, not a snapshot the card was built with, so a member
  * deleted between render and click cannot be copied.
  */
@@ -304,7 +304,7 @@ async function finishInit() {
       document.getElementById('load-banner')!.style.display = 'none';
       st.vaultOpen = true;
       // From here the vault can also be written from outside this window — a
-      // terminal running `envv`, or a LAN peer. Idempotent by assignment, so
+      // terminal running `unv`, or a LAN peer. Idempotent by assignment, so
       // re-unlocking leaves one timer.
       startVaultWatch();
       showToast(`Loaded ${st.vault.api_keys.length} keys`, 'ok', 1800);
@@ -379,7 +379,7 @@ async function init() {
   /**
    * @param onText when given, receives the file's text instead of
    *        `handleFileSelect` deciding what the file is. The authenticator
-   *        import needs it: an Aegis vault and a full EnvVault export are both
+   *        import needs it: an Aegis vault and a full UnENVerse export are both
    *        `.json`, and letting the sniffer guess between them is how a 2FAS
    *        backup ends up interpreted as a vault replacement.
    */
@@ -1703,6 +1703,6 @@ async function init() {
 // failure before either would otherwise present a blank window with no error.
 init().catch((e) => {
   document.documentElement.classList.remove('booting');
-  console.error('EnvVault failed to start', e);
+  console.error('UnENVerse failed to start', e);
   showToast('Failed to start — see the console', 'err', 6000);
 });
