@@ -1,7 +1,7 @@
 //! Secret templates: predefined field presets for common services (a GitHub PAT,
 //! an AWS key, a Postgres DSN). One JSON file at the repo root,
 //! `secret-templates.json`, compiled in here and imported by the app's
-//! Templates pane, so `envv entry add --template ID` and the pane offer the same
+//! Templates pane, so `unv entry add --template ID` and the pane offer the same
 //! presets (Phase 33.6).
 
 use serde::Deserialize;
