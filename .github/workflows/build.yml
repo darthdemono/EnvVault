@@ -333,7 +333,7 @@ jobs:
           if-no-files-found: error
 
   # ---------------------------------------------------------------------------
-  # `envv` and `envv-server` — the headless half. Shipped as their own archive
+  # `unv` and `unv-server` — the headless half. Shipped as their own archive
   # because the server runs on machines that will never have a GUI toolkit, and
   # the CLI is what agents and CI call.
   # ---------------------------------------------------------------------------
@@ -428,10 +428,10 @@ jobs:
       # and rusqlite 0.39 have both broken this build via semver-compatible
       # updates). A release must compile the pinned graph, not today's.
       # Built one package at a time so a failure names the crate.
-      - name: Build envv
+      - name: Build unv
         run: cargo build --release --locked -p envv-cli --features vault-core/bundled
 
-      - name: Build envv-server
+      - name: Build unv-server
         run: cargo build --release --locked -p envv-server --features vault-core/bundled
 
       - name: Smoke test the binaries
@@ -442,14 +442,14 @@ jobs:
           # under `set -e`, so a Linux run would abort here reporting nothing.
           EXE=""
           if [ "${RUNNER_OS}" = "Windows" ]; then EXE=".exe"; fi
-          "target/release/envv${EXE}" --version
-          "target/release/envv-server${EXE}" --version
+          "target/release/unv${EXE}" --version
+          "target/release/unv-server${EXE}" --version
           # `describe` is the CLI's machine-readable contract, generated from the
           # clap tree. If it stops emitting valid JSON, every agent integration
           # breaks silently — so a release must not ship a binary that fails here.
           # The version inside it comes from CARGO_PKG_VERSION, which is a sixth
           # copy of the number the meta job checked; assert it agrees.
-          "target/release/envv${EXE}" describe \
+          "target/release/unv${EXE}" describe \
             | jq -e --arg v "${{ needs.meta.outputs.version }}" \
                  '.version == $v and (.command.subcommands | length) > 0' > /dev/null
 
@@ -460,7 +460,7 @@ jobs:
           mkdir -p staging
           EXE=""
           if [ "${RUNNER_OS}" = "Windows" ]; then EXE=".exe"; fi
-          cp "target/release/envv${EXE}" "target/release/envv-server${EXE}" staging/
+          cp "target/release/unv${EXE}" "target/release/unv-server${EXE}" staging/
           cp README.md staging/
           ls -lh staging/
 
@@ -471,7 +471,7 @@ jobs:
           if-no-files-found: error
 
   # ---------------------------------------------------------------------------
-  # The server image. `envv-server` is the one component people run unattended
+  # The server image. `unv-server` is the one component people run unattended
   # and on a machine that is not their desktop, so it is the one that wants a
   # pull-able artefact rather than a tarball.
   #
@@ -511,7 +511,7 @@ jobs:
           # `github.repository` is `owner/name`, and GHCR requires it lowercased:
           # a capital letter in either half makes `docker push` fail with an
           # "invalid reference format" that names nothing useful.
-          NAME="ghcr.io/$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')/envv-server"
+          NAME="ghcr.io/$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')/unv-server"
           VERSION="${{ needs.meta.outputs.version }}"
           MINOR="${VERSION%.*}"
           echo "name=${NAME}"   >> "$GITHUB_OUTPUT"
@@ -556,7 +556,7 @@ jobs:
       # so this does not try to open a vault in a container with no volume.
       - name: Smoke test the image
         run: |
-          docker run --rm --entrypoint envv-server \
+          docker run --rm --entrypoint unv-server \
             "${{ steps.img.outputs.name }}:${{ needs.meta.outputs.version }}" --version
 
   # ---------------------------------------------------------------------------
@@ -621,7 +621,7 @@ jobs:
 
           # Headless binaries get archived per platform, with a flat layout so
           # `tar xzf … && ./envv` works with no path juggling.
-          ( cd artifacts/headless-linux-x86_64 && chmod +x envv envv-server \
+          ( cd artifacts/headless-linux-x86_64 && chmod +x unv unv-server \
             && tar czf "$GITHUB_WORKSPACE/release-assets/envv-${VERSION}-linux-x86_64.tar.gz" . )
           ( cd artifacts/headless-windows-x86_64 \
             && zip -qr "$GITHUB_WORKSPACE/release-assets/envv-${VERSION}-windows-x86_64.zip" . )
@@ -693,7 +693,7 @@ jobs:
         with:
           tag: v${{ needs.meta.outputs.version }}
           commit: ${{ github.sha }}
-          name: EnvVault ${{ needs.meta.outputs.version }}
+          name: UnENVerse ${{ needs.meta.outputs.version }}
           artifacts: "release-assets/*"
           token: ${{ secrets.GITHUB_TOKEN }}
           allowUpdates: true
@@ -701,7 +701,7 @@ jobs:
           draft: false
           prerelease: false
           body: |
-            # EnvVault ${{ needs.meta.outputs.version }}
+            # UnENVerse ${{ needs.meta.outputs.version }}
 
             ## Desktop
 
@@ -718,10 +718,10 @@ jobs:
 
             | File | Contains |
             | ---- | -------- |
-            | `envv-${{ needs.meta.outputs.version }}-linux-x86_64.tar.gz` | `envv`, `envv-server` |
-            | `envv-${{ needs.meta.outputs.version }}-windows-x86_64.zip` | `envv.exe`, `envv-server.exe` |
+            | `unv-${{ needs.meta.outputs.version }}-linux-x86_64.tar.gz` | `unv`, `unv-server` |
+            | `unv-${{ needs.meta.outputs.version }}-windows-x86_64.zip` | `unv.exe`, `unv-server.exe` |
 
-            `envv describe` prints the full command tree, exit codes and redaction
+            `unv describe` prints the full command tree, exit codes and redaction
             rules as JSON — read that rather than guessing from error messages.
 
             ## Verifying a download
