@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "EnvVault",
-  "version": "0.33.0",
+  "productName": "UnENVerse",
+  "version": "0.39.0",
   "identifier": "io.envvault",
   "build": {
     "frontendDist": "../dist",
@@ -11,7 +11,7 @@
     "withGlobalTauri": true,
     "windows": [
       {
-        "title": "EnvVault",
+        "title": "UnENVerse",
         "width": 1280,
         "height": 800,
         "minWidth": 860,
@@ -38,7 +38,7 @@
     ],
     "category": "Utility",
     "shortDescription": "Local-first encrypted secrets manager",
-    "longDescription": "EnvVault keeps API keys, passwords, certificates, SSH keys, connection strings and authenticator seeds in a single SQLCipher database encrypted with a key derived from your master password by Argon2id. The key is derived on your machine and never written to disk.\n\nIt stores credentials with the structure they actually have - provider, environment, scopes, rate limits, expiry, rotation cadence - and renders them into the config formats that consume them: .env files, Docker Compose, WireGuard, nginx, Kubernetes secrets, Terraform tfvars and more, with cross-references between entries resolved on the way out.\n\nBuilt-in TOTP authenticator with import and export for Ente Auth, Aegis, 2FAS, andOTP, Bitwarden and Google Authenticator. Optional self-hosted server with TLS and certificate pinning, sub-users, role-based access control and a hash-chained audit log. Ships with envv, a CLI designed so that automation can wire credentials into configuration without a secret ever passing through the calling process.",
+    "longDescription": "UnENVerse keeps API keys, passwords, certificates, SSH keys, connection strings and authenticator seeds in a single SQLCipher database encrypted with a key derived from your master password by Argon2id. The key is derived on your machine and never written to disk.\n\nIt stores credentials with the structure they actually have - provider, environment, scopes, rate limits, expiry, rotation cadence - and renders them into the config formats that consume them: .env files, Docker Compose, WireGuard, nginx, Kubernetes secrets, Terraform tfvars and more, with cross-references between entries resolved on the way out.\n\nBuilt-in TOTP authenticator with import and export for Ente Auth, Aegis, 2FAS, andOTP, Bitwarden and Google Authenticator. Optional self-hosted server with TLS and certificate pinning, sub-users, role-based access control and a hash-chained audit log. Ships with unv, a CLI designed so that automation can wire credentials into configuration without a secret ever passing through the calling process.",
     "linux": {
       "deb": {
         "depends": ["libwebkit2gtk-4.1-0", "libgtk-3-0"],
