@@ -71,6 +71,19 @@ pub fn param_of(entry: &Value) -> String {
     }
 }
 
+/// The value a `header` entry sends: the key, or the key placed into
+/// `auth_template` (Phase 37 follow-up for Jellyfin's `MediaBrowser Token="{key}"`).
+/// A template that has no `{key}`, a line break, a NUL or is over 128 bytes is
+/// ignored, not guessed at: a header that silently lacks the key is a 401 that
+/// names nothing.
+pub fn header_value(entry: &Value, key: &str) -> String {
+    let t = s(entry, "auth_template");
+    if t.is_empty() || t.len() > 128 || !t.contains("{key}") || t.contains(['\r', '\n', '\0']) {
+        return key.to_string();
+    }
+    t.replace("{key}", key)
+}
+
 /// POSIX single-quoting.
 ///
 /// `'` cannot appear inside single quotes at all, so the only way to include one
@@ -117,7 +130,7 @@ pub fn header_for(entry: &Value) -> Option<(String, String)> {
     }
     match scheme_of(entry) {
         Scheme::Bearer => Some(("Authorization".into(), format!("Bearer {value}"))),
-        Scheme::Header => Some((param_of(entry), value.to_string())),
+        Scheme::Header => Some((param_of(entry), header_value(entry, value))),
         Scheme::Basic => Some((
             "Authorization".into(),
             format!(
@@ -179,7 +192,7 @@ pub fn url_for(entry: &Value, url: &str) -> String {
 ///
 /// A **materialising** path: it contains the real credential, so the caller
 /// refuses it to stdout without `--reveal` and writes it with `--out`, exactly
-/// as `envv export` does.
+/// as `unv export` does.
 pub fn curl_for(entry: &Value, url: Option<&str>) -> String {
     let target = match url {
         Some(u) if !u.is_empty() => u.to_string(),
