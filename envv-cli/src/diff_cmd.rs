@@ -1,4 +1,4 @@
-//! `envv diff A B` — compare two entries field by field, the CLI side of the app's
+//! `unv diff A B` — compare two entries field by field, the CLI side of the app's
 //! Diff tool (Phase 33.6). Secrets are redacted like everywhere else: a
 //! fingerprint on each side, so "equal" and "different" are still answerable
 //! without reading either value; `--reveal` shows them.
