@@ -225,7 +225,7 @@ export async function exportCalendar(): Promise<void> {
   const ics = (await invoke('calendar_build_ics', {
     entries,
     kinds,
-    calendarName: 'EnvVault Secrets',
+    calendarName: 'UnENVerse Secrets',
   })) as string | undefined;
   if (typeof ics !== 'string') {
     showToast('Could not build the calendar', 'err');
@@ -298,7 +298,11 @@ async function subscribeFeed(): Promise<void> {
   }
   const includeAccountNames =
     (document.getElementById('tl-feed-account-names') as HTMLInputElement | null)?.checked ?? false;
-  const url = await st.store.createCalendarFeed('EnvVault', kinds as string[], includeAccountNames);
+  const url = await st.store.createCalendarFeed(
+    'UnENVerse',
+    kinds as string[],
+    includeAccountNames,
+  );
   if (!url) {
     showToast('Could not create feed', 'err');
     return;
