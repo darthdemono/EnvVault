@@ -6,7 +6,7 @@
  * handler wired to an id that no longer exists.
  */
 import { describe, it, expect, beforeAll, beforeEach, vi } from 'vitest';
-import { st, resetViewState } from '../src/ts/state';
+import { st, resetViewState, RemoteVaultStore } from '../src/ts/state';
 import { loadRealIndexHtml, makeEntry, makeVault, resetState } from './helpers';
 
 let confirmAnswer = true;
@@ -318,6 +318,25 @@ describe('normalizeImported', () => {
       .filter((e): e is NonNullable<typeof e> => e !== null);
     expect(() => sorted(entries)).not.toThrow();
     expect(sorted(entries).map((e) => e.provider)).toEqual(['Alpha', 'Zeta']);
+  });
+});
+
+describe('nodes tool navigation', () => {
+  it('loads the enrolled nodes when its navigation button is clicked', async () => {
+    const remote = new RemoteVaultStore('http://localhost:1');
+    const request = vi.fn().mockResolvedValue({
+      status: 200,
+      body: {
+        nodes: [
+          { id: 'n1', name: 'vps', fingerprint: 'ab'.repeat(32), projects: ['edge'], targets: [] },
+        ],
+      },
+    });
+    remote.nodesRequest = request;
+    st.store = remote;
+    document.querySelector<HTMLElement>('.tool-nav-btn[data-tool="nodes"]')!.click();
+    await vi.waitFor(() => expect($('nodes-list').textContent).toContain('vps'));
+    expect(request).toHaveBeenCalledWith('GET', '/api/nodes', undefined);
   });
 });
 
