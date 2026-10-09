@@ -425,7 +425,7 @@
       }
     },
     {
-      "_why": "The divergence this fixture was added for: 99 listed as a 99-digit credential by `envv totp ls` while `envv totp code` produced six.",
+      "_why": "The divergence this fixture was added for: 99 listed as a 99-digit credential by `unv totp ls` while `unv totp code` produced six.",
       "entry": {
         "totp_digits": 99
       },
