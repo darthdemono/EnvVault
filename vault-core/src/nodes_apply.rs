@@ -378,7 +378,6 @@ mod tests {
         assert!(!marker.exists(), "reload ran after a failed validate");
     }
 
-    #[cfg(unix)]
     #[test]
     fn a_failing_validate_on_a_new_file_removes_it() {
         let d = scratch("validate-new");
@@ -387,11 +386,10 @@ mod tests {
         assert!(!t.path.exists());
     }
 
-    #[cfg(unix)]
     #[test]
     fn a_failing_reload_restores_the_old_file() {
         let d = scratch("reload");
-        let t = target(&d, Some("true"), Some("exit 2"));
+        let t = target(&d, Some("exit 0"), Some("exit 2"));
         std::fs::write(&t.path, "old").unwrap();
         let e = apply(&t, b"new", &sha256_hex(b"new"), &d).unwrap_err();
         assert!(e.contains("reload failed, previous file restored"), "{e}");
