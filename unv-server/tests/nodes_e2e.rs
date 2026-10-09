@@ -158,7 +158,7 @@ async fn the_agent_enrolls_applies_reports_and_stays_in_sync() {
     let cfg = config(
         &dir,
         &format!(
-            "[[target]]\nid=\"env-main\"\npath='{}'\nproject=\"edge\"\nexporter=\"env\"\napply=true\nvalidate=\"true\"\n",
+            "[[target]]\nid=\"env-main\"\npath='{}'\nproject=\"edge\"\nexporter=\"env\"\napply=true\nvalidate=\"exit 0\"\n",
             out.display()
         ),
     );
@@ -1005,7 +1005,7 @@ async fn listening_node(h: &Hub, name: &str, target_path: &Path, apply: bool) ->
     let cfg = config(
         &dir,
         &format!(
-            "[[target]]\nid=\"env-main\"\npath='{}'\nproject=\"edge\"\nexporter=\"env\"\napply={apply}\nvalidate=\"true\"\n",
+            "[[target]]\nid=\"env-main\"\npath='{}'\nproject=\"edge\"\nexporter=\"env\"\napply={apply}\nvalidate=\"exit 0\"\n",
             target_path.display()
         ),
     );
