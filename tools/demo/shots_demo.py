@@ -105,7 +105,7 @@ def main():
             panel("tools")
             wd.click(f'[data-tool="{t}"]')
 
-        go("card-expanded", lambda: wd.click(".card"))
+        go("card-expanded", lambda: wd.click("#card-grid > .card"))
         go("add-secret", lambda: (panel("secrets"), wd.click("#add-btn")))
         go("authenticator", lambda: panel("auth"), 1.5)
         for slug, label in (("project-wireguard", "Home VPN"), ("project-compose", "Media Stack"),
