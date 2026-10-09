@@ -475,6 +475,7 @@ export function formToEntry(base?: VaultEntry): VaultEntry {
     label: getVal('f-label') || undefined,
     auth_scheme: (getVal('f-auth-scheme') as VaultEntry['auth_scheme']) || undefined,
     auth_param: getVal('f-auth-param') || undefined,
+    auth_template: getVal('f-auth-template') || undefined,
     user_agent: getVal('f-user-agent') || undefined,
     ...(secretType === 'cookie'
       ? { storage_tokens: parseStorageTokens(getVal('f-storage-tokens')) }
@@ -868,7 +869,7 @@ export function resetTotpField(): void {
  */
 let _unknownSecretType: string | null = null;
 
-/** A11: shows or hides the "made by a newer EnvVault" banner and (dis)ables Save. */
+/** A11: shows or hides the "made by a newer UnENVerse" banner and (dis)ables Save. */
 function applyUnknownSecretType(rawType: string | null): void {
   _unknownSecretType = rawType;
   const banner = document.getElementById('f-unknown-type-banner');
@@ -877,11 +878,11 @@ function applyUnknownSecretType(rawType: string | null): void {
     banner.hidden = !rawType;
     const p = banner.querySelector('p');
     if (p && rawType)
-      p.textContent = `This entry's type ("${rawType}") was made by a newer EnvVault — update to edit it. Everything else here is safe to view.`;
+      p.textContent = `This entry's type ("${rawType}") was made by a newer UnENVerse — update to edit it. Everything else here is safe to view.`;
   }
   if (saveBtn) {
     saveBtn.disabled = !!rawType;
-    saveBtn.title = rawType ? 'Update EnvVault to edit this entry' : '';
+    saveBtn.title = rawType ? 'Update UnENVerse to edit this entry' : '';
   }
 }
 
@@ -915,6 +916,8 @@ export function fillForm(entry: Partial<VaultEntry>) {
   (document.getElementById('f-label') as HTMLInputElement).value = entry.label || '';
   (document.getElementById('f-auth-scheme') as HTMLSelectElement).value = entry.auth_scheme || '';
   (document.getElementById('f-auth-param') as HTMLInputElement).value = entry.auth_param || '';
+  (document.getElementById('f-auth-template') as HTMLInputElement).value =
+    entry.auth_template || '';
   (document.getElementById('f-user-agent') as HTMLInputElement).value = entry.user_agent || '';
   const storageTokens = document.getElementById('f-storage-tokens') as HTMLTextAreaElement | null;
   if (storageTokens) storageTokens.value = JSON.stringify(entry.storage_tokens ?? [], null, 2);
@@ -982,7 +985,7 @@ export function fillForm(entry: Partial<VaultEntry>) {
   st.formCustomSelects.get('f-secret-type')?.setValue(stVal);
   // A11 (2026-09-14): a `<select>` handed a value it has no `<option>` for
   // reads back as the empty string — `stSelect.value` silently did not become
-  // `stVal`. That is exactly what an entry saved by a newer EnvVault with a
+  // `stVal`. That is exactly what an entry saved by a newer UnENVerse with a
   // type this build has never heard of looks like (24.1's `composite`, or any
   // of 24.5's sixteen), and saving over it used to rewrite the entry as
   // `api_key` with nobody told. Lock the form instead: preserve the real
@@ -1239,26 +1242,41 @@ function applySessionCapture(cap: SessionCapture): void {
 /**
  * How the common self-hosted apps want their API key (Phase 24.5,
  * `local_service`). Only conventions that are stable and widely documented are
- * listed; Jellyfin's `Authorization: MediaBrowser Token="…"` carries a value
- * template the `auth_scheme` model cannot express, so it is deliberately absent
- * rather than approximated.
+ * listed. Jellyfin's `Authorization: MediaBrowser Token="{key}"` needs a value
+ * template, which `auth_template` carries. Its primary documentation is a
+ * script-rendered page that could not be read for this change; the form is
+ * confirmed by several independent client libraries and the server's own mirror
+ * of its API documentation, and the older `X-Emby-Token` header is marked
+ * deprecated there, which is why it is not offered.
  */
-export const LOCAL_SERVICE_PRESETS: { id: string; label: string; scheme: string; param: string }[] =
-  [
-    {
-      id: 'arr',
-      label: 'Sonarr / Radarr / Lidarr / Prowlarr (X-Api-Key)',
-      scheme: 'header',
-      param: 'X-Api-Key',
-    },
-    { id: 'plex', label: 'Plex (X-Plex-Token header)', scheme: 'header', param: 'X-Plex-Token' },
-    {
-      id: 'homeassistant',
-      label: 'Home Assistant (long-lived bearer token)',
-      scheme: '',
-      param: '',
-    },
-  ];
+export const LOCAL_SERVICE_PRESETS: {
+  id: string;
+  label: string;
+  scheme: string;
+  param: string;
+  template?: string;
+}[] = [
+  {
+    id: 'arr',
+    label: 'Sonarr / Radarr / Lidarr / Prowlarr (X-Api-Key)',
+    scheme: 'header',
+    param: 'X-Api-Key',
+  },
+  { id: 'plex', label: 'Plex (X-Plex-Token header)', scheme: 'header', param: 'X-Plex-Token' },
+  {
+    id: 'jellyfin',
+    label: 'Jellyfin (Authorization: MediaBrowser Token)',
+    scheme: 'header',
+    param: 'Authorization',
+    template: 'MediaBrowser Token="{key}"',
+  },
+  {
+    id: 'homeassistant',
+    label: 'Home Assistant (long-lived bearer token)',
+    scheme: '',
+    param: '',
+  },
+];
 
 let _localPresetBound = false;
 
@@ -1282,7 +1300,71 @@ function wireLocalServicePreset(): void {
     if (!preset) return;
     (document.getElementById('f-auth-scheme') as HTMLSelectElement).value = preset.scheme;
     (document.getElementById('f-auth-param') as HTMLInputElement).value = preset.param;
+    (document.getElementById('f-auth-template') as HTMLInputElement).value = preset.template ?? '';
   });
+}
+
+let _pgpBound = false;
+
+/** `gpg_key`: paste the public key, fill the expiry and the public identifiers. */
+function wirePgpImport(): void {
+  const group = document.getElementById('f-pgp-group');
+  const type = document.getElementById('f-secret-type') as HTMLSelectElement | null;
+  const show = () => {
+    if (group) group.style.display = type?.value === 'gpg_key' ? 'flex' : 'none';
+  };
+  show();
+  if (!_pgpBound) {
+    _pgpBound = true;
+    type?.addEventListener('change', show);
+  }
+  const btn = document.getElementById('f-pgp-btn');
+  if (!btn) return;
+  btn.onclick = () => {
+    void (async () => {
+      if (!isTauri()) {
+        showToast('Reading a key needs the desktop app (or `unv entry set --pgp-public`)', 'err');
+        return;
+      }
+      const raw = await showPromptLarge(
+        'Paste the PUBLIC key block (-----BEGIN PGP PUBLIC KEY BLOCK-----)',
+      );
+      if (!raw?.trim()) return;
+      try {
+        const k = await invokeTauri<{
+          fingerprint: string;
+          key_id: string;
+          user_ids: string[];
+          expires_at: string | null;
+        }>('pgp_inspect', { text: raw });
+        (document.getElementById('f-expires') as HTMLInputElement).value = k.expires_at ?? '';
+        const list = document.getElementById('f-extra-vars-list');
+        if (list) {
+          // Replace the three it owns, leave any the user added.
+          const mine = new Set(['fingerprint', 'key_id', 'user_ids']);
+          for (const row of list.querySelectorAll<HTMLElement>('.extra-var-row')) {
+            if (mine.has(row.querySelector<HTMLInputElement>('.extra-var-key')?.value ?? '')) {
+              row.remove();
+            }
+          }
+          for (const [key, value] of [
+            ['fingerprint', k.fingerprint],
+            ['key_id', k.key_id],
+            ['user_ids', k.user_ids.join('; ')],
+          ] as const) {
+            if (value) list.appendChild(_makeExtraVarRow(key, value, false, true));
+          }
+        }
+        dynamicSecretFields();
+        showToast(
+          k.expires_at ? `Key expires ${k.expires_at.slice(0, 10)}` : 'This key does not expire',
+          'ok',
+        );
+      } catch (err) {
+        showToast(`Could not read the key: ${errorMessage(err)}`, 'err', 6000);
+      }
+    })();
+  };
 }
 
 let _captureBound = false;
@@ -1303,7 +1385,7 @@ function wireCaptureImport(): void {
   btn.onclick = () => {
     void (async () => {
       if (!isTauri()) {
-        showToast('Importing a capture needs the desktop app (or `envv cookie import`)', 'err');
+        showToast('Importing a capture needs the desktop app (or `unv cookie import`)', 'err');
         return;
       }
       const raw = await showPromptLarge('Paste a cURL command, HAR, or Set-Cookie lines');
@@ -1332,6 +1414,7 @@ let _cookieSplitBound = false;
 /** Assignment-guarded (invariant 9): `openModal` runs on every open. */
 function wireCookieSplit(): void {
   wireCaptureImport();
+  wirePgpImport();
   wireLocalServicePreset();
   if (_cookieSplitBound) return;
   _cookieSplitBound = true;
@@ -2006,7 +2089,7 @@ export async function saveModal() {
     // A11: belt and braces alongside the disabled Save button — this refuses
     // even if something programmatic reaches `saveModal` directly.
     if (_unknownSecretType) {
-      showToast('Update EnvVault to edit this entry', 'err');
+      showToast('Update UnENVerse to edit this entry', 'err');
       return;
     }
     const idx = parseInt((document.getElementById('edit-index') as HTMLInputElement).value);
@@ -2093,14 +2176,14 @@ export async function saveModal() {
     }
     // E12. `entry_ck` falls back to `provider|account_name|key_id` for an entry
     // with no `id`, so two entries differing only by `label` would collide there
-    // — and that tuple is what RBAC scoped writes and `envv entry rm` match on.
+    // — and that tuple is what RBAC scoped writes and `unv entry rm` match on.
     // Adding `label` to the tuple would silently re-target scoping on every
     // pre-`id` vault, so the fix is to backfill the id instead. The app does
     // that in `finishInit()`; an entry written by an older CLI may still lack
-    // one, and `envv doctor --fix` is the way to repair those.
+    // one, and `unv doctor --fix` is the way to repair those.
     if (entry.label && idx >= 0 && !old?.id) {
       showToast(
-        'This entry predates stable ids — run `envv doctor --fix` before giving it a name label',
+        'This entry predates stable ids — run `unv doctor --fix` before giving it a name label',
         'err',
         5000,
       );
