@@ -18,8 +18,43 @@
  * allowlisted "Stripe API key" in its security tab is a poor advertisement, and
  * the next person to hit the block would have no way to tell the value was fake.
  */
+import type { VaultData, VaultEntry } from '../src/ts/types';
+
+export const BUNDLE_VAULT: VaultData = {
+  api_keys: [
+    { id: 'bundle-tmdb', provider: 'TMDB', slots: ['v3', 'v4'] },
+    { id: 'bundle-omni', provider: 'OmniRoute', slots: ['api', 'read', 'write'] },
+  ].flatMap<VaultEntry>(({ id, provider, slots }): VaultEntry[] => {
+    const base = {
+      provider,
+      api_key: '',
+      price_type: 'free' as const,
+      categories: ['media stack'],
+      projectIds: ['Universal'],
+      scopes: [],
+      tags: ['jellyfin', 'legacy', 'metadata', 'radarr', 'sonarr'],
+    };
+    return [
+      { ...base, id, secretType: 'bundle', bundle_primary: `${id}-0` },
+      ...slots.map<VaultEntry>((slot, i) => ({
+        ...base,
+        id: `${id}-${i}`,
+        secretType: 'api_key',
+        api_key: `EXAMPLE_${provider}_${slot}`,
+        bundle_id: id,
+        bundle_slot: slot,
+        version: slot,
+        api_description: 'A synthetic credential with a description that wraps inside a card.',
+      })),
+    ];
+  }),
+  user_categories: ['media stack'],
+  projects: [{ id: 'Universal', name: 'Universal', description: '' }],
+};
+
 export const SEED_VAULT = {
   api_keys: [
+    ...BUNDLE_VAULT.api_keys,
     {
       id: 'e1',
       provider: 'GitHub',
