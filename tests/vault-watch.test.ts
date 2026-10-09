@@ -1,7 +1,7 @@
 /**
  * Noticing a write from outside the window (Phase 22.2).
  *
- * The app reads the vault once at unlock and holds it in memory, so an `envv`
+ * The app reads the vault once at unlock and holds it in memory, so an `unv`
  * command in a terminal — or a LAN peer — changed the database underneath a
  * window that went on showing what it read at unlock, and whose next save then
  * either overwrote that work or failed with a conflict the user could not have
