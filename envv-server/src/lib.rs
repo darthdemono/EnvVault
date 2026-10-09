@@ -1,4 +1,4 @@
-//! `envv-server` — remote vault HTTP server, usable as a binary or embedded.
+//! `unv-server` — remote vault HTTP server, usable as a binary or embedded.
 //!
 //! The desktop app hosts this same router in-process for "Open to LAN", serving
 //! the vault it already has open. Everything here is therefore free of CLI and
@@ -36,6 +36,9 @@ use vault_core::{
     merge_user_vault_write, open_db, read_or_create_salt, save_vault, verify_vault_integrity,
     VaultKey, Zeroize,
 };
+
+mod history;
+mod nodes;
 
 // ── Session model ─────────────────────────────────────────────────────────────
 
@@ -280,6 +283,9 @@ fn generate_self_signed_cert(
 
 // ── App state ─────────────────────────────────────────────────────────────────
 
+/// Uploaded pull content, keyed (node id, target) -> (arrived, bytes).
+type NodeUploads = Arc<Mutex<HashMap<(String, String), (Instant, Vec<u8>)>>>;
+
 #[derive(Clone)]
 pub struct AppState {
     sessions: Arc<Mutex<HashMap<String, Session>>>,
@@ -320,6 +326,17 @@ pub struct AppState {
     /// window: a window lets a client spend two bursts across a boundary.
     uid_buckets: Arc<Mutex<HashMap<String, (Instant, f64)>>>,
     uid_rates: Arc<UidRates>,
+    /// Phase 34: opt-in (`--nodes`). `false` means every `/api/nodes/*` route
+    /// answers 404 and `nodes.json` is never created.
+    nodes_enabled: bool,
+    nodes_path: PathBuf,
+    nodes: Arc<Mutex<Option<vault_core::nodes::NodeStore>>>,
+    /// Wakes held-open beats when the vault is saved or a pull is requested.
+    nodes_wake: Arc<tokio::sync::Notify>,
+    /// Pull requests waiting for the node to upload: (node id, target) -> asked at.
+    node_wants: Arc<Mutex<HashMap<(String, String), Instant>>>,
+    /// Uploaded pull content waiting for the owner: held in memory only.
+    node_uploads: NodeUploads,
 }
 
 /// One token bucket: tokens refill at `refill` per second up to `burst`.
@@ -458,7 +475,31 @@ impl AppState {
             limiter: Arc::new(Mutex::new(HashMap::new())),
             uid_buckets: Arc::new(Mutex::new(HashMap::new())),
             uid_rates: Arc::new(UidRates::default()),
+            nodes_enabled: false,
+            nodes_path: PathBuf::new(),
+            nodes: Arc::new(Mutex::new(None)),
+            nodes_wake: Arc::new(tokio::sync::Notify::new()),
+            node_wants: Arc::new(Mutex::new(HashMap::new())),
+            node_uploads: Arc::new(Mutex::new(HashMap::new())),
         }
+    }
+
+    /// Opts into Nodes (Phase 34). `nodes.json` lives beside the vault unless a
+    /// path is given.
+    pub fn with_nodes(mut self, enabled: bool, path: Option<PathBuf>) -> Self {
+        self.nodes_enabled = enabled;
+        self.nodes_path = path.unwrap_or_else(|| {
+            self.db_path
+                .parent()
+                .map_or_else(|| PathBuf::from("nodes.json"), |d| d.join("nodes.json"))
+        });
+        self
+    }
+
+    /// Starts dialling listening nodes (Phase 34.1). A no-op unless Nodes are on.
+    /// Call once, from inside a Tokio runtime, after the state is complete.
+    pub fn start_node_poller(&self) {
+        nodes::spawn_poller(self.clone());
     }
 
     /// Replaces the `/api/uid/*` limits (Phase 24.4).
@@ -960,9 +1001,9 @@ async fn unlock(
 }
 
 /// Idempotently seed the default `admin` user (class: Admin) and log the outcome.
-/// Credential source: `ENVV_ADMIN_PASSWORD` if set, else a random one printed once.
+/// Credential source: `UNV_ADMIN_PASSWORD` if set, else a random one printed once.
 fn seed_default_admin_logged(conn: &vault_core::SqlConnection) {
-    let env_pw = std::env::var("ENVV_ADMIN_PASSWORD").ok();
+    let env_pw = std::env::var("UNV_ADMIN_PASSWORD").ok();
     match vault_core::seed_default_admin(conn, env_pw.as_deref()) {
         Ok(vault_core::AdminSeed::Exists) => {}
         Ok(vault_core::AdminSeed::Created {
@@ -972,13 +1013,13 @@ fn seed_default_admin_logged(conn: &vault_core::SqlConnection) {
             eprintln!("  username: admin");
             eprintln!("  password: {pw}");
             eprintln!("  class:    Admin (manage users/classes below you)");
-            eprintln!("  Set ENVV_ADMIN_PASSWORD to choose this yourself.");
+            eprintln!("  Set UNV_ADMIN_PASSWORD to choose this yourself.");
             eprintln!("═══════════════════════════════════════════════\n");
         }
         Ok(vault_core::AdminSeed::Created {
             generated_password: None,
         }) => {
-            eprintln!("Default admin user created (username: admin) from ENVV_ADMIN_PASSWORD.");
+            eprintln!("Default admin user created (username: admin) from UNV_ADMIN_PASSWORD.");
         }
         Err(e) => eprintln!("Warning: default admin seeding failed: {e}"),
     }
@@ -1431,7 +1472,11 @@ async fn put_vault(
 
     if session.is_owner {
         return match save_vault(&conn, data, ctx) {
-            Ok(v) => saved_response(&v),
+            Ok(v) => {
+                state.nodes_wake.notify_waiters();
+                history::snapshot_after_save(&state, session.vault_key, session.user_id.clone());
+                saved_response(&v)
+            }
             Err(e) if e.starts_with(vault_core::CONFLICT_ERR) => {
                 err_json(StatusCode::CONFLICT, &conflict_message(&e)).into_response()
             }
@@ -1479,7 +1524,92 @@ async fn put_vault(
         expect_version: expect.as_deref().or(merge_base.as_deref()),
     };
     match save_vault(&conn, merged, ctx) {
-        Ok(v) => saved_response(&v),
+        Ok(v) => {
+            state.nodes_wake.notify_waiters();
+            history::snapshot_after_save(&state, session.vault_key, session.user_id.clone());
+            saved_response(&v)
+        }
+        Err(e) if e.starts_with(vault_core::CONFLICT_ERR) => {
+            err_json(StatusCode::CONFLICT, &conflict_message(&e)).into_response()
+        }
+        Err(e) => err_json(StatusCode::INTERNAL_SERVER_ERROR, &e).into_response(),
+    }
+}
+
+/// Phase 30.2: one entry's `version_history`, so a client can show it when the
+/// entry is expanded instead of every client carrying all of them. Owner only: a
+/// history is old secret values, and a sub-user's filtered vault already carries
+/// the ones it may see.
+async fn entry_history_handler(
+    headers: HeaderMap,
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    let (_, session) = match extract_session(&headers, &state) {
+        Ok(s) => s,
+        Err(e) => return e.into_response(),
+    };
+    if let Err(e) = require_owner(&session) {
+        return e.into_response();
+    }
+    let conn = match open_db(&state.db_path, &session.vault_key) {
+        Ok(c) => c,
+        Err(e) => return err_json(StatusCode::INTERNAL_SERVER_ERROR, &e).into_response(),
+    };
+    match vault_core::storage::entry_history(&conn, &id) {
+        Ok(Some(h)) => Json(h).into_response(),
+        Ok(None) => err_json(StatusCode::NOT_FOUND, "No such entry").into_response(),
+        Err(e) => err_json(StatusCode::INTERNAL_SERVER_ERROR, &e).into_response(),
+    }
+}
+
+/// Phase 30.1: save only what changed. `{ put, delete, projects_put,
+/// projects_delete, categories }` (see `vault_core::apply_row_patch`) is applied to the stored document and saved through
+/// the same compare-and-swap as `PUT`, so `If-Match` and the per-row merge
+/// behave identically. Owner only: a sub-user's write has to be filtered
+/// against a document it was served, which a delta cannot reconstruct.
+/// ponytail: the server still loads the whole document to apply the delta;
+/// the saving is the client no longer sending (and the wire no longer
+/// carrying) the whole vault. Add a row-level apply when that load shows up.
+async fn patch_vault(
+    headers: HeaderMap,
+    State(state): State<AppState>,
+    Json(patch): Json<serde_json::Value>,
+) -> impl IntoResponse {
+    let (_, session) = match extract_session(&headers, &state) {
+        Ok(s) => s,
+        Err(e) => return e.into_response(),
+    };
+    if let Err(e) = require_owner(&session) {
+        return e.into_response();
+    }
+    let conn = match open_db(&state.db_path, &session.vault_key) {
+        Ok(c) => c,
+        Err(e) => return err_json(StatusCode::INTERNAL_SERVER_ERROR, &e).into_response(),
+    };
+    let doc = match load_vault(&conn) {
+        Ok(Some(v)) => v,
+        Ok(None) => serde_json::json!({ "api_keys": [], "user_categories": [], "projects": [] }),
+        Err(e) => return err_json(StatusCode::INTERNAL_SERVER_ERROR, &e).into_response(),
+    };
+    let doc = match vault_core::apply_row_patch(doc, &patch) {
+        Ok(d) => d,
+        Err(e) => return err_json(StatusCode::BAD_REQUEST, &e).into_response(),
+    };
+    let expect = headers
+        .get(axum::http::header::IF_MATCH)
+        .and_then(|v| v.to_str().ok())
+        .map(|v| v.trim_matches('"').to_string());
+    let ctx = vault_core::SaveCtx {
+        actor: Some(&session.user_id),
+        expect_version: expect.as_deref(),
+    };
+    match save_vault(&conn, doc, ctx) {
+        Ok(v) => {
+            state.nodes_wake.notify_waiters();
+            history::snapshot_after_save(&state, session.vault_key, session.user_id.clone());
+            saved_response(&v)
+        }
         Err(e) if e.starts_with(vault_core::CONFLICT_ERR) => {
             err_json(StatusCode::CONFLICT, &conflict_message(&e)).into_response()
         }
@@ -1970,7 +2100,7 @@ async fn totp_enroll_handler(
     if let Err(e) = guard_manage_user(&conn, &session, &user_id) {
         return e;
     }
-    match vault_core::users::totp_enroll(&conn, &user_id, "EnvVault") {
+    match vault_core::users::totp_enroll(&conn, &user_id, "UnENVerse") {
         Ok(st) => (StatusCode::OK, Json(st)).into_response(),
         Err(e) => err_json(StatusCode::BAD_REQUEST, &e).into_response(),
     }
@@ -3027,7 +3157,7 @@ async fn uid_stats_handler(headers: HeaderMap, State(state): State<AppState>) ->
     paths(unlock, lock, status, auth_user, get_vault, put_vault, expiring, audit, stats, health),
     components(schemas(UnlockRequest, UnlockResponse, StatusResponse, ErrorResponse, AuthRequest, StatsResponse, HealthResponse)),
     info(
-        title   = "EnvVault Server",
+        title   = "UnENVerse Server",
         version = env!("CARGO_PKG_VERSION"),
         description = "Remote vault API — owner unlocks, users authenticate with /api/auth."
     ),
@@ -3060,12 +3190,12 @@ impl utoipa::Modify for SecurityAddon {
     }
 }
 
-/// Unlock the vault from a password string (used by ENVV_PASSWORD env var on startup).
+/// Unlock the vault from a password string (used by UNV_PASSWORD env var on startup).
 pub fn auto_unlock(state: &AppState, password: &str) -> Result<(), String> {
     let salt = read_or_create_salt(&state.salt_path)?;
     let key = derive_key(password, &salt)?;
     let conn = open_db(&state.db_path, &key)
-        .map_err(|_| "Wrong master password — check ENVV_PASSWORD".to_string())?;
+        .map_err(|_| "Wrong master password — check UNV_PASSWORD".to_string())?;
     let _ = init_schema(&conn);
     match verify_vault_integrity(&conn) {
         Ok(false) => return Err("Vault integrity check failed — possible tampering".to_string()),
@@ -3080,7 +3210,7 @@ pub fn auto_unlock(state: &AppState, password: &str) -> Result<(), String> {
             vault_key: key,
             user_id: owner_id,
             is_owner: true,
-            // Auto-unlock is for unattended deployments (Docker + ENVV_PASSWORD).
+            // Auto-unlock is for unattended deployments (Docker + UNV_PASSWORD).
             // Nothing ever pings this session, so it must not be allowed to lapse.
             // Its token is never returned to any caller — it exists so the key
             // stays reachable for `POST /api/auth` — so no ceiling applies.
@@ -3128,9 +3258,13 @@ pub fn build_router(state: AppState, port: u16) -> Router {
         .route("/api/unlock", post(unlock).delete(lock))
         .route("/api/status", get(status))
         .route("/api/auth", post(auth_user))
-        .route("/api/vault", get(get_vault).put(put_vault))
+        .route(
+            "/api/vault",
+            get(get_vault).put(put_vault).patch(patch_vault),
+        )
         .route("/api/vault/entries", get(get_entries))
         .route("/api/vault/expiring", get(expiring))
+        .route("/api/vault/entries/{id}/history", get(entry_history_handler))
         .route("/api/audit", get(audit))
         .route(
             "/api/users",
@@ -3213,6 +3347,28 @@ pub fn build_router(state: AppState, port: u16) -> Router {
         .route("/api/uid/lookup", post(uid_lookup_handler))
         .route("/api/uid/prune", post(uid_prune_handler))
         .route("/api/uid/stats", get(uid_stats_handler))
+        // Phase 34 — nodes, opt-in via `--nodes`
+        // Phase 35 — the config time machine
+        .route("/api/history", post(history::history_route))
+        .route("/api/nodes", get(nodes::list_nodes))
+        .route("/api/nodes/tokens", post(nodes::mint_token))
+        .route("/api/nodes/enroll", post(nodes::enroll))
+        .route("/api/nodes/beat", post(nodes::beat))
+        .route("/api/nodes/upload", post(nodes::upload))
+        .route("/api/nodes/{id}", delete(nodes::revoke_node))
+        .route("/api/nodes/{id}/pull", post(nodes::request_pull))
+        .route("/api/nodes/{id}/policy", post(nodes::set_policy))
+        .route("/api/node-approvals/{aid}/{verb}", post(nodes::decide_approval))
+        .route(
+            "/api/node-approvers",
+            get(nodes::list_approvers).post(nodes::add_approver),
+        )
+        .route(
+            "/api/node-approvers/{fp}",
+            axum::routing::delete(nodes::remove_approver),
+        )
+        .route("/api/nodes/{id}/accept", post(nodes::accept_pull))
+        .route("/api/nodes/{id}/content/{target}", get(nodes::fetch_content))
         .with_state(state);
 
     Router::new()
@@ -3303,7 +3459,7 @@ pub async fn serve(
 
 /// Binds the first free port at or after `start`, giving up after `tries`.
 ///
-/// Lets "Open to LAN" coexist with a Docker `envv-server` already holding the
+/// Lets "Open to LAN" coexist with a Docker `unv-server` already holding the
 /// default port instead of just failing.
 pub fn find_free_port(host: &str, start: u16, tries: u16) -> Option<u16> {
     (start..start.saturating_add(tries)).find(|p| std::net::TcpListener::bind((host, *p)).is_ok())
@@ -3567,6 +3723,109 @@ mod tests {
             "127.0.0.1:50000".parse().unwrap(),
         ));
         router.clone().oneshot(req).await.unwrap()
+    }
+
+    #[tokio::test]
+    async fn an_entrys_history_is_served_alone_to_the_owner_only() {
+        let (state, owner) = owner_with_vault();
+        let router = build_router(state.clone(), 8080);
+        let got = json_of(call(&router, "GET", "/api/vault", Some(&owner), None).await).await;
+        let id = got["api_keys"][0]["id"].as_str().unwrap_or("").to_string();
+        assert!(!id.is_empty(), "the fixture entry has an id");
+        let r = call(
+            &router,
+            "GET",
+            &format!("/api/vault/entries/{id}/history"),
+            Some(&owner),
+            None,
+        )
+        .await;
+        assert_eq!(r.status(), StatusCode::OK);
+        assert!(json_of(r).await.is_array());
+        let r = call(
+            &router,
+            "GET",
+            "/api/vault/entries/nope/history",
+            Some(&owner),
+            None,
+        )
+        .await;
+        assert_eq!(r.status(), StatusCode::NOT_FOUND);
+        let r = call(&router, "GET", "/api/vault/entries/x/history", None, None).await;
+        assert_eq!(r.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn patch_saves_only_the_delta_through_the_same_compare_and_swap() {
+        let (state, owner) = owner_with_vault();
+        let router = build_router(state.clone(), 8080);
+        let got = call(&router, "GET", "/api/vault", Some(&owner), None).await;
+        let v1 = got.headers()[axum::http::header::ETAG]
+            .to_str()
+            .unwrap()
+            .to_string();
+        let doc = json_of(got).await;
+        let first = doc["api_keys"][0].clone();
+
+        // Add one entry; the existing one is not sent and survives.
+        let r = call_with(
+            &router,
+            "PATCH",
+            "/api/vault",
+            &owner,
+            &[("if-match", &v1)],
+            serde_json::json!({"put": [{"id": "p-1", "provider": "Patched", "api_key": "k"}]}),
+        )
+        .await;
+        assert_eq!(r.status(), StatusCode::NO_CONTENT);
+        let v2 = r.headers()[axum::http::header::ETAG]
+            .to_str()
+            .unwrap()
+            .to_string();
+        let after = json_of(call(&router, "GET", "/api/vault", Some(&owner), None).await).await;
+        assert_eq!(after["api_keys"].as_array().unwrap().len(), 2);
+
+        // A stale base editing the entry someone else just changed is a real conflict.
+        let mut edited = first.clone();
+        edited["provider"] = serde_json::json!("Stale edit");
+        let r = call_with(
+            &router,
+            "PATCH",
+            "/api/vault",
+            &owner,
+            &[("if-match", &v1)],
+            serde_json::json!({"put": [edited]}),
+        )
+        .await;
+        assert_eq!(
+            r.status(),
+            StatusCode::NO_CONTENT,
+            "disjoint from p-1, so it merges"
+        );
+        // Delete by id, then a malformed put is refused.
+        let r = call_with(
+            &router,
+            "PATCH",
+            "/api/vault",
+            &owner,
+            &[("if-match", &v2)],
+            serde_json::json!({"delete": ["p-1"]}),
+        )
+        .await;
+        // v2 is stale after the edit above; the delete of p-1 is disjoint from it.
+        assert_eq!(r.status(), StatusCode::NO_CONTENT);
+        let after = json_of(call(&router, "GET", "/api/vault", Some(&owner), None).await).await;
+        assert_eq!(after["api_keys"].as_array().unwrap().len(), 1);
+        let r = call_with(
+            &router,
+            "PATCH",
+            "/api/vault",
+            &owner,
+            &[],
+            serde_json::json!({"put": [{"provider": "no id"}]}),
+        )
+        .await;
+        assert_eq!(r.status(), StatusCode::BAD_REQUEST);
     }
 
     #[tokio::test]
