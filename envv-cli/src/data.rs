@@ -1,7 +1,7 @@
 //! Shared accessors and lookup rules over the vault JSON blob.
 //!
 //! Lookups deliberately refuse ambiguity. A CLI that picks the "first match" for
-//! `envv entry rm git` deletes whichever of GitHub / GitLab / Gitea happens to
+//! `unv entry rm git` deletes whichever of GitHub / GitLab / Gitea happens to
 //! sit earlier in the array — the same class of bug as identifying an entry by
 //! array index (see the invariants in CLAUDE.md).
 
@@ -19,7 +19,7 @@ pub fn entries(vault: &Value) -> Vec<Value> {
 /// Entries belonging to `project`, matched by id or by a case-insensitive
 /// substring of the name.
 ///
-/// Extracted from `envfile::export_vault` when `envv calendar` needed the same
+/// Extracted from `envfile::export_vault` when `unv calendar` needed the same
 /// filter. A second copy would be a second definition of what "--project web"
 /// means, and the two would agree right up until one of them learned about
 /// sub-projects.
@@ -405,6 +405,18 @@ pub const ALL_PROJECT_TYPES: [&str; 11] = [
     "ansible",
     "postgres",
 ];
+
+/// Every project type the CLI can name: the eleven built in, then the stack
+/// integrations whose descriptors live in `vault-core/data/stack-adapters.json`
+/// (Phase 38). The adapter types are never stable until their output has been
+/// accepted by the software they target.
+pub fn all_project_types() -> Vec<&'static str> {
+    ALL_PROJECT_TYPES
+        .iter()
+        .copied()
+        .chain(vault_core::stack::adapters().iter().map(|a| a.id.as_str()))
+        .collect()
+}
 
 /// An entry's `secretType`, with the documented legacy default filled in.
 ///
