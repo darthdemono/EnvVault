@@ -1,0 +1,97 @@
+{
+  "name": "envvault",
+  "displayName": "UnENVerse",
+  "description": "References, fingerprints and secret-aware tasks for an UnENVerse vault, through the unv CLI. It never shows a secret value.",
+  "version": "0.38.0",
+  "publisher": "darthdemono",
+  "license": "MIT",
+  "private": true,
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "configuration": {
+      "title": "UnENVerse",
+      "properties": {
+        "envvault.path": {
+          "type": "string",
+          "default": "unv",
+          "description": "The unv executable. The extension runs it with the credentials your shell would use (a cached `unv login` session, or UNV_PASSWORD)."
+        },
+        "envvault.scanOnSave": {
+          "type": "boolean",
+          "default": true,
+          "description": "On save, warn at each line holding a value that is a secret in the vault."
+        }
+      }
+    },
+    "taskDefinitions": [
+      {
+        "type": "unv",
+        "required": [
+          "command"
+        ],
+        "properties": {
+          "command": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The program and its arguments. Run without a shell."
+          },
+          "project": {
+            "type": "string",
+            "description": "Load this project's .env chunks into the environment."
+          },
+          "entries": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "PROVIDER or PROVIDER=VAR, repeatable."
+          },
+          "pools": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "POOL or POOL=VAR, repeatable."
+          },
+          "prefix": {
+            "type": "string"
+          },
+          "clean": {
+            "type": "boolean",
+            "description": "Start from an empty environment."
+          }
+        }
+      }
+    ],
+    "commands": [
+      {
+        "command": "envvault.refresh",
+        "title": "UnENVerse: Refresh the entry list"
+      },
+      {
+        "command": "envvault.scanThisFile",
+        "title": "UnENVerse: Check this file for exposed secrets"
+      }
+    ]
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/vscode": "^1.85.0",
+    "typescript": "^5.6.0"
+  }
+}
