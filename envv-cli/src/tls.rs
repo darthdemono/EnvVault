@@ -3,7 +3,7 @@
 //!
 //! Before Phase 17 this file did not exist and the CLI called
 //! `reqwest::blocking::Client::new()` in three places, which meant two things,
-//! both bad. It could not reach a self-signed `envv-server` at all, and it
+//! both bad. It could not reach a self-signed `unv-server` at all, and it
 //! linked a *different* TLS stack from the desktop app: `reqwest`'s default
 //! features pull in native-tls, while `src-tauri` has always used rustls. One
 //! product, two trust decisions, neither aware of the other.
@@ -69,7 +69,7 @@ pub fn configure(fingerprint: Option<&str>, ca_cert: Option<&std::path::Path>) -
     Ok(())
 }
 
-/// Adopt a fingerprint remembered from a previous `envv login --tofu`.
+/// Adopt a fingerprint remembered from a previous `unv login --tofu`.
 ///
 /// Only takes effect when the user gave no explicit policy — an explicit
 /// `--fingerprint` or `--ca-cert` on this invocation always wins over a stored
@@ -98,6 +98,99 @@ pub fn build_client() -> CliResult<reqwest::blocking::Client> {
         .map_err(|e| CliError::from(format!("Cannot build HTTPS client: {e}")))
 }
 
+/// The client a node agent uses to reach its hub (Phase 34): the configured
+/// pin, TLS 1.3 only, no redirects (a redirect would carry a signed request to
+/// somewhere the pin never saw), and a timeout longer than the hub's longest
+/// held beat.
+pub fn build_node_client(timeout: std::time::Duration) -> CliResult<reqwest::blocking::Client> {
+    let cfg = tls::client_config_tls13(&policy()).map_err(CliError::from)?;
+    reqwest::blocking::Client::builder()
+        .use_preconfigured_tls(cfg)
+        .timeout(timeout)
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .map_err(|e| CliError::from(format!("Cannot build HTTPS client: {e}")))
+}
+
+/// The client a hub uses to dial a listening node (Phase 34.1): this node's
+/// certificate, by the SHA-256 recorded at enrollment, TLS 1.3 only, no redirects.
+/// Not the globally configured pin - the hub talks to many nodes, each with its own.
+pub fn build_pinned_node_client(
+    fingerprint: &str,
+    timeout: std::time::Duration,
+) -> CliResult<reqwest::blocking::Client> {
+    let cfg = tls::client_config_tls13(&tls::TlsPolicy::Pin(fingerprint.to_string()))
+        .map_err(CliError::from)?;
+    reqwest::blocking::Client::builder()
+        .use_preconfigured_tls(cfg)
+        .timeout(timeout)
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .map_err(|e| CliError::from(format!("Cannot build HTTPS client: {e}")))
+}
+
+/// A node's answer to a hub's request (Phase 34.1).
+pub struct Dialed {
+    pub status: u16,
+    /// Response headers, names lower-cased.
+    pub headers: std::collections::HashMap<String, String>,
+    pub body: Vec<u8>,
+}
+
+/// One hub-signed POST to a listening node, pinned to its certificate. The hub
+/// crate calls this rather than naming an HTTP client: the signature is made by
+/// the caller (`ts` and `sig` are the `x-hub-ts` and `x-hub-sig` values).
+pub fn hub_post(
+    fingerprint: &str,
+    base: &str,
+    path: &str,
+    ts: i64,
+    sig: &str,
+    body: &[u8],
+) -> Result<Dialed, String> {
+    let client = build_pinned_node_client(fingerprint, std::time::Duration::from_secs(30))
+        .map_err(|e| e.to_string())?;
+    let resp = client
+        .post(format!("{base}{path}"))
+        .header("content-type", "application/json")
+        .header("x-hub-ts", ts.to_string())
+        .header("x-hub-sig", sig)
+        .body(body.to_vec())
+        .send()
+        .map_err(|e| {
+            // The verifier's message is in the source chain, not Display.
+            let mut m = e.to_string();
+            let mut src: Option<&dyn std::error::Error> = std::error::Error::source(&e);
+            while let Some(s) = src {
+                m.push_str("; ");
+                m.push_str(&s.to_string());
+                src = s.source();
+            }
+            m
+        })?;
+    let status = resp.status().as_u16();
+    let headers = resp
+        .headers()
+        .iter()
+        .filter_map(|(k, v)| {
+            Some((
+                k.as_str().to_ascii_lowercase(),
+                v.to_str().ok()?.to_string(),
+            ))
+        })
+        .collect();
+    // A node's answer is a beat; bound it so a hostile address cannot stream.
+    let body = resp.bytes().map_err(|e| e.to_string())?;
+    if body.len() > 8 * 1024 * 1024 {
+        return Err("the node's answer is over 8 MiB".into());
+    }
+    Ok(Dialed {
+        status,
+        headers,
+        body: body.to_vec(),
+    })
+}
+
 /// Turn a transport failure into an error whose code says what to do about it.
 ///
 /// A certificate that fails the pin and a server that is switched off are the
@@ -123,7 +216,7 @@ pub fn classify_connect_error(err: &reqwest::Error, base: &str) -> CliError {
         return CliError::denied(format!(
             "{base} presented a certificate that does not match the pinned fingerprint.\n\
              Either the server's certificate was replaced, or something is impersonating it.\n\
-             If you know it rotated: `envv logout --server {base}`, then log in again with --tofu."
+             If you know it rotated: `unv logout --server {base}`, then log in again with --tofu."
         ));
     }
     if lower.contains("invalid peer certificate")
@@ -132,14 +225,14 @@ pub fn classify_connect_error(err: &reqwest::Error, base: &str) -> CliError {
     {
         return CliError::denied(format!(
             "{base} presented a certificate this machine does not trust.\n\
-             For a self-signed envv-server, pin it: `envv login --server {base} --tofu`,\n\
+             For a self-signed unv-server, pin it: `unv login --server {base} --tofu`,\n\
              or pass --ca-cert with the CA that issued it."
         ));
     }
     CliError::unavailable(format!("Cannot reach server: {err}"))
 }
 
-/// A client for **third-party issuers**, not for `envv-server`.
+/// A client for **third-party issuers**, not for `unv-server`.
 ///
 /// `enrich --online` talks to github.com, api.openai.com and six others. Those
 /// need ordinary CA validation and must *never* inherit the pin: a fingerprint
