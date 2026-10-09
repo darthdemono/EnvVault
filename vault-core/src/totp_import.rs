@@ -265,7 +265,7 @@ pub fn detect(text: &str) -> Result<Format, String> {
 
 fn encrypted_msg(app: &str, advice: &str) -> String {
     format!(
-        "this is an *encrypted* {app} export. EnvVault will not try to decrypt \
+        "this is an *encrypted* {app} export. UnENVerse will not try to decrypt \
          another app's vault — {advice}, import it here, then delete the \
          plaintext file."
     )
@@ -934,7 +934,7 @@ fn build_2fas(items: &[Imported]) -> String {
         // oldest version every current build still reads.
         "schemaVersion": 4,
         "appVersionCode": 0,
-        "appVersionName": "EnvVault",
+        "appVersionName": "UnENVerse",
         "appOrigin": "android",
         "servicesEncrypted": Value::Null,
         "reference": Value::Null,
@@ -970,7 +970,7 @@ fn stable_uuid(secret: &str) -> String {
 //
 // The rules live here rather than in the CLI because they decide whether a
 // working second factor survives an import, and a rule like that must not be
-// able to differ between the app and the terminal. `envv totp import` and the
+// able to differ between the app and the terminal. `unv totp import` and the
 // desktop app's Import button both call [`plan`] and [`apply`].
 
 /// Normalised key for "is this the same account?".
@@ -1006,7 +1006,7 @@ pub enum Plan {
 /// Decide, for each incoming seed, what should happen to it.
 ///
 /// The rule that matters is [`Plan::Conflict`]. A stored second factor is not
-/// recoverable from EnvVault's side once it is gone, and an import is exactly
+/// recoverable from UnENVerse's side once it is gone, and an import is exactly
 /// the moment a stale export gets pointed at a vault that has since been
 /// re-enrolled. Silently taking the incoming value there would lock the user out
 /// of an account at the moment they believe they are backing one up.
