@@ -16,6 +16,8 @@ import {
 import { initPoolsPane, renderPoolsPane } from './pools';
 import { initTimelinePane, renderTimeline } from './timeline';
 import { initEnrichPane, initDoctorPane } from './enrich-pane';
+import { initHistoryPane } from './history-pane';
+import { initNodesPane } from './nodes-pane';
 import { initUidPane } from './uid-pane';
 import { initVendorImportPane } from './vendor-import-pane';
 import {
@@ -294,6 +296,8 @@ export function initTools() {
   initTimelinePane();
   initEnrichPane();
   initUidPane();
+  initNodesPane();
+  initHistoryPane();
   initVendorImportPane();
   initDoctorPane();
   if ((Settings.get('activeTool') || '') === 'timeline') renderTimeline();
