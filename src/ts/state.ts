@@ -1678,6 +1678,7 @@ export function switchTool(toolId: string) {
     else btn.removeAttribute('aria-current');
   });
   Settings.set('activeTool', toolId);
+  if (toolId === 'nodes') import('./nodes-pane').then((m) => m.refreshNodes()).catch(() => {});
 }
 
 // ── The environment-variable name template ─────────────────────────────────
