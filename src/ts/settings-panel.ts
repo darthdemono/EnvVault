@@ -293,7 +293,7 @@ export function buildPanelOrderEditor() {
 }
 
 // ── Provider catalogue (Phase 31.1) ────────────────────────────────────────
-// `envv catalogue show` / `update`. The signature check, rollback refusal and
+// `unv catalogue show` / `update`. The signature check, rollback refusal and
 // cache are all Rust (`vault_core::catalogue`); this row only asks. Like the TOTP
 // code, it cannot work in a plain browser, and says so rather than pretending.
 
@@ -314,7 +314,7 @@ function wireCatalogueRow(): void {
   const btn = document.getElementById('s-catalogue-update') as HTMLButtonElement | null;
   if (!status || !btn) return;
   if (!inTauri) {
-    status.textContent = 'Available in the desktop app. In a terminal: envv catalogue update.';
+    status.textContent = 'Available in the desktop app. In a terminal: unv catalogue update.';
     btn.disabled = true;
     return;
   }
@@ -341,7 +341,7 @@ function wireCatalogueRow(): void {
 }
 
 // ── Full-fidelity archive (Phase 33.3) ──────────────────────────────────────
-// `envv backup archive` / `restore-archive`. The cryptography and the checks are
+// `unv backup archive` / `restore-archive`. The cryptography and the checks are
 // Rust (`envv_cli::backup`); this only collects a password and a file.
 
 function pickTextFile(): Promise<string | null> {
@@ -372,7 +372,7 @@ function wireArchiveRows(): void {
   if (!inTauri) {
     for (const b of [make, restore]) {
       b.disabled = true;
-      b.title = 'Available in the desktop app. In a terminal: envv backup archive.';
+      b.title = 'Available in the desktop app. In a terminal: unv backup archive.';
     }
     return;
   }
