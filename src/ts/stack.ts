@@ -1,0 +1,337 @@
+/**
+ * Stack integrations as data (Phase 38, ADR-0144): the TypeScript half of the
+ * interpreter for `vault-core/data/stack-adapters.json`.
+ *
+ * Prometheus, Grafana and Homepage are not three exporters here. They are three
+ * descriptors, and this file and `vault-core/src/stack.rs` are two readings of
+ * the same grammar, pinned by golden fixtures asserted from both sides
+ * (`tests/stack.test.ts`, `envv-cli/tests/stack_parity.rs`). Keep the two
+ * identical in behaviour: the quoting rule, what counts as empty, the order of
+ * keys and groups.
+ */
+import descriptorJson from '../../vault-core/data/stack-adapters.json';
+import type { ChunkField, Project, SecretChunk } from './types';
+
+interface FieldSpec {
+  key: string;
+  kind?: 'text' | 'list' | 'bool';
+  secret?: boolean;
+  default?: string;
+  choices?: string[];
+  help?: string;
+}
+interface ChunkSpec {
+  type: string;
+  label: string;
+  singleton?: boolean;
+  fields: FieldSpec[];
+}
+export interface StackAdapter {
+  id: string;
+  label: string;
+  abbr: string;
+  description: string;
+  file: string;
+  chunks: ChunkSpec[];
+  starter: { type: string; name: string }[];
+  output: Node;
+}
+
+interface FieldNode {
+  f: string;
+  as?: 'list' | 'bool' | 'int' | 'str';
+  fmt?: string;
+}
+interface MapNode {
+  map: [string, Node][];
+  keep?: boolean;
+}
+interface ListNode {
+  list: Node[];
+  keep?: boolean;
+}
+interface EachNode {
+  each: string;
+  node: Node;
+  keep?: boolean;
+}
+interface SingletonNode {
+  singleton: string;
+  node: Node;
+}
+interface GroupNode {
+  group: { of: string; by: string; default?: string; item: Node };
+  keep?: boolean;
+}
+interface EntryNode {
+  entry: { key: Node; value?: Node };
+}
+interface WhenNode {
+  when: string[];
+  node: Node;
+}
+type Node =
+  | string
+  | number
+  | boolean
+  | null
+  | FieldNode
+  | MapNode
+  | ListNode
+  | EachNode
+  | SingletonNode
+  | GroupNode
+  | EntryNode
+  | WhenNode;
+
+type Y = string | boolean | number | Y[] | YMap;
+/** An ordered map: the descriptor's key order is the file's key order. */
+class YMap {
+  constructor(public entries: [string, Y][]) {}
+}
+
+const ADAPTERS = (descriptorJson as unknown as { adapters: StackAdapter[] }).adapters;
+
+export function stackAdapters(): readonly StackAdapter[] {
+  return ADAPTERS;
+}
+export function stackAdapter(id: string | null | undefined): StackAdapter | undefined {
+  return id ? ADAPTERS.find((a) => a.id === id) : undefined;
+}
+export function isStackProjectType(t: string | null | undefined): boolean {
+  return !!stackAdapter(t);
+}
+export function stackChunkTypes(): string[] {
+  return ADAPTERS.flatMap((a) => a.chunks.map((c) => c.type));
+}
+export function stackChunkSpec(adapter: StackAdapter, type: string): ChunkSpec | undefined {
+  return adapter.chunks.find((c) => c.type === type);
+}
+
+// ── YAML ─────────────────────────────────────────────────────────────────────
+
+const RESERVED = new Set([
+  'true',
+  'false',
+  'yes',
+  'no',
+  'on',
+  'off',
+  'y',
+  'n',
+  'null',
+  '~',
+  'nan',
+  'inf',
+]);
+
+/** Same rule as `scalar` in stack.rs: only plain words are written bare. */
+function scalar(s: string): string {
+  const bare = s !== '' && !RESERVED.has(s.toLowerCase()) && /^[A-Za-z_][A-Za-z0-9_.-]*$/.test(s);
+  return bare ? s : JSON.stringify(s);
+}
+
+function writeMap(out: string[], entries: [string, Y][], indent: number): void {
+  const pad = ' '.repeat(indent);
+  for (const [k, v] of entries) {
+    const key = `${pad}${scalar(k)}:`;
+    if (typeof v === 'string') out.push(`${key} ${scalar(v)}\n`);
+    else if (typeof v === 'boolean' || typeof v === 'number') out.push(`${key} ${String(v)}\n`);
+    else if (v instanceof YMap) {
+      if (!v.entries.length) out.push(`${key} {}\n`);
+      else {
+        out.push(`${key}\n`);
+        writeMap(out, v.entries, indent + 2);
+      }
+    } else if (Array.isArray(v)) {
+      if (!v.length) out.push(`${key} []\n`);
+      else {
+        out.push(`${key}\n`);
+        writeList(out, v, indent + 2);
+      }
+    }
+  }
+}
+
+function writeList(out: string[], items: Y[], indent: number): void {
+  const pad = ' '.repeat(indent);
+  for (const item of items) {
+    if (item instanceof YMap && item.entries.length) {
+      // The first key shares the dash's line; the rest align under it.
+      const inner: string[] = [];
+      writeMap(inner, item.entries, indent + 2);
+      out.push(`${pad}- ${inner.join('').slice(indent + 2)}`);
+    } else if (Array.isArray(item) && item.length) {
+      out.push(`${pad}-\n`);
+      writeList(out, item, indent + 2);
+    } else if (typeof item === 'string') out.push(`${pad}- ${scalar(item)}\n`);
+    else if (typeof item === 'boolean' || typeof item === 'number')
+      out.push(`${pad}- ${String(item)}\n`);
+    else if (item instanceof YMap) out.push(`${pad}- {}\n`);
+    else out.push(`${pad}- []\n`);
+  }
+}
+
+function toYaml(root: Y | null): string {
+  const out: string[] = ['# Generated by UnENVerse\n'];
+  if (root instanceof YMap) writeMap(out, root.entries, 0);
+  else if (Array.isArray(root)) writeList(out, root, 0);
+  return out.join('');
+}
+
+// ── Interpreter ──────────────────────────────────────────────────────────────
+
+/** How a stored value becomes text: `(raw, isSecret) => text`. */
+export type StackResolve = (raw: string, secret: boolean) => string;
+
+interface Ctx {
+  adapter: StackAdapter;
+  chunks: SecretChunk[];
+  resolve: StackResolve;
+  cur?: { chunk: SecretChunk; spec: ChunkSpec };
+}
+
+function rawField(chunk: SecretChunk, key: string): string {
+  if (key === '@name') return chunk.name ?? '';
+  const f = (chunk.fields ?? []).find((x: ChunkField) => x.key === key);
+  return typeof f?.value === 'string' ? f.value : '';
+}
+
+function fieldText(ctx: Ctx, key: string): string {
+  if (!ctx.cur) return '';
+  const raw = rawField(ctx.cur.chunk, key);
+  if (raw.trim() === '') return '';
+  if (key === '@name') return raw;
+  const secret = ctx.cur.spec.fields.some((f) => f.key === key && f.secret);
+  return ctx.resolve(raw, secret);
+}
+
+function eachChunk(ctx: Ctx, type: string): Ctx[] {
+  const spec = stackChunkSpec(ctx.adapter, type);
+  if (!spec) return [];
+  return ctx.chunks
+    .filter((c) => c.chunk_type === type)
+    .map((chunk) => ({ ...ctx, cur: { chunk, spec } }));
+}
+
+function splitList(s: string): string[] {
+  return s
+    .split(/[\n,]/)
+    .map((x) => x.trim())
+    .filter(Boolean);
+}
+
+function truthy(s: string): boolean | null {
+  const t = s.trim().toLowerCase();
+  if (['true', 'yes', 'on', '1'].includes(t)) return true;
+  if (['false', 'no', 'off', '0'].includes(t)) return false;
+  return null;
+}
+
+function evaluate(node: Node, ctx: Ctx): Y | null {
+  if (typeof node === 'string') return node;
+  if (typeof node === 'boolean') return node;
+  if (typeof node === 'number') return Number.isInteger(node) ? node : null;
+  if (node === null) return null;
+
+  if ('f' in node) {
+    const text = fieldText(ctx, node.f);
+    if (text === '') return null;
+    switch (node.as ?? 'str') {
+      case 'list': {
+        const items = splitList(text);
+        return items.length ? items : null;
+      }
+      case 'bool':
+        return truthy(text);
+      case 'int': {
+        const t = text.trim();
+        return /^[+-]?\d+$/.test(t) ? Number(t) : text;
+      }
+      default:
+        return node.fmt !== undefined ? node.fmt.replace('{}', text) : text;
+    }
+  }
+  if ('map' in node) {
+    const entries: [string, Y][] = [];
+    for (const [key, child] of node.map) {
+      const v = evaluate(child, ctx);
+      if (v !== null) entries.push([key, v]);
+    }
+    return entries.length || node.keep === true ? new YMap(entries) : null;
+  }
+  if ('list' in node) {
+    const l = node.list.map((n) => evaluate(n, ctx)).filter((v): v is Y => v !== null);
+    return l.length || node.keep === true ? l : null;
+  }
+  if ('each' in node) {
+    const l = eachChunk(ctx, node.each)
+      .map((c) => evaluate(node.node, c))
+      .filter((v): v is Y => v !== null);
+    return l.length || node.keep === true ? l : null;
+  }
+  if ('singleton' in node) {
+    const first = eachChunk(ctx, node.singleton)[0];
+    return first ? evaluate(node.node, first) : null;
+  }
+  if ('group' in node) {
+    const g = node.group;
+    const groups: [string, Y[]][] = [];
+    for (const c of eachChunk(ctx, g.of)) {
+      const t = fieldText(c, g.by);
+      const name = t === '' ? (g.default ?? '') : t;
+      const y = evaluate(g.item, c);
+      if (y === null) continue;
+      const hit = groups.find((x) => x[0] === name);
+      if (hit) hit[1].push(y);
+      else groups.push([name, [y]]);
+    }
+    const l: Y[] = groups.map(([n, items]) => new YMap([[n, items]]));
+    return l.length || node.keep === true ? l : null;
+  }
+  if ('entry' in node) {
+    const key = evaluate(node.entry.key, ctx);
+    if (typeof key !== 'string') return null;
+    const value = node.entry.value === undefined ? null : evaluate(node.entry.value, ctx);
+    return new YMap([[key, value ?? new YMap([])]]);
+  }
+  // `when`: the node only if one of the listed fields has a value.
+  const any = node.when.some((f) => fieldText(ctx, f) !== '');
+  return any ? evaluate(node.node, ctx) : null;
+}
+
+/** Renders a project of a stack adapter's type to the file it produces. */
+export function renderStack(
+  adapter: StackAdapter,
+  project: Project,
+  resolve: StackResolve,
+): string {
+  const chunks = (project.chunks ?? []).filter((c) => !c.disabled);
+  return toYaml(evaluate(adapter.output, { adapter, chunks, resolve }));
+}
+
+/** A new, empty chunk of this type with the descriptor's defaults filled in. */
+export function newStackChunk(spec: ChunkSpec, name: string): SecretChunk {
+  return {
+    id: crypto.randomUUID(),
+    name,
+    chunk_type: spec.type as SecretChunk['chunk_type'],
+    fields: spec.fields.map((f) => ({
+      key: f.key,
+      value: f.default ?? '',
+      field_type: (f.secret
+        ? 'secret'
+        : f.kind === 'list'
+          ? 'list'
+          : 'var') as ChunkField['field_type'],
+    })),
+  };
+}
+
+/** The chunks a new project of this type starts with. */
+export function stackStarterChunks(adapter: StackAdapter): SecretChunk[] {
+  return adapter.starter.flatMap((s) => {
+    const spec = stackChunkSpec(adapter, s.type);
+    return spec ? [newStackChunk(spec, s.name)] : [];
+  });
+}
