@@ -150,7 +150,7 @@ jobs:
           <head>
             <meta charset="utf-8">
             <meta name="viewport" content="width=device-width, initial-scale=1">
-            <title>EnvVault ${VERSION} — API reference</title>
+            <title>UnENVerse ${VERSION} — API reference</title>
             <style>
               :root { color-scheme: light dark; }
               body {
@@ -166,7 +166,7 @@ jobs:
             </style>
           </head>
           <body>
-            <h1>EnvVault</h1>
+            <h1>UnENVerse</h1>
             <div class="v">API reference &middot; version ${VERSION} &middot; commit ${GITHUB_SHA:0:7}</div>
             <ul>
               <li>
@@ -186,7 +186,7 @@ jobs:
                 <a href="${RUST_ENTRY}">Rust crates</a>
                 <p>
                   <code>vault-core</code> (crypto, storage, RBAC),
-                  <code>envv-server</code>, <code>envv-cli</code> and the Tauri
+                  <code>unv-server</code>, <code>envv-cli</code> and the Tauri
                   app crate, built with rustdoc.
                 </p>
               </li>
