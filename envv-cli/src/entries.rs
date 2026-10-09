@@ -89,7 +89,7 @@ pub struct EntryFields {
     /// This is what turns a stored string into a working request, and it is the
     /// one thing about a credential the vault did not hold — so two entries that
     /// look identical were used completely differently and the user had to
-    /// remember which. `envv curl` reads it.
+    /// remember which. `unv curl` reads it.
     #[arg(long, value_parser = ["bearer", "header", "basic", "query", "cookie", ""])]
     pub auth_scheme: Option<String>,
     /// The header or query-parameter name `--auth-scheme` puts the value in.
@@ -98,6 +98,10 @@ pub struct EntryFields {
     /// nothing for `bearer` and `basic`, whose shapes are fixed.
     #[arg(long)]
     pub auth_param: Option<String>,
+    /// For `--auth-scheme header`: the value sent, with `{key}` for the credential,
+    /// e.g. `--auth-template 'MediaBrowser Token="{key}"'`. Ignored without `{key}`.
+    #[arg(long)]
+    pub auth_template: Option<String>,
     /// The User-Agent this credential was minted against.
     ///
     /// Not optional metadata for a session cookie: replay without the matching
@@ -108,9 +112,15 @@ pub struct EntryFields {
     ///
     /// `blob_ref` holds only a path, so a fresh machine has the reference and
     /// not the credential. This holds the file itself; `--mount-path` says where
-    /// `envv file write` puts it back.
+    /// `unv file write` puts it back.
     #[arg(long)]
     pub blob_file: Option<PathBuf>,
+    /// Read an OpenPGP key (armoured or binary; the public part is enough) and
+    /// record what it says: `expires_at` from the sooner of the key's and its
+    /// subkeys' expiry, and public variables `fingerprint`, `key_id` and `user_ids`.
+    /// For a `gpg_key` entry; the private half stays wherever you keep it.
+    #[arg(long)]
+    pub pgp_public: Option<PathBuf>,
     /// Where the consumer expects to find this credential on disk.
     #[arg(long)]
     pub mount_path: Option<String>,
@@ -146,7 +156,7 @@ pub struct EntryFields {
     /// the sentence you will be held to if the issuer asks why you have the key.
     #[arg(long)]
     pub purpose: Option<String>,
-    /// Key pool this entry joins, so `envv get --pool <name>` can swap onto it.
+    /// Key pool this entry joins, so `unv get --pool <name>` can swap onto it.
     ///
     /// Membership is explicit: two keys for the same provider do not pool
     /// automatically. Pass an empty string to leave the pool.
@@ -211,9 +221,9 @@ pub struct EntryFields {
     /// Authenticator seed for this credential's service: base32, or a whole
     /// `otpauth://totp/...` URI.
     ///
-    /// This is the seed a *third party* issued, from which `envv totp code`
-    /// produces the six digits you type into that service. It is not EnvVault's
-    /// own second factor — that is `envv user totp`.
+    /// This is the seed a *third party* issued, from which `unv totp code`
+    /// produces the six digits you type into that service. It is not UnENVerse's
+    /// own second factor — that is `unv user totp`.
     ///
     /// A URI is split: its algorithm, digits and period are stored alongside the
     /// seed, so pasting one is all that is ever needed. Pass an empty string to
@@ -240,7 +250,7 @@ pub struct EntryFields {
     pub totp_kind: Option<String>,
     /// The next counter an `hotp` seed will use.
     ///
-    /// Set it to resynchronise an account that has drifted; `envv totp advance`
+    /// Set it to resynchronise an account that has drifted; `unv totp advance`
     /// is how it moves in normal use.
     #[arg(long)]
     pub totp_counter: Option<u64>,
@@ -468,7 +478,7 @@ impl EntryFields {
             return Ok(());
         }
 
-        // One reader for all five fields, shared with `envv totp`, the desktop
+        // One reader for all five fields, shared with `unv totp`, the desktop
         // command and the importer.
         let mut params = vault_core::totp::Params::from_fields(
             entry.get("totp_kind").and_then(|v| v.as_str()),
@@ -618,6 +628,9 @@ impl EntryFields {
         if let Some(v) = &self.auth_param {
             set_str(entry, "auth_param", v);
         }
+        if let Some(v) = &self.auth_template {
+            set_str(entry, "auth_template", v);
+        }
         if let Some(v) = &self.user_agent {
             set_str(entry, "user_agent", v);
         }
@@ -652,6 +665,34 @@ impl EntryFields {
                 )
             })?;
             entry["blob_data"] = json!(text);
+        }
+        if let Some(path) = &self.pgp_public {
+            let raw = std::fs::read(path)
+                .map_err(|e| CliError::from(format!("Cannot read {}: {e}", path.display())))?;
+            let info = vault_core::pgp::inspect(&raw).map_err(CliError::invalid)?;
+            match info.soonest_expiry() {
+                Some(t) => entry["expires_at"] = json!(vault_core::pgp::iso(t)),
+                None => {
+                    entry.as_object_mut().map(|o| o.remove("expires_at"));
+                }
+            }
+            let mut list: Vec<Value> = entry
+                .get("extra_vars")
+                .and_then(|v| v.as_array())
+                .cloned()
+                .unwrap_or_default();
+            let mut put = |key: &str, value: String| {
+                list.retain(|x| x.get("key").and_then(|k| k.as_str()) != Some(key));
+                if !value.is_empty() {
+                    list.push(
+                        json!({ "key": key, "value": value, "secret": false, "public": true }),
+                    );
+                }
+            };
+            put("fingerprint", info.primary.fingerprint.clone());
+            put("key_id", info.primary.key_id.clone());
+            put("user_ids", info.user_ids.join("; "));
+            entry["extra_vars"] = json!(list);
         }
         if let Some(v) = &self.secret_role {
             set_str(entry, "secret_role", v);
@@ -812,7 +853,7 @@ impl EntryFields {
                         .any(|p| p.get("id").and_then(|x| x.as_str()) == Some(id))
                 {
                     return Err(CliError::not_found(format!(
-                        "No such project id: '{id}' (see `envv project ls`)"
+                        "No such project id: '{id}' (see `unv project ls`)"
                     )));
                 }
             }
@@ -836,7 +877,7 @@ pub fn cmd_add(
 ) -> CliResult {
     let template = match template {
         Some(id) => Some(vault_core::templates::find(id).ok_or_else(|| {
-            CliError::not_found(format!("No template '{id}' — see `envv template ls`"))
+            CliError::not_found(format!("No template '{id}' — see `unv template ls`"))
         })?),
         None => None,
     };
@@ -859,7 +900,7 @@ pub fn cmd_add(
             return Ok(());
         }
         return Err(CliError::conflict(format!(
-            "An entry named '{provider}' already exists — use `envv entry set` to change it, or pass a distinct --key-id"
+            "An entry named '{provider}' already exists — use `unv entry set` to change it, or pass a distinct --key-id"
         )));
     }
 
@@ -908,7 +949,7 @@ pub fn cmd_add(
     Ok(())
 }
 
-/// `envv totp add NAME --seed-stdin [--account …]` — the guided path that
+/// `unv totp add NAME --seed-stdin [--account …]` — the guided path that
 /// mirrors the desktop Authenticator panel's "Add 2FA" form: attach to an
 /// existing entry found by exact provider name, or create a bare
 /// `password`-typed one with an empty primary when none exists.
@@ -944,7 +985,7 @@ pub fn cmd_totp_add(
                 .is_some_and(|s| !s.trim().is_empty());
             if already {
                 return Err(CliError::conflict(format!(
-                    "'{name}' already has a seed — use `envv entry set {name} --totp-stdin` \
+                    "'{name}' already has a seed — use `unv entry set {name} --totp-stdin` \
                      to re-enroll it on purpose"
                 )));
             }
@@ -1217,7 +1258,7 @@ pub fn cmd_flag(access: &Access, query: &str, field: &str, on: bool) -> CliResul
 ///
 /// `save_vault` appends the previous value to `version_history` whenever the key
 /// changes, so passing `--key` here both rotates and records.
-/// `envv entry verify <entry>` — stamp a session as still working.
+/// `unv entry verify <entry>` — stamp a session as still working.
 ///
 /// The session equivalent of `rotate`, and the reason the rotation nag is
 /// switched off for a cookie (Phase 23, E13): rotating one means logging in
@@ -1381,10 +1422,10 @@ pub fn cmd_history(access: &Access, query: &str) -> CliResult {
     Ok(())
 }
 
-/// `envv curl <entry> [-- URL]` — the command that actually sends the credential.
+/// `unv curl <entry> [-- URL]` — the command that actually sends the credential.
 ///
 /// A **materialising** path: the output contains the real value, so it follows
-/// the same rule as `envv export` and `envv render` — redacted to stdout unless
+/// the same rule as `unv export` and `unv render` — redacted to stdout unless
 /// `--reveal`, written in full by `--out`.
 ///
 /// Redacted rather than *refused*, unlike a vault-wide export: the shape of the
@@ -1430,8 +1471,8 @@ pub fn cmd_curl(
 /// live in `extra_vars` once the user has split them — with `attrs` carrying the
 /// domain, path, secure flag and expiry that `cookies.txt` needs and a pasted
 /// `document.cookie` string does not have. Reading both and preferring the split
-/// form is what lets one entry serve `envv cookie header` (which needs neither)
-/// and `envv cookie txt` (which needs all of them).
+/// form is what lets one entry serve `unv cookie header` (which needs neither)
+/// and `unv cookie txt` (which needs all of them).
 pub fn cookies_of(entry: &Value) -> Vec<crate::cookies::Cookie> {
     let split: Vec<crate::cookies::Cookie> = entry
         .get("extra_vars")
@@ -1481,7 +1522,7 @@ pub fn cookies_of(entry: &Value) -> Vec<crate::cookies::Cookie> {
     crate::cookies::parse_cookie_header(entry.get("api_key").and_then(|v| v.as_str()).unwrap_or(""))
 }
 
-/// `envv file write <entry> [--out PATH]` — materialise a file-shaped credential.
+/// `unv file write <entry> [--out PATH]` — materialise a file-shaped credential.
 ///
 /// **There is no stdout form and there deliberately never will be.** The whole
 /// point of E17 is that the consumer wants a *path*: printing the contents is
@@ -1504,7 +1545,7 @@ pub fn cmd_file_write(
     let Some((contents, _ext)) = crate::filecred::contents_of(&entry) else {
         return Err(CliError::invalid(format!(
             "'{provider}' holds no file contents. A `blob_ref` is only a path — put the file in \
-             the vault with `envv entry set {provider} --blob-file <path>`."
+             the vault with `unv entry set {provider} --blob-file <path>`."
         )));
     };
 
@@ -1518,7 +1559,7 @@ pub fn cmd_file_write(
             if mount.is_empty() {
                 return Err(CliError::invalid(format!(
                     "'{provider}' has no mount path. Pass --out, or set one with \
-                     `envv entry set {provider} --mount-path /etc/…`."
+                     `unv entry set {provider} --mount-path /etc/…`."
                 )));
             }
             std::path::PathBuf::from(mount)
@@ -1550,11 +1591,11 @@ pub fn cmd_file_write(
     Ok(())
 }
 
-/// `envv cookie header|curl|txt|json <entry>`.
+/// `unv cookie header|curl|txt|json <entry>`.
 ///
 /// Every form is a materialising path — the output *is* a live session — so each
 /// is redacted to stdout and written in full only by `--out`, the same rule
-/// `envv export` follows.
+/// `unv export` follows.
 pub fn cmd_cookie(
     access: &Access,
     query: &str,
@@ -1791,12 +1832,12 @@ pub fn cmd_list(
     Ok(())
 }
 
-/// `envv get <entry> --profile <p>` — the terminal half of the app's Copy button.
+/// `unv get <entry> --profile <p>` — the terminal half of the app's Copy button.
 ///
 /// The text carries **real values**, so it obeys the Phase 14 rule that governs
 /// every other artefact: refused to stdout unless `--reveal`, written by
 /// `--out`. Masking it instead would produce something that looks like a
-/// deployable `.env` and is not — the exact reason `envv export` refuses rather
+/// deployable `.env` and is not — the exact reason `unv export` refuses rather
 /// than masks.
 pub fn cmd_get_profile(
     access: &Access,
