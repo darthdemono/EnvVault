@@ -34,8 +34,8 @@
  *
  * The builder has no masker and no `reveal` flag. Redaction is the *caller's*
  * job and it is decided by the Phase 14 rule that already governs every other
- * artefact: `envv get --profile` refuses to stdout unless `--reveal` and writes
- * the real thing with `--out`, exactly as `envv export` does; the app's Copy
+ * artefact: `unv get --profile` refuses to stdout unless `--reveal` and writes
+ * the real thing with `--out`, exactly as `unv export` does; the app's Copy
  * button is the UI's `--reveal`. Putting a masker in here would mean a second
  * redaction policy to keep in step with `out.rs`, which is the shape that
  * produced the two-lists-of-secret-fields leak in Phase 22.
