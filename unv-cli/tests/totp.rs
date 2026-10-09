@@ -11,8 +11,8 @@
 //! this project and `vault-core/src/totp.rs` owns it, with the RFC 6238 vectors
 //! beside it. Nothing here re-derives a code.
 
-use unv_cli::out;
 use serde_json::{json, Value};
+use unv_cli::out;
 use vault_core::totp::{self, Params, Stored};
 
 fn table() -> Value {

@@ -4,8 +4,8 @@
 //! importer must *skip* and say so, because "0 skipped" on an export containing
 //! credit cards would mean the reader had quietly mangled them.
 
-use unv_cli::import_vaults::{read_bitwarden, read_onepassword, read_proton, Incoming};
 use serde_json::Value;
+use unv_cli::import_vaults::{read_bitwarden, read_onepassword, read_proton, Incoming};
 
 fn load(name: &str) -> Value {
     let p = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))

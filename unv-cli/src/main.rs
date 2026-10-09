@@ -2081,11 +2081,17 @@ fn run(cli: &Cli) -> CliResult {
         Some(path) => session::read_dotenv(path)?,
         None => Vec::new(),
     };
+    // A compose `.env` written before the rename still says `ENVV_PASSWORD`; the
+    // process-environment shim (`adopt_legacy_env`) does not reach a file read
+    // here, so the legacy spelling is looked up too (the new name wins).
     let dotenv_get = |key: &str| {
-        dotenv
-            .iter()
-            .find(|(k, _)| k == key)
-            .map(|(_, v)| v.clone())
+        let legacy = key.replacen("UNV_", "ENVV_", 1);
+        [key, legacy.as_str()].iter().find_map(|k| {
+            dotenv
+                .iter()
+                .find(|(name, _)| name == k)
+                .map(|(_, v)| v.clone())
+        })
     };
 
     let password = session::resolve_password(

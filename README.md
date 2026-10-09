@@ -10,7 +10,7 @@ It ships as three programs that share one storage engine:
 | **`unv`**           | A CLI built so an automated caller can drive the whole vault without a single secret value entering its output. |
 | **`unv-server`**    | An optional HTTP/HTTPS server, so the desktop app and the CLI on other machines can reach one vault.            |
 
-Current version **0.42.0**, with Phases 1 to 42 of the road to 1.0 done (39 is the code-level pentest review, whose live-deployment checklist is the maintainer's; 41 is the follow-up round of sub-phases, 42 is the rename to UnENVerse and the Docker viewer) (see [How it got here](#how-it-got-here)). The version in `src-tauri/tauri.conf.json` is the authoritative one. `package.json`, the four `Cargo.toml` files and the git tag are all checked against it by the `meta` job in `.github/workflows/build.yml`.
+Current version **0.42.1**, with Phases 1 to 42 of the road to 1.0 done (39 is the code-level pentest review, whose live-deployment checklist is the maintainer's; 41 is the follow-up round of sub-phases, 42 is the rename to UnENVerse and the Docker viewer) (see [How it got here](#how-it-got-here)). The version in `src-tauri/tauri.conf.json` is the authoritative one. `package.json`, the four `Cargo.toml` files and the git tag are all checked against it by the `meta` job in `.github/workflows/build.yml`.
 
 ---
 

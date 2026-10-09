@@ -8,9 +8,9 @@
 //! After an intentional change: `PARITY_UPDATE=1 npx vitest run tests/stack.test.ts`
 //! and read the diff.
 
-use unv_cli::{chunks, exporters, refs::Resolver};
 use serde_json::{json, Value};
 use std::path::PathBuf;
+use unv_cli::{chunks, exporters, refs::Resolver};
 use vault_core::config_check;
 
 fn fixtures() -> PathBuf {

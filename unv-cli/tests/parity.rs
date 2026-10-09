@@ -9,10 +9,10 @@
 //! If this fails after an intentional change, regenerate with
 //! `PARITY_UPDATE=1 npx vitest run tests/cli-parity.test.ts` and read the diff.
 
-use unv_cli::exporters;
-use unv_cli::refs::Resolver;
 use serde_json::Value;
 use std::path::PathBuf;
+use unv_cli::exporters;
+use unv_cli::refs::Resolver;
 
 fn fixtures() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))

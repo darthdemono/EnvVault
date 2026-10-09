@@ -8,9 +8,9 @@
 //! `out::mode()` defaults to `reveal: false`, so redaction is active here with
 //! no setup — the same default a caller gets.
 
+use serde_json::{json, Value};
 use unv_cli::refs::Resolver;
 use unv_cli::{agentio, exporters, out, render};
-use serde_json::{json, Value};
 
 fn vault() -> Value {
     json!({

@@ -6,8 +6,8 @@
 //! fixture is what makes a divergence a test failure instead of a subtly
 //! different answer in the CLI and the app.
 
-use unv_cli::ratelimit::{self, Period};
 use serde_json::{json, Value};
+use unv_cli::ratelimit::{self, Period};
 
 fn table() -> Value {
     // CARGO_MANIFEST_DIR is unv-cli/; the fixture is shared with the frontend
