@@ -1,4 +1,4 @@
-//! `envv oauth refresh` against a mock issuer on localhost, through the real
+//! `unv oauth refresh` against a mock issuer on localhost, through the real
 //! binary. The properties that matter: the rotated refresh token is in the vault
 //! by the time the command succeeds, the issuer's error text is not echoed, and
 //! https is required for anything that is not localhost.
@@ -25,11 +25,13 @@ fn mock_issuer(response: &'static str) -> (String, std::thread::JoinHandle<Strin
     (url, h)
 }
 
-fn envv(dir: &std::path::Path, args: &[&str]) -> (bool, String) {
-    let out = Command::new(env!("CARGO_BIN_EXE_envv"))
+fn unv(dir: &std::path::Path, args: &[&str]) -> (bool, String) {
+    let out = Command::new(env!("CARGO_BIN_EXE_unv"))
+        .env_remove("UNV_SERVER_URL")
         .env_remove("ENVV_SERVER_URL")
+        .env_remove("UNV_ENV_FILE")
         .env_remove("ENVV_ENV_FILE")
-        .env("ENVV_PASSWORD", "correct-horse-battery")
+        .env("UNV_PASSWORD", "correct-horse-battery")
         .args([
             "--db-path",
             dir.join("vault.db").to_str().unwrap(),
@@ -56,7 +58,7 @@ fn refresh_stores_the_rotated_token_before_reporting_and_never_echoes_secrets() 
         r#"{"access_token":"NEW-ACCESS","refresh_token":"NEW-REFRESH","expires_in":3600}"#,
     );
     let token_var = format!("token_url={url}");
-    let (ok, o) = envv(
+    let (ok, o) = unv(
         &dir,
         &[
             "entry",
@@ -76,7 +78,7 @@ fn refresh_stores_the_rotated_token_before_reporting_and_never_echoes_secrets() 
     );
     assert!(ok, "{o}");
 
-    let (ok, o) = envv(&dir, &["oauth", "refresh", "Slack"]);
+    let (ok, o) = unv(&dir, &["oauth", "refresh", "Slack"]);
     assert!(ok, "{o}");
     assert!(o.contains("rotated"), "{o}");
     assert!(
@@ -89,7 +91,7 @@ fn refresh_stores_the_rotated_token_before_reporting_and_never_echoes_secrets() 
     assert!(req.contains("client_secret=csecret"));
 
     // The new refresh token is what the vault holds now.
-    let (ok, o) = envv(&dir, &["get", "Slack", "--reveal"]);
+    let (ok, o) = unv(&dir, &["get", "Slack", "--reveal"]);
     assert!(ok, "{o}");
     assert!(o.contains("NEW-REFRESH") && o.contains("NEW-ACCESS"), "{o}");
     // The replaced token is kept in version_history (E8), which is the point:
@@ -100,7 +102,7 @@ fn refresh_stores_the_rotated_token_before_reporting_and_never_echoes_secrets() 
     );
 
     // Plain http to a non-local host is refused before anything is sent.
-    let (ok, _) = envv(
+    let (ok, _) = unv(
         &dir,
         &[
             "entry",
@@ -111,7 +113,7 @@ fn refresh_stores_the_rotated_token_before_reporting_and_never_echoes_secrets() 
         ],
     );
     assert!(ok);
-    let (ok, o) = envv(&dir, &["oauth", "refresh", "Slack"]);
+    let (ok, o) = unv(&dir, &["oauth", "refresh", "Slack"]);
     assert!(!ok && o.contains("https"), "{o}");
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -124,7 +126,7 @@ fn an_issuer_error_is_named_and_the_stored_token_survives() {
     let (url, issuer) =
         mock_issuer(r#"{"error":"invalid_grant","error_description":"leaky detail"}"#);
     let token_var = format!("token_url={url}");
-    let (ok, o) = envv(
+    let (ok, o) = unv(
         &dir,
         &[
             "entry",
@@ -141,13 +143,13 @@ fn an_issuer_error_is_named_and_the_stored_token_survives() {
         ],
     );
     assert!(ok, "{o}");
-    let (ok, o) = envv(&dir, &["oauth", "refresh", "Gh"]);
+    let (ok, o) = unv(&dir, &["oauth", "refresh", "Gh"]);
     issuer.join().unwrap();
     assert!(
         !ok && o.contains("invalid_grant") && !o.contains("leaky detail"),
         "{o}"
     );
-    let (_, o) = envv(&dir, &["get", "Gh", "--reveal"]);
+    let (_, o) = unv(&dir, &["get", "Gh", "--reveal"]);
     assert!(
         o.contains("KEEP-ME"),
         "a refused refresh must not touch the stored token: {o}"
