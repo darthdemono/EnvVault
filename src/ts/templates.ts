@@ -19,7 +19,7 @@ export interface SecretTemplate {
 
 /**
  * The presets live in `secret-templates.json` at the repo root, read here and by
- * `vault_core::templates` (`include_str!`), so `envv entry add --template` and
+ * `vault_core::templates` (`include_str!`), so `unv entry add --template` and
  * this pane can never offer different presets. Same one-file shape as
  * `secret-types.json`; no parity fixture is needed because there is one copy.
  */
