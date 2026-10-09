@@ -1,6 +1,6 @@
-//! vault-core — shared encryption, storage, and tooling for EnvVault.
+//! vault-core — shared encryption, storage, and tooling for UnENVerse.
 //!
-//! Used by the Tauri desktop app, the HTTP server (`envv-server`), and the CLI
+//! Used by the Tauri desktop app, the HTTP server (`unv-server`), and the CLI
 //! (`envv-cli`).  Has no dependency on Tauri; accepts `&Path` for all I/O.
 
 use argon2::{Algorithm, Argon2, Params, Version};
@@ -11,20 +11,36 @@ use std::path::Path;
 pub use zeroize::Zeroize;
 
 pub mod generators;
+pub mod jwks;
 pub use generators::{generate_certificate, generate_ssh_keypair};
 
 // Phase 24.3: the one Rust builder for the .ics feed — moved here from
-// envv-cli so `envv-server` can serve it too. See the module doc for why the
+// envv-cli so `unv-server` can serve it too. See the module doc for why the
 // TypeScript twin was deleted rather than kept as a second answer.
 pub mod calendar;
 // Phase 24.3: the ics_feeds table (token issuance/lookup/revocation). Storage
-// only — rate limiting and RBAC filtering live in envv-server, same split as
+// only — rate limiting and RBAC filtering live in unv-server, same split as
 // `users`.
 pub mod ics_feeds;
 // Phase 24.4: the unique-ID registry — a separate SQLCipher file keyed from a
 // secret stored in this vault's vault_meta. Storage and hashing only; rate
-// limiting lives in envv-server.
+// limiting lives in unv-server.
 pub mod uid_registry;
+
+// Phase 34: nodes. The protocol, the hub registry and the node config (`nodes`),
+// and the transactional file apply a node performs (`nodes_apply`).
+pub mod nodes;
+pub mod nodes_apply;
+
+// Phase 35: the config time machine, and the line diff it shares with the CLI,
+// the server and the app.
+pub mod blast;
+pub mod config_history;
+
+// Phase 38: stack integrations (Prometheus, Grafana, Homepage) as descriptors in
+// data/stack-adapters.json, interpreted here and in src/ts/stack.ts.
+pub mod stack;
+pub mod textdiff;
 // Phase 24.5: the secret-type registry — one JSON descriptor file, read here
 // and imported as plain JSON by the TypeScript side.
 pub mod secret_types;
@@ -34,8 +50,11 @@ pub mod cxf;
 pub mod bundle_import;
 pub mod bundle_scope;
 pub mod catalogue;
+pub mod compat;
 pub mod config_check;
 pub mod oauth;
+pub mod pgp;
+pub mod php_config;
 pub mod session_import;
 pub mod storage;
 pub mod templates;
@@ -122,7 +141,7 @@ pub fn derive_key(password: &str, salt: &[u8]) -> Result<VaultKey, String> {
 /// Restrict a file to its owner where the platform can express that.
 ///
 /// Windows has no chmod equivalent — files inherit the directory ACL — so this
-/// is a no-op there and `envv doctor` reports the check as *not enforceable*
+/// is a no-op there and `unv doctor` reports the check as *not enforceable*
 /// rather than passing. A check that always passes proves nothing.
 pub fn restrict_to_owner(path: &Path) -> Result<(), String> {
     #[cfg(unix)]
@@ -154,8 +173,8 @@ pub fn check_salt_pairing(db_path: &Path, salt_path: &Path) -> Result<(), String
             "{} exists but {} is missing.\n\
              The salt is 16 random bytes written once and stored nowhere else — without \n\
              it this database cannot be opened by anyone, and nothing can recompute it.\n\
-             Restore both from an archive (`envv backup restore-archive`), or restore the \n\
-             vault contents from a .vaultbak (`envv backup import`), which does not need \n\
+             Restore both from an archive (`unv backup restore-archive`), or restore the \n\
+             vault contents from a .vaultbak (`unv backup import`), which does not need \n\
              the original salt.",
             db_path.display(),
             salt_path.display()
@@ -179,7 +198,7 @@ pub fn read_or_create_salt(salt_path: &Path) -> Result<[u8; SALT_LEN], String> {
         }
         fs::write(salt_path, s).map_err(|e| e.to_string())?;
         // The salt is half of what opens the vault. It was written with whatever
-        // the umask gave it — 0644 on a default Linux install, which `envv
+        // the umask gave it — 0644 on a default Linux install, which `unv
         // doctor` is what finally noticed.
         restrict_to_owner(salt_path)?;
         Ok(s)
@@ -265,6 +284,7 @@ pub fn init_schema(conn: &Connection) -> Result<(), String> {
     users::init_users_schema(conn)?;
     // Calendar feed tokens (Phase 24.3)
     ics_feeds::init_schema(conn)?;
+    config_history::init_schema(conn)?;
     Ok(())
 }
 
@@ -300,7 +320,7 @@ pub fn entry_ck(entry: &serde_json::Value) -> String {
 
 /// The vault-document schema this build writes.
 ///
-/// Three binaries — the desktop app, `envv-server` and `envv` — read and write
+/// Three binaries — the desktop app, `unv-server` and `unv` — read and write
 /// one untyped JSON blob, and until this existed nothing recorded which shape it
 /// was in. The problem had already been hit once and solved by convention: the
 /// legacy `rate_limit` string is dual-written so a vault edited by a current
@@ -317,7 +337,12 @@ pub fn entry_ck(entry: &serde_json::Value) -> String {
 /// **Version 2 (Phase 30) is row-per-entry storage** (see [`storage`]). A v1 vault
 /// is converted on first open, after a `vault.db.v1.bak` copy; a v1 build then
 /// refuses the file with [`SCHEMA_ERR`] instead of reading an empty blob.
-pub const VAULT_SCHEMA_VERSION: u32 = 2;
+///
+/// **Version 3 (Phase 30.2) gives every chunk of a project a row of its own.** A v2
+/// vault loads unchanged (a project row with inline chunks is understood) and is
+/// rewritten into chunk rows by its first save; a v2 build then refuses the file,
+/// because it would read a project with no chunks and delete the chunk rows.
+pub const VAULT_SCHEMA_VERSION: u32 = 3;
 
 /// Marker prefix on the error returned when the stored vault was written by a
 /// newer build than this one. Callers match on it to tell "upgrade me" from a
@@ -356,9 +381,9 @@ pub fn vault_schema_version(conn: &Connection) -> Result<Option<u32>, String> {
 pub fn check_schema_version(conn: &Connection) -> Result<(), String> {
     match vault_schema_version(conn)? {
         Some(v) if v > VAULT_SCHEMA_VERSION => Err(format!(
-            "{SCHEMA_ERR}: this vault was written by a newer version of EnvVault \
+            "{SCHEMA_ERR}: this vault was written by a newer version of UnENVerse \
              (vault schema v{v}, this build understands v{VAULT_SCHEMA_VERSION}). \
-             Upgrade EnvVault to open it — writing it with this build would drop \
+             Upgrade UnENVerse to open it — writing it with this build would drop \
              the fields it does not understand."
         )),
         _ => Ok(()),
@@ -470,6 +495,87 @@ fn historied_extra_vars(entry: &serde_json::Value) -> Vec<(String, String)> {
                 .collect()
         })
         .unwrap_or_default()
+}
+
+/// Phase 30.1: apply a delta to a stored vault document. Shared by `PATCH
+/// /api/vault` and the desktop's `save_vault_rows` so they cannot differ.
+///
+/// `{ put, delete }` change `api_keys` by `id`; `projects_put`/`projects_delete`
+/// change `projects` by `id`; `categories`, when present, replaces
+/// `user_categories` (a flat list of strings, small). Every put needs a
+/// non-empty string `id`. Unknown keys are ignored.
+pub fn apply_row_patch(
+    mut doc: serde_json::Value,
+    patch: &serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    use serde_json::Value;
+    fn ids(v: Option<&Value>, what: &str) -> Result<Vec<String>, String> {
+        let mut out = Vec::new();
+        for d in v.and_then(Value::as_array).into_iter().flatten() {
+            match d.as_str() {
+                Some(id) if !id.is_empty() => out.push(id.to_string()),
+                _ => return Err(format!("{what} takes a list of ids")),
+            }
+        }
+        Ok(out)
+    }
+    fn puts(v: Option<&Value>, what: &str) -> Result<Vec<(String, Value)>, String> {
+        let mut out = Vec::new();
+        for e in v.and_then(Value::as_array).into_iter().flatten() {
+            match e.get("id").and_then(Value::as_str) {
+                Some(id) if !id.is_empty() => out.push((id.to_string(), e.clone())),
+                _ => return Err(format!("Every {what} needs a string id")),
+            }
+        }
+        Ok(out)
+    }
+    fn apply(
+        doc: &mut Value,
+        key: &str,
+        put: Vec<(String, Value)>,
+        del: Vec<String>,
+    ) -> Result<(), String> {
+        let list = doc
+            .get_mut(key)
+            .and_then(Value::as_array_mut)
+            .ok_or_else(|| format!("stored vault has no {key}"))?;
+        let id_of = |e: &Value| e.get("id").and_then(Value::as_str).map(str::to_string);
+        list.retain(|e| id_of(e).is_none_or(|id| !del.contains(&id)));
+        for (id, entry) in put {
+            match list
+                .iter()
+                .position(|e| id_of(e).as_deref() == Some(id.as_str()))
+            {
+                Some(i) => list[i] = entry,
+                None => list.push(entry),
+            }
+        }
+        Ok(())
+    }
+    let (ep, ed) = (
+        puts(patch.get("put"), "put entry")?,
+        ids(patch.get("delete"), "delete")?,
+    );
+    let (pp, pd) = (
+        puts(patch.get("projects_put"), "put project")?,
+        ids(patch.get("projects_delete"), "projects_delete")?,
+    );
+    let cats = match patch.get("categories") {
+        None | Some(Value::Null) => None,
+        Some(Value::Array(a)) if a.iter().all(Value::is_string) => Some(Value::Array(a.clone())),
+        Some(_) => return Err("categories takes a list of strings".into()),
+    };
+    apply(&mut doc, "api_keys", ep, ed)?;
+    if !pp.is_empty() || !pd.is_empty() {
+        if doc.get("projects").is_none() {
+            doc["projects"] = Value::Array(Vec::new());
+        }
+        apply(&mut doc, "projects", pp, pd)?;
+    }
+    if let Some(c) = cats {
+        doc["user_categories"] = c;
+    }
+    Ok(doc)
 }
 
 /// Serialises `data` to the vault, updating `version_history` on key changes
@@ -946,6 +1052,45 @@ pub fn iso_now() -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_row_patch_replaces_by_id_appends_deletes_and_refuses_bad_input() {
+        use serde_json::json;
+        let doc = json!({
+            "api_keys": [{"id":"a","provider":"A"},{"id":"b","provider":"B"}],
+            "user_categories": ["x"],
+            "projects": [{"id":"p","name":"P"}]
+        });
+        let out = apply_row_patch(
+            doc.clone(),
+            &json!({
+                "put": [{"id":"b","provider":"B2"},{"id":"c","provider":"C"}],
+                "delete": ["a"],
+                "projects_put": [{"id":"q","name":"Q"}],
+                "projects_delete": ["p"],
+                "categories": ["y","z"]
+            }),
+        )
+        .unwrap();
+        assert_eq!(
+            out,
+            json!({
+                "api_keys": [{"id":"b","provider":"B2"},{"id":"c","provider":"C"}],
+                "user_categories": ["y","z"],
+                "projects": [{"id":"q","name":"Q"}]
+            })
+        );
+        // An empty patch changes nothing.
+        assert_eq!(apply_row_patch(doc.clone(), &json!({})).unwrap(), doc);
+        for bad in [
+            json!({"put": [{"provider":"no id"}]}),
+            json!({"delete": [1]}),
+            json!({"projects_put": [{"name":"no id"}]}),
+            json!({"categories": [1]}),
+        ] {
+            assert!(apply_row_patch(doc.clone(), &bad).is_err(), "{bad}");
+        }
+    }
+
     use super::*;
     use serde_json::json;
 
@@ -1814,7 +1959,7 @@ mod salt_pairing_tests {
         let _ = fs::remove_dir_all(&d);
     }
 
-    /// New salts are owner-only. They were 0644 until `envv doctor` said so.
+    /// New salts are owner-only. They were 0644 until `unv doctor` said so.
     #[test]
     #[cfg(unix)]
     fn a_generated_salt_is_owner_only() {
