@@ -1,5 +1,5 @@
 /**
- * Tools -> Enrich (Phase 33.1): `envv enrich` without `--online`, in the app.
+ * Tools -> Enrich (Phase 33.1): `unv enrich` without `--online`, in the app.
  *
  * The planner is Rust (`envv_cli::enrich::plan_entry`, over the `enrich_plan`
  * command), so a Preview shows exactly what the CLI would propose, reasons and
@@ -173,7 +173,7 @@ export function initEnrichPane(): void {
   const previewBtn = document.getElementById('enrich-preview-btn') as HTMLButtonElement | null;
   if (!status || !previewBtn) return;
   if (!inTauri) {
-    status.textContent = 'Available in the desktop app. In a terminal: envv enrich.';
+    status.textContent = 'Available in the desktop app. In a terminal: unv enrich.';
     previewBtn.disabled = true;
     return;
   }
@@ -182,7 +182,7 @@ export function initEnrichPane(): void {
 }
 
 // ── Diagnose (Phase 33.2) ───────────────────────────────────────────────────
-// The document half of `envv doctor`, in the Health pane. The database-level
+// The document half of `unv doctor`, in the Health pane. The database-level
 // checks (integrity, storage, salt, file permissions, audit chain) need the file
 // run too when the vault is this machine's (`doctor_file`); against a remote the
 // pane says the rest is the server's.
@@ -200,7 +200,7 @@ export function initDoctorPane(): void {
   const host = document.getElementById('doctor-results');
   if (!btn || !status || !host) return;
   if (!inTauri) {
-    status.textContent = 'Available in the desktop app. In a terminal: envv doctor.';
+    status.textContent = 'Available in the desktop app. In a terminal: unv doctor.';
     btn.disabled = true;
     return;
   }
@@ -210,13 +210,13 @@ export function initDoctorPane(): void {
       try {
         const findings = await invokeTauri<Finding[]>('doctor_document', { vault: st.vault });
         // The file half needs this machine's database, so it only runs against the
-        // local vault; a remote's file belongs to the server (`envv doctor` there).
+        // local vault; a remote's file belongs to the server (`unv doctor` there).
         const local = !(st.store instanceof RemoteVaultStore);
         if (local) findings.push(...(await invokeTauri<Finding[]>('doctor_file')));
         const bad = findings.filter((f) => f.level === 'warn' || f.level === 'fail').length;
         const tail = local
           ? ''
-          : ' File, integrity and audit checks run on the server: envv doctor.';
+          : ' File, integrity and audit checks run on the server: unv doctor.';
         status.textContent =
           (bad ? `${bad} thing${bad === 1 ? '' : 's'} need attention.` : 'All checks passed.') +
           tail;
