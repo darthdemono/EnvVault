@@ -6,9 +6,10 @@ import type {
   RemoteVaultConfig,
   PersistedView,
   AuditRow,
+  Project,
 } from './types';
 import { dump as yamlDump } from 'js-yaml';
-import { hexAlpha, showToast } from './utils';
+import { hexAlpha, onClipboardWrite, showToast } from './utils';
 import { invokeTauri, isTauri } from './tauri';
 export { inTauri } from './tauri';
 
@@ -27,6 +28,15 @@ function jsonError(value: unknown, fallback: string): string {
 
 // ── VaultStore ─────────────────────────────────────────────────────────────
 
+/** The delta `PATCH /api/vault` and `save_vault_rows` take; see `vault_core::apply_row_patch`. */
+export interface VaultPatch {
+  put?: VaultEntry[];
+  delete?: string[];
+  projects_put?: Project[];
+  projects_delete?: string[];
+  categories?: string[];
+}
+
 export interface VaultStore {
   load(): Promise<VaultData | null>;
   save(data: VaultData): Promise<void>;
@@ -36,6 +46,13 @@ export interface VaultStore {
    * is stored and must be reloaded before the next edit.
    */
   takeMerged?(): boolean;
+  /**
+   * Phase 30.1: save only what changed. Resolves `false` when the store cannot
+   * (a sub-user's login), so the caller saves the whole document instead.
+   */
+  saveRows?(patch: VaultPatch): Promise<boolean>;
+  /** True when the last save did not reach the store (the failure was already toasted). */
+  lastSaveFailed?(): boolean;
   readonly isRemote: boolean;
   readonly vaultId: string;
 }
@@ -157,6 +174,23 @@ export class TauriVaultStore implements VaultStore {
     }
   }
 
+  /** Phase 30.1: save a delta; same compare-and-swap as `save`. */
+  async saveRows(patch: VaultPatch): Promise<boolean> {
+    try {
+      this.adopt(
+        await this.invoke<string>('save_vault_rows', {
+          patch,
+          expectVersion: this.lastVersion,
+        }),
+      );
+    } catch (e) {
+      const msg = String(e instanceof Error ? e.message : e);
+      if (msg.includes('VAULT_CONFLICT')) throw new VaultConflictError(conflictEntries(msg));
+      throw e;
+    }
+    return true;
+  }
+
   /**
    * Write regardless of what is currently stored, adopting the result as our
    * new base. Only for a user explicitly choosing to overwrite after a conflict.
@@ -215,14 +249,14 @@ export class RemoteVaultStore implements VaultStore {
     const useNative = isTauri() && url.startsWith('https://');
 
     if (useNative && _invoke) {
-      // Tauri proxy does not surface response headers — ETag unavailable on this path.
+      // The proxy hands back the two headers a save needs (ETag, X-Vault-Merged).
       const result = (await _invoke('remote_request', {
         url,
         method: opts.method ?? 'GET',
         headersJson: JSON.stringify(opts.headers ?? {}),
         body: opts.body ?? null,
         fingerprint: this.fingerprint ?? null,
-      })) as { status: number; body: string };
+      })) as { status: number; body: string; etag?: string | null; merged?: boolean };
       const ok = result.status >= 200 && result.status < 300;
       return {
         ok,
@@ -231,8 +265,8 @@ export class RemoteVaultStore implements VaultStore {
           const parsed: unknown = JSON.parse(result.body);
           return Promise.resolve(parsed);
         },
-        etag: null,
-        merged: false,
+        etag: result.etag ?? null,
+        merged: result.merged === true,
       };
     }
 
@@ -358,7 +392,35 @@ export class RemoteVaultStore implements VaultStore {
   }
 
   async save(data: VaultData): Promise<void> {
-    if (!this.token) return;
+    await this.send('PUT', data);
+  }
+
+  /**
+   * Phase 30.1: send only what changed (`PATCH /api/vault`, owner only). Same
+   * If-Match, merge and toasts as `save`. Resolves `false` when the server
+   * refuses deltas for this login (a sub-user) so the caller can save whole.
+   */
+  async saveRows(patch: VaultPatch): Promise<boolean> {
+    return (await this.send('PATCH', patch)) !== 'refused';
+  }
+
+  private failed = false;
+
+  lastSaveFailed(): boolean {
+    return this.failed;
+  }
+
+  private async send(method: 'PUT' | 'PATCH', data: unknown): Promise<'ok' | 'refused' | 'failed'> {
+    const r = await this.sendRaw(method, data);
+    this.failed = r === 'failed';
+    return r;
+  }
+
+  private async sendRaw(
+    method: 'PUT' | 'PATCH',
+    data: unknown,
+  ): Promise<'ok' | 'refused' | 'failed'> {
+    if (!this.token) return 'failed';
     try {
       const headers: Record<string, string> = {
         'Content-Type': 'application/json',
@@ -367,7 +429,7 @@ export class RemoteVaultStore implements VaultStore {
       // Optimistic concurrency: prove we wrote against the version we last read.
       if (this.lastVersion) headers['If-Match'] = this.lastVersion;
       const r = await this._apiFetch('/api/vault', {
-        method: 'PUT',
+        method,
         headers,
         body: JSON.stringify(data),
       });
@@ -380,8 +442,9 @@ export class RemoteVaultStore implements VaultStore {
           'err',
           6000,
         );
-        return;
+        return 'failed';
       }
+      if (method === 'PATCH' && [403, 404, 405].includes(r.status)) return 'refused';
       if (!r.ok) {
         const body = await r.json().catch(() => ({}));
         showToast(
@@ -389,19 +452,21 @@ export class RemoteVaultStore implements VaultStore {
           'err',
           4000,
         );
-        return;
+        return 'failed';
       }
       // Saved. The server returns the version to send as the next If-Match; when it
       // could not (the pinned-HTTPS proxy surfaces no headers) the next write is
       // unconditional until a load refreshes the token, as before.
       this.lastVersion = r.etag ?? '';
       this.merged = r.merged;
+      return 'ok';
     } catch (e) {
       showToast(
         `Remote save failed: ${e instanceof Error ? e.message : 'network error'}`,
         'err',
         4000,
       );
+      return 'failed';
     }
   }
 
@@ -546,6 +611,31 @@ export class RemoteVaultStore implements VaultStore {
       parsed = await r.json();
     } catch {
       // A 204 or an HTML error page has no JSON; the status carries the answer.
+    }
+    return { status: r.status, body: parsed };
+  }
+
+  /** One authenticated call to the node hub (`/api/nodes/*`, Phase 34). Same shape and
+   * reasons as {@link RemoteVaultStore.uidRequest}: the status is part of the answer. */
+  async nodesRequest(
+    method: 'GET' | 'POST' | 'DELETE',
+    path: string,
+    body?: unknown,
+  ): Promise<{ status: number; body: unknown }> {
+    if (!this.token) return { status: 401, body: { error: 'Not connected' } };
+    const r = await this._apiFetch(path, {
+      method,
+      headers: {
+        Authorization: `Bearer ${this.token}`,
+        ...(body === undefined ? {} : { 'Content-Type': 'application/json' }),
+      },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    });
+    let parsed: unknown = null;
+    try {
+      parsed = await r.json();
+    } catch {
+      // 202/204 carry no body; the status is the answer.
     }
     return { status: r.status, body: parsed };
   }
@@ -840,6 +930,14 @@ export function entryId(entry: VaultEntry): string {
   return entry.id;
 }
 
+// Phase 36: every copy the app makes goes to the materialisation log, so blast
+// radius can say which secrets reached this machine's clipboard. Rust matches the
+// text against the vault we hand it and records fingerprints, never values.
+onClipboardWrite((text) => {
+  if (!isTauri() || !st.vault || text.length > 1 << 20) return;
+  invokeTauri('matlog_note', { text, note: 'clipboard', vault: st.vault }).catch(() => undefined);
+});
+
 /**
  * The single vault write path.
  *
@@ -850,7 +948,7 @@ export function entryId(entry: VaultEntry): string {
 export async function persist(): Promise<void> {
   ensureEntryIds(st.vault.api_keys);
   try {
-    await st.store.save(st.vault);
+    await saveWholeOrDelta();
     // The save folded in changes another writer had stored: our copy is behind,
     // and the next save from it would be judged against the wrong base.
     if (st.store.takeMerged?.()) {
@@ -864,6 +962,123 @@ export async function persist(): Promise<void> {
     }
     showToast(`Save failed: ${err instanceof Error ? err.message : String(err)}`, 'err', 4000);
   }
+}
+
+// ── Delta saves (Phase 30.1, ADR-0146) ───────────────────────────────────────────────
+//
+// Everything in the renderer mutates `st.vault` in place, so there is no list of
+// dirty ids to read. Instead `persist` remembers the JSON of each entry and
+// project as of the last save that reached the store and sends the difference.
+// The snapshot is only trusted while the document and its arrays are the very
+// objects it was taken from; anything that replaced one (an import, a reload, a
+// filter that reassigned `api_keys`) falls back to the whole-document save,
+// which is always correct. An order change falls back too: a delta appends.
+// ponytail: stringifying every entry per save is O(vault) on the client but sends
+// and merges O(changed); a dirty set maintained at mutation sites would remove it.
+
+interface Synced {
+  vault: VaultData;
+  store: VaultStore;
+  keys: VaultEntry[];
+  projects: Project[];
+  cats: string[] | undefined;
+  entries: Map<string, string>;
+  projectJson: Map<string, string>;
+  catsJson: string;
+}
+
+let synced: Synced | null = null;
+
+/** Forget what the store holds; the next save is a whole-document one. */
+export function forgetSynced(): void {
+  synced = null;
+}
+
+function jsonById(list: { id?: unknown }[]): Map<string, string> | null {
+  const m = new Map<string, string>();
+  for (const e of list) {
+    if (typeof e.id !== 'string' || !e.id || m.has(e.id)) return null;
+    m.set(e.id, JSON.stringify(e));
+  }
+  return m;
+}
+
+function snapshotNow(): void {
+  const entries = jsonById(st.vault.api_keys);
+  const projectJson = jsonById(st.vault.projects);
+  synced =
+    entries && projectJson
+      ? {
+          vault: st.vault,
+          store: st.store,
+          keys: st.vault.api_keys,
+          projects: st.vault.projects,
+          cats: st.vault.user_categories,
+          entries,
+          projectJson,
+          catsJson: JSON.stringify(st.vault.user_categories ?? []),
+        }
+      : null;
+}
+
+/** True when `now` is `before` minus the deleted ids with new ids appended. */
+function orderHolds(before: string[], now: string[], gone: Set<string>): boolean {
+  const kept = before.filter((id) => !gone.has(id));
+  const known = new Set(before);
+  const appended = now.filter((id) => !known.has(id));
+  const expect = [...kept, ...appended];
+  return expect.length === now.length && expect.every((id, i) => id === now[i]);
+}
+
+/** The delta since the last synced state, or `null` when it cannot be trusted. */
+export function currentPatch(): VaultPatch | null {
+  const sy = synced;
+  const v = st.vault;
+  if (!sy) return null;
+  if (
+    sy.vault !== v ||
+    sy.store !== st.store ||
+    sy.keys !== v.api_keys ||
+    sy.projects !== v.projects ||
+    sy.cats !== v.user_categories
+  ) {
+    return null;
+  }
+  const now = jsonById(v.api_keys);
+  const nowP = jsonById(v.projects);
+  if (!now || !nowP) return null;
+  const gone = new Set([...sy.entries.keys()].filter((id) => !now.has(id)));
+  const goneP = new Set([...sy.projectJson.keys()].filter((id) => !nowP.has(id)));
+  if (
+    !orderHolds([...sy.entries.keys()], [...now.keys()], gone) ||
+    !orderHolds([...sy.projectJson.keys()], [...nowP.keys()], goneP)
+  ) {
+    return null;
+  }
+  const patch: VaultPatch = {};
+  const put = v.api_keys.filter((e) => sy.entries.get(e.id as string) !== now.get(e.id as string));
+  if (put.length) patch.put = put;
+  if (gone.size) patch.delete = [...gone];
+  const putP = v.projects.filter((p) => sy.projectJson.get(p.id) !== nowP.get(p.id));
+  if (putP.length) patch.projects_put = putP;
+  if (goneP.size) patch.projects_delete = [...goneP];
+  const catsJson = JSON.stringify(v.user_categories ?? []);
+  if (catsJson !== sy.catsJson) patch.categories = v.user_categories ?? [];
+  return patch;
+}
+
+async function saveWholeOrDelta(): Promise<void> {
+  const store = st.store;
+  const patch = store.saveRows ? currentPatch() : null;
+  let sent = false;
+  if (patch) {
+    if (Object.keys(patch).length === 0) return; // nothing changed since the last save
+    sent = await store.saveRows!(patch);
+  }
+  if (!sent) await store.save(st.vault);
+  // A save that never reached the store (toasted already) leaves the old snapshot,
+  // so the same changes go out again with the next one.
+  if (!store.lastSaveFailed?.()) snapshotNow();
 }
 
 /**
@@ -891,6 +1106,7 @@ async function resolveSaveConflict(err: VaultConflictError): Promise<void> {
     if (typeof store.forceSave === 'function') {
       try {
         await store.forceSave(st.vault);
+        forgetSynced();
         showToast('Your version saved, overwriting the other change', 'ok', 3500);
         return;
       } catch (e) {
@@ -909,6 +1125,7 @@ async function resolveSaveConflict(err: VaultConflictError): Promise<void> {
 async function reloadFromStore(): Promise<boolean> {
   const fresh = await st.store.load();
   if (!fresh) return false;
+  forgetSynced();
   st.vault.api_keys = fresh.api_keys;
   st.vault.user_categories = fresh.user_categories || [];
   st.vault.projects = fresh.projects || [{ id: 'Universal', name: 'Universal', description: '' }];
@@ -945,6 +1162,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   groupByType: false,
   groupPools: true,
   groupBundles: true,
+  configCheckAll: false,
   dismissedBundleSuggestions: [] as string[],
   activityBarPosition: 'left' as const,
   activityBarStyle: 'icon' as const,
@@ -1379,7 +1597,7 @@ export function applyActivityBar() {
  * our own vault over LAN.
  *
  * On a purely local vault the panel wrote users into the desktop's own
- * `vault.db`, which `envv-server` never reads (it uses its own file). Accounts
+ * `vault.db`, which `unv-server` never reads (it uses its own file). Accounts
  * created there could never authenticate anywhere: it looked like it worked and
  * silently did nothing.
  */
@@ -1782,7 +2000,7 @@ export function entryHasPayload(entry: VaultEntry): boolean {
   if (entry.blob_ref) return true;
   // A composite's payload is its template (parts are `extra_vars`, checked
   // below anyway, but a template with zero parts is still a real composite —
-  // `envv describe`-shaped structure, not a value). A bundle's payload is
+  // `unv describe`-shaped structure, not a value). A bundle's payload is
   // membership it does not itself record — see B2 in the design, deferred —
   // so it is never reported empty from this predicate alone.
   if (entry.secretType === 'composite') return !!entry.composite_template;
@@ -1917,7 +2135,7 @@ export const Exporter = {
         if (xv.key) doc[envName(k, { role: xv.key })] = xv.value ?? '';
       }
     });
-    const header = `# EnvVault Export\n# Generated: ${new Date().toISOString()}\n\n`;
+    const header = `# UnENVerse Export\n# Generated: ${new Date().toISOString()}\n\n`;
     return header + yamlDump(doc, { indent: 2, lineWidth: -1, noRefs: true });
   },
   json(keys: VaultEntry[]): string {
