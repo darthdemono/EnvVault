@@ -2,10 +2,10 @@
 //!
 //! # Two callers, one generator
 //!
-//! Phase 19 added this module for **sub-user login**: EnvVault checking a code
+//! Phase 19 added this module for **sub-user login**: UnENVerse checking a code
 //! its own user typed. Phase 22 added the mirror image — a TOTP seed the vault
 //! *stores on behalf of a third party*, the way Bitwarden and 1Password hold an
-//! authenticator entry, where EnvVault produces the code and a website checks
+//! authenticator entry, where UnENVerse produces the code and a website checks
 //! it.
 //!
 //! They share every line of arithmetic and deliberately nothing else. The login
@@ -383,7 +383,7 @@ pub fn grouped(secret_b32: &str) -> String {
 // ── Stored third-party seeds (Phase 22) ───────────────────────────────────────
 //
 // Everything below serves the *other* caller: a seed the vault holds on behalf
-// of a website, from which EnvVault produces a code the user types into that
+// of a website, from which UnENVerse produces a code the user types into that
 // website. Nothing here verifies anything, so nothing here has — or wants — the
 // anti-replay mark that `verify` above carries.
 
@@ -532,7 +532,7 @@ impl Params {
     /// unusable falling back to the `otpauth://` default.
     ///
     /// **This is the only place a vault's TOTP fields become `Params`.** They
-    /// were read three separate ways before — `envv totp code` clamped, `envv
+    /// were read three separate ways before — `unv totp code` clamped, `unv
     /// totp ls` did not, and the IPC command did neither — so one entry
     /// carrying `totp_digits: 99` listed as a 99-digit credential, produced six
     /// digits when asked for a code, and returned an error rather than a code to
@@ -1164,7 +1164,7 @@ mod tests {
         // A username is user-supplied. Unescaped, `a&issuer=Evil` would append a
         // parameter of the attacker's choosing to the URI a user is about to
         // paste into their authenticator.
-        let uri = otpauth_uri("EnvVault", "a&issuer=Evil?x=1", "ABCD");
+        let uri = otpauth_uri("UnENVerse", "a&issuer=Evil?x=1", "ABCD");
         assert!(uri.contains("a%26issuer%3DEvil%3Fx%3D1"), "{uri}");
         assert_eq!(uri.matches("issuer=").count(), 1, "{uri}");
     }
