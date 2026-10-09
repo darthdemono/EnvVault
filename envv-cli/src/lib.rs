@@ -1,4 +1,4 @@
-//! Library half of the `envv` CLI.
+//! Library half of the `unv` CLI.
 //!
 //! The binary is a thin argument parser over these modules. They live in a
 //! library so integration tests can call the exporters directly and assert them
@@ -10,6 +10,7 @@ pub mod access;
 pub mod agentio;
 pub mod authreq;
 pub mod backup;
+pub mod blast_cmd;
 pub mod bundle_cmd;
 pub mod catalogue_cmd;
 pub mod check_cmd;
@@ -27,11 +28,18 @@ pub mod envfile;
 pub mod error;
 pub mod exec;
 pub mod exporters;
+pub mod exposure;
 pub mod feed_cmd;
 pub mod filecred;
 pub mod fmt;
 pub mod gen;
+pub mod history;
+pub mod history_cmd;
 pub mod import_vaults;
+pub mod matlog;
+pub mod node_agent;
+pub mod node_cmd;
+pub mod node_listen;
 pub mod oauth_cmd;
 pub mod out;
 pub mod pool;
