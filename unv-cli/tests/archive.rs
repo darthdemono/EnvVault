@@ -35,7 +35,7 @@ fn make_vault(db: &std::path::Path, salt: &std::path::Path) {
 
 #[test]
 fn archive_round_trip_and_every_refusal() {
-    let dir = std::env::temp_dir().join(format!("envv-archive-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("unv-archive-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let db = dir.join("vault.db");

@@ -69,7 +69,7 @@ type CalendarFeed = {
 export class LocalVaultStore implements VaultStore {
   load(): Promise<VaultData | null> {
     return Promise.resolve().then(() => {
-      const raw = sessionStorage.getItem('envvault');
+      const raw = sessionStorage.getItem('unenverse');
       if (!raw) return null;
       const data: unknown = JSON.parse(raw);
       return data as VaultData;
@@ -77,7 +77,7 @@ export class LocalVaultStore implements VaultStore {
   }
   save(data: VaultData): Promise<void> {
     try {
-      sessionStorage.setItem('envvault', JSON.stringify(data));
+      sessionStorage.setItem('unenverse', JSON.stringify(data));
     } catch {
       showToast('Session storage full — export to save changes', 'err');
     }
@@ -1208,7 +1208,7 @@ export const Settings = {
     return { ...this._data };
   },
   _persist() {
-    localStorage.setItem('envvault-settings', JSON.stringify(this._data));
+    localStorage.setItem('unenverse-settings', JSON.stringify(this._data));
   },
   async init() {
     try {
@@ -1216,14 +1216,14 @@ export const Settings = {
       if (r.ok) Object.assign(this._data, await r.json());
     } catch {}
     try {
-      const s = localStorage.getItem('envvault-settings');
+      const s = localStorage.getItem('unenverse-settings');
       if (s) Object.assign(this._data, JSON.parse(s));
     } catch {}
     // One-time migration: env/tags/prefixes became configurable sidebar sections.
     // Earlier installs persisted a list without them — merge them in once so they
     // don't silently vanish, while still honouring later user toggles.
     try {
-      if (!localStorage.getItem('envvault-sb-migrated')) {
+      if (!localStorage.getItem('unenverse-sb-migrated')) {
         const secs = [...(this._data.sidebarSections || [])];
         const insertAfter = (anchor: SidebarSection, key: SidebarSection) => {
           if (secs.includes(key)) return;
@@ -1236,7 +1236,7 @@ export const Settings = {
         if (!secs.includes('pools')) secs.push('pools');
         if (!secs.includes('prefixes')) secs.push('prefixes');
         this._data.sidebarSections = secs;
-        localStorage.setItem('envvault-sb-migrated', '1');
+        localStorage.setItem('unenverse-sb-migrated', '1');
         this._persist();
       }
       // Phase 22's Authenticator section, merged in the same way and under its
@@ -1249,11 +1249,11 @@ export const Settings = {
       // install, since the list has been persisted since Phase 12 — had the 2FA
       // tab in the markup, wired, and `display: none`. The panel was
       // unreachable for everyone and nothing said so.
-      if (!localStorage.getItem('envvault-panel-migrated-auth')) {
+      if (!localStorage.getItem('unenverse-panel-migrated-auth')) {
         const panels = [...(this._data.panelOrder || [])];
         if (!panels.includes('auth')) panels.push('auth');
         this._data.panelOrder = panels;
-        localStorage.setItem('envvault-panel-migrated-auth', '1');
+        localStorage.setItem('unenverse-panel-migrated-auth', '1');
         this._persist();
       }
       // A2 (2026-09-14): reversed. The Authenticator *sidebar section* — added
@@ -1266,8 +1266,8 @@ export const Settings = {
       // key that outlives the code rendering it can never reappear — and the
       // flag stays set (never cleared, never reused) so nothing ever tries to
       // insert it again.
-      if (!localStorage.getItem('envvault-sb-migrated-totp')) {
-        localStorage.setItem('envvault-sb-migrated-totp', '1');
+      if (!localStorage.getItem('unenverse-sb-migrated-totp')) {
+        localStorage.setItem('unenverse-sb-migrated-totp', '1');
       }
     } catch {}
     // A2: persisted settings can outlive the Authenticator sidebar surface.

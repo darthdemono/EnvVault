@@ -11,7 +11,7 @@ export interface Envelope<T> {
   error?: { code: string; message: string };
 }
 
-export function runEnvv(
+export function runUnv(
   exe: string,
   args: string[],
   cwd?: string,
@@ -31,8 +31,8 @@ export function runEnvv(
   });
 }
 
-export async function envvJson<T>(exe: string, args: string[], cwd?: string): Promise<T> {
-  const out = await runEnvv(exe, ['--json', ...args], cwd);
+export async function unvJson<T>(exe: string, args: string[], cwd?: string): Promise<T> {
+  const out = await runUnv(exe, ['--json', ...args], cwd);
   const env = JSON.parse(out) as Envelope<T>;
   if (!env.ok || env.data === undefined) throw new Error(env.error?.message ?? 'unv failed');
   return env.data;

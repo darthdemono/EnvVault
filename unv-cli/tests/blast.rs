@@ -14,7 +14,7 @@ fn scratch() -> std::path::PathBuf {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_nanos();
-    let p = std::env::temp_dir().join(format!("envv-blast-{}-{n}", std::process::id()));
+    let p = std::env::temp_dir().join(format!("unv-blast-{}-{n}", std::process::id()));
     std::fs::create_dir_all(&p).unwrap();
     p
 }
@@ -22,9 +22,9 @@ fn scratch() -> std::path::PathBuf {
 fn unv(dir: &std::path::Path) -> Command {
     let mut c = Command::new(env!("CARGO_BIN_EXE_unv"));
     c.env_remove("UNV_SERVER_URL")
-        .env_remove("ENVV_SERVER_URL")
+        .env_remove("UNV_SERVER_URL")
         .env_remove("UNV_ENV_FILE")
-        .env_remove("ENVV_ENV_FILE")
+        .env_remove("UNV_ENV_FILE")
         .env("UNV_PASSWORD", "correct-horse-battery")
         .env("XDG_STATE_HOME", dir.join("state"))
         .args([
@@ -119,10 +119,7 @@ fn exec_and_out_are_logged_by_name_and_a_rotation_clears_the_to_do_list() {
     );
 
     // The log file itself holds names and fingerprints, never values, and is private.
-    let log = dir
-        .join("state")
-        .join("envv")
-        .join("materialisations.jsonl");
+    let log = dir.join("state").join("unv").join("materialisations.jsonl");
     let raw = std::fs::read_to_string(&log).unwrap();
     assert!(!raw.contains(ONE), "the log holds a value");
     use std::os::unix::fs::PermissionsExt;
@@ -219,6 +216,6 @@ fn a_revealed_get_is_logged_and_a_masked_one_is_not() {
     assert_eq!(json["data"]["deployments"], 1, "{json}");
     assert_eq!(json["data"]["entries"][0]["provider"], "Stripe");
     // The record names the entry and a fingerprint, never the value.
-    let log = std::fs::read_to_string(dir.join("state/envv/materialisations.jsonl")).unwrap();
+    let log = std::fs::read_to_string(dir.join("state/unv/materialisations.jsonl")).unwrap();
     assert!(!log.contains(ONE), "the log holds a value: {log}");
 }

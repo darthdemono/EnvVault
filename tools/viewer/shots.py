@@ -106,7 +106,7 @@ class WD:
     def shot(self, path):
         # WebDriver's own screenshot hangs under software compositing, so grab
         # the virtual display itself: the window fills it.
-        subprocess.run(["import", "-window", "root", "-crop", "1440x900+0+0", "+repage", path], check=True, env=dict(os.environ, DISPLAY=":99"))
+        subprocess.run(["import", "-window", "root", "-crop", os.environ.get("SHOT_CROP", "1440x900") + "+0+0", "+repage", path], check=True, env=dict(os.environ, DISPLAY=":99"))
 
     def stop(self):
         if self.sid:
@@ -191,7 +191,7 @@ def main():
             snap("onboarding")
 
         # Skip the wizard and seed the vault the way the UI lab does.
-        wd.js("localStorage.setItem('envvault-settings', JSON.stringify({onboardingCompleted: true, panelOrder: ['secrets','tools','remote','users','auth']}))")
+        wd.js("localStorage.setItem('unenverse-settings', JSON.stringify({onboardingCompleted: true, panelOrder: ['secrets','tools','remote','users','auth']}))")
         seed = json.load(open("/out/seed.json"))
         res = wd.js_async(
             "const done = arguments[arguments.length - 1];"

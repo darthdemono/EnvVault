@@ -544,7 +544,7 @@ jobs:
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.version=${{ needs.meta.outputs.version }}
             org.opencontainers.image.revision=${{ github.sha }}
-            org.opencontainers.image.licenses=MIT
+            org.opencontainers.image.licenses=Apache-2.0
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -620,7 +620,7 @@ jobs:
           cp artifacts/desktop-*/* release-assets/
 
           # Headless binaries get archived per platform, with a flat layout so
-          # `tar xzf … && ./envv` works with no path juggling.
+          # `tar xzf … && ./unv` works with no path juggling.
           ( cd artifacts/headless-linux-x86_64 && chmod +x unv unv-server \
             && tar czf "$GITHUB_WORKSPACE/release-assets/unv-${VERSION}-linux-x86_64.tar.gz" . )
           ( cd artifacts/headless-windows-x86_64 \

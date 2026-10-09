@@ -43,3 +43,6 @@ eslint-suppressions.json
 src/ts/icon-paths.ts
 vscode-extension/out/
 vault-core/tests/fixtures/
+
+# Compiled from the development notes; not hand-formatted.
+CHANGELOG.md

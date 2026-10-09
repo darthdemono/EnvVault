@@ -77,7 +77,7 @@ pub fn default_dir() -> PathBuf {
     }
     dirs::config_dir()
         .unwrap_or_else(|| PathBuf::from("."))
-        .join("envv-node")
+        .join("unv-node")
 }
 
 pub fn load_state(dir: &Path) -> CliResult<NodeState> {

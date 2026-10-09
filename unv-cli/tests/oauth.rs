@@ -28,9 +28,9 @@ fn mock_issuer(response: &'static str) -> (String, std::thread::JoinHandle<Strin
 fn unv(dir: &std::path::Path, args: &[&str]) -> (bool, String) {
     let out = Command::new(env!("CARGO_BIN_EXE_unv"))
         .env_remove("UNV_SERVER_URL")
-        .env_remove("ENVV_SERVER_URL")
+        .env_remove("UNV_SERVER_URL")
         .env_remove("UNV_ENV_FILE")
-        .env_remove("ENVV_ENV_FILE")
+        .env_remove("UNV_ENV_FILE")
         .env("UNV_PASSWORD", "correct-horse-battery")
         .args([
             "--db-path",
@@ -50,7 +50,7 @@ fn unv(dir: &std::path::Path, args: &[&str]) -> (bool, String) {
 
 #[test]
 fn refresh_stores_the_rotated_token_before_reporting_and_never_echoes_secrets() {
-    let dir = std::env::temp_dir().join(format!("envv-oauth-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("unv-oauth-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
 
@@ -120,7 +120,7 @@ fn refresh_stores_the_rotated_token_before_reporting_and_never_echoes_secrets() 
 
 #[test]
 fn an_issuer_error_is_named_and_the_stored_token_survives() {
-    let dir = std::env::temp_dir().join(format!("envv-oauth-err-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("unv-oauth-err-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let (url, issuer) =

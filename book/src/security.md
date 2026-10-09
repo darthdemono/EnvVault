@@ -12,4 +12,4 @@ users, and compare-and-swap writes to avoid silent overwrite conflicts.
 
 No security control removes the need to protect an unlocked desktop session or
 the machine on which it runs. Report vulnerabilities through the repository's
-[security policy](https://github.com/darthdemono/EnvVault/security/policy).
+[security policy](https://github.com/darthdemono/UnENVerse/security/policy).

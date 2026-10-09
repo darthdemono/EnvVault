@@ -954,7 +954,7 @@ fn build_2fas(items: &[Imported]) -> String {
 /// path — but a field that *looked* opaque and was not would be worse.
 fn stable_uuid(secret: &str) -> String {
     use sha2::{Digest, Sha256};
-    let h = Sha256::digest(format!("envvault-aegis-uuid:{secret}").as_bytes());
+    let h = Sha256::digest(format!("unenverse-aegis-uuid:{secret}").as_bytes());
     let hex: String = h.iter().take(16).map(|b| format!("{b:02x}")).collect();
     format!(
         "{}-{}-{}-{}-{}",

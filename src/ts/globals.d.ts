@@ -1,4 +1,4 @@
 interface Window {
-  __envvBulkToggle?: (index: number) => boolean;
-  __envvIsBulkMode?: () => boolean;
+  __unvBulkToggle?: (index: number) => boolean;
+  __unvIsBulkMode?: () => boolean;
 }

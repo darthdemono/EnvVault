@@ -1043,10 +1043,10 @@ async function init() {
       (e.target as HTMLElement).closest('[data-action]') !== el
     )
       return;
-    if (window.__envvIsBulkMode?.() && action !== 'bulk-toggle') {
+    if (window.__unvIsBulkMode?.() && action !== 'bulk-toggle') {
       const card = el.closest<HTMLElement>('[data-idx]');
       if (card) {
-        window.__envvBulkToggle?.(parseInt(card.dataset.idx!));
+        window.__unvBulkToggle?.(parseInt(card.dataset.idx!));
         return;
       }
     }
@@ -1094,10 +1094,10 @@ async function init() {
         break;
       }
       case 'bulk-toggle':
-        window.__envvBulkToggle?.(idx);
+        window.__unvBulkToggle?.(idx);
         break;
       case 'bundle-bulk-toggle': {
-        if (!window.__envvIsBulkMode?.()) {
+        if (!window.__unvIsBulkMode?.()) {
           showToast('Choose Select first to bulk-select bundle members', 'info');
           break;
         }
@@ -1107,7 +1107,7 @@ async function init() {
             .map((card) => Number(card.dataset.idx))
             .filter(Number.isInteger),
         );
-        indices.forEach((memberIdx) => window.__envvBulkToggle?.(memberIdx));
+        indices.forEach((memberIdx) => window.__unvBulkToggle?.(memberIdx));
         break;
       }
       case 'duplicate':
@@ -1136,11 +1136,11 @@ async function init() {
         const pool = el.dataset.pool ?? '';
         // In bulk mode the card has no per-pool checkbox of its own; the
         // summary bar stands in for one, ticking every member it covers.
-        if (window.__envvIsBulkMode?.()) {
+        if (window.__unvIsBulkMode?.()) {
           const members = poolsOf(st.vault).get(pool) ?? [];
           members.forEach((m) => {
             const i = st.vault.api_keys.indexOf(m);
-            if (i >= 0) window.__envvBulkToggle?.(i);
+            if (i >= 0) window.__unvBulkToggle?.(i);
           });
           break;
         }

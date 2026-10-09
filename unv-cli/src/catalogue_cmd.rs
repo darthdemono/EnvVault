@@ -70,7 +70,7 @@ fn fetch(url: &str) -> CliResult<Vec<u8>> {
         return Err(invalid("the catalogue is only fetched over https"));
     }
     let client =
-        crate::tls::build_public_client(std::time::Duration::from_secs(20), "envv-catalogue")?;
+        crate::tls::build_public_client(std::time::Duration::from_secs(20), "unv-catalogue")?;
     let resp = client
         .get(url)
         .send()

@@ -293,7 +293,7 @@ fn events_for_entry(entry: &Value, kinds: &[EventKind]) -> Vec<CalEvent> {
     if kinds.contains(&EventKind::Created) {
         if let Some(date) = to_ics_date(s(entry, "created_at").as_deref()) {
             out.push(CalEvent {
-                uid: format!("{id}-created@envvault"),
+                uid: format!("{id}-created@unenverse"),
                 date,
                 summary: format!("Created: {label}"),
                 description: join(format!("{label} was added to the vault.")),
@@ -306,7 +306,7 @@ fn events_for_entry(entry: &Value, kinds: &[EventKind]) -> Vec<CalEvent> {
     if kinds.contains(&EventKind::Expires) {
         if let Some(date) = to_ics_date(s(entry, "expires_at").as_deref()) {
             out.push(CalEvent {
-                uid: format!("{id}-expires@envvault"),
+                uid: format!("{id}-expires@unenverse"),
                 date,
                 summary: format!("Expires: {label}"),
                 description: join(format!("{label} expires on this day.")),
@@ -347,7 +347,7 @@ fn events_for_entry(entry: &Value, kinds: &[EventKind]) -> Vec<CalEvent> {
                 };
                 let head = format!("{label}: {}.", what.to_lowercase());
                 out.push(CalEvent {
-                    uid: format!("{id}-{var}@envvault"),
+                    uid: format!("{id}-{var}@unenverse"),
                     date,
                     summary: format!("{what}: {label}"),
                     description: if with_meta { join(head) } else { head },
@@ -366,7 +366,7 @@ fn events_for_entry(entry: &Value, kinds: &[EventKind]) -> Vec<CalEvent> {
                     .and_then(|v| v.as_i64())
                     .unwrap_or(0);
                 out.push(CalEvent {
-                    uid: format!("{id}-rotation@envvault"),
+                    uid: format!("{id}-rotation@unenverse"),
                     date,
                     summary: format!("Rotate: {label}"),
                     description: join(format!("{label} is due for rotation (every {days} days).")),
@@ -528,7 +528,7 @@ mod tests {
         let e = json!({ "id": "abc", "provider": "X", "expires_at": "2026-06-01T00:00:00Z" });
         let a = build_ics(std::slice::from_ref(&e), &IcsOptions::default());
         let b = build_ics(&[e], &IcsOptions::default());
-        assert!(a.contains("UID:abc-expires@envvault"));
+        assert!(a.contains("UID:abc-expires@unenverse"));
         assert_eq!(event_count(&a), 1);
         assert_eq!(event_count(&b), 1);
     }

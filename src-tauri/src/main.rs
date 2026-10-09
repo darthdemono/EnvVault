@@ -3,14 +3,13 @@
 
 //! Binary entry point for UnENVerse.
 //!
-//! All application logic lives in [`env_vault_lib`].  This crate merely
-//! delegates to [`env_vault_lib::run`] so that `cargo tauri dev` and
+//! All application logic lives in [`unenverse_lib`].  This crate merely
+//! delegates to [`unenverse_lib::run`] so that `cargo tauri dev` and
 //! `cargo test` can share the same library crate without recompiling the
 //! binary.
 
-/// Application entry point.  Calls [`env_vault_lib::run`] which builds the
+/// Application entry point.  Calls [`unenverse_lib::run`] which builds the
 /// Tauri application, registers all commands, and starts the event loop.
 fn main() {
-    vault_core::compat::adopt_legacy_env();
-    env_vault_lib::run();
+    unenverse_lib::run();
 }

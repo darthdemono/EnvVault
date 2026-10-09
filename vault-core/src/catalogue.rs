@@ -178,7 +178,7 @@ pub fn cache_path() -> Option<PathBuf> {
     if let Some(p) = std::env::var_os("UNV_CATALOGUE_FILE") {
         return Some(PathBuf::from(p));
     }
-    dirs::data_dir().map(|d| d.join("io.envvault").join("catalogue.json"))
+    dirs::data_dir().map(|d| d.join("io.unenverse").join("catalogue.json"))
 }
 
 /// The cached catalogue, re-verified now. A bad or missing file is `None`, so
@@ -293,7 +293,7 @@ mod tests {
 
     #[test]
     fn rollback_is_refused() {
-        let dir = std::env::temp_dir().join(format!("envv-cat-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("unv-cat-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         std::env::set_var("UNV_CATALOGUE_FILE", dir.join("c.json"));
         let new = sign(&cat("2026-10-08T00:00:00Z"), &SEED).unwrap();

@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+# Install once: git config core.hooksPath .githooks
+cargo fmt --all -- --check

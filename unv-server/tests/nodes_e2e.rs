@@ -17,7 +17,7 @@ fn scratch(tag: &str) -> PathBuf {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_nanos();
-    let d = std::env::temp_dir().join(format!("envv-nodes-e2e-{tag}-{n}"));
+    let d = std::env::temp_dir().join(format!("unv-nodes-e2e-{tag}-{n}"));
     std::fs::create_dir_all(&d).unwrap();
     d
 }
@@ -1056,7 +1056,17 @@ async fn the_hub_dials_a_listening_node_and_a_save_reaches_it() {
         wait_for(&out, "TOKEN=first", 20).await,
         "the first push never arrived"
     );
-    let (_, list) = h.owner("GET", "/api/nodes", serde_json::json!({})).await;
+    // The node writes the file while it is still answering the poll, so the hub
+    // stamps `last_polled` a moment after the file appears (observed on Windows
+    // runners). Wait for the stamp instead of reading it once.
+    let mut list = serde_json::Value::Null;
+    for _ in 0..100 {
+        list = h.owner("GET", "/api/nodes", serde_json::json!({})).await.1;
+        if list["nodes"][0]["last_polled"].is_string() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
     assert_eq!(
         list["nodes"][0]["listen"]["endpoint"],
         format!("https://127.0.0.1:{}", node.port)

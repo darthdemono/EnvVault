@@ -1,22 +1,99 @@
 # UnENVerse
 
-UnENVerse is a secrets manager that runs on your machine and talks to nothing else. API keys, passwords, X.509 certificates, SSH keys and whole structured configs live in a SQLCipher database encrypted with a key derived from your master password. No cloud account, no telemetry, no plaintext file sitting on disk waiting for someone to read it.
+**A self-hosted secrets manager for people who run their own infrastructure: a desktop app, a command-line tool and an optional server that share one encrypted vault.**
 
-It ships as three programs that share one storage engine:
+![UnENVerse showing a vault of API keys, passwords, certificates and 2FA codes](Screenshots/unenverse.png)
 
-|                     | What it is                                                                                                      |
-| ------------------- | --------------------------------------------------------------------------------------------------------------- |
-| **The desktop app** | A Tauri 2 window. This is where you look at and edit secrets.                                                   |
-| **`unv`**           | A CLI built so an automated caller can drive the whole vault without a single secret value entering its output. |
-| **`unv-server`**    | An optional HTTP/HTTPS server, so the desktop app and the CLI on other machines can reach one vault.            |
+UnENVerse keeps API keys, passwords, certificates, SSH keys, two-factor seeds and whole configuration files (WireGuard, Docker Compose, nginx and more) in a single vault encrypted on your own machine. Nothing is sent to a cloud service, and there is no account to create.
 
-Current version **0.42.1**, with Phases 1 to 42 of the road to 1.0 done (39 is the code-level pentest review, whose live-deployment checklist is the maintainer's; 41 is the follow-up round of sub-phases, 42 is the rename to UnENVerse and the Docker viewer) (see [How it got here](#how-it-got-here)). The version in `src-tauri/tauri.conf.json` is the authoritative one. `package.json`, the four `Cargo.toml` files and the git tag are all checked against it by the `meta` job in `.github/workflows/build.yml`.
+## Overview
 
----
+Most secrets managers store a password and hand it back. UnENVerse also knows what the secret is _for_. A config file in a project can point at a vault entry (`${GitHub/token}`), so the real value lives in one place and every `wg0.conf`, `docker-compose.yml` or `.env` built from it stays in step when you rotate a key.
+
+It is built around three ideas:
+
+- **The vault is yours.** A SQLCipher database encrypted with a key derived from your master password (Argon2id). The key never touches disk, and there is no recovery service, because there is no server of ours.
+- **Scripts and AI agents can use it without seeing your secrets.** The `unv` command redacts every stored value by default and offers ways to _use_ a secret (run a program with it, render a file with it) without ever printing it.
+- **It scales from one laptop to a small team.** Run the desktop app alone, or put `unv-server` on a machine you control and give each person their own login, API tokens and permissions.
+
+### What it does
+
+| Area                          | What you get                                                                                                                                                                                                                                                                                    |
+| ----------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Secrets**                   | 26 secret types: API keys, passwords, certificates, SSH and GPG keys, database connections, OAuth clients, web sessions, recovery codes, crypto wallets, licence keys, Wi-Fi networks and more. Tags, categories, environments, expiry dates, rotation reminders and per-entry version history. |
+| **Two-factor codes**          | Stores authenticator seeds (TOTP, HOTP, Steam Guard) and shows live codes. Imports from Aegis, 2FAS, andOTP, Ente, Bitwarden and Google Authenticator.                                                                                                                                          |
+| **Projects and config files** | Eleven project types: WireGuard, Docker Compose, nginx, Kubernetes, Traefik, Apache, HAProxy, Ansible, Postgres, SSH config and generic `.env`. Build a config from parts, point fields at vault entries, and export the finished file.                                                         |
+| **Safety checks**             | A health scan for weak, expiring, duplicated or leaked secrets, and a config checker that finds mistakes across files (an nginx `proxy_pass` to a service that does not exist, two WireGuard peers claiming one address).                                                                       |
+| **Command line**              | `unv` covers everything the app does. Values are redacted by default, output is JSON with stable exit codes, and `unv exec` and `unv render` use a secret without printing it.                                                                                                                  |
+| **Server and sharing**        | An optional HTTP/HTTPS server with certificate pinning, per-row merge of simultaneous edits, `/api/health`, calendar feeds for expiry dates and a registry of issued IDs.                                                                                                                       |
+| **Multi-user access**         | Named users, classes (role templates), API tokens, optional two-factor login and a permission language such as `project:web AND NOT env:production`.                                                                                                                                            |
+| **Nodes**                     | Agents on your other machines watch a config file, report when it drifts from the vault and, if you allow it, receive the new version. Pushes can require your approval.                                                                                                                        |
+| **History and audit**         | A tamper-evident audit log, a snapshot of every rendered config with secrets masked, and a "blast radius" report that lists exactly which credentials a machine has seen.                                                                                                                       |
+| **Import and export**         | `.env`, Bitwarden, 1Password, Proton Pass, FIDO Credential Exchange, browser captures (cURL, HAR, cookies) and encrypted backups.                                                                                                                                                               |
+
+### Who it is for
+
+- Developers and homelab owners who keep tokens, certificates and config files scattered across notes and `.env` files.
+- Small teams that want a self-hosted vault with real access control but not a platform to operate.
+- Anyone who runs scripts or AI coding agents and wants them to _use_ credentials without being able to read them.
+
+### What it is not
+
+- It is not a hosted service. You run it, you back it up.
+- It is not a browser autofill extension.
+- A forgotten master password cannot be recovered. See [Backups](#backups-and-the-one-thing-you-cannot-recover).
+
+## Tour
+
+**Sign in.** Open the app and create a vault, or connect to a server.
+
+![The unlock screen connecting to a server](Screenshots/login-filled.png)
+
+**Add any kind of secret.** The form adapts to the type and shows the environment variable name it will generate.
+
+![The Add Secret form](Screenshots/add-secret.png)
+
+**Keep config files and secrets together.** A project holds the parts of a real config; fields can reference vault entries.
+
+| WireGuard                                               | Docker Compose                                             | nginx                                           |
+| ------------------------------------------------------- | ---------------------------------------------------------- | ----------------------------------------------- |
+| ![WireGuard project](Screenshots/project-wireguard.png) | ![Docker Compose project](Screenshots/project-compose.png) | ![nginx project](Screenshots/project-nginx.png) |
+
+**Two-factor codes** sit next to the credentials they protect.
+
+![The authenticator panel](Screenshots/authenticator.png)
+
+**Find what needs attention.** The health scan lists expiring, stale and risky secrets.
+
+![The health scan](Screenshots/health-scan.png)
+
+**Share with a team, with limits.** Users, classes and permission expressions decide who sees what.
+
+| Users                                      | A user's permissions                                        | Classes                             |
+| ------------------------------------------ | ----------------------------------------------------------- | ----------------------------------- |
+| ![Users panel](Screenshots/users-list.png) | ![Permission expressions](Screenshots/user-permissions.png) | ![Classes](Screenshots/classes.png) |
+
+The screenshots show a demo vault with invented data. `tools/demo/run.sh` rebuilds them.
+
+## Quick start
+
+1. Download the installer for your system from the [Releases](../../releases) page (see [Install](#install)).
+2. Launch UnENVerse and choose a master password of at least twelve characters. **Write it down: it cannot be recovered.**
+3. Click **Add Secret**, pick a type, fill it in and save.
+4. Optional: install the command line tool and use a secret without printing it:
+
+```bash
+unv list                                  # names and types, values redacted
+unv get GitHub                            # one entry, still redacted
+unv exec -- ./deploy.sh                   # run a program with your secrets in its environment
+unv render config.tpl --out config.conf   # fill ${references} in a template
+```
 
 ## Contents
 
-- [What it does](#what-it-does)
+- [Overview](#overview)
+- [Tour](#tour)
+- [Quick start](#quick-start)
 - [Install](#install)
 - [First run](#first-run)
 - [The desktop app](#the-desktop-app)
@@ -48,84 +125,7 @@ Current version **0.42.1**, with Phases 1 to 42 of the road to 1.0 done (39 is t
 - [Building from source](#building-from-source)
 - [Development](#development)
 - [Continuous integration](#continuous-integration)
-- [UI and CLI parity](#ui-and-cli-parity)
-- [What is not finished](#what-is-not-finished)
-- [How it got here](#how-it-got-here)
 - [License](#license)
-
----
-
-## What it does
-
-Everything listed here is implemented and in the shipping build. The sections after this one explain each of them properly.
-
-### Storage and crypto
-
-- SQLCipher (AES-256-CBC) for the database. The key never touches disk.
-- Argon2id (m=65536, t=3, p=1) over your master password and a 16-byte random salt.
-- The key lives in one `Mutex<Option<[u8; 32]>>` and is zeroed on lock.
-- Argon2id again, with cheaper parameters, for sub-user passwords.
-- An append-only audit log bound into a SHA-256 hash chain, so a deleted or edited row is detectable.
-- Optional hardware entropy for generated secrets, mixed with the OS CSPRNG and never used raw, from the CLI and from Settings.
-- Row-per-entry storage (schema v2): a save writes the rows that changed, and a stale writer is merged per row instead of refused whole.
-
-### Secrets
-
-- Twenty-six types from one registry (`secret-types.json`): the original seven plus web sessions, composites, bundles, OAuth clients, signing keys, registry tokens, databases, recovery codes, GPG and age keys, self-hosted service keys, tracker passkeys, usenet servers, Wi-Fi, licences, crypto wallets, passkeys, secure notes and identity documents.
-- Stored authenticator seeds for third-party services (TOTP, HOTP and Steam Guard) that produce live codes, and import and export for seven other authenticators.
-- Copy profiles and one name template, so the same entry produces the same environment variable names in the app and the CLI.
-- Rotation cadences, expiry dates, an overdue badge, and a health scan that finds the ones you forgot.
-- Version history per entry, capped at fifty revisions, restorable.
-- Tags, categories, projects, environments and prefixes, all filterable from the sidebar.
-- About forty issuer signatures recognised on sight, extended by a signed catalogue you can update without a release.
-- Importers for `.env` files, Bitwarden, 1Password, Proton Pass, a Python config module, FIDO CXF files and browser captures (cURL, HAR, `Set-Cookie`), from the app and the CLI.
-
-### Projects and configuration
-
-- Eleven project types, all of them validated against the software they target.
-- Config chunks: a WireGuard peer, a Compose service, an nginx server block, a Kubernetes Secret, and so on.
-- `${refs}` that point a config field at a vault entry, so the secret lives in one place and the config points at it.
-- A config checker (`unv check`, and a panel in the config view) that finds the mistakes a single file cannot show: a `proxy_pass` to a service no chunk defines, a reference to a vault entry that is gone.
-- Exporters that write a real `wg0.conf`, `docker-compose.yml`, `nginx.conf`, Kubernetes manifest, `ssh_config`, Traefik dynamic config, Apache vhost, HAProxy config, Ansible playbook or `.pgpass`.
-
-### The CLI
-
-- Redaction by default. Stored values print as `sha256:` plus twelve hex characters.
-- Materialisation paths that skip stdout completely: `--out`, `unv exec`, `unv render`.
-- A JSON envelope and ten stable exit codes, so a script can branch on the failure instead of grepping English.
-- `unv describe`, which prints the whole contract as JSON generated from the same clap definition the binary runs on.
-- Certificate pinning, so a self-signed `unv-server` is reachable safely.
-- `unv doctor`, which checks the things that break quietly.
-- Output protection beyond the CLI itself: `unv shield` filters a command's output stream, and `unv scan --exposed` looks for stored values sitting in plain files.
-- A machine-checked promise that the app and the CLI can do the same things (see [UI and CLI parity](#ui-and-cli-parity)).
-
-### The server, and sharing
-
-- HTTP or HTTPS, with a self-signed certificate generated on first start if you do not bring your own.
-- Certificate pinning in both clients, enforced during the handshake, before any credential is sent.
-- Selective reads, so a scoped user does not download the whole vault to read one value.
-- "Open to LAN", which serves the vault straight out of the desktop app.
-- Compare-and-swap on every write, and a per-row merge, so two people editing different entries both keep their work.
-- A real `/api/health`, request ids and `Retry-After` on every refusal.
-- Subscribable `.ics` calendar feeds, addressed by a revocable token and never carrying a value.
-- An opt-in unique-ID registry that stores only keyed hashes.
-
-### Multi-user
-
-- Named sub-users with their own passwords and API tokens.
-- Classes, which are named permission templates.
-- A permission expression language with `AND`, `OR` and `NOT`.
-- Strict write scoping, where a write must satisfy every scope instead of any one of them.
-- Capability flags and an authority tier, so a user cannot grant themselves more than they hold.
-
-### The application itself
-
-- Twenty-two tool panes: generators, a health scan, an audit viewer, a diff, enrichment, a unique-ID registry, a formatter, a CIDR calculator, a cron reader and more.
-- Themes, an activity bar you can move, a resizable sidebar and a layout that remembers itself.
-- Auto-lock, a dedicated re-lock screen, and window state that survives a restart.
-- 1,388 frontend tests and 483 Rust tests, run on Linux and Windows on every push, a Playwright layout lab that measures the app in a real browser at nine window sizes, and a probe that presses every control and fails on one that does nothing visible.
-
----
 
 ## Install
 
@@ -159,21 +159,17 @@ cosign verify-blob \
 
 See [Building from source](#building-from-source) at the bottom.
 
----
-
 ## First run
 
-On first launch the app asks you to create a master password. Minimum twelve characters, and it means it. This is a secrets manager, and eight characters of `hunter2` is not a serious answer to the question.
+On first launch the app asks you to create a master password of at least twelve characters.
 
 That password is never stored anywhere. It goes through Argon2id (m=65536, t=3, p=1) with a 16-byte random salt to derive a 32-byte key, and that key opens the SQLCipher database. The key lives in memory and is zeroed when you lock.
 
-So what happens if you forget it? Nothing good. There is no recovery, no reset link, no support address that can help you. The only thing left is to delete `vault.db` and `vault.salt` and start over with an empty vault. Write the password down somewhere real.
+If you forget the password, the vault cannot be recovered. There is no reset link and no support channel that can help. The only option is to delete `vault.db` and `vault.salt` and start with an empty vault, so store the password somewhere safe.
 
-**N.B.** The salt is as load-bearing as the database, and this is the single most common way people lose a vault. `vault.salt` is sixteen bytes of CSPRNG output, written once, derived from nothing, and stored nowhere else. A `vault.db` without it cannot be opened by anyone, including you, and nothing can recompute it. Copying the database to a new machine and leaving the salt behind is a permanent loss that looks like a forgotten password, because every unlock attempt reports "wrong password" for a password that is perfectly correct.
+**Keep the salt with the database.** A vault is lost most often by separating the two files. `vault.salt` is sixteen bytes of CSPRNG output, written once, derived from nothing, and stored nowhere else. A `vault.db` without it cannot be opened by anyone, including you, and nothing can recompute it. Copying the database to a new machine and leaving the salt behind is a permanent loss that looks like a forgotten password, because every unlock attempt reports "wrong password" for a password that is perfectly correct.
 
-Two things guard against that now. `unv backup archive` writes both files into one encrypted archive, and any attempt to open a database whose salt has gone missing refuses outright instead of silently generating a fresh one. `unv doctor` and `unv status` both tell you where the salt is and remind you to keep it with the database.
-
----
+Two things guard against that: `unv backup archive` writes both files into one encrypted archive, and any attempt to open a database whose salt has gone missing refuses outright instead of silently generating a fresh one. `unv doctor` and `unv status` both tell you where the salt is and remind you to keep it with the database.
 
 ## The desktop app
 
@@ -204,8 +200,6 @@ Click to expand. The card shows the fields, and the buttons across the top do th
 ### Searching
 
 `Ctrl+K` focuses the search bar. It searches names, usernames, notes, tags and categories. The last eight searches are remembered and offered as a dropdown. `Esc` clears it, `Shift+Esc` clears every active filter at once, which exists because a filter restored from a previous session is one you do not remember setting.
-
----
 
 ## Secrets
 
@@ -259,7 +253,7 @@ About forty issuer signatures compiled in, plus whatever the [signed catalogue](
 
 `unv enrich` is in the app too (Tools, Enrich), running the same planner, with a preview, per-proposal ticks and an Apply button. `unv enrich --online` goes further and asks each issuer about its own credential, filling `account_name`, `scopes`, `expires_at` and `rate_limit` from the real response. Eight issuers answer: GitHub, GitLab, Slack, Stripe, DigitalOcean, npm, OpenAI and Anthropic. It is opt-in because it sends the secret over TLS to the service that issued it; in the app it sits behind a checkbox and a consent screen that names every issuer and how many secrets go to each before anything is sent, and a cookie is never probed. That is a real cost, and it buys you something you cannot get any other way: a 401 from the issuer is the only reliable way to learn that a stored credential has been revoked.
 
-**N.B.** `secretType` is `api_key` for every entry ever written, so "is this field empty?" has to special-case it. Without that, every imported `postgres://` URL stays classified as an API key forever.
+Note: `secretType` is `api_key` for every entry ever written, so "is this field empty?" has to special-case it. Without that, every imported `postgres://` URL stays classified as an API key forever.
 
 ### Importing existing secrets
 
@@ -286,8 +280,6 @@ SVG is refused. Permanently, and on purpose. An SVG is a script container and a 
 
 The uploaded file is validated on read as well as on pick, for the same reason.
 
----
-
 ## Authenticator codes
 
 A seed that a third party issued is a field on any entry, not a type of its own: a GitHub login carries its own second factor, so `${GitHub/...}` stays unambiguous and there is one entry to rotate, not two. Paste a base32 seed or a whole `otpauth://` URI (it is split on the way in, not stored whole) and the card shows the live code and a countdown.
@@ -312,19 +304,17 @@ The CLI equivalents are `--profile`, `--metadata`, `--field`, and the global `--
 
 **A composite** is one value with secrets inside it: a template with named `{part}` holes (`link`, `signed_link`, `connection`, `custom`). Parts are stored raw and percent-encoded by URL zone when rendered, so a password containing `@:/?#%` cannot change where the host is. An unfilled placeholder refuses to render.
 
-**A bundle** is one card holding several whole entries (a Spotify password, its web session and its API app; TMDB v3 and v4) plus its own typed local variables, which act as a scope that composites and derived values resolve against (`{discord.id}`, `{prefix}`). A rendered value is secret unless every input is public, and a missing reference refuses rather than rendering a hole. Members stay ordinary entries, so unbundling is lossless; `unv bundle ...` and the `${bundle:Name/slot/field}` reference are the CLI side, and a Python config module imports as a bundle and exports back to the same meaning.
+**A bundle** is one card holding several whole entries (a Spotify password, its web session and its API app; TMDB v3 and v4) plus its own typed local variables, which act as a scope that composites and derived values resolve against (`{bot.id}`, `{prefix}`). A rendered value is secret unless every input is public, and a missing reference refuses rather than rendering a hole. Members stay ordinary entries, so unbundling is lossless; `unv bundle ...` and the `${bundle:Name/slot/field}` reference are the CLI side, and a Python config module imports as a bundle and exports back to the same meaning.
 
 ## The provider catalogue
 
 The issuer table behind `enrich` used to change only with a release. Now a signed file can extend it: `unv catalogue update` (or Settings, Provider catalogue, Update) fetches the whole file, never one provider at a time, so the host learns nothing about which issuers you hold credentials for. It is verified with an Ed25519 key pinned in the binary on every load, refuses to go backwards in time, and every field is shape-checked after the signature (a one-character prefix would match nearly every secret). The compiled table stays the fallback, so `enrich` behaves identically on an air-gapped machine, and `unv catalogue update --file` installs one from disk. Publishing is a step in `docs.yml` that signs `catalogue/providers.json` with the `CATALOGUE_SIGNING_KEY` secret; without the secret nothing is published and nothing breaks.
 
----
-
 ## Projects, chunks and exports
 
 A project is a real object with a type. Its config lives in **chunks**, and a chunk is a named group of fields: one WireGuard peer, one Compose service, one nginx server block.
 
-Eleven project types ship, and as of Phase 18 all eleven are stable:
+Eleven project types ship, each checked against the software it targets:
 
 | Type         | Exports to                       |
 | ------------ | -------------------------------- |
@@ -359,44 +349,6 @@ There is one deliberate exception. A `docker_service` chunk keeps `${VAR}` as wr
 
 Renaming an entry rewrites every `${ref}` pointing at it. Without that cascade, renaming quietly breaks every config that referred to it, and you find out at deploy time.
 
-### How a project type earns the word "stable"
-
-By having its generated config accepted by the software it targets. Not by round-tripping through a parser we also wrote, because a parser we wrote agreeing with an exporter we wrote proves nothing at all.
-
-| Type       | Evidence                                                                 |
-| ---------- | ------------------------------------------------------------------------ |
-| wireguard  | Round-trips through `parseWgConf`                                        |
-| docker     | Compose schema, plus the `.env` pairing                                  |
-| nginx      | Round-trips through `parseNginxConf`                                     |
-| kubernetes | Applied to a real k3s cluster, and the value read back out of it         |
-| ssh_config | Parsed by OpenSSH, `ssh -G`                                              |
-| traefik    | Loaded by Traefik v3, router and middleware both reporting `enabled`     |
-| apache     | `httpd -t` returning `Syntax OK`                                         |
-| haproxy    | `haproxy -c` returning zero                                              |
-| ansible    | `ansible-playbook --syntax-check` returning zero                         |
-| postgres   | A real Postgres server authenticating using only the generated `.pgpass` |
-
-`.github/workflows/exporters.yml` runs that matrix. Every job carries a control case that fails the build if the validator accepts nonsense, because a green tick from a validator that accepts anything is worse than no job at all.
-
-That exercise was worth doing. It found two bugs that no fixture could have caught. Six of the seven newer exporters never resolved `${refs}` at all, so an Apache `SSLCertificateFile` pointed at nothing and a `.pgpass` shipped the literal string `${DB/password}` as the password. And `exportAnsible` emitted a mapping immediately followed by a sequence, which is not valid YAML in any parser, so its output could never have been consumed by the tool it was written for.
-
-### Two implementations, one golden file
-
-The config formats exist twice: once in `src/ts/chunk-ops.ts` for the app, once in `unv-cli/src/exporters.rs` for the CLI. Two implementations of one file format drift silently. The app writes a working `wg0.conf`, the CLI writes a subtly different one, and nobody notices until a deploy breaks.
-
-So both sides assert against the same golden files in `tests/fixtures/parity/`. `tests/cli-parity.test.ts` pins the TypeScript output, `unv-cli/tests/parity.rs` pins the Rust output against identical bytes. Change either one and the other fails.
-
-Regenerate deliberately:
-
-```bash
-PARITY_UPDATE=1 npx vitest run tests/cli-parity.test.ts
-cargo test -p unv-cli
-```
-
-The first time that fixture ran it found two live export bugs. Disabled chunks were being exported by the four exporters people actually deploy, so disabling a WireGuard peer greyed the card out and still wrote it into `wg0.conf`, and the tunnel kept trusting a peer the user believed they had removed. And `exportNginx` never resolved `${refs}`, so the starter template's `ssl_certificate ${example_cert}` reached nginx as literal text and the server refused to start, while copying the same chunk from its card resolved perfectly.
-
----
-
 ## Tools
 
 Twenty-two panes, reachable from the activity bar.
@@ -427,8 +379,6 @@ Twenty-two panes, reachable from the activity bar.
 
 The audit viewer reads the whole table, which is fine now and will not be fine forever. See [What is not finished](#what-is-not-finished).
 
----
-
 ## Settings, shortcuts and auto-lock
 
 ### Settings
@@ -441,7 +391,7 @@ It runs once on a new vault: master password, theme, auto-lock, and whether secr
 
 ### Accessibility
 
-Phase 19 was an accessibility pass, and the contract is asserted mechanically rather than by inspection (`tests/a11y.test.ts`). Every button and form control must have an accessible name; no `for=`, `aria-labelledby`, `aria-controls` or `aria-describedby` may name an id that does not exist; the activity tablist has exactly one tab stop and it is the selected tab; every overlay is a named modal dialog with a focus trap. Adding a button with no text and no `aria-label` fails the suite. A reading pass had already walked past thirteen unnamed controls that these tests found.
+Accessibility is asserted mechanically rather than by inspection (`tests/a11y.test.ts`). Every button and form control must have an accessible name; no `for=`, `aria-labelledby`, `aria-controls` or `aria-describedby` may name an id that does not exist; the activity tablist has exactly one tab stop and it is the selected tab; every overlay is a named modal dialog with a focus trap. Adding a button with no text and no `aria-label` fails the suite.
 
 The Caps Lock hint on the password fields is derived from the character a key produced, never from `getModifierState('CapsLock')` — WebKitGTK reports that from GDK's raw modifier mask, which said "on" with Caps Lock off for every user. The platform's own claim is scored against each derived reading and believed only after two agreements, never again after one disagreement; that is what lets the hint appear on click-into-field where the browser tells the truth.
 
@@ -470,8 +420,6 @@ Auto-lock and lock-on-hide are both suspended while you are [serving to the LAN]
 ### Window state
 
 Size, position and maximized state persist across restarts. Visibility deliberately does not. The tray handler hides the window, so saving visibility would mean that hiding to the tray and quitting restores an _invisible_ window next launch, and the app appears to start and do nothing with only the tray icon as a way back. The plugin also skips restoring a position that no connected monitor intersects, so unplugging a second display cannot strand the window off-screen.
-
----
 
 ## The CLI
 
@@ -558,7 +506,7 @@ unv describe | jq '.commands[] | select(.name == "entry")'
 
 ### Certificate pinning
 
-The CLI could not verify a self-signed `unv-server` at all until Phase 17. There was no `--ca-cert`, no custom verifier, and worse: it linked a different TLS stack from the desktop app, since `reqwest`'s default features pull in native-tls while the app has always used rustls. One product, two trust decisions, neither aware of the other.
+The CLI and the desktop app share one certificate verifier, so a self-signed `unv-server` is trusted (or refused) the same way by both. `--ca-cert` adds a private CA and `--fingerprint` pins a certificate.
 
 Both now build from one verifier in `vault-core/src/tls.rs`. Three flags:
 
@@ -656,7 +604,7 @@ unv logout --all
 
 Sessions cache in `sessions.json`, mode 0600, filed by subject so naming a subject selects a session rather than suppressing it. A rejected session is cleared and the error tells you to log in again, since otherwise every later command fails identically with an unhelpful 401.
 
-**N.B.** On Windows there is no chmod equivalent and the file inherits the directory ACL. That is a real gap and it is written down rather than papered over.
+Note: on Windows there is no chmod equivalent and the file inherits the directory ACL. That is a real gap and it is written down rather than papered over.
 
 ### Idempotency
 
@@ -667,8 +615,6 @@ unv project add Web --if-missing
 ```
 
 Re-running a provisioning script is not an error, and it does not overwrite a secret.
-
----
 
 ## Entropy sources
 
@@ -700,8 +646,6 @@ All four generators report which source produced a value, in the JSON envelope a
 
 PKCS#11 and TPM backends are not built in. Ask for one and you are told that specifically, rather than being told it is an unknown source, because "not compiled in" and "not a thing" are different problems and you deserve to know which.
 
----
-
 ## Key pools
 
 Several interchangeable credentials for one service, rotated when one gets rate limited.
@@ -722,9 +666,7 @@ The cursor indexes the **full** member list, not the available subset. Filter fi
 
 Exhaustion is reported, not detected. `unv exec` never sees the child's HTTP responses, so nothing here can notice a 429 on your behalf. You tell it, with `pool report`. When every member is cooling, exit 7, naming the one that frees up first.
 
-The Tools pane reads the same file over IPC rather than reimplementing the format. The app's `app_data_dir` and the CLI's `dirs::data_dir()/io.envvault` resolve to the same directory, and that was verified rather than assumed. If it ever stops being true, the panel silently shows a different vault's cursors.
-
----
+The Tools pane reads the same file over IPC rather than reimplementing the format. The app's `app_data_dir` and the CLI's `dirs::data_dir()/io.unenverse` resolve to the same directory, and that was verified rather than assumed. If it ever stops being true, the panel silently shows a different vault's cursors.
 
 ## Backups, and the one thing you cannot recover
 
@@ -751,8 +693,6 @@ Restoring refuses to overwrite an existing vault without `--force`, verifies bot
 Both formats are in the app too, under Settings, Import / Export. The archive is built by the same code the CLI uses; restoring verifies the password and both checksums before touching a file, stops the LAN server, zeroizes the in-memory key and reloads. One caveat: an archive is a byte copy of `vault.db`, so lock any other tool using the vault first, or it can miss the last pages written.
 
 Per-entry version history is the third thing in this family: fifty revisions per entry, restorable from the card, written automatically whenever the secret changes.
-
----
 
 ## The server
 
@@ -804,8 +744,6 @@ Two properties hold there, and both are easy to lose:
 
 Ten failures per IP per sixty seconds. It counts **failures only**, not requests, and the IP comes from the real socket address rather than the spoofable `X-Forwarded-For`. The map is pruned above a thousand entries, since an unbounded map under IP rotation is a memory leak with a security-shaped excuse.
 
----
-
 ## Open to LAN
 
 The desktop app can serve its own vault to other machines. Remote panel, Start, done. It runs the identical router `unv-server` runs, in-process.
@@ -816,15 +754,11 @@ The gate around it matters more than the feature. `lan_start` opens _this machin
 
 The server closes itself after eight idle hours. Auto-lock is suspended while it runs, because locking the vault out from under your own clients is not security either.
 
----
-
 ## Calendar feeds and the unique-ID registry
 
 **Calendar feeds.** Timeline, Subscribe mints a URL, `/ics/{token}.ics`, that a calendar app can subscribe to: expiries and rotations as events, never a value. The token is 32 random bytes shown once and stored as a hash, a permission revoked later shrinks the feed because RBAC is applied at fetch time, and a locked server answers 503 with `Retry-After` instead of an empty calendar (an empty feed reads as "no expiries" and clients delete the events). `unv calendar feed new|ls|revoke` is the CLI side. The URL is a bearer credential that calendar apps store in plain text and sync to their cloud, and the dialog says so.
 
 **The unique-ID registry** records every identifier a deployment issued so a new one can be checked for uniqueness. It is opt-in (`unv-server --uid-registry`), stores only an HMAC of each value in a separate encrypted `registry.db` (so a stolen registry yields nothing usable), enforces global uniqueness by a primary-key insert rather than a check-then-insert, and rate-limits mint, check and lookup with true token buckets whose defaults came from a measured benchmark. Pruning runs in chunks so registration continues, and the prune dialog says plainly that deleting a record deletes the only evidence an ID was issued. Tools, Unique IDs and `unv uid ...` drive it.
-
----
 
 ## Nodes
 
@@ -869,8 +803,6 @@ What it guarantees, and what it does not:
 
 A container can observe but should not apply; `packaging/unv-node.service` is the unit for a host.
 
----
-
 ## Config history
 
 Config lives in git and its secrets live somewhere else, so the file that actually runs is versioned by nobody. The vault holds both, so it keeps a **snapshot of every project's rendered config whenever a save changes it**, inside `vault.db` (encrypted with everything else).
@@ -890,8 +822,6 @@ unv history where <sha256>          # which snapshot a host's file came from
 - **Where.** Tools, Config history in the app (a local vault or a remote one), `unv history` on a local or remote vault; one dispatcher answers all three. Owner only.
 
 Not built: restoring a snapshot into chunks (the parsers are in the app; `--out` writes the old file for you to deploy) and diffing a node's live file (the hub only knows its hash).
-
----
 
 ## Blast radius
 
@@ -916,8 +846,6 @@ Rotate these and nothing else:
 - **Local runs are logged outside the audit chain.** `unv exec`, anything written with `--out`, and revealed exports append to a bounded ring (`materialisations.jsonl` beside `sessions.json`: 0600, newest 5,000 records) naming entries, fields and fingerprints, never values. `get --reveal` and the app's copy buttons are not logged: the log is evidence of what the CLI did here, not of what a compromised user could have done.
 - **The command rotates the vault's copy.** Revoke the old credential at its issuer too; the entry's console link is printed when it has one. In the app it is the Blast radius button on each node in Tools, Nodes.
 
----
-
 ## Stack integrations
 
 Prometheus (`prometheus.yml`), Grafana (provisioned datasources) and Homepage (`services.yaml`) are project types whose output is described by a JSON file (`vault-core/data/stack-adapters.json`) rather than hand-written code. Create one from the project type list (they are experimental: enable them in Settings), add chunks, then `unv project export NAME --format prometheus` or push it to a node. `unv check` applies each integration's own rules. `vscode-extension/` completes `${Provider/FIELD}` references in an editor and scans a file for exposed secrets.
@@ -934,28 +862,24 @@ Data and hash are written inside one `BEGIN IMMEDIATE` transaction. Two separate
 
 Since schema v2 the vault is stored one row per entry and project, and a save returning a version ending in `+merged` means another writer's changes were folded in. The server compares against the rows the writer last read: an entry you did not touch keeps whatever the other writer did, two edits to different entries both survive, and only an entry both sides changed differently is a conflict, named in the error. The first open of an older vault converts it in one transaction and leaves `vault.db.v1.bak`, which `unv doctor` tells you to delete once you are satisfied (it holds the same secrets in the old format).
 
----
-
 ## Docker
 
 ```bash
 docker run -d -p 8743:8743 \
-  -v envv-data:/data \
+  -v unv-data:/data \
   -e UNV_PASSWORD=... \
   ghcr.io/darthdemono/unenverse/unv-server:latest
 ```
 
-Idle RSS is 1.32 MiB on a four-core host, and 1.36 MiB after an Argon2id unlock. It was 3.99 MiB before Phase 15, and the difference is worth explaining because none of it was application code.
+Idle RSS is 1.32 MiB on a four-core host, and 1.36 MiB after an Argon2id unlock. The figure comes from three runtime settings rather than from application code:
 
-- tokio ran one worker per CPU. Now two, tunable with `UNV_WORKER_THREADS`, with 1 MB stacks.
+- The server runs two tokio workers with 1 MB stacks instead of one per CPU. Tune it with `UNV_WORKER_THREADS`.
 - `MALLOC_ARENA_MAX=2`. glibc gives each thread up to eight arenas per core, and each reserves a 64 MB heap it never fully returns. The saving scales with the host's core count, which is why this looked fine on a laptop and awful on a build server.
 - `MALLOC_TRIM_THRESHOLD_` so the 64 MB Argon2id buffer returns to the OS at once instead of staying resident for the life of the process.
 
 Compose sets `mem_limit: 256m`, which is two concurrent Argon2id unlocks without the OOM killer turning a login into a restart, plus `shm_size: 16m`.
 
-The healthcheck opens the port rather than running `--version`, because a wedged process still answers `--version` perfectly happily. Phase 20 added `/api/health` on top of that: it reports liveness and lock state without leaking counts, and it is what a supervisor should watch.
-
----
+The healthcheck opens the port rather than running `--version`, because a wedged process still answers `--version` perfectly happily. `/api/health` goes further: it reports liveness and lock state without leaking counts, and it is what a supervisor should watch.
 
 ## Multiple users
 
@@ -974,8 +898,6 @@ unv user class deploy Deployers
 Classes are named permission templates. A class expression and an individual expression are ANDed, so a class restriction cannot be undone by an individual grant. That AND is also why an absent expression means "no grant" rather than "no restriction": treating absence as true would give a user with no permissions at all `true AND true`, and therefore everything.
 
 Capability flags (`cap_manage_users`, `cap_manage_classes`, `cap_delete_projects`) and an authority tier stop a user granting themselves more than they hold.
-
----
 
 ## Permission expressions
 
@@ -1012,8 +934,6 @@ It is off by default, and existing users are untouched by the migration. A relea
 
 `unv perm show` prints the effective expression as well as the stored one, because an operator who has just enabled strict mode and sees an unchanged rule will reasonably conclude the flag did nothing.
 
----
-
 ## The security model
 
 What it protects against: someone with your disk. The database is encrypted at rest, the key is derived from a password that is never stored, and it is zeroed on lock.
@@ -1036,12 +956,6 @@ Reads are deliberately not audited. Every `GET /api/vault` used to write a row, 
 
 **Vault data is untrusted input.** It arrives as JSON from SQLCipher, from a server somebody else runs, or from an imported backup. TypeScript union types are erased at runtime, so every field is escaped before rendering, including ones typed as unions. Only `http:` and `https:` URLs become clickable links, because a `javascript:` URL in an `api_url` field was a real stored-XSS vector.
 
-### Things deliberately removed
-
-- **TOTP was removed in Phase 7** because nothing in the product ever reached it — no enrollment surface, no CLI verb, no UI, so the only thing the code did was carry a schema column. It came back in Phase 19 with all three, and on the terms this list predicted: sub-user login only. The owner authenticates by deriving the key, so there is nothing for a second factor to gate, and that refusal lives in `vault-core` where the app and the CLI cannot disagree about it.
-- **A global paste hotkey.** `Ctrl+Shift+V` intercepted the system paste shortcut and caused a lock. Gone.
-- **Reset from the unlock screen.** A button that destroys the vault should not sit on the screen you see before you have proven you own it.
-
 ### Closed oracles
 
 - `/api/vault` returned `200` with `{"api_keys": []}` when no data existed. It returns 404 now, since the first response told an unauthenticated caller the vault existed and was empty.
@@ -1051,42 +965,27 @@ Reads are deliberately not audited. Every `GET /api/vault` used to write a row, 
 - `/api/vault/expiring` returned full secrets to non-owners.
 - `filter_vault_for_user` leaked the complete category taxonomy to users who could see none of it.
 
-### Correctness bugs that were security bugs
-
-Not everything on this list looks like a vulnerability at first glance.
-
-- Comparing legacy SHA-256 password hashes with `==` was a timing attack. It is an XOR fold now.
-- Bulk delete used array indices to identify entries. Splicing the array between capturing an index and using it retargets the operation onto a neighbour, so it destroyed the wrong secrets. Everything is id-keyed now, which is the single most repeated lesson in this codebase.
-- The four exporters people actually deploy ignored `disabled`, so a WireGuard peer you had disabled still went into `wg0.conf` and the tunnel kept trusting it.
-- Six of the newer exporters never resolved `${refs}`, so a `.pgpass` shipped the literal text `${DB/password}` as the password.
-- The rate limiter counted every request rather than every failure, so ordinary use locked you out.
-- Opening a vault whose salt had gone missing generated a fresh one, which reported "wrong password" forever and destroyed the evidence that anything else had happened.
-
----
-
 ## Where your files live
 
 On Linux:
 
 |                    | Path                                                                                         |
 | ------------------ | -------------------------------------------------------------------------------------------- |
-| Database           | `~/.local/share/io.envvault/vault.db`                                                        |
-| Salt               | `~/.local/share/io.envvault/vault.salt`                                                      |
+| Database           | `~/.local/share/io.unenverse/vault.db`                                                       |
+| Salt               | `~/.local/share/io.unenverse/vault.salt`                                                     |
 | Settings           | The webview's local storage (themes, layout, copy settings). Not in the vault, not encrypted |
-| Provider catalogue | `~/.local/share/io.envvault/catalogue.json`, re-verified on every load                       |
+| Provider catalogue | `~/.local/share/io.unenverse/catalogue.json`, re-verified on every load                      |
 | CLI sessions       | `$XDG_STATE_HOME/envv/sessions.json`, mode 0600                                              |
 | Pool state         | Beside the sessions file, mode 0600                                                          |
 
 On Windows the CLI keeps sessions in `%LOCALAPPDATA%` rather than the roaming profile, since a cached session token should not follow you onto another machine.
 
-> **If you used this when it was called API Vault:** the identifier changed from `io.apivault` to `io.envvault`. Move the directories before launching the renamed build, or it will greet you as a first-time user and offer to create an empty vault.
+> **If you used this when it was called API Vault:** the identifier changed from `io.apivault` to `io.unenverse`. Move the directories before launching the renamed build, or it will greet you as a first-time user and offer to create an empty vault.
 >
 > ```bash
-> mv ~/.local/share/io.apivault ~/.local/share/io.envvault
-> mv ~/.config/io.apivault      ~/.config/io.envvault
+> mv ~/.local/share/io.apivault ~/.local/share/io.unenverse
+> mv ~/.config/io.apivault      ~/.config/io.unenverse
 > ```
-
----
 
 ## Building from source
 
@@ -1136,9 +1035,9 @@ npm run format:rust     # cargo fmt
 cargo test --workspace
 ```
 
----
-
 ## Development
+
+Run `npm run preflight` before pushing. It runs the same gates as CI: `cargo fmt --check`, clippy with warnings denied, the Rust and TypeScript tests, lint, type check and a production build. Enable the formatting hook once with `git config core.hooksPath .githooks`.
 
 ### Linting and formatting
 
@@ -1146,15 +1045,11 @@ ESLint 10 flat config, type-aware through an explicit `project: ['./tsconfig.jso
 
 Three exclusions are load-bearing, and none of them are laziness.
 
-- **`index.html`** is in `.prettierignore`. A formatter has already silently deleted an element from it once (`#new-category-form`, Phase 3), and the app queries ids that no tool can prove are still present.
+- **`index.html`** is in `.prettierignore`. A formatter has already silently deleted an element from it once (`#new-category-form`), and the app queries ids that no tool can prove are still present.
 - **`tests/fixtures/`** is excluded. Those files _are_ the assertion. Reformatting one makes both parity suites fail against a file that no longer describes any real config format.
 - **`docs/` and `site/`** are generated.
 
 Two ESLint rules are off, with the evidence in the config. `no-unnecessary-type-assertion` and `non-nullable-type-assertion-style` misread the generic DOM helpers: the checker infers the type parameter from the assertion's own context, so every `as HTMLSelectElement` looks redundant. Running `--fix` removed about 170 of them and produced 130-plus TS2339 errors in a tree that had just typechecked clean. A lint rule whose autofix does not typecheck is worse than no rule.
-
-### Lint is at zero
-
-ESLint runs with `--max-warnings 0` and the former backlog of 501 warnings and 236 suppressed errors is gone: IPC results and parsed JSON are `unknown` narrowed at the boundary, and every floating or misused promise was a decision (`void` with a reason, or a `.catch` that tells the user), not a mechanical edit. There is no suppressions file any more. `innerHTML` is banned outright.
 
 ### Versioning
 
@@ -1180,7 +1075,7 @@ npm run docs:rust   # cargo doc over the four crates
 
 Two tools because there is no one tool. Doxygen has no Rust front end and rustdoc has no TypeScript one.
 
-**N.B.** Do not put an outer `///` doc on a `pub mod` line when the module file already has `//!` docs. rustdoc merges the two and resolves the combined text in the _parent's_ scope, so every intra-doc link written inside the module fails with "no item named ... in scope", and `-D warnings` turns that into a failed docs build. This note was written after it happened to `vault-core::entropy`, and it happened again to `vault-core::totp` two phases later — the comment sits in `lib.rs` two declarations above the line that reintroduced it.
+Note: do not put an outer `///` doc on a `pub mod` line when the module file already has `//!` docs. rustdoc merges the two and resolves the combined text in the _parent's_ scope, so every intra-doc link written inside the module fails with "no item named ... in scope", and `-D warnings` turns that into a failed docs build.
 
 ### The UI lab
 
@@ -1196,15 +1091,9 @@ So there are two specs. `ui-lab/layout.spec.ts` boots the app against a delibera
 
 Both are gitignored outputs; the harness is committed. The first full run triaged 1,155 findings to zero (a 24-pixel target floor in `a11y.css` and three CSS fixes), and the lab is meant to run again after every major release.
 
-### The efficacy probe
+### UI and CLI parity
 
-Layout is not the only way a control fails. A button can exist, be reachable and be styled perfectly while doing nothing, or claim success without having done anything. `tests/efficacy*.test.ts` press every `button[id]`, every `data-action` on the card grid and the config view, every closer with its dialog open, every Settings control (it must change a stored setting after Save) and the health, icon and feed surfaces. A control with no visible effect fails the test unless it is listed, with a reason, in a `*-silent.json` allow-list, and a listed control that starts working fails too. It found sixteen silent buttons on its first run, pools that stopped collapsing beside a bundle, a banner whose Accept did nothing, and chunk reordering that changed the exported order while the screen stayed the same.
-
-### The docs site and decision records
-
-`book/` is an mdBook (roadmap, security model, CLI guide, phase designs) published to GitHub Pages beside the API references. It carries 139 decision records (`book/src/adr/NNNN-*.md`) that source comments cite as `ADR-0138`; `tests/adr-refs.test.ts` fails on a citation with no record, or one whose status is superseded with no successor. Planning notes under `handoff/` and `review/` stay private.
-
----
+The rule is that whatever the app can do the CLI can do, and the reverse (a rule about capability, not interaction: sidebar order and the undo toast have no CLI meaning). It is checked rather than promised. `tests/fixtures/parity/capabilities.json` classifies every CLI command (read live from `unv describe`) and every Tauri command into a capability marked `both`, a tracked gap, or an exemption with a written reason, and `unv-cli/tests/capabilities.rs` fails when a command belongs to no capability, when the map names something that does not exist, or when a command offered as "the UI has it" is never invoked by the frontend. Exemptions are the CLI-only things by nature (`exec`, `watch`, `shield`, `use`, shell completion, the session cache) and a handful of pure developer utilities. The check found six dead Tauri commands on its first run.
 
 ## Continuous integration
 
@@ -1220,7 +1109,7 @@ That check is the only guard, deliberately. Re-runs, empty commits and no-op mer
 
 It also builds a GHCR image for `unv-server`.
 
-**N.B.** Windows vendors OpenSSL, whose `Configure` is a Perl program needing `Locale::Maketext::Simple`. Git for Windows' MSYS perl does not have it. PATH ordering does not settle this, because `shell: bash` is Git bash and its msys runtime injects its own `/usr/bin` during PATH conversion. Both workflows set `OPENSSL_SRC_PERL` outright, which `openssl-src` reads before falling back to PATH.
+Note: Windows vendors OpenSSL, whose `Configure` is a Perl program needing `Locale::Maketext::Simple`. Git for Windows' MSYS perl does not have it. PATH ordering does not settle this, because `shell: bash` is Git bash and its msys runtime injects its own `/usr/bin` during PATH conversion. Both workflows set `OPENSSL_SRC_PERL` outright, which `openssl-src` reads before falling back to PATH.
 
 ### `docs.yml`, the site on GitHub Pages
 
@@ -1236,85 +1125,6 @@ One job per tool. It regenerates the golden fixtures, fails if they were stale, 
 
 Every job carries a control case. If the validator accepts deliberate nonsense, the job fails. A validator that accepts anything produces a green tick that means nothing, and a green tick that means nothing is worse than no check, because it converts "unknown" into "fine".
 
----
-
-## UI and CLI parity
-
-The rule is that whatever the app can do the CLI can do, and the reverse (a rule about capability, not interaction: sidebar order and the undo toast have no CLI meaning). It is checked rather than promised. `tests/fixtures/parity/capabilities.json` classifies every CLI command (read live from `unv describe`) and every Tauri command into a capability marked `both`, a tracked gap, or an exemption with a written reason, and `unv-cli/tests/capabilities.rs` fails when a command belongs to no capability, when the map names something that does not exist, or when a command offered as "the UI has it" is never invoked by the frontend. Exemptions are the CLI-only things by nature (`exec`, `watch`, `shield`, `use`, shell completion, the session cache) and a handful of pure developer utilities. The check found six dead Tauri commands on its first run.
-
----
-
-## What is not finished
-
-Every project has a list like this. Most do not publish it.
-
-- **Real-window checks.** Everything is tested in jsdom and the layout lab, but several things have never run in a real Tauri window: the stored-code ticker on a remote vault, keyboard reorder and drag in the Settings sidebar editor, Caps Lock from the operating system's own state, emoji input under IBus and fcitx5, and the newest panes (Enrich, Unique IDs, the archive and restore buttons).
-- **Things only the maintainer can do.** Enable GitHub Pages and the repository's security settings, add the `CATALOGUE_SIGNING_KEY` secret, and confirm the published catalogue URL.
-- **The provider catalogue is still the compiled table.** It can add issuers without a release now, but it holds only the ~48 prefixes that were already built in. Curating more has to come from each issuer's own documentation, with a source and a date per prefix.
-- **`unv` collides with an unrelated product of the same name** at envvault.dev, which has an incompatible command tree. This has to be decided before 1.0, because afterwards it is a breaking change.
-- **The audit table has no index and is read whole,** and retention is harder than it looks: pruning rows breaks the chain that makes the log tamper-evident, so any scheme needs a checkpoint record attesting to the pruned prefix.
-- **Deltas and chunk rows** are built: the app sends only the entries and projects that changed, and a project's chunks are rows of their own. The server still loads the whole document to apply a delta, and the app does not yet load an entry's version history lazily.
-- **Not yet done:** the pre-1.0 penetration test against a real deployment, the bundle acceptance test on your own Discord config, and the repository settings only the maintainer can change (see `review/review-02.md`).
-- **SVG is refused as a custom icon.** Permanently and on purpose, listed here only so nobody files it as a bug.
-
----
-
-## How it got here
-
-The sections above describe the current state. This is the order it arrived in, for anyone reading the git history.
-
-| Phase      | Delivered                                                                                                                                                                                                   |
-| ---------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 1          | Tauri wrapper, static frontend                                                                                                                                                                              |
-| 2          | SQLCipher and Argon2id encrypted storage, unlock flow                                                                                                                                                       |
-| 3          | TypeScript and Vite, inline-handler elimination, structured project types, audit table, version history                                                                                                     |
-| 4          | Remote vault server and the first CLI                                                                                                                                                                       |
-| 5          | Multi-user RBAC, user classes, remote panel, health dashboard                                                                                                                                               |
-| 5.1        | Security hardening: Argon2id for sub-users, failure-only rate limiting, restricted CORS                                                                                                                     |
-| 6          | TLS on the server, certificate pinning, tag sidebar filter, YAML formatter, re-lock overlay                                                                                                                 |
-| 7          | Correctness pass: stable entry ids, audit log viewer, offline fonts, session expiry, tests and CI                                                                                                           |
-| 8          | Owner as a real user row, audit attribution, permission scoping, enumeration oracle closed                                                                                                                  |
-| 9          | Permission expression language with AND, OR and NOT, plus a live editor                                                                                                                                     |
-| 10         | Open to LAN, hosting the vault from the desktop app                                                                                                                                                         |
-| 10.1       | Lost-update fix: compare-and-swap on every vault write                                                                                                                                                      |
-| 11         | Frontend test suite and a module-by-module audit. 66 bugs fixed                                                                                                                                             |
-| 12         | UX persistence, window state, the LAN wrong-vault gate, experimental project types                                                                                                                          |
-| 13         | CLI parity, exporter golden fixtures, which found the disabled-chunk and nginx `${ref}` export bugs                                                                                                         |
-| 14         | The agent-safe CLI: redaction, JSON envelope, exit codes, `describe`                                                                                                                                        |
-| 15         | Custom icons, live enrichment, Windows and cross-distro portability, Docker memory                                                                                                                          |
-| 16         | ESLint, Prettier and clippy, auto-versioning, release and docs CI, key pools, structured rate limits                                                                                                        |
-| 17         | CLI certificate pinning on a shared verifier, entropy sources, context zeroize, `backup archive`, strict write scoping                                                                                      |
-| 18         | `unv doctor`, vendor importers, selective reads, chunk test coverage, and all eleven project types graduated on live-service evidence                                                                       |
-| 19         | UX and accessibility: the first-run wizard, TOTP for sub-users, the mechanical accessibility contract, `unv use`                                                                                            |
-| 20         | Operability: `tracing` in all three binaries, a real `/api/health`, `Retry-After` and request ids on every error                                                                                            |
-| 21         | `${Provider/ID}` no longer resolves to the entry's UUID; a deny-list and an alias arm on both sides                                                                                                         |
-| 22         | TOTP as a stored secret; 22.2 added HOTP, Steam Guard, the next code and the Authenticator panel                                                                                                            |
-| 23         | Credential shape: value roles, one name template, copy profiles, cookies, file credentials, collision detection                                                                                             |
-| 24         | Shipped-feature defects (blank remote codes, exports that wrote nothing), lint to zero, Dependabot, CodeQL, `cargo-deny`, the docs site                                                                     |
-| 24.1-24.5  | Composites and bundles, the legible grid, calendar feeds, the unique-ID registry, the type registry and web sessions                                                                                        |
-| 25         | Real-router tests for the server and one shared `permex` fixture                                                                                                                                            |
-| 26         | Redaction outward: `unv shield`, `unv scan --exposed`, file-only exposure reports                                                                                                                           |
-| 27         | The UI lab's first full run, triaged from 1,155 findings to zero                                                                                                                                            |
-| 28         | Escape by construction: the `html` tagged template and the `innerHTML` ban                                                                                                                                  |
-| 29         | The config compiler: `unv check` and the config-view panel                                                                                                                                                  |
-| 30         | Storage v2: row-per-entry, per-row merge of stale writers, a one-way conversion with a backup                                                                                                               |
-| 31         | The signed provider catalogue; 31.1 and 31.2 added the Settings row and catalogue axes                                                                                                                      |
-| 32         | The efficacy audit: a probe that presses every control; 32.1 and 32.2 extended it to cards, config view, closers, settings and surfaces                                                                     |
-| 33         | UI and CLI parity made mechanical; Enrich, Diagnose, Unique IDs, import and archive in the app; `unv diff`, `reset-vault`, presets, `--env-case` in the CLI                                                 |
-| 34         | Nodes: a hub and an agent, signed requests, transactional apply, push and pull, Tools, Nodes and `unv node`                                                                                                 |
-| 35         | The config time machine: a snapshot of every rendered config, diffs with secrets as fingerprints, retention behind a verifiable checkpoint, `unv history` and Tools, Config history                         |
-| 36         | Blast radius: `unv blast-radius`, per-snapshot exposure records, a bounded local materialisation log, and a Blast radius button on each node                                                                |
-| 37         | Approval: a per-node policy that holds pushes for a human, requests bound to exact bytes, a diff to review, and a hub-signed approval the node checks before it writes                                      |
-| 38         | Stack integrations: Prometheus, Grafana datasources and Homepage services as data descriptors, checked by `unv check`, pushable to nodes, plus a VS Code extension                                          |
-| 38.1       | A Nextcloud `config.php` importer, and `enrich --online` for a self-hosted Grafana service-account token                                                                                                    |
-| 30.1, 30.2 | Delta saves (`PATCH /api/vault`), a project's chunks as rows of their own (schema v3), change history kept by age, parallel row parsing                                                                     |
-| 34.1, 37.1 | A hub that dials a listening node; approvals signed on the owner's device                                                                                                                                   |
-| 39         | Pentest review of Phases 34 to 38 at code level; residual risks written down                                                                                                                                |
-| 41         | Follow-up round: delta saves, chunk rows, listening nodes, device-signed approvals, Nextcloud import and the 24.5 leftovers (rows above)                                                                    |
-| 42         | Renamed UnENVerse (CLI `unv`, server `unv-server`, `UNV_*` variables; `ENVV_*` still read); a Docker viewer that drives the real window and screenshots it; restore a snapshot or a node's file into chunks |
-
----
-
 ## License
 
-MIT. See [LICENSE](LICENSE).
+UnENVerse is released under the [Apache License 2.0](LICENSE). See [NOTICE](NOTICE) for attribution and [CHANGELOG.md](CHANGELOG.md) for the release history.

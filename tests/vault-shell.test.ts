@@ -201,7 +201,7 @@ describe('card context menu targets', () => {
     st.vault.api_keys = [bundle, first, second];
     st.bulkMode = true;
     renderGrid();
-    const toggle = vi.spyOn(window, '__envvBulkToggle');
+    const toggle = vi.spyOn(window, '__unvBulkToggle');
 
     document.querySelector<HTMLElement>('[data-action="bundle-bulk-toggle"]')!.click();
 

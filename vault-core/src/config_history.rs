@@ -812,7 +812,7 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let path = std::env::temp_dir().join(format!("envv-hist-conc-{n}.db"));
+        let path = std::env::temp_dir().join(format!("unv-hist-conc-{n}.db"));
         {
             let c = Connection::open(&path).unwrap();
             crate::init_schema(&c).unwrap();

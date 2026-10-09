@@ -69,13 +69,13 @@ fn data_dir_or_exit() -> PathBuf {
     }
 }
 
-/// Returns the vault.db path: `--db-path`, else `io.envvault/vault.db` under the
+/// Returns the vault.db path: `--db-path`, else `io.unenverse/vault.db` under the
 /// platform data directory (`~/.local/share` on Linux, `%APPDATA%` on Windows).
 pub fn default_db_path() -> PathBuf {
     DB_PATH
         .get()
         .cloned()
-        .unwrap_or_else(|| data_dir_or_exit().join("io.envvault").join("vault.db"))
+        .unwrap_or_else(|| data_dir_or_exit().join("io.unenverse").join("vault.db"))
 }
 
 /// Returns the vault.salt path: `--salt-path`, else the one beside vault.db.
@@ -83,7 +83,7 @@ pub fn default_salt_path() -> PathBuf {
     SALT_PATH
         .get()
         .cloned()
-        .unwrap_or_else(|| data_dir_or_exit().join("io.envvault").join("vault.salt"))
+        .unwrap_or_else(|| data_dir_or_exit().join("io.unenverse").join("vault.salt"))
 }
 
 // ── Password helper ───────────────────────────────────────────────────────────

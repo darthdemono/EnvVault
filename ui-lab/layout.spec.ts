@@ -167,11 +167,11 @@ async function openTool(page: Page, tool: string) {
  */
 async function boot(page: Page) {
   await page.addInitScript((vault) => {
-    sessionStorage.setItem('envvault', JSON.stringify(vault));
+    sessionStorage.setItem('unenverse', JSON.stringify(vault));
     // Phase 19 added a first-run wizard, which is modal and covers everything
     // this file exists to measure. The lab was written before it and every
     // screen timed out at 30s against an overlay the audit never mentions.
-    localStorage.setItem('envvault-settings', JSON.stringify({ onboardingCompleted: true }));
+    localStorage.setItem('unenverse-settings', JSON.stringify({ onboardingCompleted: true }));
   }, SEED_VAULT);
   const errors: string[] = [];
   page.on('pageerror', (e) => errors.push(String(e)));

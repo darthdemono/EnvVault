@@ -427,7 +427,7 @@ mod commands {
     // Pool state (cursor, cooldowns, use counts) lives in `pools.json` in the
     // per-user state directory, NOT in the vault — see `vault_core::pool` for
     // why. The CLI writes the same file, and the app's `app_data_dir` resolves
-    // to the same `io.envvault` directory the CLI defaults to, so a key reported
+    // to the same `io.unenverse` directory the CLI defaults to, so a key reported
     // rate limited from CI shows as cooling here.
     //
     // Note what does NOT cross this boundary: the frontend sends only the
@@ -1761,7 +1761,7 @@ mod commands {
             .file_name()
             .and_then(|n| n.to_str())
             .filter(|n| !n.is_empty())
-            .unwrap_or("envvault-export")
+            .unwrap_or("unenverse-export")
             .to_string();
 
         let stem = Path::new(&safe_name)
@@ -1861,7 +1861,7 @@ mod commands {
 /// back on.
 ///
 /// So: every variable is a default, not an override. Anything already set in the
-/// environment wins, which makes `WEBKIT_DISABLE_COMPOSITING_MODE=0 envvault` a
+/// environment wins, which makes `WEBKIT_DISABLE_COMPOSITING_MODE=0 unenverse` a
 /// working escape hatch instead of a no-op.
 #[cfg(target_os = "linux")]
 fn configure_linux_webkit() {
@@ -1896,7 +1896,7 @@ pub fn run() {
     // The rule from `vault_core::telemetry` applies here too and matters most in
     // this binary: log fingerprints, entry ids and provider names — never a
     // stored value, never the master password, never a session token.
-    vault_core::telemetry::init("envvault-desktop", "info");
+    vault_core::telemetry::init("unenverse-desktop", "info");
 
     #[cfg(target_os = "linux")]
     configure_linux_webkit();
@@ -2056,7 +2056,7 @@ mod export_file_tests {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let path = std::env::temp_dir().join(format!("envvault-export-test-{nanos}"));
+        let path = std::env::temp_dir().join(format!("unenverse-export-test-{nanos}"));
         fs::create_dir_all(&path).unwrap();
         path
     }

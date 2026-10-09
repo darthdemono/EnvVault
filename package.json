@@ -2,7 +2,7 @@
   "name": "unenverse",
   "version": "0.42.1",
   "private": true,
-  "license": "MIT",
+  "license": "Apache-2.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -27,6 +27,7 @@
     "ui-lab:report": "cat ui-lab/.artifacts/layout-findings.md",
     "docs": "node scripts/docs.mjs",
     "docs:rust": "cargo doc --workspace --no-deps",
+    "preflight": "bash scripts/preflight.sh",
     "check": "npm run version:check && npm run format:check && npm run lint && npm run typecheck && npm test",
     "docs:all": "npm run docs && npm run docs:rust"
   },

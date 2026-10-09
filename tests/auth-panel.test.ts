@@ -56,9 +56,9 @@ describe('the panel is the only surface — the sidebar section is gone (A2)', (
   });
 
   it('never re-adds the section key to a persisted sidebarSections list', () => {
-    localStorage.setItem('envvault-sb-migrated-totp', '');
+    localStorage.setItem('unenverse-sb-migrated-totp', '');
     localStorage.setItem(
-      'envvault-settings',
+      'unenverse-settings',
       JSON.stringify({ sidebarSections: ['all', 'authenticator', 'prefixes'] }),
     );
     return Settings.init().then(() => {

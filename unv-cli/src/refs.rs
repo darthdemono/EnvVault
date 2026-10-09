@@ -198,7 +198,7 @@ pub fn find_entry<'a>(entries: &'a [Value], prov: &str) -> Option<&'a Value> {
 /// CLI export that ignored it would write a different value than the UI does for
 /// the same reference.
 pub fn env_copy_field() -> String {
-    let path = dirs::config_dir().map(|d| d.join("io.envvault").join("settings.json"));
+    let path = dirs::config_dir().map(|d| d.join("io.unenverse").join("settings.json"));
     let field = path
         .filter(|p| p.exists())
         .and_then(|p| std::fs::read_to_string(p).ok())

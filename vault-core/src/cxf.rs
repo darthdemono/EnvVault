@@ -32,9 +32,9 @@
 //!
 //! Every UnENVerse type without a native CXF shape — the majority of the 26 in
 //! `secret_types` — exports as `custom-fields` carrying an
-//! `_envvault_type` field, so another manager sees labelled fields and
+//! `_unenverse_type` field, so another manager sees labelled fields and
 //! UnENVerse-to-UnENVerse round-trips losslessly. Import of `custom-fields`
-//! reads `_envvault_type` back when present and falls back to `extra_vars`
+//! reads `_unenverse_type` back when present and falls back to `extra_vars`
 //! otherwise, so a CXF file honestly written by some other tool still imports
 //! as something rather than being refused.
 
@@ -170,7 +170,7 @@ fn custom_fields_credential(entry: &Value) -> CxfCredential {
     let mut fields = Vec::new();
     let secret_type = s(entry, "secretType").unwrap_or_else(|| "api_key".to_string());
     fields.push(CxfField {
-        name: "_envvault_type".to_string(),
+        name: "_unenverse_type".to_string(),
         value: secret_type,
         field_type: None,
     });
@@ -211,11 +211,11 @@ fn custom_fields_credential(entry: &Value) -> CxfCredential {
 }
 
 /// CXF has no bundle-level fields; this extension preserves parent locals.
-const BUNDLE_LOCAL_ESCAPE: &str = "__envvault_local__";
+const BUNDLE_LOCAL_ESCAPE: &str = "__unenverse_local__";
 
 fn encode_bundle_local_name(name: &str) -> String {
-    if name == "_envvault_type"
-        || name == "_envvault_bundle"
+    if name == "_unenverse_type"
+        || name == "_unenverse_bundle"
         || name.starts_with(BUNDLE_LOCAL_ESCAPE)
     {
         format!("{BUNDLE_LOCAL_ESCAPE}{name}")
@@ -230,7 +230,7 @@ fn decode_bundle_local_name(name: &str) -> &str {
 
 fn bundle_locals_credential(entry: Option<&Value>) -> CxfCredential {
     let mut fields = vec![CxfField {
-        name: "_envvault_bundle".into(),
+        name: "_unenverse_bundle".into(),
         value: "true".into(),
         field_type: None,
     }];
@@ -399,7 +399,7 @@ fn entries_from_item(item: &CxfItem, mut new_id: impl FnMut() -> String, now: &s
     let is_bundle = non_totp.iter().any(|credential| match credential {
         CxfCredential::CustomFields { fields } => fields
             .iter()
-            .any(|field| field.name == "_envvault_bundle" && field.value == "true"),
+            .any(|field| field.name == "_unenverse_bundle" && field.value == "true"),
         _ => false,
     });
 
@@ -452,7 +452,7 @@ fn entries_from_item(item: &CxfItem, mut new_id: impl FnMut() -> String, now: &s
                 fields
                     .iter()
                     .filter(|field| {
-                        field.name != "_envvault_type" && field.name != "_envvault_bundle"
+                        field.name != "_unenverse_type" && field.name != "_unenverse_bundle"
                     })
                     .map(|field| {
                         json!({ "key": decode_bundle_local_name(&field.name), "value": field.value })
@@ -585,16 +585,16 @@ fn entry_from_credential(id: &str, title: &str, cred: &CxfCredential, now: &str)
             e
         }
         CxfCredential::CustomFields { fields } => {
-            let envvault_type = fields
+            let unenverse_type = fields
                 .iter()
-                .find(|f| f.name == "_envvault_type")
+                .find(|f| f.name == "_unenverse_type")
                 .map(|f| f.value.as_str())
                 .filter(|t| crate::secret_types::find(t).is_some())
                 .unwrap_or("api_key");
-            let mut e = base_entry(id, title, envvault_type, now);
+            let mut e = base_entry(id, title, unenverse_type, now);
             let mut vars = vec![];
             for f in fields {
-                if f.name == "_envvault_type" {
+                if f.name == "_unenverse_type" {
                     continue;
                 }
                 match f.name.as_str() {
@@ -681,7 +681,7 @@ mod tests {
             CxfCredential::CustomFields { fields } => {
                 assert!(fields
                     .iter()
-                    .any(|f| f.name == "_envvault_type" && f.value == "database"));
+                    .any(|f| f.name == "_unenverse_type" && f.value == "database"));
             }
             _ => panic!("expected custom-fields"),
         }
@@ -752,7 +752,7 @@ mod tests {
                                 field_type: Some("text".into()),
                             },
                             CxfField {
-                                name: "_envvault_type".into(),
+                                name: "_unenverse_type".into(),
                                 value: "api_key".into(),
                                 field_type: None,
                             },
@@ -803,7 +803,7 @@ mod tests {
             "id": "b1", "provider": "Discord", "secretType": "bundle",
             "extra_vars": [
                 { "key": "guild_id", "value": "123" },
-                { "key": "_envvault_bundle", "value": "true" },
+                { "key": "_unenverse_bundle", "value": "true" },
             ],
         });
         let doc = export(&[bundle]);
@@ -812,7 +812,7 @@ mod tests {
         assert_eq!(imported.len(), 1);
         assert_eq!(imported[0]["secretType"], "bundle");
         assert_eq!(imported[0]["extra_vars"][0]["key"], "guild_id");
-        assert_eq!(imported[0]["extra_vars"][1]["key"], "_envvault_bundle");
+        assert_eq!(imported[0]["extra_vars"][1]["key"], "_unenverse_bundle");
         assert_eq!(imported[0]["extra_vars"][1]["value"], "true");
     }
 }

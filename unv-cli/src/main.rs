@@ -2,7 +2,7 @@
 //!
 //! Works in two modes:
 //! - **Local**: reads the Tauri app's SQLCipher DB directly
-//!   (`~/.local/share/io.envvault/vault.db`).
+//!   (`~/.local/share/io.unenverse/vault.db`).
 //! - **Remote**: connects to a running `unv-server` via HTTP.
 //!
 //! Set `UNV_SERVER_URL` or pass `--server` to switch to remote mode. Password is
@@ -252,7 +252,7 @@ enum Commands {
         #[arg(long)]
         project: Option<String>,
         /// Name for the generated Kubernetes Secret (k8s format only).
-        #[arg(long, default_value = "envvault")]
+        #[arg(long, default_value = "unenverse")]
         name: String,
         /// Write to this file instead of stdout.
         #[arg(long, short = 'o')]
@@ -557,7 +557,7 @@ enum Commands {
         #[arg(long)]
         keep_folders: bool,
     },
-    /// Pin a project and environment to this directory (writes `.envv.json`).
+    /// Pin a project and environment to this directory (writes `.unv.json`).
     ///
     /// Later commands run here inherit them, so `--project` stops being typed
     /// on every line. An explicit flag still wins, and `UNV_PROJECT` /
@@ -573,7 +573,7 @@ enum Commands {
         /// Print the context in effect and where it came from.
         #[arg(long)]
         show: bool,
-        /// Remove `.envv.json` from this directory.
+        /// Remove `.unv.json` from this directory.
         #[arg(long)]
         clear: bool,
     },
@@ -1896,8 +1896,6 @@ enum PermCmd {
 /// capability test saw as an empty `describe`. Everything runs on a thread with an
 /// explicit stack instead of relying on the platform default.
 fn main() {
-    // Variables set before the rename (`ENVV_*`) keep working.
-    vault_core::compat::adopt_legacy_env();
     let worker = std::thread::Builder::new()
         .name("unv".into())
         .stack_size(32 * 1024 * 1024)
@@ -2081,17 +2079,11 @@ fn run(cli: &Cli) -> CliResult {
         Some(path) => session::read_dotenv(path)?,
         None => Vec::new(),
     };
-    // A compose `.env` written before the rename still says `ENVV_PASSWORD`; the
-    // process-environment shim (`adopt_legacy_env`) does not reach a file read
-    // here, so the legacy spelling is looked up too (the new name wins).
     let dotenv_get = |key: &str| {
-        let legacy = key.replacen("UNV_", "ENVV_", 1);
-        [key, legacy.as_str()].iter().find_map(|k| {
-            dotenv
-                .iter()
-                .find(|(name, _)| name == k)
-                .map(|(_, v)| v.clone())
-        })
+        dotenv
+            .iter()
+            .find(|(k, _)| k == key)
+            .map(|(_, v)| v.clone())
     };
 
     let password = session::resolve_password(

@@ -1,10 +1,10 @@
 {
-  "name": "envvault",
+  "name": "unenverse",
   "displayName": "UnENVerse",
   "description": "References, fingerprints and secret-aware tasks for an UnENVerse vault, through the unv CLI. It never shows a secret value.",
   "version": "0.38.0",
   "publisher": "darthdemono",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "private": true,
   "engines": {
     "vscode": "^1.85.0"
@@ -20,12 +20,12 @@
     "configuration": {
       "title": "UnENVerse",
       "properties": {
-        "envvault.path": {
+        "unenverse.path": {
           "type": "string",
           "default": "unv",
           "description": "The unv executable. The extension runs it with the credentials your shell would use (a cached `unv login` session, or UNV_PASSWORD)."
         },
-        "envvault.scanOnSave": {
+        "unenverse.scanOnSave": {
           "type": "boolean",
           "default": true,
           "description": "On save, warn at each line holding a value that is a secret in the vault."
@@ -76,11 +76,11 @@
     ],
     "commands": [
       {
-        "command": "envvault.refresh",
+        "command": "unenverse.refresh",
         "title": "UnENVerse: Refresh the entry list"
       },
       {
-        "command": "envvault.scanThisFile",
+        "command": "unenverse.scanThisFile",
         "title": "UnENVerse: Check this file for exposed secrets"
       }
     ]

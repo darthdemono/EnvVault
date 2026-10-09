@@ -1865,7 +1865,7 @@ export function openModal(title: string, idx: number) {
   populateProjectSelect();
 }
 
-const DRAFT_KEY = 'envvault-form-draft';
+const DRAFT_KEY = 'unenverse-form-draft';
 
 function _saveDraft() {
   try {

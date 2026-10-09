@@ -135,7 +135,7 @@ fn write_atomic(
     use std::io::Write;
     let dir = path.parent().ok_or("target has no parent directory")?;
     let name = path.file_name().ok_or("target has no file name")?;
-    let tmp = dir.join(format!(".{}.envv-node.tmp", name.to_string_lossy()));
+    let tmp = dir.join(format!(".{}.unv-node.tmp", name.to_string_lossy()));
     let mut opts = std::fs::OpenOptions::new();
     opts.write(true).create(true).truncate(true);
     #[cfg(unix)]
@@ -283,7 +283,7 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let d = std::env::temp_dir().join(format!("envv-apply-{tag}-{n}"));
+        let d = std::env::temp_dir().join(format!("unv-apply-{tag}-{n}"));
         std::fs::create_dir_all(&d).unwrap();
         d
     }

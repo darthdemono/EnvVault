@@ -66,7 +66,7 @@ export async function exportAs(fmt: string) {
       : fmt === 'json'
         ? JSON.stringify(st.vault, null, 2)
         : Exporter.dotenv(keys);
-  const filename = `envvault.${fmt === 'yaml' ? 'yaml' : fmt === 'json' ? 'json' : 'env'}`;
+  const filename = `unenverse.${fmt === 'yaml' ? 'yaml' : fmt === 'json' ? 'json' : 'env'}`;
   // A3: the toast now follows the write rather than the click — see `saveFile`.
   const res = await saveFile(content, filename);
   if (!res.ok) showToast(`Export failed: ${res.error}`, 'error');
@@ -143,7 +143,7 @@ export async function downloadText(content: string, filename: string, okMsg: str
 }
 
 /** Kubernetes Secret manifest (stringData — values kept readable, not base64). */
-export function exportK8sSecret(name = 'envvault') {
+export function exportK8sSecret(name = 'unenverse') {
   const keys = st.vault.api_keys;
   const lines = [
     'apiVersion: v1',
@@ -163,7 +163,7 @@ export function exportTfvars() {
   const lines = keys.map(
     (e) => `${primaryEnvName(e, { case: 'lower' })} = ${JSON.stringify(e.api_key)}`,
   );
-  void downloadText(lines.join('\n'), 'envvault.tfvars', 'Exported .tfvars ✓');
+  void downloadText(lines.join('\n'), 'unenverse.tfvars', 'Exported .tfvars ✓');
 }
 
 // ── Encrypted backup (AES-256-GCM, PBKDF2-SHA256) ──────────────────────────
@@ -241,7 +241,7 @@ export async function exportEncryptedBackup(password: string) {
   });
   void downloadText(
     envelope,
-    `envvault-${new Date().toISOString().slice(0, 10)}.vaultbak`,
+    `unenverse-${new Date().toISOString().slice(0, 10)}.vaultbak`,
     'Encrypted backup exported ✓',
   );
 }

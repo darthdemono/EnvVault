@@ -9,7 +9,7 @@ a library. Three rules make it safe to hand to an automated caller:
 2. **Nothing reads a secret.** `get()` returns fingerprints. To *use* a secret,
    call `exec()` or `render()`, which move the value into a child process or a
    file without it passing through this process at all.
-3. **Exit codes are the control flow.** `EnvvError.code` is a stable string
+3. **Exit codes are the control flow.** `UnvError.code` is a stable string
    ("not_found", "ambiguous", "denied", …), so retry logic never string-matches
    a message.
 
@@ -24,7 +24,7 @@ import subprocess
 from typing import Any, Sequence
 
 
-class EnvvError(RuntimeError):
+class UnvError(RuntimeError):
     """A failed command. `code` is the stable machine class, not the message."""
 
     def __init__(self, code: str, message: str, details: Any = None, exit_code: int = 1):
@@ -65,12 +65,12 @@ class Envv:
         try:
             payload = json.loads(proc.stdout or "{}")
         except json.JSONDecodeError:
-            raise EnvvError("error", (proc.stderr or proc.stdout).strip(), None, proc.returncode)
+            raise UnvError("error", (proc.stderr or proc.stdout).strip(), None, proc.returncode)
 
         if payload.get("ok"):
             return payload.get("data")
         err = payload.get("error", {})
-        raise EnvvError(
+        raise UnvError(
             err.get("code", "error"),
             err.get("message", "unknown error"),
             err.get("details"),

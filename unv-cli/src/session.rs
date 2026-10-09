@@ -44,11 +44,11 @@ pub fn state_file(name: &str) -> PathBuf {
     #[cfg(windows)]
     {
         if let Some(dir) = dirs::data_local_dir() {
-            return dir.join("envv").join(name);
+            return dir.join("unv").join(name);
         }
     }
     if let Some(dir) = std::env::var_os("XDG_STATE_HOME") {
-        return PathBuf::from(dir).join("envv").join(name);
+        return PathBuf::from(dir).join("unv").join(name);
     }
     // No `.` fallback. `sessions.json` holds a live bearer token at 0600, and
     // writing it to the current working directory means dropping a credential
@@ -66,7 +66,7 @@ pub fn state_file(name: &str) -> PathBuf {
         );
         std::process::exit(crate::error::Code::Unavailable as i32);
     };
-    home.join(".local").join("state").join("envv").join(name)
+    home.join(".local").join("state").join("unv").join(name)
 }
 
 fn read_all() -> Value {

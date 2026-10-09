@@ -158,7 +158,7 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let d = std::env::temp_dir().join(format!("envv-matlog-{n}"));
+        let d = std::env::temp_dir().join(format!("unv-matlog-{n}"));
         std::fs::create_dir_all(&d).unwrap();
         d.join("materialisations.jsonl")
     }

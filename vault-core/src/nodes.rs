@@ -1222,7 +1222,7 @@ pub fn approver_seed(dir: &Path) -> Result<String, String> {
 
 /// Where the CLI keeps the device key: the directory the desktop app uses too.
 pub fn default_approver_dir() -> Option<PathBuf> {
-    dirs::data_dir().map(|d| d.join("io.envvault"))
+    dirs::data_dir().map(|d| d.join("io.unenverse"))
 }
 
 /// Signs an approval on the owner's device for exactly one request. The lifetime
@@ -1638,7 +1638,7 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let d = std::env::temp_dir().join(format!("envv-nodes-{tag}-{n}"));
+        let d = std::env::temp_dir().join(format!("unv-nodes-{tag}-{n}"));
         std::fs::create_dir_all(&d).unwrap();
         d
     }

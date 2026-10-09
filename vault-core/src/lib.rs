@@ -50,7 +50,6 @@ pub mod cxf;
 pub mod bundle_import;
 pub mod bundle_scope;
 pub mod catalogue;
-pub mod compat;
 pub mod config_check;
 pub mod oauth;
 pub mod pgp;
@@ -1100,7 +1099,7 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let dir = std::env::temp_dir().join(format!("envvault-test-{tag}-{nanos}"));
+        let dir = std::env::temp_dir().join(format!("unenverse-test-{tag}-{nanos}"));
         fs::create_dir_all(&dir).unwrap();
         dir
     }
@@ -1915,7 +1914,7 @@ mod salt_pairing_tests {
     use super::*;
 
     fn tmp(name: &str) -> std::path::PathBuf {
-        let d = std::env::temp_dir().join(format!("envv-salt-{name}-{}", std::process::id()));
+        let d = std::env::temp_dir().join(format!("unv-salt-{name}-{}", std::process::id()));
         let _ = fs::remove_dir_all(&d);
         fs::create_dir_all(&d).unwrap();
         d

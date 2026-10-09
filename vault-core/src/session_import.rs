@@ -677,7 +677,7 @@ pub fn parse_set_cookie(text: &str, now_unix: i64) -> Result<Capture, String> {
 /// can read it — the same wall `yt-dlp --cookies-from-browser` hits.
 pub fn read_firefox(path: &std::path::Path, host: &str) -> Result<Capture, String> {
     let dir = std::env::temp_dir().join(format!(
-        "envv-ff-{}-{}",
+        "unv-ff-{}-{}",
         std::process::id(),
         crate::new_uuid()
     ));
@@ -944,7 +944,7 @@ Invoke-WebRequest -UseBasicParsing -Uri "https://www.example.com/a" `
 
     #[test]
     fn firefox_sqlite_is_read_from_a_copy_and_filtered_by_host() {
-        let dir = std::env::temp_dir().join(format!("envv-ffsrc-{}", crate::new_uuid()));
+        let dir = std::env::temp_dir().join(format!("unv-ffsrc-{}", crate::new_uuid()));
         std::fs::create_dir_all(&dir).unwrap();
         let db = dir.join("cookies.sqlite");
         {

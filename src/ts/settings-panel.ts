@@ -384,7 +384,7 @@ function wireArchiveRows(): void {
       if (!pw) return;
       try {
         const text = await invokeTauri<string>('backup_archive_build', { password: pw });
-        const r = await saveFile(text, 'envvault.vaultarc', 'application/json');
+        const r = await saveFile(text, 'unenverse.vaultarc', 'application/json');
         if (r.ok) showToast(`Archive written${r.path ? `: ${r.path}` : ''}`, 'ok', 3500);
         else showToast(`Could not write the archive: ${r.error}`, 'err', 4000);
       } catch (e) {

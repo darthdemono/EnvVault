@@ -1490,7 +1490,7 @@ export function initTools() {
   });
 
   // Expose bulk toggle to card clicks
-  window.__envvBulkToggle = (idx: number) => {
+  window.__unvBulkToggle = (idx: number) => {
     if (!st.bulkMode) return false;
     const entry = st.vault.api_keys[idx];
     if (!entry) return true;
@@ -1503,7 +1503,7 @@ export function initTools() {
       ?.classList.toggle('bulk-selected', st.bulkSelected.has(id));
     return true;
   };
-  window.__envvIsBulkMode = () => st.bulkMode;
+  window.__unvIsBulkMode = () => st.bulkMode;
 
   // ── SECRET DIFF ────────────────────────────────────────────────────────────
 

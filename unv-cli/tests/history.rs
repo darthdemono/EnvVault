@@ -14,7 +14,7 @@ fn scratch() -> std::path::PathBuf {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_nanos();
-    let p = std::env::temp_dir().join(format!("envv-history-{}-{n}", std::process::id()));
+    let p = std::env::temp_dir().join(format!("unv-history-{}-{n}", std::process::id()));
     std::fs::create_dir_all(&p).unwrap();
     p
 }
@@ -22,9 +22,9 @@ fn scratch() -> std::path::PathBuf {
 fn unv(dir: &std::path::Path) -> Command {
     let mut c = Command::new(env!("CARGO_BIN_EXE_unv"));
     c.env_remove("UNV_SERVER_URL")
-        .env_remove("ENVV_SERVER_URL")
+        .env_remove("UNV_SERVER_URL")
         .env_remove("UNV_ENV_FILE")
-        .env_remove("ENVV_ENV_FILE")
+        .env_remove("UNV_ENV_FILE")
         .env("UNV_PASSWORD", "correct-horse-battery")
         .args([
             "--db-path",

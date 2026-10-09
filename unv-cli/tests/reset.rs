@@ -5,9 +5,9 @@ use std::process::{Command, Stdio};
 fn unv(dir: &std::path::Path, args: &[&str]) -> std::process::Output {
     Command::new(env!("CARGO_BIN_EXE_unv"))
         .env_remove("UNV_SERVER_URL")
-        .env_remove("ENVV_SERVER_URL")
+        .env_remove("UNV_SERVER_URL")
         .env_remove("UNV_ENV_FILE")
-        .env_remove("ENVV_ENV_FILE")
+        .env_remove("UNV_ENV_FILE")
         .env("UNV_PASSWORD", "scratch-pass-123456")
         .stdin(Stdio::null())
         .arg("--db-path")
@@ -19,7 +19,7 @@ fn unv(dir: &std::path::Path, args: &[&str]) -> std::process::Output {
 
 #[test]
 fn reset_needs_confirmation_and_removes_only_the_vault() {
-    let dir = std::env::temp_dir().join(format!("envv-reset-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("unv-reset-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     assert!(unv(&dir, &["--init", "entry", "add", "A", "--key", "k"])
         .status

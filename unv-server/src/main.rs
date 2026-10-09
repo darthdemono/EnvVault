@@ -69,8 +69,7 @@ struct Args {
 }
 
 fn main() {
-    // Variables set before the rename (`ENVV_*`) keep working.
-    vault_core::compat::adopt_legacy_env();
+    // Variables set before the rename (`UNV_*`) keep working.
     // Pick the crypto provider explicitly. The workspace enables both `ring`
     // (axum-server) and `aws_lc_rs` (vault-core's `tls` feature) on one rustls;
     // cargo unifies features across a build, so rustls sees two candidates,
@@ -131,7 +130,7 @@ async fn async_main() {
                 );
                 std::process::exit(2);
             })
-            .join("envv-server")
+            .join("unv-server")
     };
 
     let db_path = args

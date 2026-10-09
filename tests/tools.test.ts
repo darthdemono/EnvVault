@@ -22,7 +22,7 @@ vi.mock('../src/ts/utils', async (importOriginal) => {
 });
 
 const $ = (id: string) => document.getElementById(id)!;
-const bulkToggle = (idx: number) => (window as any).__envvBulkToggle?.(idx);
+const bulkToggle = (idx: number) => (window as any).__unvBulkToggle?.(idx);
 
 /**
  * `initTools()` binds every handler once, to the nodes present at that moment.

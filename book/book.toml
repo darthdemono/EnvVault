@@ -5,5 +5,5 @@ language = "en"
 src = "src"
 
 [output.html]
-git-repository-url = "https://github.com/darthdemono/EnvVault"
-edit-url-template = "https://github.com/darthdemono/EnvVault/edit/main/book/{path}"
+git-repository-url = "https://github.com/darthdemono/UnENVerse"
+edit-url-template = "https://github.com/darthdemono/UnENVerse/edit/main/book/{path}"

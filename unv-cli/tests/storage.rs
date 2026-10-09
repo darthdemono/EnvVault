@@ -8,11 +8,11 @@ use std::process::Command;
 fn unv(dir: &std::path::Path, args: &[&str]) -> (Option<i32>, String) {
     let out = Command::new(env!("CARGO_BIN_EXE_unv"))
         .env_remove("UNV_SERVER_URL")
-        .env_remove("ENVV_SERVER_URL")
+        .env_remove("UNV_SERVER_URL")
         .env_remove("UNV_ENV_FILE")
-        .env_remove("ENVV_ENV_FILE")
+        .env_remove("UNV_ENV_FILE")
         .env_remove("UNV_PROJECT")
-        .env_remove("ENVV_PROJECT")
+        .env_remove("UNV_PROJECT")
         .env("UNV_PASSWORD", "correct-horse-battery")
         .args([
             "--db-path",
@@ -31,7 +31,7 @@ fn unv(dir: &std::path::Path, args: &[&str]) -> (Option<i32>, String) {
 
 #[test]
 fn a_v1_vault_is_converted_by_the_cli_and_nothing_is_lost() {
-    let dir = std::env::temp_dir().join(format!("envv-storage-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("unv-storage-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
 

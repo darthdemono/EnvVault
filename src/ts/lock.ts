@@ -54,7 +54,7 @@ export async function lockVault(reason: 'auto' | 'manual' | 'visibility' = 'manu
   st.vault.api_keys = [];
   st.vault.user_categories = [];
   st.vault.projects = [{ id: 'Universal', name: 'Universal', description: '' }];
-  sessionStorage.removeItem('envvault');
+  sessionStorage.removeItem('unenverse');
 
   // Pending undos close over the entries they would restore — including their
   // secret values — and the Undo button stayed live after locking. Locking has

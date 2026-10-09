@@ -247,7 +247,7 @@ export async function exportCalendar(): Promise<void> {
   );
   if (!ok) return;
 
-  void downloadText(ics, 'envvault-secrets.ics', `Exported ${count} events ✓`);
+  void downloadText(ics, 'unenverse-secrets.ics', `Exported ${count} events ✓`);
 }
 
 // ── Calendar feeds (Phase 24.3) — server-side only, so this whole section is

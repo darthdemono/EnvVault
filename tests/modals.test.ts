@@ -767,17 +767,17 @@ describe('openModal / closeModal', () => {
   });
 
   it('closes and discards the in-progress draft', () => {
-    sessionStorage.setItem('envvault-form-draft', '{"provider":"half typed"}');
+    sessionStorage.setItem('unenverse-form-draft', '{"provider":"half typed"}');
     closeModal();
     expect($('modal-overlay').classList.contains('open')).toBe(false);
-    expect(sessionStorage.getItem('envvault-form-draft')).toBeNull();
+    expect(sessionStorage.getItem('unenverse-form-draft')).toBeNull();
   });
 });
 
 describe('openAdd draft restore', () => {
   it('restores a saved draft into the form', () => {
     sessionStorage.setItem(
-      'envvault-form-draft',
+      'unenverse-form-draft',
       JSON.stringify({ provider: 'Draft Co', api_key: 'sk-draft' }),
     );
     openAdd();
@@ -786,7 +786,7 @@ describe('openAdd draft restore', () => {
   });
 
   it('opens a blank form when the stored draft is corrupt', () => {
-    sessionStorage.setItem('envvault-form-draft', '{not json');
+    sessionStorage.setItem('unenverse-form-draft', '{not json');
     expect(() => openAdd()).not.toThrow();
     expect(($('f-provider') as HTMLInputElement).value).toBe('');
   });
@@ -1164,7 +1164,7 @@ describe('the generator popover (A8, 2026-09-15)', () => {
   it('hashes on the hash tab', async () => {
     $('f-key-generate-caret').click();
     document.querySelector<HTMLButtonElement>('.gen-tab-btn[data-gen-tab="hash"]')!.click();
-    ($('gp-hash-input') as HTMLTextAreaElement).value = 'envvault';
+    ($('gp-hash-input') as HTMLTextAreaElement).value = 'unenverse';
     $('gp-generate-btn').click();
     await new Promise((r) => setTimeout(r, 20));
     expect($('gp-output').textContent).toMatch(/^[0-9a-f]{64}$/); // SHA-256 hex, the default

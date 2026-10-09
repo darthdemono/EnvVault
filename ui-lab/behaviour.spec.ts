@@ -12,9 +12,9 @@ import { test, expect, type Page } from '@playwright/test';
 /** Boot with a vault and a settings blob already in place, past the wizard. */
 async function boot(page: Page, settings: Record<string, unknown>) {
   await page.addInitScript((s) => {
-    localStorage.setItem('envvault-settings', JSON.stringify(s));
+    localStorage.setItem('unenverse-settings', JSON.stringify(s));
     sessionStorage.setItem(
-      'envvault',
+      'unenverse',
       JSON.stringify({ api_keys: [], user_categories: [], projects: [] }),
     );
   }, settings);
@@ -58,7 +58,7 @@ test.describe('boot', () => {
     // dropped over them. `html.booting` suppresses that first paint; both boot
     // terminals clear it, and so does a boot that throws.
     await page.addInitScript(() => {
-      localStorage.setItem('envvault-settings', JSON.stringify({ onboardingCompleted: true }));
+      localStorage.setItem('unenverse-settings', JSON.stringify({ onboardingCompleted: true }));
     });
     await page.goto('/');
     await page.waitForSelector('#card-grid', { timeout: 15_000 });
@@ -75,9 +75,9 @@ test.describe('keyboard', () => {
     page,
   }) => {
     await page.addInitScript(() => {
-      localStorage.setItem('envvault-settings', JSON.stringify({ onboardingCompleted: true }));
+      localStorage.setItem('unenverse-settings', JSON.stringify({ onboardingCompleted: true }));
       sessionStorage.setItem(
-        'envvault',
+        'unenverse',
         JSON.stringify({
           api_keys: [{ id: 'k1', provider: 'GitHub', api_key: 'x', secretType: 'api_key' }],
           user_categories: [],

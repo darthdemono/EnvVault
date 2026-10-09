@@ -111,7 +111,7 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let d = std::env::temp_dir().join(format!("envv-hist-srv-{n}"));
+        let d = std::env::temp_dir().join(format!("unv-hist-srv-{n}"));
         std::fs::create_dir_all(&d).unwrap();
         let key = [5u8; 32];
         let state = AppState::new(
@@ -236,6 +236,10 @@ mod tests {
         h.until_snapshots(1).await;
         // Saving the same thing again records nothing; changing the secret does.
         h.put(vault("sk_live_ONE")).await;
+        // Let the background task for the repeat finish (and wrongly snapshot, if
+        // it were going to) before the next save; under a loaded machine two
+        // saves landing together coalesce into one snapshot and hide the count.
+        tokio::time::sleep(Duration::from_millis(300)).await;
         h.put(vault("sk_live_TWO")).await;
         h.until_snapshots(2).await;
         tokio::time::sleep(Duration::from_millis(150)).await;

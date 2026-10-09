@@ -1,4 +1,4 @@
-//! Per-directory project and environment context — `unv use` and `.envv.json`.
+//! Per-directory project and environment context — `unv use` and `.unv.json`.
 //!
 //! Every command that scopes to a project repeats `--project web` forever. This
 //! pins the answer to a directory once, the way a `.git` directory or a
@@ -9,7 +9,7 @@
 //!
 //! 1. An explicit `--project` / `--env` flag.
 //! 2. `UNV_PROJECT` / `UNV_ENV` in the environment — what CI sets.
-//! 3. The nearest `.envv.json`, searching upward from the working directory.
+//! 3. The nearest `.unv.json`, searching upward from the working directory.
 //!
 //! # This file holds no secrets, and that is deliberate
 //!
@@ -35,9 +35,9 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
 /// The file name searched for, upward from the working directory.
-pub const FILE_NAME: &str = ".envv.json";
+pub const FILE_NAME: &str = ".unv.json";
 
-/// Contents of a `.envv.json`.
+/// Contents of a `.unv.json`.
 #[derive(Serialize, Deserialize, Default, Debug, Clone, PartialEq, Eq)]
 pub struct Context {
     /// Format version. Present so a future field can be added without an older
@@ -54,7 +54,7 @@ fn one() -> u32 {
     1
 }
 
-/// Walks up from `start` looking for `.envv.json`, stopping at the filesystem
+/// Walks up from `start` looking for `.unv.json`, stopping at the filesystem
 /// root.
 ///
 /// Upward search, not just the current directory: the whole point is running
@@ -222,7 +222,7 @@ pub fn cmd_use(
                     // Stated because it is the confusing case: the file is right
                     // there and something else is winning.
                     if env_project.is_some() || env_env.is_some() {
-                        println!("\nENVV_PROJECT / UNV_ENV are set and take precedence.");
+                        println!("\nUNV_PROJECT / UNV_ENV are set and take precedence.");
                     }
                 }
                 None => println!("No {FILE_NAME} found in this directory or any parent."),
@@ -281,7 +281,7 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let d = std::env::temp_dir().join(format!("envv-ctx-{tag}-{nanos}"));
+        let d = std::env::temp_dir().join(format!("unv-ctx-{tag}-{nanos}"));
         std::fs::create_dir_all(&d).unwrap();
         d
     }

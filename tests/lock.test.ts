@@ -60,11 +60,11 @@ describe('lockVault', () => {
 
   it('clears the session storage copy', async () => {
     sessionStorage.setItem(
-      'envvault',
+      'unenverse',
       JSON.stringify({ api_keys: [{ api_key: 'sk-alpha-secret' }] }),
     );
     await lockVault('manual');
-    expect(sessionStorage.getItem('envvault')).toBeNull();
+    expect(sessionStorage.getItem('unenverse')).toBeNull();
   });
 
   it('turns off bulk mode', async () => {

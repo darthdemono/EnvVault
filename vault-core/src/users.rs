@@ -2124,7 +2124,7 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let dir = std::env::temp_dir().join(format!("envvault-users-{tag}-{nanos}"));
+        let dir = std::env::temp_dir().join(format!("unenverse-users-{tag}-{nanos}"));
         std::fs::create_dir_all(&dir).unwrap();
         let key = crate::derive_key("pw", b"0123456789abcdef").unwrap();
         let conn = crate::open_db(&dir.join("vault.db"), &key).unwrap();

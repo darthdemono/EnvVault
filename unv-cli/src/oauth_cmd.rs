@@ -66,7 +66,7 @@ pub fn refresh(access: &Access, query: &str, yes: bool) -> CliResult {
         if let Some(r) = grant.refresh_token.as_deref().filter(|_| rotated) {
             let dir = std::env::temp_dir();
             let path = dir.join(format!(
-                "envv-oauth-recovery-{}.json",
+                "unv-oauth-recovery-{}.json",
                 vault_core::new_uuid()
             ));
             let wrote = std::fs::write(

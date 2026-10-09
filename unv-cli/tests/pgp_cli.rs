@@ -8,9 +8,9 @@ use std::process::Command;
 fn unv(dir: &std::path::Path, args: &[&str]) -> (Option<i32>, Value, String) {
     let out = Command::new(env!("CARGO_BIN_EXE_unv"))
         .env_remove("UNV_SERVER_URL")
-        .env_remove("ENVV_SERVER_URL")
+        .env_remove("UNV_SERVER_URL")
         .env_remove("UNV_ENV_FILE")
-        .env_remove("ENVV_ENV_FILE")
+        .env_remove("UNV_ENV_FILE")
         .env("UNV_PASSWORD", "correct-horse-battery")
         .args([
             "--db-path",
@@ -31,7 +31,7 @@ fn unv(dir: &std::path::Path, args: &[&str]) -> (Option<i32>, Value, String) {
 
 #[test]
 fn a_gpg_key_entry_takes_its_expiry_and_fingerprint_from_the_key() {
-    let dir = std::env::temp_dir().join(format!("envv-pgp-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("unv-pgp-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let fixtures =

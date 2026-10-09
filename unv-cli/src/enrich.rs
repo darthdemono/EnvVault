@@ -1018,7 +1018,7 @@ fn probe_grafana(
 ) -> Option<Live> {
     let client = crate::tls::build_public_client(
         std::time::Duration::from_secs(timeout_secs),
-        concat!("envv/", env!("CARGO_PKG_VERSION")),
+        concat!("unv/", env!("CARGO_PKG_VERSION")),
     )
     .ok()?;
     let issuer = "Grafana";
@@ -1107,7 +1107,7 @@ pub fn probe_entry(entry: &Value, timeout_secs: u64, force: bool) -> Option<Live
     // --server. Some of these APIs reject a request with no user agent outright.
     let client = crate::tls::build_public_client(
         std::time::Duration::from_secs(timeout_secs),
-        concat!("envv/", env!("CARGO_PKG_VERSION")),
+        concat!("unv/", env!("CARGO_PKG_VERSION")),
     )
     .ok()?;
 

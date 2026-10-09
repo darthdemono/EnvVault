@@ -51,7 +51,7 @@ describe('archive rows', () => {
     $('s-archive-btn').click();
     await flush();
     expect(invoke).toHaveBeenCalledWith('backup_archive_build', { password });
-    expect(saved[0].name).toBe('envvault.vaultarc');
+    expect(saved[0].name).toBe('unenverse.vaultarc');
     expect($('toast').textContent).toContain('Archive written');
   });
 

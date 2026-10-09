@@ -4,9 +4,9 @@ use std::process::{Command, Stdio};
 fn unv(dir: &std::path::Path, args: &[&str]) -> (bool, String) {
     let o = Command::new(env!("CARGO_BIN_EXE_unv"))
         .env_remove("UNV_SERVER_URL")
-        .env_remove("ENVV_SERVER_URL")
+        .env_remove("UNV_SERVER_URL")
         .env_remove("UNV_ENV_FILE")
-        .env_remove("ENVV_ENV_FILE")
+        .env_remove("UNV_ENV_FILE")
         .env("UNV_PASSWORD", "scratch-pass-123456")
         .stdin(Stdio::null())
         .arg("--db-path")
@@ -22,7 +22,7 @@ fn unv(dir: &std::path::Path, args: &[&str]) -> (bool, String) {
 
 #[test]
 fn template_prefills_flags_override_and_diff_redacts() {
-    let dir = std::env::temp_dir().join(format!("envv-diff-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("unv-diff-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
 
     let (ok, ls) = unv(&dir, &["template", "ls"]);

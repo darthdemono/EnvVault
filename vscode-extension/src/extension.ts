@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { envvJson, runEnvv } from './unv';
+import { unvJson, runUnv } from './unv';
 import {
   FIELD_NAMES,
   completionContext,
@@ -17,13 +17,13 @@ let names: string[] = [];
 let diagnostics: vscode.DiagnosticCollection;
 
 function exe(): string {
-  return vscode.workspace.getConfiguration('envvault').get<string>('path') || 'unv';
+  return vscode.workspace.getConfiguration('unenverse').get<string>('path') || 'unv';
 }
 
 /** Entry names only; the CLI redacts everything else. */
 async function refreshNames(): Promise<void> {
   try {
-    const data = await envvJson<{ entries?: { provider?: string }[] } | { provider?: string }[]>(
+    const data = await unvJson<{ entries?: { provider?: string }[] } | { provider?: string }[]>(
       exe(),
       ['list'],
     );
@@ -36,10 +36,10 @@ async function refreshNames(): Promise<void> {
 
 async function scanFile(doc: vscode.TextDocument): Promise<void> {
   if (doc.uri.scheme !== 'file') return;
-  const dir = await mkdtemp(join(tmpdir(), 'envvault-scan-'));
+  const dir = await mkdtemp(join(tmpdir(), 'unenverse-scan-'));
   const report = join(dir, 'report.txt');
   try {
-    await runEnvv(exe(), ['scan', '--exposed', doc.uri.fsPath, '--out', report]);
+    await runUnv(exe(), ['scan', '--exposed', doc.uri.fsPath, '--out', report]);
     const found = parseExposureReport(await readFile(report, 'utf8'));
     diagnostics.set(
       doc.uri,
@@ -63,18 +63,18 @@ async function scanFile(doc: vscode.TextDocument): Promise<void> {
 }
 
 export function activate(ctx: vscode.ExtensionContext): void {
-  diagnostics = vscode.languages.createDiagnosticCollection('envvault');
+  diagnostics = vscode.languages.createDiagnosticCollection('unenverse');
   ctx.subscriptions.push(diagnostics);
   void refreshNames();
 
   ctx.subscriptions.push(
-    vscode.commands.registerCommand('envvault.refresh', () => refreshNames()),
-    vscode.commands.registerCommand('envvault.scanThisFile', async () => {
+    vscode.commands.registerCommand('unenverse.refresh', () => refreshNames()),
+    vscode.commands.registerCommand('unenverse.scanThisFile', async () => {
       const doc = vscode.window.activeTextEditor?.document;
       if (doc) await scanFile(doc);
     }),
     vscode.workspace.onDidSaveTextDocument((doc) => {
-      if (vscode.workspace.getConfiguration('envvault').get<boolean>('scanOnSave'))
+      if (vscode.workspace.getConfiguration('unenverse').get<boolean>('scanOnSave'))
         void scanFile(doc);
     }),
     vscode.workspace.onDidCloseTextDocument((doc) => diagnostics.delete(doc.uri)),
@@ -108,7 +108,7 @@ export function activate(ctx: vscode.ExtensionContext): void {
           let shown: { fingerprint?: string; length?: number } | null = null;
           try {
             const args = ['get', ref.head, ...(ref.field ? ['--field', ref.field] : [])];
-            const d = await envvJson<{ value?: { fingerprint?: string; length?: number } }>(
+            const d = await unvJson<{ value?: { fingerprint?: string; length?: number } }>(
               exe(),
               args,
             );

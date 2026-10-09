@@ -16,7 +16,7 @@
 //! # Why this lives in vault-core
 //!
 //! Two programs read this file: `unv` and the desktop app. The app's
-//! `app_data_dir` and the CLI's `dirs::data_dir()/io.envvault` resolve to the
+//! `app_data_dir` and the CLI's `dirs::data_dir()/io.unenverse` resolve to the
 //! same directory, so one vault produces the same [`local_vault_key`] in both -
 //! report a key rate limited from CI and the desktop shows it cooling.
 //!
@@ -31,7 +31,7 @@
 //! {
 //!   "version": 1,
 //!   "vaults": {
-//!     "local:/home/me/.local/share/io.envvault/vault.db": {
+//!     "local:/home/me/.local/share/io.unenverse/vault.db": {
 //!       "github-ci": {
 //!         "cursor": 1,
 //!         "members": {
@@ -57,7 +57,7 @@ use std::path::PathBuf;
 /// Where `pools.json` lives.
 ///
 /// `$XDG_STATE_HOME/envv/` on Unix, `%LOCALAPPDATA%\envv\` on Windows, falling
-/// back to `~/.local/state/envv/`. The same directory as the CLI's
+/// back to `~/.local/state/unv/`. The same directory as the CLI's
 /// `sessions.json`.
 ///
 /// Returns `None` rather than guessing when there is no home directory to work
@@ -74,16 +74,16 @@ pub fn state_path() -> Option<PathBuf> {
         // machine-local cursor cannot be synced onto another machine by a
         // domain profile nobody thinks about.
         if let Some(dir) = dirs::data_local_dir() {
-            return Some(dir.join("envv").join("pools.json"));
+            return Some(dir.join("unv").join("pools.json"));
         }
     }
     if let Some(dir) = std::env::var_os("XDG_STATE_HOME") {
-        return Some(PathBuf::from(dir).join("envv").join("pools.json"));
+        return Some(PathBuf::from(dir).join("unv").join("pools.json"));
     }
     dirs::home_dir().map(|h| {
         h.join(".local")
             .join("state")
-            .join("envv")
+            .join("unv")
             .join("pools.json")
     })
 }

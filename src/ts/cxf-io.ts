@@ -101,7 +101,7 @@ export async function runCxfExport(): Promise<void> {
   }
   if (!text) return;
   const stamp = new Date().toISOString().slice(0, 10);
-  const result = await saveFile(text, `envvault-${stamp}.cxf.json`, 'application/json');
+  const result = await saveFile(text, `unenverse-${stamp}.cxf.json`, 'application/json');
   if (!result.ok) {
     showToast(`Could not write the file: ${result.error}`, 'err', 5000);
     return;
