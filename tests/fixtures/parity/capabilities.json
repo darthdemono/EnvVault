@@ -5,21 +5,21 @@
       "id": "entries",
       "status": "both",
       "cli": [
-        "envv list",
-        "envv get",
-        "envv entry ls",
-        "envv entry get",
-        "envv entry add",
-        "envv entry set",
-        "envv entry rename",
-        "envv entry rm",
-        "envv entry tag",
-        "envv entry pin",
-        "envv entry compromise",
-        "envv entry rotate",
-        "envv entry verify",
-        "envv entry history",
-        "envv entry restore"
+        "unv list",
+        "unv get",
+        "unv entry ls",
+        "unv entry get",
+        "unv entry add",
+        "unv entry set",
+        "unv entry rename",
+        "unv entry rm",
+        "unv entry tag",
+        "unv entry pin",
+        "unv entry compromise",
+        "unv entry rotate",
+        "unv entry verify",
+        "unv entry history",
+        "unv entry restore"
       ],
       "ui": [
         "id:add-btn",
@@ -27,7 +27,8 @@
       ],
       "tauri": [
         "load_vault",
-        "save_vault"
+        "save_vault",
+        "save_vault_rows"
       ],
       "note": "The app edits the vault document and saves it whole; the CLI goes through Access::save.",
       "cli_flags": []
@@ -36,17 +37,17 @@
       "id": "export",
       "status": "both",
       "cli": [
-        "envv export",
-        "envv project export",
-        "envv emit",
-        "envv curl",
-        "envv cookie header",
-        "envv cookie curl",
-        "envv cookie txt",
-        "envv cookie json",
-        "envv file write",
-        "envv render",
-        "envv env"
+        "unv export",
+        "unv project export",
+        "unv emit",
+        "unv curl",
+        "unv cookie header",
+        "unv cookie curl",
+        "unv cookie txt",
+        "unv cookie json",
+        "unv file write",
+        "unv render",
+        "unv env"
       ],
       "ui": [
         "id:copy-all-btn",
@@ -63,7 +64,7 @@
       "id": "cookie-capture",
       "status": "both",
       "cli": [
-        "envv cookie import"
+        "unv cookie import"
       ],
       "ui": [
         "id:f-capture-btn"
@@ -75,13 +76,28 @@
       "cli_flags": []
     },
     {
+      "id": "pgp-key-expiry",
+      "status": "both",
+      "cli": [],
+      "ui": [
+        "id:f-pgp-btn"
+      ],
+      "tauri": [
+        "pgp_inspect"
+      ],
+      "note": "Phase 24.5 gpg_key: the key's fingerprint, key id, user ids and soonest expiry, read from a pasted public key (app) or `unv entry add|set --pgp-public FILE` (CLI), by the same vault_core::pgp.",
+      "cli_flags": [
+        "--pgp-public"
+      ]
+    },
+    {
       "id": "calendar",
       "status": "both",
       "cli": [
-        "envv calendar export",
-        "envv calendar feed new",
-        "envv calendar feed ls",
-        "envv calendar feed revoke"
+        "unv calendar export",
+        "unv calendar feed new",
+        "unv calendar feed ls",
+        "unv calendar feed revoke"
       ],
       "ui": [
         "tool:timeline",
@@ -97,8 +113,8 @@
       "id": "cxf",
       "status": "both",
       "cli": [
-        "envv cxf import",
-        "envv cxf export"
+        "unv cxf import",
+        "unv cxf export"
       ],
       "ui": [
         "id:settings-cxf-import-btn",
@@ -115,9 +131,9 @@
       "id": "health",
       "status": "both",
       "cli": [
-        "envv scan",
-        "envv status",
-        "envv rotate-check"
+        "unv scan",
+        "unv status",
+        "unv rotate-check"
       ],
       "ui": [
         "tool:health"
@@ -130,7 +146,7 @@
       "id": "config-check",
       "status": "both",
       "cli": [
-        "envv check"
+        "unv check"
       ],
       "ui": [
         "src:src/ts/config-check.ts"
@@ -139,13 +155,15 @@
         "config_check_project"
       ],
       "note": "",
-      "cli_flags": []
+      "cli_flags": [
+        "--all-projects"
+      ]
     },
     {
       "id": "audit",
       "status": "both",
       "cli": [
-        "envv audit"
+        "unv audit"
       ],
       "ui": [
         "tool:audit"
@@ -160,7 +178,7 @@
       "id": "import-env",
       "status": "both",
       "cli": [
-        "envv import"
+        "unv import"
       ],
       "ui": [
         "tool:import-export",
@@ -176,11 +194,11 @@
       "id": "pools",
       "status": "both",
       "cli": [
-        "envv pool ls",
-        "envv pool show",
-        "envv pool next",
-        "envv pool report",
-        "envv pool reset"
+        "unv pool ls",
+        "unv pool show",
+        "unv pool next",
+        "unv pool report",
+        "unv pool reset"
       ],
       "ui": [
         "tool:pools"
@@ -199,20 +217,20 @@
       "id": "projects",
       "status": "both",
       "cli": [
-        "envv project ls",
-        "envv project show",
-        "envv project add",
-        "envv project rename",
-        "envv project rm",
-        "envv project chunk ls",
-        "envv project chunk show",
-        "envv project chunk add",
-        "envv project chunk rm",
-        "envv project chunk rename",
-        "envv project chunk set",
-        "envv project chunk unset",
-        "envv project chunk disable",
-        "envv project chunk enable"
+        "unv project ls",
+        "unv project show",
+        "unv project add",
+        "unv project rename",
+        "unv project rm",
+        "unv project chunk ls",
+        "unv project chunk show",
+        "unv project chunk add",
+        "unv project chunk rm",
+        "unv project chunk rename",
+        "unv project chunk set",
+        "unv project chunk unset",
+        "unv project chunk disable",
+        "unv project chunk enable"
       ],
       "ui": [
         "id:new-project-btn",
@@ -226,11 +244,11 @@
       "id": "categories",
       "status": "both",
       "cli": [
-        "envv category ls",
-        "envv category add",
-        "envv category rename",
-        "envv category rm",
-        "envv tags"
+        "unv category ls",
+        "unv category add",
+        "unv category rename",
+        "unv category rm",
+        "unv tags"
       ],
       "ui": [
         "id:new-category-root-btn"
@@ -243,9 +261,9 @@
       "id": "catalogue",
       "status": "both",
       "cli": [
-        "envv catalogue update",
-        "envv catalogue show",
-        "envv catalogue diff"
+        "unv catalogue update",
+        "unv catalogue show",
+        "unv catalogue diff"
       ],
       "ui": [
         "id:s-catalogue-update"
@@ -261,7 +279,7 @@
       "id": "oauth",
       "status": "both",
       "cli": [
-        "envv oauth refresh"
+        "unv oauth refresh"
       ],
       "ui": [
         "src:src/ts/render.ts"
@@ -276,9 +294,9 @@
       "id": "recovery-codes",
       "status": "both",
       "cli": [
-        "envv codes status",
-        "envv codes next",
-        "envv codes use"
+        "unv codes status",
+        "unv codes next",
+        "unv codes use"
       ],
       "ui": [
         "src:src/ts/render.ts"
@@ -291,12 +309,12 @@
       "id": "bundles",
       "status": "both",
       "cli": [
-        "envv bundle ls",
-        "envv bundle new",
-        "envv bundle add",
-        "envv bundle remove",
-        "envv bundle dissolve",
-        "envv bundle delete"
+        "unv bundle ls",
+        "unv bundle new",
+        "unv bundle add",
+        "unv bundle remove",
+        "unv bundle dissolve",
+        "unv bundle delete"
       ],
       "ui": [
         "src:src/ts/bundle-scope.ts",
@@ -310,10 +328,10 @@
       "id": "generators",
       "status": "both",
       "cli": [
-        "envv gen secret",
-        "envv gen password",
-        "envv gen cert",
-        "envv gen ssh"
+        "unv gen secret",
+        "unv gen password",
+        "unv gen cert",
+        "unv gen ssh"
       ],
       "ui": [
         "tool:secret-gen",
@@ -332,8 +350,8 @@
       "id": "backup",
       "status": "both",
       "cli": [
-        "envv backup export",
-        "envv backup import"
+        "unv backup export",
+        "unv backup import"
       ],
       "ui": [
         "id:settings-export-btn",
@@ -347,22 +365,22 @@
       "id": "users",
       "status": "both",
       "cli": [
-        "envv user ls",
-        "envv user add",
-        "envv user rm",
-        "envv user rename",
-        "envv user passwd",
-        "envv user class",
-        "envv user token ls",
-        "envv user token new",
-        "envv user token revoke",
-        "envv class ls",
-        "envv class add",
-        "envv class set",
-        "envv class rm",
-        "envv perm show",
-        "envv perm set",
-        "envv perm check"
+        "unv user ls",
+        "unv user add",
+        "unv user rm",
+        "unv user rename",
+        "unv user passwd",
+        "unv user class",
+        "unv user token ls",
+        "unv user token new",
+        "unv user token revoke",
+        "unv class ls",
+        "unv class add",
+        "unv class set",
+        "unv class rm",
+        "unv perm show",
+        "unv perm set",
+        "unv perm check"
       ],
       "ui": [
         "id:create-user-btn",
@@ -394,10 +412,10 @@
       "id": "user-totp",
       "status": "both",
       "cli": [
-        "envv user totp status",
-        "envv user totp enroll",
-        "envv user totp confirm",
-        "envv user totp disable"
+        "unv user totp status",
+        "unv user totp enroll",
+        "unv user totp confirm",
+        "unv user totp disable"
       ],
       "ui": [
         "src:src/ts/users.ts"
@@ -415,14 +433,14 @@
       "id": "authenticator",
       "status": "both",
       "cli": [
-        "envv totp code",
-        "envv totp ls",
-        "envv totp add",
-        "envv totp advance",
-        "envv totp uri",
-        "envv totp rm",
-        "envv totp import",
-        "envv totp export"
+        "unv totp code",
+        "unv totp ls",
+        "unv totp add",
+        "unv totp advance",
+        "unv totp uri",
+        "unv totp rm",
+        "unv totp import",
+        "unv totp export"
       ],
       "ui": [
         "id:auth-add-btn",
@@ -442,7 +460,7 @@
       "id": "enrich",
       "status": "both",
       "cli": [
-        "envv enrich"
+        "unv enrich"
       ],
       "ui": [
         "tool:enrich"
@@ -459,7 +477,7 @@
       "id": "doctor",
       "status": "both",
       "cli": [
-        "envv doctor"
+        "unv doctor"
       ],
       "ui": [
         "id:doctor-run-btn"
@@ -468,14 +486,14 @@
         "doctor_document",
         "doctor_file"
       ],
-      "note": "Health pane -> Diagnose vault runs the document checks over whichever vault is open and, for this machine's vault, the file checks too (integrity, storage hashes, salt pairing, permissions, audit chain) through the same functions `envv doctor` runs. `--fix` repairs stay CLI-only for now.",
+      "note": "Health pane -> Diagnose vault runs the document checks over whichever vault is open and, for this machine's vault, the file checks too (integrity, storage hashes, salt pairing, permissions, audit chain) through the same functions `unv doctor` runs. `--fix` repairs stay CLI-only for now.",
       "cli_flags": []
     },
     {
       "id": "import-vault",
       "status": "both",
       "cli": [
-        "envv import-vault"
+        "unv import-vault"
       ],
       "ui": [
         "id:vi-file-btn"
@@ -490,8 +508,8 @@
       "id": "backup-archive",
       "status": "both",
       "cli": [
-        "envv backup archive",
-        "envv backup restore-archive"
+        "unv backup archive",
+        "unv backup restore-archive"
       ],
       "ui": [
         "id:s-archive-btn",
@@ -508,12 +526,12 @@
       "id": "uid-registry",
       "status": "both",
       "cli": [
-        "envv uid check",
-        "envv uid register",
-        "envv uid mint",
-        "envv uid lookup",
-        "envv uid prune",
-        "envv uid stats"
+        "unv uid check",
+        "unv uid register",
+        "unv uid mint",
+        "unv uid lookup",
+        "unv uid prune",
+        "unv uid stats"
       ],
       "ui": [
         "tool:uid-registry"
@@ -523,10 +541,107 @@
       "cli_flags": []
     },
     {
+      "id": "nodes-hub",
+      "status": "both",
+      "cli": [
+        "unv node token new",
+        "unv node ls",
+        "unv node show",
+        "unv node revoke",
+        "unv node pull",
+        "unv node accept"
+      ],
+      "ui": [
+        "tool:nodes"
+      ],
+      "tauri": [
+        "env_import_plan"
+      ],
+      "note": "Phase 34. Tools -> Nodes over /api/nodes/* (remote vault, server started with --nodes): mint an enrollment token, list nodes and targets, revoke, fetch a pull target's file (to a file, never the page), accept it. The CLI's `pull` writes with --out; the app saves through saveFile. `pull --into-chunk` and the pane's 'Read into a chunk' read an .env-style file back into an env_file chunk with the same Rust rules (`env_import_plan`); other formats' parsers live in the app only.",
+      "cli_flags": [
+        "--into-chunk"
+      ]
+    },
+    {
+      "id": "nodes-agent",
+      "status": "exempt",
+      "cli": [
+        "unv node enroll",
+        "unv node run",
+        "unv node check"
+      ],
+      "ui": [],
+      "tauri": [],
+      "note": "Exempt, by nature (invariant 10): these run on the managed host, which has no vault and no app. The app cannot enroll a machine it is not running on; the hub half of every flow is in nodes-hub.",
+      "cli_flags": []
+    },
+    {
+      "id": "config-history",
+      "status": "both",
+      "cli": [
+        "unv history ls",
+        "unv history show",
+        "unv history diff",
+        "unv history diff-file",
+        "unv history snapshot",
+        "unv history prune",
+        "unv history verify",
+        "unv history policy",
+        "unv history where",
+        "unv history stats"
+      ],
+      "ui": [
+        "tool:history"
+      ],
+      "tauri": [
+        "history_call"
+      ],
+      "note": "Phase 35. Tools -> Config history. One dispatcher (envv_cli::history::call) answers the local CLI, the desktop app (history_call) and the server (POST /api/history), so the three cannot disagree. Stdout/UI show fingerprinted text; the real values need --reveal / Reveal, or go to a file (--out / Save file).",
+      "cli_flags": []
+    },
+    {
+      "id": "blast-radius",
+      "status": "both",
+      "cli": [
+        "unv blast-radius"
+      ],
+      "ui": [
+        "tool:nodes"
+      ],
+      "tauri": [
+        "matlog_note"
+      ],
+      "note": "Phase 36. `--host NODE` asks the hub (audit chain + config history) and is in Tools -> Nodes as the Blast radius button on each node. `--host local` reads this machine's materialisation log, a client-side file; the CLI writes it for exec, --out and --reveal, and the app writes it for every clipboard copy (`matlog_note`), so the reading half stays CLI-only by nature.",
+      "cli_flags": []
+    },
+    {
+      "id": "node-approval",
+      "status": "both",
+      "cli": [
+        "unv node policy",
+        "unv node approvals",
+        "unv node approve",
+        "unv node reject",
+        "unv node approver show",
+        "unv node approver register",
+        "unv node approver ls",
+        "unv node approver rm"
+      ],
+      "ui": [
+        "tool:nodes"
+      ],
+      "tauri": [
+        "approver_public",
+        "approver_sign"
+      ],
+      "note": "Phase 37.1: the approver key on this machine (the app and the CLI read one file), registered with the hub, makes a node set to 'device' approvable only by a signature made there. Phase 37. Tools -> Nodes: per-node 'require approval' toggle, the held pushes with Review (diff, secrets as fingerprints), Approve and Reject, over /api/nodes/{id}/policy and /api/node-approvals/{id}/{approve|reject}. The agent half (a target's `require_approval`, the signed-approval check) is in node.toml and runs on the host.",
+      "cli_flags": []
+    },
+    {
       "id": "strict-write",
       "status": "both",
       "cli": [
-        "envv user strict-write"
+        "unv user strict-write"
       ],
       "ui": [
         "src:src/ts/users.ts"
@@ -578,14 +693,14 @@
         "lan_stop",
         "lan_status"
       ],
-      "note": "The app hosts the vault it has open on the LAN for up to 8 idle hours. The CLI-side equivalent is the separate envv-server binary (envv-server --host 0.0.0.0 --tls), which serves a vault file to the LAN as its own process.",
+      "note": "The app hosts the vault it has open on the LAN for up to 8 idle hours. The CLI-side equivalent is the separate unv-server binary (unv-server --host 0.0.0.0 --tls), which serves a vault file to the LAN as its own process.",
       "cli_flags": []
     },
     {
       "id": "reset-vault",
       "status": "both",
       "cli": [
-        "envv reset-vault"
+        "unv reset-vault"
       ],
       "ui": [],
       "tauri": [
@@ -598,12 +713,12 @@
       "id": "cli-session",
       "status": "exempt",
       "cli": [
-        "envv completions",
-        "envv describe",
-        "envv login",
-        "envv whoami",
-        "envv logout",
-        "envv sessions"
+        "unv completions",
+        "unv describe",
+        "unv login",
+        "unv whoami",
+        "unv logout",
+        "unv sessions"
       ],
       "ui": [],
       "tauri": [],
@@ -614,7 +729,7 @@
       "id": "cwd-context",
       "status": "exempt",
       "cli": [
-        "envv use"
+        "unv use"
       ],
       "ui": [],
       "tauri": [],
@@ -625,7 +740,7 @@
       "id": "exec",
       "status": "exempt",
       "cli": [
-        "envv exec"
+        "unv exec"
       ],
       "ui": [],
       "tauri": [],
@@ -636,7 +751,7 @@
       "id": "watch",
       "status": "exempt",
       "cli": [
-        "envv watch"
+        "unv watch"
       ],
       "ui": [],
       "tauri": [],
@@ -647,7 +762,7 @@
       "id": "shield",
       "status": "exempt",
       "cli": [
-        "envv shield"
+        "unv shield"
       ],
       "ui": [],
       "tauri": [],
@@ -658,8 +773,8 @@
       "id": "catalogue-publisher",
       "status": "exempt",
       "cli": [
-        "envv catalogue export",
-        "envv catalogue sign"
+        "unv catalogue export",
+        "unv catalogue sign"
       ],
       "ui": [],
       "tauri": [],
@@ -691,7 +806,7 @@
         "id:settings-btn"
       ],
       "tauri": [],
-      "note": "envCopyCase and envIncludePrefix are the global flags --env-case and --env-prefix (also ENVV_ENV_CASE / ENVV_ENV_PREFIX); copyProfile and metadataStyle were already --profile and --metadata; envCopyField is `get --field`. They govern copies and exports only: reference resolution and exec keep the default names.",
+      "note": "envCopyCase and envIncludePrefix are the global flags --env-case and --env-prefix (also UNV_ENV_CASE / UNV_ENV_PREFIX); copyProfile and metadataStyle were already --profile and --metadata; envCopyField is `get --field`. They govern copies and exports only: reference resolution and exec keep the default names.",
       "cli_flags": [
         "--env-case",
         "--env-prefix"
@@ -701,7 +816,7 @@
       "id": "entropy-sources",
       "status": "both",
       "cli": [
-        "envv gen sources"
+        "unv gen sources"
       ],
       "ui": [
         "id:s-entropy-source"
@@ -734,7 +849,7 @@
       "id": "vault-diff",
       "status": "both",
       "cli": [
-        "envv diff"
+        "unv diff"
       ],
       "ui": [
         "tool:diff"
@@ -747,15 +862,15 @@
       "id": "templates",
       "status": "both",
       "cli": [
-        "envv template ls",
-        "envv template show"
+        "unv template ls",
+        "unv template show"
       ],
       "ui": [
         "tool:templates"
       ],
       "tauri": [],
       "cli_flags": [],
-      "note": "One preset file, secret-templates.json, read by the pane and by vault_core::templates; `envv entry add --preset ID` creates from a preset and explicit flags override it."
+      "note": "One preset file, secret-templates.json, read by the pane and by vault_core::templates; `unv entry add --preset ID` creates from a preset and explicit flags override it."
     },
     {
       "id": "token-tools",
@@ -767,7 +882,7 @@
       ],
       "tauri": [],
       "cli_flags": [],
-      "note": "JWT decoding of pasted text and a reference table of key formats; neither reads vault data. The format table is the provider catalogue (envv catalogue show)."
+      "note": "JWT decoding of pasted text and a reference table of key formats; neither reads vault data. The format table is the provider catalogue (unv catalogue show)."
     }
   ]
 }
