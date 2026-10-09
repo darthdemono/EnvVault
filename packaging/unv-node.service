@@ -1,0 +1,46 @@
+# unv node agent (Phase 34). Install as /etc/systemd/system/unv-node.service.
+#
+# One-time setup, as root:
+#   useradd --system --home-dir /var/lib/unv-node --create-home --shell /usr/sbin/nologin unv-node
+#   install -d -o unv-node -g unv-node -m 700 /etc/unv-node
+#   (write the enrollment token to /etc/unv-node/token, then, as unv-node:)
+#   unv node enroll --hub https://hub.example:8743 --hub-fingerprint <sha256> \
+#       --token-file /etc/unv-node/token --state-dir /var/lib/unv-node
+#   (write /etc/unv-node/node.toml: one [[target]] per file; apply = false until you mean it)
+#
+# The agent is not root. A target's `reload` command is the only thing that
+# needs more, and NoNewPrivileges below rules out sudo. Give unv-node exactly
+# that one action with a polkit rule instead (org.freedesktop.systemd1.manage-units
+# for nginx.service only), and write reload = "systemctl reload nginx".
+# Files it may write must be writable by unv-node (group ownership or an ACL
+# on the one file), not by widening this unit.
+[Unit]
+Description=unv node agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=unv-node
+Group=unv-node
+Environment=UNV_NODE_DIR=/var/lib/unv-node
+ExecStart=/usr/local/bin/unv node run --config /etc/unv-node/node.toml
+Restart=on-failure
+RestartSec=5
+
+# The agent needs the network, its own state directory, and the files named in
+# node.toml. Everything else is closed. Add the directories of your targets to
+# ReadWritePaths (a path here that does not exist stops the unit from starting).
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+# AF_UNIX is for systemctl talking to the system bus.
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+ReadWritePaths=/var/lib/unv-node
+# ReadWritePaths=/etc/nginx/sites-enabled
+
+[Install]
+WantedBy=multi-user.target
