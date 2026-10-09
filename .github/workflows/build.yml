@@ -589,15 +589,15 @@ jobs:
           mkdir -p artifacts
           for a in desktop-linux-x86_64 desktop-windows-x86_64 \
                    headless-linux-x86_64 headless-windows-x86_64; do
-            for i in 1 2 3; do
+            for i in 1 2 3 4 5; do
               if gh run download "$GITHUB_RUN_ID" -n "$a" -D "artifacts/$a"; then
                 continue 2
               fi
               rm -rf "artifacts/$a"
               echo "$a: attempt $i failed; sleeping $((i * 20))s"
-              sleep $((i * 20))
+              sleep $((i * 30))
             done
-            echo "::error::could not download artifact $a after 3 attempts"
+            echo "::error::could not download artifact $a after 5 attempts"
             exit 1
           done
           # Empty is as fatal as absent, and fails more confusingly later.
