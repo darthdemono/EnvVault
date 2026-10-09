@@ -4,7 +4,7 @@
 //! Only the four stable project types are ported. The experimental types can
 //! still be created with `--experimental`, but they come up empty here rather
 //! than with a second, drifting copy of templates the UI owns; add their chunks
-//! in the app, or with `envv project chunk add`.
+//! in the app, or with `unv project chunk add`.
 
 use serde_json::{json, Value};
 
@@ -30,6 +30,12 @@ fn fd(key: &str, value: &str, field_type: &str, description: &str) -> Value {
 }
 
 pub fn starter_chunks(ptype: &str) -> Option<Vec<Value>> {
+    // Stack adapters (Phase 38) describe their own starters.
+    if let Some(a) = vault_core::stack::adapter(ptype) {
+        return Some(vault_core::stack::starter_chunks(a, &|| {
+            uuid::Uuid::new_v4().to_string()
+        }));
+    }
     match ptype {
         "wireguard" => Some(vec![
             chunk(
