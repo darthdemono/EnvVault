@@ -690,7 +690,7 @@ function openAddRemoteForm() {
         </div>
         <div class="users-detail-meta">
           <div class="users-detail-name">Add Remote Vault</div>
-          <div class="users-detail-sub">Connect to a running envv-server instance.</div>
+          <div class="users-detail-sub">Connect to a running unv-server instance.</div>
         </div>
       </div>
       <section class="users-section">
