@@ -23,7 +23,7 @@ ignore = [
   { id = "RUSTSEC-2026-0194", reason = "quick-xml: build-time plist parsing of our own files (Tauri)" },
   { id = "RUSTSEC-2026-0195", reason = "quick-xml: build-time plist parsing of our own files (Tauri)" },
   # Marvin Attack on RSA decryption timing. Pulled in by ssh-key's `crypto`
-  # feature (exactly pinned in AGENTS.md). EnvVault generates RSA/ed25519 keys and
+  # feature (exactly pinned in AGENTS.md). UnENVerse generates RSA/ed25519 keys and
   # never performs RSA private-key decryption on attacker-chosen ciphertext, which
   # is the precondition. There is no patched release.
   { id = "RUSTSEC-2023-0071", reason = "rsa: no fix exists; no RSA decryption oracle is exposed" },
