@@ -7,7 +7,7 @@ use crate::exporters;
 use crate::fmt::{cell, confirm, emit};
 use crate::out;
 use crate::refs::Resolver;
-use serde_json::json;
+use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 
 pub const CHUNK_TYPES: [&str; 29] = [
@@ -172,12 +172,21 @@ pub fn add(access: &Access, project: &str, name: &str, ctype: &str) -> CliResult
     {
         list[pi]["chunks"] = json!([]);
     }
-    list[pi]["chunks"].as_array_mut().unwrap().push(json!({
-        "id": uuid::Uuid::new_v4().to_string(),
-        "name": name,
-        "chunk_type": ctype,
-        "fields": [],
-    }));
+    // A stack adapter's chunk comes with its fields and defaults; the built-in
+    // types start empty, as they always have.
+    let fresh = vault_core::stack::adapters()
+        .iter()
+        .find_map(|a| a.chunk_spec(ctype))
+        .map(|spec| vault_core::stack::new_chunk(spec, name, uuid::Uuid::new_v4().to_string()))
+        .unwrap_or_else(|| {
+            json!({
+                "id": uuid::Uuid::new_v4().to_string(),
+                "name": name,
+                "chunk_type": ctype,
+                "fields": [],
+            })
+        });
+    list[pi]["chunks"].as_array_mut().unwrap().push(fresh);
     access.save(&vault)?;
     out::ok(
         "project.chunk.add",
@@ -395,6 +404,24 @@ pub const EXPORT_FORMATS: &[&str] = &[
     "json",
 ];
 
+/// Every `--format` value: the built-in exporters, then one per stack adapter.
+pub fn export_formats() -> Vec<&'static str> {
+    EXPORT_FORMATS
+        .iter()
+        .copied()
+        .chain(vault_core::stack::adapters().iter().map(|a| a.id.as_str()))
+        .collect()
+}
+
+/// Every chunk type `--type` accepts: the built-in ones, then each stack adapter's.
+pub fn all_chunk_types() -> Vec<&'static str> {
+    CHUNK_TYPES
+        .iter()
+        .copied()
+        .chain(vault_core::stack::chunk_types())
+        .collect()
+}
+
 /// The format a project of this type exports as when `--format` is omitted.
 ///
 /// Every one of the eleven project types maps to the exporter for its own
@@ -415,12 +442,74 @@ pub fn default_format_for(ptype: &str) -> &'static str {
         "kubernetes" => "k8s",
         "ssh_config" => "ssh",
         "traefik" => "traefik",
+        // A stack adapter's project type is also its exporter's name.
+        t if vault_core::stack::adapter(t).is_some() => {
+            vault_core::stack::adapter(t).map_or("env", |a| a.id.as_str())
+        }
         // `generic` holds env_file chunks by definition, so .env is right for it
         // — and it is the right answer for an unknown type from a newer build
         // too, since a .env of the project's env chunks is the one output that
         // cannot be wrong about a format it does not know.
         _ => "env",
     }
+}
+
+/// Renders one project to the single file a node target names.
+///
+/// This is the hub's render path: it always resolves `${…}` to real values,
+/// because its only caller hands the bytes to a node that writes them to disk.
+/// It never reaches stdout, so it does not consult `--reveal`. `compose` is the
+/// YAML and `compose-env` is the `.env` beside it, as two targets, because a
+/// node writes one file per target.
+pub fn render_project(vault: &Value, project: &str, exporter: &str) -> CliResult<String> {
+    render_project_as(vault, project, exporter, false)
+}
+
+/// As [`render_project`], with `redact` choosing between the deployable text and
+/// the same text with every resolved secret replaced by its fingerprint (what
+/// `unv project export` prints to a terminal). The config history stores both.
+pub fn render_project_as(
+    vault: &Value,
+    project: &str,
+    exporter: &str,
+    redact: bool,
+) -> CliResult<String> {
+    let pi = find_project_index(vault, project)?;
+    let p = projects(vault)[pi].clone();
+    let r = Resolver::from_parts(
+        crate::data::entries(vault),
+        projects(vault),
+        &crate::refs::env_copy_field(),
+        redact,
+    );
+    Ok(match exporter {
+        "wireguard" => exporters::export_wireguard(&p, &r),
+        "nginx" => exporters::export_nginx(&p, &r),
+        "apache" => exporters::export_apache(&p, &r),
+        "haproxy" => exporters::export_haproxy(&p, &r),
+        "ansible" => exporters::export_ansible(&p, &r),
+        "postgres" => exporters::export_postgres(&p, &r),
+        "k8s" => exporters::export_k8s(&p, &r),
+        "ssh" => exporters::export_ssh_config(&p, &r),
+        "traefik" => exporters::export_traefik(&p, &r),
+        a if vault_core::stack::adapter(a).is_some() => exporters::export_stack(a, &p, &r),
+        "compose" => exporters::export_docker_compose(&p, &r).yaml,
+        "compose-env" => exporters::export_docker_compose(&p, &r).env_file,
+        "env" => {
+            let e = exporters::export_project_env(&p, &r);
+            if !e.had_chunks {
+                return Err(CliError::not_found(format!(
+                    "Project '{project}' has no env_file chunks"
+                )));
+            }
+            e.text
+        }
+        other => {
+            return Err(CliError::invalid(format!(
+                "'{other}' is not a node exporter"
+            )))
+        }
+    })
 }
 
 pub fn export(
@@ -449,7 +538,7 @@ pub fn export(
     // The default format is now *derived from the project type for every type*,
     // not for three of them with a silent `.env` fallback for the rest.
     //
-    // The old fallback meant `envv project export my-lb` on an haproxy project
+    // The old fallback meant `unv project export my-lb` on an haproxy project
     // either wrote a file that was not an haproxy config, or failed with
     // "Project 'my-lb' has no env_file chunks" — a diagnosis naming neither the
     // cause nor the fix. `generic` still defaults to `.env`, which is correct:
@@ -466,6 +555,9 @@ pub fn export(
         "k8s" => emit(&exporters::export_k8s(&p, &r), out),
         "ssh" => emit(&exporters::export_ssh_config(&p, &r), out),
         "traefik" => emit(&exporters::export_traefik(&p, &r), out),
+        a if vault_core::stack::adapter(a).is_some() => {
+            emit(&exporters::export_stack(a, &p, &r), out)
+        }
         "compose" => {
             let c = exporters::export_docker_compose(&p, &r);
             match out {
@@ -517,7 +609,7 @@ pub fn export(
         ),
         other => Err(CliError::invalid(format!(
             "Unknown format '{other}'. Supported: {}.",
-            EXPORT_FORMATS.join(", ")
+            export_formats().join(", ")
         ))),
     }
 }
