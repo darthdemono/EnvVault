@@ -158,7 +158,7 @@ async fn the_agent_enrolls_applies_reports_and_stays_in_sync() {
     let cfg = config(
         &dir,
         &format!(
-            "[[target]]\nid=\"env-main\"\npath=\"{}\"\nproject=\"edge\"\nexporter=\"env\"\napply=true\nvalidate=\"true\"\n",
+            "[[target]]\nid=\"env-main\"\npath='{}'\nproject=\"edge\"\nexporter=\"env\"\napply=true\nvalidate=\"true\"\n",
             out.display()
         ),
     );
@@ -244,7 +244,7 @@ async fn a_failing_validate_leaves_the_file_alone_and_the_failure_reaches_the_au
     let cfg = config(
         &dir,
         &format!(
-            "[[target]]\nid=\"env-main\"\npath=\"{}\"\nproject=\"edge\"\nexporter=\"env\"\napply=true\nvalidate=\"exit 1\"\n",
+            "[[target]]\nid=\"env-main\"\npath='{}'\nproject=\"edge\"\nexporter=\"env\"\napply=true\nvalidate=\"exit 1\"\n",
             out.display()
         ),
     );
@@ -287,7 +287,7 @@ async fn apply_off_is_observe_only_and_a_locked_hub_changes_nothing() {
     let cfg = config(
         &dir,
         &format!(
-            "[[target]]\nid=\"env-main\"\npath=\"{}\"\nproject=\"edge\"\nexporter=\"env\"\n",
+            "[[target]]\nid=\"env-main\"\npath='{}'\nproject=\"edge\"\nexporter=\"env\"\n",
             out.display()
         ),
     );
@@ -305,7 +305,7 @@ async fn apply_off_is_observe_only_and_a_locked_hub_changes_nothing() {
     // Flip apply on, then lock the hub: still nothing is written.
     let cfg = config(
         &dir,
-        &format!("[[target]]\nid=\"env-main\"\npath=\"{}\"\nproject=\"edge\"\nexporter=\"env\"\napply=true\n", out.display()),
+        &format!("[[target]]\nid=\"env-main\"\npath='{}'\nproject=\"edge\"\nexporter=\"env\"\napply=true\n", out.display()),
     );
     let (d2, c2) = (dir.clone(), cfg);
     drop(agent);
@@ -331,7 +331,7 @@ async fn a_pull_target_travels_to_the_owner_once_and_only_on_request() {
     enroll(&h, &dir, "laptop").await;
     let cfg = config(
         &dir,
-        &format!("[[target]]\nid=\"wg\"\npath=\"{}\"\nproject=\"edge\"\nexporter=\"wireguard\"\nmode=\"pull\"\n", file.display()),
+        &format!("[[target]]\nid=\"wg\"\npath='{}'\nproject=\"edge\"\nexporter=\"wireguard\"\nmode=\"pull\"\n", file.display()),
     );
     let (d2, c2) = (dir.clone(), cfg);
     let mut agent = blocking(move || Agent::new(&d2, &c2)).await.unwrap();
@@ -396,7 +396,7 @@ async fn results_survive_a_locked_hub_and_are_reported_when_it_returns() {
     let cfg = config(
         &dir,
         &format!(
-            "[[target]]\nid=\"env-main\"\npath=\"{}\"\nproject=\"edge\"\nexporter=\"env\"\napply=true\n",
+            "[[target]]\nid=\"env-main\"\npath='{}'\nproject=\"edge\"\nexporter=\"env\"\napply=true\n",
             out.display()
         ),
     );
@@ -465,7 +465,7 @@ async fn apply_once(h: &Hub, name: &str) -> (std::path::PathBuf, PathBuf) {
     let cfg = config(
         &dir,
         &format!(
-            "[[target]]\nid=\"env-main\"\npath=\"{}\"\nproject=\"edge\"\nexporter=\"env\"\napply=true\n",
+            "[[target]]\nid=\"env-main\"\npath='{}'\nproject=\"edge\"\nexporter=\"env\"\napply=true\n",
             out.display()
         ),
     );
@@ -623,7 +623,7 @@ fn approval_config(dir: &Path, out: &Path) -> PathBuf {
     config(
         dir,
         &format!(
-            "[[target]]\nid=\"env-main\"\npath=\"{}\"\nproject=\"edge\"\nexporter=\"env\"\napply=true\nrequire_approval=true\n",
+            "[[target]]\nid=\"env-main\"\npath='{}'\nproject=\"edge\"\nexporter=\"env\"\napply=true\nrequire_approval=true\n",
             out.display()
         ),
     )
@@ -1005,7 +1005,7 @@ async fn listening_node(h: &Hub, name: &str, target_path: &Path, apply: bool) ->
     let cfg = config(
         &dir,
         &format!(
-            "[[target]]\nid=\"env-main\"\npath=\"{}\"\nproject=\"edge\"\nexporter=\"env\"\napply={apply}\nvalidate=\"true\"\n",
+            "[[target]]\nid=\"env-main\"\npath='{}'\nproject=\"edge\"\nexporter=\"env\"\napply={apply}\nvalidate=\"true\"\n",
             target_path.display()
         ),
     );
@@ -1426,7 +1426,7 @@ fn device_config(dir: &Path, out: &Path, approver: &str) -> PathBuf {
     config(
         dir,
         &format!(
-            "approver = \"{approver}\"\n[[target]]\nid=\"env-main\"\npath=\"{}\"\nproject=\"edge\"\nexporter=\"env\"\napply=true\nrequire_approval=true\n",
+            "approver = \"{approver}\"\n[[target]]\nid=\"env-main\"\npath='{}'\nproject=\"edge\"\nexporter=\"env\"\napply=true\nrequire_approval=true\n",
             out.display()
         ),
     )
