@@ -1,4 +1,4 @@
-//! `envv check [PROJECT]` — cross-chunk checks (Phase 29).
+//! `unv check [PROJECT]` — cross-chunk checks (Phase 29).
 //!
 //! The rules live in `vault_core::config_check` so the desktop app asks the same
 //! code over IPC. Findings carry chunk and field names, never field values, so the
@@ -38,6 +38,7 @@ pub fn run(
     project: Option<&str>,
     fail_on: Option<&str>,
     json_out: bool,
+    all_projects: bool,
 ) -> CliResult {
     let vault = access.load_vault()?;
     let names = vault_names(&vault);
@@ -47,10 +48,16 @@ pub fn run(
         None => projects(&vault),
     };
 
+    // `--all-projects`: a proxy_pass host may be a service of any project.
+    let elsewhere = if all_projects {
+        config_check::services_of(&projects(&vault))
+    } else {
+        Vec::new()
+    };
     let mut rows: Vec<Value> = Vec::new();
     for p in &targets {
         let pname = p.get("name").and_then(Value::as_str).unwrap_or("");
-        for f in config_check::check_project(p, &names) {
+        for f in config_check::check_project_scoped(p, &names, &elsewhere) {
             let mut j = f.to_json();
             j["project"] = json!(pname);
             rows.push(j);
@@ -65,6 +72,7 @@ pub fn run(
     };
     let summary = json!({
         "projects": targets.len(),
+        "scope": if all_projects { "all-projects" } else { "project" },
         "errors": errors,
         "warnings": warnings,
         "rules": config_check::RULES,
