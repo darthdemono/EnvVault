@@ -1,29 +1,29 @@
 services:
-  envv-server:
+  unv-server:
     build:
       context: .
       dockerfile: Dockerfile
-    image: envv-server:0.6.0
-    container_name: envv-server
+    image: unv-server:0.6.0
+    container_name: unv-server
     ports:
       - "8743:8743"
     volumes:
       - ./envv:/data # bind-mount: data lives next to docker-compose.yml, easy to back up / move
     environment:
-      # Set ENVV_PASSWORD in a .env file to auto-unlock on startup.
+      # Set UNV_PASSWORD in a .env file to auto-unlock on startup.
       # Leave unset to require manual POST /api/unlock instead.
       #
-      # The same .env drives the CLI: `envv --env-file .env enrich --online`
+      # The same .env drives the CLI: `unv --env-file .env enrich --online`
       # reads the password from here rather than keeping a second copy.
-      - ENVV_PASSWORD=${ENVV_PASSWORD:-}
+      - UNV_PASSWORD=${UNV_PASSWORD:-}
       # Raise if you actually serve concurrent clients; 2 is right for a vault.
-      - ENVV_WORKER_THREADS=${ENVV_WORKER_THREADS:-2}
+      - UNV_WORKER_THREADS=${UNV_WORKER_THREADS:-2}
       - MALLOC_ARENA_MAX=2
-      # Structured logging. `info` is the built-in default; set `ENVV_LOG=debug`
-      # to get one line per request with its id, or `ENVV_LOG_FORMAT=json` to
+      # Structured logging. `info` is the built-in default; set `UNV_LOG=debug`
+      # to get one line per request with its id, or `UNV_LOG_FORMAT=json` to
       # ship the log somewhere that parses it.
-      - ENVV_LOG=${ENVV_LOG:-info}
-      - ENVV_LOG_FORMAT=${ENVV_LOG_FORMAT:-}
+      - UNV_LOG=${UNV_LOG:-info}
+      - UNV_LOG_FORMAT=${UNV_LOG_FORMAT:-}
     restart: unless-stopped
 
     # A hard ceiling, not a target. Steady state is a few MB; the spikes are
