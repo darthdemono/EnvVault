@@ -15,6 +15,11 @@ pub struct ImportedVar {
     pub key: String,
     pub value: String,
     pub kind: String,
+    /// Safe to print: a prefix, a colour, a title, a link with no credential in
+    /// it. Set only when the importer is sure; everything else stays masked
+    /// (redaction is fail-closed). Omitted from the output when false.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub public: bool,
 }
 
 #[derive(Debug, Serialize, PartialEq)]
@@ -219,12 +224,133 @@ fn kind_for_string(name: &str, body: &str) -> &'static str {
     }
 }
 
+/// A name that says what it holds. Beats every other signal.
+fn secretish_name(name: &str) -> bool {
+    let n = name.to_ascii_lowercase();
+    [
+        "key",
+        "token",
+        "secret",
+        "password",
+        "passwd",
+        "pwd",
+        "auth",
+        "credential",
+        "salt",
+        "signature",
+        "private",
+        "webhook",
+        "cert",
+    ]
+    .iter()
+    .any(|w| n.contains(w))
+}
+
+/// Query-parameter names and path pieces that mean a credential rides in the URL.
+fn url_is_public(url: &str) -> bool {
+    let u = url.trim().trim_start_matches('<').trim_end_matches('>');
+    let Some(rest) = u
+        .strip_prefix("https://")
+        .or_else(|| u.strip_prefix("http://"))
+    else {
+        return false;
+    };
+    let (authority, tail) = rest.split_once('/').unwrap_or((rest, ""));
+    if authority.contains('@') {
+        return false; // user:password@host
+    }
+    let (path, query) = tail.split_once('?').unwrap_or((tail, ""));
+    let path = path.to_ascii_lowercase();
+    if path.contains("hook") {
+        return false; // a webhook URL is the credential
+    }
+    // A long mixed letter-and-digit path segment is a token, whatever it is called.
+    let tokenish = |seg: &str| {
+        seg.len() >= 24
+            && seg
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+            && seg.chars().any(|c| c.is_ascii_digit())
+            && seg.chars().any(|c| c.is_ascii_alphabetic())
+    };
+    if path.split('/').any(tokenish) {
+        return false;
+    }
+    let bad = [
+        "key", "token", "secret", "pass", "pwd", "sig", "auth", "code", "session",
+    ];
+    query
+        .split(['&', ';'])
+        .filter_map(|kv| kv.split('=').next())
+        .all(|k| {
+            let k = k.to_ascii_lowercase();
+            !bad.iter().any(|b| k.contains(b))
+        })
+}
+
+/// Prose: words with spaces and no assignment or long run of mixed characters.
+fn is_prose(v: &str) -> bool {
+    v.contains(' ')
+        && !v.contains('=')
+        && !v.split_whitespace().any(|w| {
+            w.len() >= 16
+                && w.chars().any(|c| c.is_ascii_digit())
+                && w.chars().any(|c| c.is_ascii_alphabetic())
+        })
+}
+
+/// Whether the importer is sure a value is safe to print. `public_keys` are the
+/// keys already judged public, for templates (a template is public only if every
+/// input is, so a composite can never launder a secret into a printable value).
+fn is_public(name: &str, kind: &str, value: &str, public_keys: &HashSet<String>) -> bool {
+    if secretish_name(name) {
+        return false;
+    }
+    match kind {
+        "hex_int" | "bool" | "float" => true,
+        "int" => value.trim_start_matches(['-', '+']).len() <= 6,
+        "url" => url_is_public(value),
+        "markdown_link" => value
+            .split_once("](")
+            .map(|(_, t)| t.trim_end_matches(')'))
+            .is_some_and(url_is_public),
+        "template" => {
+            // The `{name}` holes; `{{` and `}}` are literal braces.
+            let mut rest = value.replace("{{", "").replace("}}", "");
+            let mut refs: Vec<String> = Vec::new();
+            while let Some(i) = rest.find('{') {
+                let Some(j) = rest[i..].find('}') else {
+                    return false;
+                };
+                refs.push(rest[i + 1..i + j].to_string());
+                rest.replace_range(i..=i + j, "");
+            }
+            refs.iter().all(|r| public_keys.contains(r))
+                && (!rest.contains("://")
+                    || url_is_public(&rest.replace(' ', ""))
+                    || is_prose(&rest))
+        }
+        "string" => {
+            let t = value.trim();
+            if t.chars().count() <= 2 {
+                return true;
+            }
+            if t.starts_with('<') && t.ends_with('>') && t.contains("://") {
+                return url_is_public(t);
+            }
+            is_prose(t)
+        }
+        _ => false,
+    }
+}
+
 pub fn import_python_config(text: &str) -> BundleImport {
     let mut vars: Vec<ImportedVar> = Vec::new();
     let mut warnings: Vec<String> = Vec::new();
     let mut bound: HashMap<String, String> = HashMap::new();
     let mut taken: HashSet<String> = HashSet::new();
     let mut rewrites: Vec<(String, String, usize)> = Vec::new();
+    let mut public_keys: HashSet<String> = HashSet::new();
 
     for (index, raw) in text.lines().enumerate() {
         let line_no = index + 1;
@@ -272,8 +398,14 @@ pub fn import_python_config(text: &str) -> BundleImport {
                                 None => rewrites.push((from, to, 1)),
                             }
                         }
+                        // An f-string with nothing to fill in is just a string; only a
+                        // real hole (or a literal brace) makes it a template.
+                        kind = if text.contains(['{', '}']) {
+                            "template"
+                        } else {
+                            kind_for_string(name, &text)
+                        };
                         value = text;
-                        kind = "template";
                         extra = None;
                     }
                 },
@@ -327,10 +459,15 @@ pub fn import_python_config(text: &str) -> BundleImport {
         }
         taken.insert(key.clone());
         bound.insert(name.to_string(), key.clone());
+        let public = is_public(name, kind, &value, &public_keys);
+        if public {
+            public_keys.insert(key.clone());
+        }
         vars.push(ImportedVar {
             key,
             value,
             kind: kind.to_string(),
+            public,
         });
     }
 
@@ -349,15 +486,20 @@ mod tests {
     use super::*;
 
     #[test]
-    fn matches_the_golden_file_the_typescript_twin_wrote() {
+    fn matches_the_golden_files_the_typescript_twin_wrote() {
         let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../tests/fixtures/parity/");
-        let src = std::fs::read_to_string(format!("{root}bundle-import-synthetic.py")).unwrap();
-        let gold: serde_json::Value = serde_json::from_str(
-            &std::fs::read_to_string(format!("{root}bundle-import.json")).unwrap(),
-        )
-        .unwrap();
-        let got = serde_json::to_value(import_python_config(&src)).unwrap();
-        assert_eq!(got, gold);
+        for (src, gold) in [
+            ("bundle-import-synthetic.py", "bundle-import.json"),
+            // The maintainer's own bot config, values blanked (Phase 24.1 acceptance).
+            ("bundle-discord-setup.py", "bundle-discord-setup.json"),
+        ] {
+            let src = std::fs::read_to_string(format!("{root}{src}")).unwrap();
+            let gold: serde_json::Value =
+                serde_json::from_str(&std::fs::read_to_string(format!("{root}{gold}")).unwrap())
+                    .unwrap();
+            let got = serde_json::to_value(import_python_config(&src)).unwrap();
+            assert_eq!(got, gold);
+        }
     }
 
     #[test]
