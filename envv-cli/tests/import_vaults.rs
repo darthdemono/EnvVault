@@ -131,3 +131,89 @@ fn something_that_is_not_a_proton_export_says_so() {
     let err = read_proton(&serde_json::json!({ "items": [] })).unwrap_err();
     assert!(err.contains("does not look like"), "{err}");
 }
+
+// ── Nextcloud config.php ─────────────────────────────────────────────────────
+
+fn nextcloud(name: &str) -> (Value, Vec<String>) {
+    let p = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures")
+        .join(name);
+    envv_cli::import_vaults::source_value("nextcloud", &std::fs::read_to_string(p).unwrap())
+        .expect("parse")
+}
+
+#[test]
+fn a_real_sqlite_nextcloud_yields_its_two_instance_secrets_and_nothing_else() {
+    // Written by a Nextcloud 29 container's installer, not by hand.
+    let (doc, warnings) = nextcloud("nextcloud-config.php");
+    assert!(warnings.is_empty(), "{warnings:?}");
+    let (items, skipped) = envv_cli::import_vaults::read_nextcloud(&doc);
+    assert_eq!(skipped, 0);
+    let names: Vec<&str> = items.iter().map(|i| i.provider.as_str()).collect();
+    assert_eq!(
+        names,
+        [
+            "Nextcloud passwordsalt (oc8u6g4icnd8)",
+            "Nextcloud secret (oc8u6g4icnd8)"
+        ]
+    );
+    assert!(items.iter().all(|i| i.secret_type == "password"));
+}
+
+#[test]
+fn a_full_nextcloud_config_yields_database_smtp_redis_and_object_store_secrets() {
+    let (doc, warnings) = nextcloud("nextcloud-full.php");
+    assert_eq!(
+        warnings.len(),
+        1,
+        "the getenv() licence key is reported: {warnings:?}"
+    );
+    let (items, skipped) = envv_cli::import_vaults::read_nextcloud(&doc);
+    assert_eq!(skipped, 1, "and counted as skipped");
+    let db = by_name(&items, "Nextcloud database (ocabc123)");
+    assert_eq!(db.username.as_deref(), Some("nc"));
+    assert_eq!(db.secret, "EXAMPLE_DB_cccccccccccc");
+    assert_eq!(db.notes.as_deref(), Some("mysql at db:3306 / nextcloud"));
+    assert_eq!(
+        by_name(&items, "Nextcloud SMTP (ocabc123)")
+            .username
+            .as_deref(),
+        Some("mailer@example.com")
+    );
+    assert_eq!(
+        by_name(&items, "Nextcloud Redis (ocabc123)").secret,
+        "EXAMPLE_REDIS_eeeeeeeeeeee"
+    );
+    let s3 = by_name(&items, "Nextcloud object store (ocabc123)");
+    assert_eq!(s3.username.as_deref(), Some("EXAMPLE_S3KEY"));
+    assert_eq!(s3.secret_type, "api_key");
+    assert_eq!(s3.notes.as_deref(), Some("bucket nc-data"));
+    assert_eq!(s3.url.as_deref(), Some("https://cloud.example.com"));
+    assert_eq!(items.len(), 6);
+}
+
+#[test]
+fn importing_a_nextcloud_config_twice_changes_nothing_the_second_time() {
+    use envv_cli::import_vaults::{plan_import, ImportOpts};
+    let (doc, _) = nextcloud("nextcloud-full.php");
+    let opts = ImportOpts {
+        apply: false,
+        project: None,
+        category: None,
+        keep_folders: true,
+    };
+    let vault = serde_json::json!({ "api_keys": [], "projects": [], "user_categories": [] });
+    let first = plan_import(&vault, "nextcloud", &doc, &opts).unwrap();
+    assert_eq!(first.created, 6);
+    let mut after = vault.clone();
+    after["api_keys"] = serde_json::json!(first.entries);
+    let second = plan_import(&after, "nextcloud", &doc, &opts).unwrap();
+    assert_eq!(
+        (second.created, second.updated, second.unchanged),
+        (0, 0, 6)
+    );
+    // The preview is fingerprints only.
+    assert!(!serde_json::to_string(&first.preview)
+        .unwrap()
+        .contains("EXAMPLE_DB"));
+}
