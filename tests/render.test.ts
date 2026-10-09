@@ -42,6 +42,7 @@ describe('renderGrid', () => {
     const card = grid().querySelector('.bundle-card-wrap')!;
     expect(card.querySelectorAll('[role="tab"]')).toHaveLength(4);
     expect(card.querySelector('[role="tab"][aria-selected="true"]')?.textContent).toBe('v3');
+    expect(card.querySelectorAll('[role="tab"][aria-selected="false"]')).toHaveLength(3);
     expect(card.querySelectorAll('.bundle-member')).toHaveLength(1);
     expect(card.querySelector('.bundle-member')?.textContent).toContain('v3');
   });
@@ -54,6 +55,7 @@ describe('renderGrid', () => {
     ];
     renderGrid();
     expect(cards()).toHaveLength(3);
+    expect(grid().querySelectorAll('.card-chevron[aria-expanded="false"]')).toHaveLength(3);
   });
 
   it('shows an empty state instead of cards when nothing matches', () => {
