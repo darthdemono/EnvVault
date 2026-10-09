@@ -107,7 +107,7 @@ describe('normalizeB32', () => {
   it('collapses every spelling of one seed to one string', () => {
     // Two entries holding the same seed typed differently must be
     // byte-identical, or their fingerprints disagree and a duplicate is
-    // invisible to `envv totp ls` and to the health scan.
+    // invisible to `unv totp ls` and to the health scan.
     const spellings = [
       'JBSWY3DPEHPK3PXP',
       'jbswy3dpehpk3pxp',
@@ -120,7 +120,7 @@ describe('normalizeB32', () => {
 
 describe('totpParamsOf — golden table', () => {
   // The third parity table. These four fields were read three different ways in
-  // Rust alone — `envv totp code` clamped, `envv totp ls` did not, and
+  // Rust alone — `unv totp code` clamped, `unv totp ls` did not, and
   // `entry_totp_code` did neither — so an entry could list as a 99-digit
   // credential, hand over six digits, and return an error to the app instead of
   // a code. `vault_core::totp::Params::from_fields` is now the single reader and
