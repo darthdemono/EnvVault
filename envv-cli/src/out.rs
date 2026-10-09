@@ -8,8 +8,8 @@
 //!   stdout prints a *fingerprint* instead: `sha256:` plus twelve hex characters.
 //!   That is enough to tell "did this change?" and "do these two entries hold the
 //!   same secret?" apart, and useless for authenticating anywhere.
-//! - **Materialisation never passes through stdout.** `--out`, `envv exec` and
-//!   `envv render --out` move real values from the vault into a file or a child
+//! - **Materialisation never passes through stdout.** `--out`, `unv exec` and
+//!   `unv render --out` move real values from the vault into a file or a child
 //!   process's environment. The orchestrator arranges the move; it never sees
 //!   what moved.
 //!
@@ -114,8 +114,8 @@ pub fn masked_json(value: &str) -> Value {
 /// Public because every path that can print one of these has to apply the same
 /// rule. `entries::cmd_get --field` and `pool::cmd_next --field` each carried
 /// their own copy of this list, and the copy is what went stale: `totp_secret`
-/// was added here and nowhere else, so `envv get X --field totp_secret` printed
-/// an authenticator seed in clear while `envv get X` masked the same value.
+/// was added here and nowhere else, so `unv get X --field totp_secret` printed
+/// an authenticator seed in clear while `unv get X` masked the same value.
 pub const SECRET_FIELDS: [&str; 5] = [
     "api_key",
     "api_secret",
@@ -129,7 +129,7 @@ pub const SECRET_FIELDS: [&str; 5] = [
 /// **This list is what makes redaction fail closed.** Masking used to be an
 /// allow-list of fields to hide, so any field the running binary did not know
 /// about was printed verbatim — and a binary reading a vault written by a newer
-/// build is the ordinary case, not an edge one. A 0.20.0 `envv list --json`
+/// build is the ordinary case, not an edge one. A 0.20.0 `unv list --json`
 /// against a vault holding a Phase 22 seed printed `api_key` as a fingerprint
 /// and `totp_secret` in clear, because the field did not exist when that binary
 /// was compiled.
@@ -195,7 +195,7 @@ const PUBLIC_FIELDS_EXTRA: [&str; 4] = ["totp_digits", "totp_period", "totp_kind
 /// `primary_public` and `secret_public` are the E5 opt-out flags themselves, and
 /// they are booleans, so the unknown-string sweep would never have touched them;
 /// they are listed for the reader rather than for the code.
-const PUBLIC_FIELDS_P23: [&str; 10] = [
+const PUBLIC_FIELDS_P23: [&str; 11] = [
     "primary_role",
     "secret_role",
     "label",
@@ -208,6 +208,7 @@ const PUBLIC_FIELDS_P23: [&str; 10] = [
     // "what is this and how would I use it" — while protecting nothing.
     "auth_scheme",
     "auth_param",
+    "auth_template",
     // A timestamp, and the whole point of E13's check is that a listing can say
     // which sessions nobody has confirmed lately.
     "last_verified_at",
@@ -401,50 +402,57 @@ pub fn redact_entries(entries: &[Value]) -> Vec<Value> {
 /// Every string value this build treats as private in an entry.
 ///
 /// The outward matcher follows the same fail-closed policy as a redacted
-/// listing. A new private field then cannot leak through `envv shield` or evade
-/// `envv scan --exposed` while the ordinary listing still masks it.
+/// listing. A new private field then cannot leak through `unv shield` or evade
+/// `unv scan --exposed` while the ordinary listing still masks it.
 pub fn secret_values(entry: &Value) -> Vec<String> {
+    secret_pairs(entry).into_iter().map(|(_, v)| v).collect()
+}
+
+/// As [`secret_values`], each with the name of the part of the entry it came
+/// from: a field name, `extra_vars/NAME`, or `version_history` for a value the
+/// entry no longer holds. Blast radius (Phase 36) needs the name to say *which*
+/// credential was on a host, and to tell a live value from a rotated-away one.
+pub fn secret_pairs(entry: &Value) -> Vec<(String, String)> {
     let is_cookie = entry.get("secretType").and_then(|v| v.as_str()) == Some("cookie");
-    let mut values = Vec::new();
+    let mut pairs: Vec<(String, String)> = Vec::new();
 
     for field in SECRET_FIELDS {
         if !public_slot(entry, is_cookie, field) {
             if let Some(value) = entry.get(field).and_then(|v| v.as_str()) {
-                values.push(value.to_string());
+                pairs.push((field.to_string(), value.to_string()));
             }
         }
     }
     if let Some(fields) = entry.as_object() {
-        values.extend(fields.iter().filter_map(|(field, value)| {
+        pairs.extend(fields.iter().filter_map(|(field, value)| {
             (value.is_string()
                 && !is_public_field(field)
                 && !SECRET_FIELDS.contains(&field.as_str()))
-            .then(|| value.as_str().map(str::to_string))
+            .then(|| value.as_str().map(|v| (field.clone(), v.to_string())))
             .flatten()
         }));
     }
     if let Some(vars) = entry.get("extra_vars").and_then(|v| v.as_array()) {
-        values.extend(vars.iter().filter_map(|var| {
+        pairs.extend(vars.iter().filter_map(|var| {
             let is_public =
                 !is_cookie && var.get("public").and_then(|v| v.as_bool()).unwrap_or(false);
-            (!is_public)
-                .then(|| {
-                    var.get("value")
-                        .and_then(|v| v.as_str())
-                        .map(str::to_string)
-                })
-                .flatten()
+            if is_public {
+                return None;
+            }
+            let value = var.get("value").and_then(|v| v.as_str())?;
+            let name = var.get("key").and_then(|v| v.as_str()).unwrap_or("?");
+            Some((format!("extra_vars/{name}"), value.to_string()))
         }));
     }
     if let Some(history) = entry.get("version_history").and_then(|v| v.as_array()) {
-        values.extend(history.iter().filter_map(|entry| {
+        pairs.extend(history.iter().filter_map(|entry| {
             entry
                 .get("value")
                 .and_then(|value| value.as_str())
-                .map(str::to_string)
+                .map(|v| ("version_history".to_string(), v.to_string()))
         }));
     }
-    values
+    pairs
 }
 
 /// True when a chunk field holds secret material.
@@ -501,6 +509,16 @@ pub fn redact_project(project: &Value) -> Value {
 /// Every command funnels through here so the JSON shape is identical everywhere:
 /// `{"ok": true, "command": "...", "data": ...}`.
 pub fn ok(command: &str, data: Value, text: impl FnOnce()) {
+    // Anything printed under --reveal may hold real values, whichever command
+    // printed it. The log keeps entry, field and fingerprint, never the value
+    // (Phase 36); a document with no vault secret in it writes nothing.
+    if revealing() {
+        crate::matlog::note(
+            "stdout",
+            &format!("--reveal ({command})"),
+            &serde_json::to_string(&data).unwrap_or_default(),
+        );
+    }
     if is_json() {
         let mut env = json!({ "ok": true, "command": command, "data": data });
         if dry_run() {
