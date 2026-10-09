@@ -1,9 +1,9 @@
-//! `envv totp` — the authenticator half of the vault (Phase 22).
+//! `unv totp` — the authenticator half of the vault (Phase 22).
 //!
 //! An entry's `totp_secret` is a seed a **third-party service** issued, from
 //! which this command produces the six digits you type into that service. It is
-//! the mirror image of `envv user totp`, which enrolls a second factor on
-//! *EnvVault's own* sub-user login; the two share the RFC 6238 arithmetic in
+//! the mirror image of `unv user totp`, which enrolls a second factor on
+//! *UnENVerse's own* sub-user login; the two share the RFC 6238 arithmetic in
 //! `vault-core::totp` and nothing else.
 //!
 //! # What prints and what does not
@@ -11,10 +11,10 @@
 //! Phase 14's rule is that stdout redacts stored values by default. It applies
 //! here exactly as written, to the two things that *are* stored values:
 //!
-//! - the **seed** (`envv get X --field totp_secret`) is masked to a fingerprint,
+//! - the **seed** (`unv get X --field totp_secret`) is masked to a fingerprint,
 //!   `--reveal` opts back in — it is in `SECRET_FIELDS` like every other secret;
-//! - the **`otpauth://` URI** (`envv totp uri`) contains the seed, so it is
-//!   refused to stdout and written with `--out`, exactly like `envv export`.
+//! - the **`otpauth://` URI** (`unv totp uri`) contains the seed, so it is
+//!   refused to stdout and written with `--out`, exactly like `unv export`.
 //!
 //! The **code** prints. It is not a stored value: it is derived, it is six
 //! digits, and it is dead in under thirty seconds. This is an exemption to the
@@ -26,15 +26,15 @@
 //!
 //! # Import and export
 //!
-//! `envv totp import` reads what Ente Auth, Aegis, 2FAS, andOTP, Bitwarden and
-//! Google Authenticator write; `envv totp export` writes the three formats those
+//! `unv totp import` reads what Ente Auth, Aegis, 2FAS, andOTP, Bitwarden and
+//! Google Authenticator write; `unv totp export` writes the three formats those
 //! apps read back. Both go through `vault_core::totp_import`, which is the only
 //! implementation — the desktop app calls the same code over IPC rather than
 //! parsing six formats a second time.
 //!
 //! Export **is** a file full of seeds, so it follows the seed's rule and not the
 //! code's: refused to stdout unless `--reveal`, written 0600 by `--out`, exactly
-//! like `envv backup export`. Import writes to the vault, so it never overwrites
+//! like `unv backup export`. Import writes to the vault, so it never overwrites
 //! a seed that is already there with a different one — see `cmd_import`.
 
 use crate::access::Access;
@@ -90,14 +90,14 @@ fn seed_of(entry: &Value) -> CliResult<Option<(String, totp::Params)>> {
 fn require_seed(entry: &Value) -> CliResult<(String, totp::Params)> {
     seed_of(entry)?.ok_or_else(|| {
         CliError::not_found(format!(
-            "'{}' has no TOTP seed — add one with `envv entry set '{}' --totp <SEED|otpauth://…>`",
+            "'{}' has no TOTP seed — add one with `unv entry set '{}' --totp <SEED|otpauth://…>`",
             data::provider_of(entry),
             data::provider_of(entry),
         ))
     })
 }
 
-/// `envv totp code <entry>` — the current code and how long it has left.
+/// `unv totp code <entry>` — the current code and how long it has left.
 pub fn cmd_code(access: &Access, query: &str, next: bool) -> CliResult {
     let vault = access.load_vault_or_empty()?;
     let idx = find_entry_index(&vault, query)?;
@@ -122,7 +122,7 @@ pub fn cmd_code(access: &Access, query: &str, next: bool) -> CliResult {
         || {
             // A counter-based code has no clock, so there is no countdown to
             // print — its position is the useful number, and it is what
-            // `envv totp advance` moves.
+            // `unv totp advance` moves.
             if live.kind == totp::Kind::Hotp {
                 println!("{}  (counter {})", grouped_code(&live.code), live.counter);
             } else {
@@ -140,7 +140,7 @@ pub fn cmd_code(access: &Access, query: &str, next: bool) -> CliResult {
     Ok(())
 }
 
-/// `envv totp advance` — move a counter-based seed to its next position.
+/// `unv totp advance` — move a counter-based seed to its next position.
 ///
 /// Reading a code deliberately does **not** advance it. A counter-based code
 /// stands until it is used, and the service moves on only when it accepts one;
@@ -204,7 +204,7 @@ fn grouped_code(code: &str) -> String {
     format!("{} {}", &code[..half], &code[half..])
 }
 
-/// `envv totp ls` — which entries carry a seed.
+/// `unv totp ls` — which entries carry a seed.
 ///
 /// Names and parameters only, never codes. A vault-wide dump of live codes is
 /// the same shape as a vault-wide export to stdout, which Phase 14 refuses: it
@@ -216,13 +216,13 @@ pub fn cmd_ls(access: &Access) -> CliResult {
     let mut rows: Vec<Value> = Vec::new();
     for entry in &data::entries(&vault) {
         // A broken seed is reported rather than aborting the listing: one bad
-        // entry must not make `envv totp ls` useless for the other forty.
+        // entry must not make `unv totp ls` useless for the other forty.
         let (ok, note) = match seed_of(entry) {
             Ok(Some(_)) => (true, None),
             Ok(None) => continue,
             Err(e) => (false, Some(e.message)),
         };
-        // The same reader `envv totp code` uses. Listing the raw stored numbers
+        // The same reader `unv totp code` uses. Listing the raw stored numbers
         // instead — which is what this did — reported a credential the code
         // command would never produce: 99 digits listed, six digits handed over.
         let params = params_of(entry);
@@ -283,7 +283,7 @@ pub fn cmd_ls(access: &Access) -> CliResult {
     Ok(())
 }
 
-/// `envv totp uri <entry> [--out FILE]` — the `otpauth://` URI, for a new phone.
+/// `unv totp uri <entry> [--out FILE]` — the `otpauth://` URI, for a new phone.
 ///
 /// The URI **is** the seed, so it obeys the export rule rather than the code
 /// rule: refused to stdout (exit 9) unless `--reveal`, written in full by
@@ -337,9 +337,9 @@ pub fn cmd_uri(access: &Access, query: &str, out_path: Option<&PathBuf>) -> CliR
     Ok(())
 }
 
-/// `envv totp rm <entry>` — forget the seed.
+/// `unv totp rm <entry>` — forget the seed.
 ///
-/// Destructive and unrecoverable from EnvVault's side once the last copy is
+/// Destructive and unrecoverable from UnENVerse's side once the last copy is
 /// gone, so it goes through the same confirmation every delete does. The
 /// previous value lands in `version_history`, which is the one thing standing
 /// between a mis-typed provider name and a locked account.
@@ -376,7 +376,7 @@ pub fn cmd_rm(access: &Access, query: &str, yes: bool) -> CliResult {
 
 // ── Import and export ─────────────────────────────────────────────────────────
 
-/// `envv totp import <file>` — read another authenticator's export into the vault.
+/// `unv totp import <file>` — read another authenticator's export into the vault.
 ///
 /// The merge rules are `vault_core::totp_import::{plan, write_fields, new_entry}`
 /// and not this file's: whether a working second factor survives an import must
@@ -419,7 +419,7 @@ pub fn cmd_import(
             .any(|p| p.get("id").and_then(|x| x.as_str()) == Some(id));
         if id != "Universal" && !known {
             return Err(CliError::not_found(format!(
-                "No such project id: '{id}' (see `envv project ls`)"
+                "No such project id: '{id}' (see `unv project ls`)"
             )));
         }
     }
@@ -531,11 +531,11 @@ pub fn cmd_import(
     Ok(())
 }
 
-/// `envv totp export` — write every stored seed in a format another app reads.
+/// `unv totp export` — write every stored seed in a format another app reads.
 ///
 /// This is a **materialising path by construction**: the file it produces is
-/// nothing but seeds, so it obeys the same rule `envv backup export` and
-/// `envv totp uri` do — refused to stdout (exit 9) unless `--reveal`, written
+/// nothing but seeds, so it obeys the same rule `unv backup export` and
+/// `unv totp uri` do — refused to stdout (exit 9) unless `--reveal`, written
 /// 0600 by `--out`.
 pub fn cmd_export(
     access: &Access,
