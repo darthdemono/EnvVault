@@ -188,7 +188,7 @@ describe('exporter parity fixtures', () => {
   // `envv-cli/src/calendar.rs`, pinned by this same `calendar.ics` fixture from
   // both sides. Phase 24.3 deleted the TypeScript builder — the format is now
   // built in exactly one place, `vault-core/src/calendar.rs`, reached by the
-  // app over IPC (`calendar_build_ics`) and by the CLI and `envv-server`
+  // app over IPC (`calendar_build_ics`) and by the CLI and `unv-server`
   // directly. The fixture still exists and still pins the Rust output; see
   // `calendar_ics` and `calendar_carries_no_secret_value` in
   // `envv-cli/tests/parity.rs`.
@@ -198,7 +198,7 @@ describe('exporter parity fixtures', () => {
    * already drifted silently before it was pinned. `PASSWORD`, `PASS` and `PWD`
    * were in this file's `FIELD_ALIASES` and missing from `canonical_field` in
    * `envv-cli/src/refs.rs`, so `${PgProd/password}` resolved here and reached
-   * `.pgpass`, `envv render`, `envv exec` and every CLI export as the literal
+   * `.pgpass`, `unv render`, `unv exec` and every CLI export as the literal
    * text `${PgProd/password}`.
    *
    * Asserted through `resolveFieldRef` rather than by importing the table, so it
@@ -331,7 +331,7 @@ describe('exporter parity fixtures', () => {
    * Copy profiles — Phase 23, step 3. A sixth twin pair.
    *
    * It exists twice because the app's Copy button puts the text on the
-   * clipboard with no Rust in the loop, and `envv get --profile` writes the same
+   * clipboard with no Rust in the loop, and `unv get --profile` writes the same
    * text from the terminal. A copy that differs between the two is a `.env`
    * whose contents depend on which half of the product the user reached for.
    */
@@ -360,7 +360,7 @@ describe('exporter parity fixtures', () => {
    * How a credential is sent — Phase 23, E16. A seventh twin pair.
    *
    * The app's "Copy as request header" builds the header with no Rust in the
-   * loop and `envv curl` builds the same one from the terminal; a header that
+   * loop and `unv curl` builds the same one from the terminal; a header that
    * differs between them is a request that works from one half of the product
    * and 401s from the other, with the API explaining neither.
    */
