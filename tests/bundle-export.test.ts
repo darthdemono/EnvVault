@@ -106,4 +106,37 @@ describe('bundle exports', () => {
       expect(after.get(`CFG_${key.toUpperCase()}`), key).toBe(val);
     }
   });
+
+  it("the maintainer's real bot config survives import -> bundle -> Python export by meaning", () => {
+    const src = readFileSync('tests/fixtures/parity/bundle-discord-setup.py', 'utf8');
+    const imported = importPythonConfig(src);
+    const bundle = makeEntry({
+      id: 'bundle',
+      provider: 'Bot',
+      secretType: 'bundle',
+      extra_vars: imported.vars.map((v) => ({ key: v.key, value: v.value, kind: v.kind })),
+    });
+    const exported = buildBundleExport(bundle, [], 'python');
+    const back = importPythonConfig(exported);
+    expect(back.warnings).toEqual([]);
+
+    const resolve = (vars: { key: string; value: string; kind: string }[]) => {
+      const byKey = new Map(vars.map((v) => [v.key, v]));
+      const value = (key: string): string => {
+        const v = byKey.get(key)!;
+        return v.kind === 'template'
+          ? v.value.replace(/\{([A-Za-z_]\w*)\}/g, (_m, ref: string) => value(ref))
+          : v.value;
+      };
+      return new Map(vars.map((v) => [v.key, value(v.key)]));
+    };
+    const before = resolve(imported.vars);
+    const after = resolve(back.vars);
+    for (const [key, val] of before) {
+      expect(after.get(`BOT_${key.toUpperCase()}`), key).toBe(val);
+    }
+    // The stats URL still holds the FIRST api_key, as it did in the original file.
+    expect(before.get('url')).toContain('&key=XXXXXXXXXXXXXXXXXXXXXXXXXXX');
+    expect(exported).toContain('BOT_COLOUR = 0x800000');
+  });
 });
