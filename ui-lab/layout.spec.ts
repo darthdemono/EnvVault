@@ -38,6 +38,7 @@ const SCREENS: { name: string; go: (p: Page) => Promise<void> }[] = [
   { name: 'tools-diff', go: async (p) => void (await openTool(p, 'diff')) },
   { name: 'tools-import-export', go: async (p) => void (await openTool(p, 'import-export')) },
   { name: 'panel-remote', go: async (p) => void (await openPanel(p, 'remote')) },
+  { name: 'panel-auth', go: async (p) => void (await openPanel(p, 'auth')) },
   {
     name: 'panel-users',
     go: async (p) => {
@@ -79,6 +80,62 @@ const SCREENS: { name: string; go: (p: Page) => Promise<void> }[] = [
     go: async (p) => {
       await p.locator('#project-list .sidebar-item').nth(1).click();
       await p.waitForTimeout(150);
+    },
+  },
+  {
+    // Phase 28.1: the cross-chunk findings panel is silent against a clean project
+    // and outside the desktop app, so it is never on screen in this lab. Answer
+    // its one IPC command from a stub (`isTauri()` is checked at call time) and
+    // repaint the config view, so its layout is measured too.
+    name: 'project-config-findings',
+    go: async (p) => {
+      const open = async () => {
+        await p.locator('#project-list .sidebar-item').nth(1).click();
+        await p.waitForTimeout(150);
+      };
+      await open();
+      await p.evaluate(() => {
+        const long = 'A finding message long enough to wrap on a narrow window '.repeat(3);
+        (window as unknown as Record<string, unknown>).__TAURI__ = {
+          core: {
+            invoke: (cmd: string) =>
+              Promise.resolve(
+                cmd === 'config_check_project'
+                  ? [
+                      {
+                        rule: 'nginx-proxy-pass-unknown-service',
+                        severity: 'warning',
+                        chunk_id: 'c1',
+                        chunk: 'darthdemono.com',
+                        chunk_type: 'nginx_server',
+                        field: 'proxy_pass',
+                        message: long,
+                        related: [],
+                      },
+                      {
+                        rule: 'compose-port-clash',
+                        severity: 'error',
+                        chunk_id: 'c1',
+                        chunk: 'A chunk name that is far too long to fit beside its badge',
+                        chunk_type: 'docker_service',
+                        field: 'ports',
+                        message: 'Two services publish 8080/tcp',
+                        related: [],
+                      },
+                    ]
+                  : null,
+              ),
+          },
+        };
+      });
+      // Leave the project and come back: re-selecting the open one repaints nothing.
+      await p.locator('#project-list .sidebar-item').nth(0).click();
+      await p.waitForTimeout(100);
+      await open();
+      await p.waitForSelector('.config-check-list', { timeout: 5000 });
+      await p.evaluate(() => {
+        delete (window as unknown as Record<string, unknown>).__TAURI__;
+      });
     },
   },
 ];
