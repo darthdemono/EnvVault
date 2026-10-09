@@ -5,7 +5,7 @@
  * Prometheus, Grafana and Homepage are not three exporters here. They are three
  * descriptors, and this file and `vault-core/src/stack.rs` are two readings of
  * the same grammar, pinned by golden fixtures asserted from both sides
- * (`tests/stack.test.ts`, `envv-cli/tests/stack_parity.rs`). Keep the two
+ * (`tests/stack.test.ts`, `unv-cli/tests/stack_parity.rs`). Keep the two
  * identical in behaviour: the quoting rule, what counts as empty, the order of
  * keys and groups.
  */

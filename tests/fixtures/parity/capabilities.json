@@ -1,5 +1,5 @@
 {
-  "comment": "Phase 33. The UI/CLI capability map. tests: envv-cli/tests/capabilities.rs. Evidence prefixes: tauri: (a registered command), id: (an element id in index.html or tools-markup.ts), tool: (a data-tool pane), src: (a source file). status: both | gap-ui | gap-cli | exempt.",
+  "comment": "Phase 33. The UI/CLI capability map. tests: unv-cli/tests/capabilities.rs. Evidence prefixes: tauri: (a registered command), id: (an element id in index.html or tools-markup.ts), tool: (a data-tool pane), src: (a source file). status: both | gap-ui | gap-cli | exempt.",
   "capabilities": [
     {
       "id": "entries",
@@ -596,7 +596,7 @@
       "tauri": [
         "history_call"
       ],
-      "note": "Phase 35. Tools -> Config history. One dispatcher (envv_cli::history::call) answers the local CLI, the desktop app (history_call) and the server (POST /api/history), so the three cannot disagree. Stdout/UI show fingerprinted text; the real values need --reveal / Reveal, or go to a file (--out / Save file).",
+      "note": "Phase 35. Tools -> Config history. One dispatcher (unv_cli::history::call) answers the local CLI, the desktop app (history_call) and the server (POST /api/history), so the three cannot disagree. Stdout/UI show fingerprinted text; the real values need --reveal / Reveal, or go to a file (--out / Save file).",
       "cli_flags": []
     },
     {

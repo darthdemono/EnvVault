@@ -2,7 +2,7 @@
   "_comment": [
     "The environment-variable name template and .env value quoting (Phase 23,",
     "step 1), asserted from both src/ts/state.ts (envName / quoteEnvValue /",
-    "unquoteEnvValue) and envv-cli/src/envfile.rs (env_name / quote_env_value /",
+    "unquoteEnvValue) and unv-cli/src/envfile.rs (env_name / quote_env_value /",
     "unquote_env_value).",
     "",
     "This fixture exists because there were three name builders before it and",

@@ -181,7 +181,7 @@ export function exportPostgres(project: Project): string {
  * Reference alias → the **vault-entry JSON field name** it resolves to.
  *
  * The values are the JSON names (`api_key`, not `key`) so this table and
- * `canonical_field` in `envv-cli/src/refs.rs` are the same table written twice
+ * `canonical_field` in `unv-cli/src/refs.rs` are the same table written twice
  * rather than two tables that happen to agree. Pinned from both sides by
  * `tests/fixtures/parity/field-aliases.json`.
  */
@@ -242,7 +242,7 @@ const FIELD_ALIASES: Readonly<Record<string, string>> = {
  * to mean one thing everywhere, and making it depend on the entry's own vars is
  * the divergence this closes.
  *
- * Twin of `REFERENCE_DENY` in `envv-cli/src/refs.rs`.
+ * Twin of `REFERENCE_DENY` in `unv-cli/src/refs.rs`.
  */
 const REFERENCE_DENY: ReadonlySet<string> = new Set([
   'id',
@@ -256,14 +256,14 @@ const REFERENCE_DENY: ReadonlySet<string> = new Set([
  * then `extra_vars`.
  *
  * The fall-through from an empty built-in to `extra_vars` matches
- * `entry_field()` in `envv-cli/src/refs.rs` — without it `${Spotify/ID}` would
+ * `entry_field()` in `unv-cli/src/refs.rs` — without it `${Spotify/ID}` would
  * resolve in the CLI and come back empty here for the entry that keeps its
  * client id in a var.
  */
 /**
  * Normalise a role or a reference field for comparison — `account_sid`,
  * `ACCOUNT-SID` and `Account Sid` are one name. Twin: `role_key` in
- * `envv-cli/src/refs.rs`.
+ * `unv-cli/src/refs.rs`.
  */
 function roleKey(raw: string): string {
   return raw.replace(/[^A-Za-z0-9]/g, '_').toUpperCase();
@@ -344,7 +344,7 @@ export function isEntryFieldPublic(entry: VaultEntry, field: string): boolean {
  * The explicit `${Provider/field}` form is never ambiguous and is what the docs
  * recommend.
  *
- * Twin: `find_entry` in `envv-cli/src/refs.rs`, pinned by the `reference_lookup`
+ * Twin: `find_entry` in `unv-cli/src/refs.rs`, pinned by the `reference_lookup`
  * section of `tests/fixtures/parity/env-names.json`.
  */
 export function findEntryByRef(name: string): VaultEntry | undefined {
@@ -374,7 +374,7 @@ export function findEntryByRef(name: string): VaultEntry | undefined {
 
 /**
  * `${bundle:Name}`, `${bundle:Name/slot}`, `${bundle:Name/slot/field}` and
- * `${bundle:Name/local}`. Twin of `resolve_bundle_ref` in `envv-cli/src/refs.rs`.
+ * `${bundle:Name/local}`. Twin of `resolve_bundle_ref` in `unv-cli/src/refs.rs`.
  * An ambiguous bundle name or an unknown slot is unresolved, never a guess.
  */
 function resolveBundleRef(body: string, useEnvCopyField: boolean): string | null {

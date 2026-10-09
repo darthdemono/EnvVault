@@ -12,4 +12,4 @@ Allows client to distinguish "vault not initialized" from "empty vault" — prev
 
 ## Evidence
 
-`envv-server/main.rs`
+`unv-server/main.rs`

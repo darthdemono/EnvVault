@@ -342,7 +342,7 @@ function wireCatalogueRow(): void {
 
 // ── Full-fidelity archive (Phase 33.3) ──────────────────────────────────────
 // `unv backup archive` / `restore-archive`. The cryptography and the checks are
-// Rust (`envv_cli::backup`); this only collects a password and a file.
+// Rust (`unv_cli::backup`); this only collects a password and a file.
 
 function pickTextFile(): Promise<string | null> {
   return new Promise((resolve) => {

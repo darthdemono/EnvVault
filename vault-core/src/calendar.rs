@@ -4,7 +4,7 @@
 //! This is the fourth format in the project implemented twice, and it follows
 //! the rule the other three established: **one golden file, asserted from both
 //! sides**. `tests/fixtures/parity/calendar.ics` is written by the TypeScript
-//! suite and read back by `envv-cli/tests/parity.rs`, because reviewing two
+//! suite and read back by `unv-cli/tests/parity.rs`, because reviewing two
 //! implementations for agreement does not work — the first time that fixture
 //! ran for the exporters it found two live bugs.
 //!

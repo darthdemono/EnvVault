@@ -1,5 +1,5 @@
 {
-  "_comment": "${bundle:Name...} reference resolution, asserted from src/ts/chunk-ops.ts and envv-cli/src/refs.rs. Phase 24.1 B-addressing.",
+  "_comment": "${bundle:Name...} reference resolution, asserted from src/ts/chunk-ops.ts and unv-cli/src/refs.rs. Phase 24.1 B-addressing.",
   "entries": [
     { "id": "bun-spotify", "provider": "Spotify", "secretType": "bundle", "bundle_primary": "m-web", "api_key": "", "extra_vars": [{ "key": "prefix", "value": ">" }] },
     { "id": "m-web", "provider": "Spotify web", "bundle_id": "bun-spotify", "bundle_slot": "web", "api_key": "sp_dc_value" },

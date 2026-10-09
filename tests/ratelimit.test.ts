@@ -2,7 +2,7 @@
  * The TypeScript half of the rate-limit parser's cross-implementation parity.
  *
  * Cases live in `tests/fixtures/parity/rate-limit.json`, and
- * `envv-cli/tests/ratelimit.rs` asserts the Rust parser against the identical
+ * `unv-cli/tests/ratelimit.rs` asserts the Rust parser against the identical
  * file. Reviewing two parsers for agreement does not work; the fixture is what
  * makes a divergence a test failure instead of a support ticket.
  */

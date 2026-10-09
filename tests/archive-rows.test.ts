@@ -1,6 +1,6 @@
 /**
  * Settings -> Full-fidelity archive (Phase 33.3). The cryptography is Rust
- * (`archive_tests` in envv-cli); this drives the two buttons.
+ * (`archive_tests` in unv-cli); this drives the two buttons.
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { loadRealIndexHtml } from './helpers';

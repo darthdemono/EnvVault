@@ -12,4 +12,4 @@ Reading a counter-based code never advances it; `envv totp advance` and a card b
 
 ## Evidence
 
-`envv-cli/src/totp_cmd.rs`, `src/ts/auth-panel.ts`
+`unv-cli/src/totp_cmd.rs`, `src/ts/auth-panel.ts`

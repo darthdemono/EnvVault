@@ -1,7 +1,7 @@
 /**
  * Tools -> Enrich (Phase 33.1): `unv enrich` without `--online`, in the app.
  *
- * The planner is Rust (`envv_cli::enrich::plan_entry`, over the `enrich_plan`
+ * The planner is Rust (`unv_cli::enrich::plan_entry`, over the `enrich_plan`
  * command), so a Preview shows exactly what the CLI would propose, reasons and
  * all. It works from an entry's name and the public issuer prefix of its secret;
  * the secret itself never comes back, only a fingerprint. Nothing is written

@@ -25,7 +25,7 @@
 //!
 //! | Variable | Effect |
 //! | -------- | ------ |
-//! | `UNV_LOG` | `tracing` filter directive (`info`, `envv_server=debug`, …). Checked first. |
+//! | `UNV_LOG` | `tracing` filter directive (`info`, `unv_server=debug`, …). Checked first. |
 //! | `RUST_LOG` | Same, checked only when `UNV_LOG` is unset, so an unrelated `RUST_LOG` in the environment still works. |
 //! | `UNV_LOG_FORMAT` | `json` for one JSON object per line; anything else is the human format. |
 //!

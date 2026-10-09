@@ -1,7 +1,7 @@
 /**
  * Stack integrations (Phase 38): the TypeScript interpreter of
  * `vault-core/data/stack-adapters.json`, pinned against the same golden files as
- * the Rust one (`envv-cli/tests/stack_parity.rs`). Regenerate deliberately with
+ * the Rust one (`unv-cli/tests/stack_parity.rs`). Regenerate deliberately with
  * `PARITY_UPDATE=1 npx vitest run tests/stack.test.ts`, then run the Rust test.
  */
 import { describe, it, expect, beforeEach } from 'vitest';

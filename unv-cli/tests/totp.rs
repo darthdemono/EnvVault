@@ -11,16 +11,16 @@
 //! this project and `vault-core/src/totp.rs` owns it, with the RFC 6238 vectors
 //! beside it. Nothing here re-derives a code.
 
-use envv_cli::out;
+use unv_cli::out;
 use serde_json::{json, Value};
 use vault_core::totp::{self, Params, Stored};
 
 fn table() -> Value {
-    // CARGO_MANIFEST_DIR is envv-cli/; the fixture is shared with the frontend
+    // CARGO_MANIFEST_DIR is unv-cli/; the fixture is shared with the frontend
     // suite and lives at the workspace root.
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
-        .expect("envv-cli has a parent directory")
+        .expect("unv-cli has a parent directory")
         .join("tests/fixtures/parity/totp-seeds.json");
     let raw = std::fs::read_to_string(&path)
         .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
@@ -277,7 +277,7 @@ fn every_secret_field_is_recognised_through_the_name_the_cli_takes() {
         // The single-field path tests `SECRET_FIELDS.contains(canonical_field(f))`,
         // so a canonical form absent from the list is a value that prints in
         // clear while the same value inside a whole-entry dump is masked.
-        let canonical = envv_cli::refs::canonical_field(field);
+        let canonical = unv_cli::refs::canonical_field(field);
         assert!(
             out::SECRET_FIELDS.contains(&canonical),
             "--field {field} canonicalises to {canonical}, which is not treated \

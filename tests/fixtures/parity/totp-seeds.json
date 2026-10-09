@@ -5,7 +5,7 @@
     "pasted otpauth:// URI as it is typed) and vault-core/src/totp.rs",
     "(parse_seed, for the CLI, the desktop IPC command and the server).",
     "",
-    "tests/totp.test.ts pins the TypeScript side; envv-cli/tests/totp.rs pins the",
+    "tests/totp.test.ts pins the TypeScript side; unv-cli/tests/totp.rs pins the",
     "Rust side against the identical cases. Reviewing two parsers for agreement",
     "does not work — the same arrangement, and the same reason, as",
     "rate-limit.json and field-aliases.json.",

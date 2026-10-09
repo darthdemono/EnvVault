@@ -2,7 +2,7 @@
  * Stored third-party TOTP seeds — the TypeScript half (Phase 22).
  *
  * The parse/URI cases live in `tests/fixtures/parity/totp-seeds.json`, and
- * `envv-cli/tests/totp.rs` asserts `vault_core::totp` against the identical
+ * `unv-cli/tests/totp.rs` asserts `vault_core::totp` against the identical
  * file. Reviewing two parsers for agreement does not work; the fixture is what
  * turns a divergence into a test failure instead of a URI that means one thing
  * in the app and another in the CLI.
@@ -124,7 +124,7 @@ describe('totpParamsOf — golden table', () => {
   // `entry_totp_code` did neither — so an entry could list as a 99-digit
   // credential, hand over six digits, and return an error to the app instead of
   // a code. `vault_core::totp::Params::from_fields` is now the single reader and
-  // `envv-cli/tests/totp.rs` asserts it against this identical file.
+  // `unv-cli/tests/totp.rs` asserts it against this identical file.
   for (const c of TABLE.params) {
     it(`${JSON.stringify(c.entry)} -> ${c.out.algorithm}/${c.out.digits}/${c.out.period}`, () => {
       const got = totpParamsOf(c.entry as unknown as VaultEntry);

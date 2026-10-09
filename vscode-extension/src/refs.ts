@@ -62,7 +62,7 @@ export function completionContext(linePrefix: string): CompletionContext | null 
 
 /**
  * The field names a `${Provider/field}` understands, from `canonical_field` in
- * `envv-cli/src/refs.rs` (the Rust half of a twin pair pinned by
+ * `unv-cli/src/refs.rs` (the Rust half of a twin pair pinned by
  * `tests/fixtures/parity/field-aliases.json`; `tests/vscode-refs.test.ts` fails
  * if this list names something the fixture does not know). Named variables an
  * entry carries are completed from the CLI as well.

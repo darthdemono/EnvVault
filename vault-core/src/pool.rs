@@ -232,7 +232,7 @@ pub fn set_cooldown(
 /// The cursor indexes the **full** member list rather than a filtered one, so
 /// a member going on cooldown does not shift every other member's position
 /// and make the next call skip an unrelated key. `None` when every member is
-/// cooling. Shared by `unv pool next`/`unv get --pool` (`envv-cli/src/pool.rs`)
+/// cooling. Shared by `unv pool next`/`unv get --pool` (`unv-cli/src/pool.rs`)
 /// and the desktop card's Copy button (`pool_next` in `src-tauri`) — two
 /// callers picking a member by two different rules is exactly the shape that
 /// hands one caller a key the other just put on cooldown.

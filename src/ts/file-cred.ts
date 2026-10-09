@@ -1,7 +1,7 @@
 /**
  * @file
  * File-shaped credentials — Phase 23, E17.
- * @description The twin of `envv-cli/src/filecred.rs`, pinned by
+ * @description The twin of `unv-cli/src/filecred.rs`, pinned by
  *              `tests/fixtures/parity/file-creds.json`.
  *
  * ## Some credentials are a file, and the variable names the path

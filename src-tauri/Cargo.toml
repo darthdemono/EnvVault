@@ -1,6 +1,6 @@
 [package]
 name    = "envvault"
-version = "0.42.0"
+version = "0.42.1"
 edition = "2021"
 publish = false
 license = "MIT"
@@ -25,12 +25,12 @@ serde_json        = "1"
 vault-core        = { path = "../vault-core", features = ["tls", "telemetry"] }
 # `enrich`'s planner (Phase 33.1): the app calls the same `plan_entry` the CLI does,
 # so what a Preview shows is what `unv enrich` would propose.
-envv-cli          = { path = "../envv-cli" }
+unv-cli          = { path = "../unv-cli" }
 tracing           = "0.1"
 # "Open to LAN": the desktop hosts the same axum router in-process against the
 # vault it already has open, rather than shelling out to a second process with a
 # second database.
-envv-server       = { path = "../envv-server" }
+unv-server       = { path = "../unv-server" }
 tokio             = { version = "1", features = ["rt", "sync", "time"] }
 zeroize           = { version = "=1.8.1", features = ["zeroize_derive"] }
 # HTTP proxy for remote vault with TLS cert pinning (Phase 6)

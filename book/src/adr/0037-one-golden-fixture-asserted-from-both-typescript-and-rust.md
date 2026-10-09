@@ -12,4 +12,4 @@ One golden fixture asserted from both TypeScript and Rust
 
 ## Evidence
 
-`tests/fixtures/parity/`, `tests/cli-parity.test.ts`, `envv-cli/tests/parity.rs`
+`tests/fixtures/parity/`, `tests/cli-parity.test.ts`, `unv-cli/tests/parity.rs`

@@ -1,10 +1,10 @@
 {
   "_comment": [
     "Golden table for the rate-limit parser, which exists twice:",
-    "src/ts/ratelimit.ts (app) and envv-cli/src/ratelimit.rs (CLI).",
+    "src/ts/ratelimit.ts (app) and unv-cli/src/ratelimit.rs (CLI).",
     "",
     "Both assert against this file. tests/ratelimit.test.ts pins the TypeScript",
-    "side; envv-cli/tests/ratelimit.rs pins the Rust side against the identical",
+    "side; unv-cli/tests/ratelimit.rs pins the Rust side against the identical",
     "cases. Change one parser and the other fails.",
     "",
     "`parse` cases: input string -> {count, period}, or null when the string says",

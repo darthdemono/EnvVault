@@ -12,4 +12,4 @@ An empty primary is **omitted** from a `.env`, not written as `NAME=`
 
 ## Evidence
 
-`src/ts/state.ts`, `envv-cli/src/profile.rs`
+`src/ts/state.ts`, `unv-cli/src/profile.rs`

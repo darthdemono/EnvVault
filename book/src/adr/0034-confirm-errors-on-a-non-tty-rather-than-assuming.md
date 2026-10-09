@@ -12,4 +12,4 @@ A script that forgot `--yes` must fail loudly, not delete quietly
 
 ## Evidence
 
-`envv-cli/src/fmt.rs`
+`unv-cli/src/fmt.rs`

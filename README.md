@@ -10,7 +10,7 @@ It ships as three programs that share one storage engine:
 | **`unv`**           | A CLI built so an automated caller can drive the whole vault without a single secret value entering its output. |
 | **`unv-server`**    | An optional HTTP/HTTPS server, so the desktop app and the CLI on other machines can reach one vault.            |
 
-Current version **0.39.0**, with Phases 1 to 42 of the road to 1.0 done (39 is the code-level pentest review, whose live-deployment checklist is the maintainer's; 41 is the follow-up round of sub-phases, 42 is the rename to UnENVerse and the Docker viewer) (see [How it got here](#how-it-got-here)). The version in `src-tauri/tauri.conf.json` is the authoritative one. `package.json`, the four `Cargo.toml` files and the git tag are all checked against it by the `meta` job in `.github/workflows/build.yml`.
+Current version **0.42.0**, with Phases 1 to 42 of the road to 1.0 done (39 is the code-level pentest review, whose live-deployment checklist is the maintainer's; 41 is the follow-up round of sub-phases, 42 is the rename to UnENVerse and the Docker viewer) (see [How it got here](#how-it-got-here)). The version in `src-tauri/tauri.conf.json` is the authoritative one. `package.json`, the four `Cargo.toml` files and the git tag are all checked against it by the `meta` job in `.github/workflows/build.yml`.
 
 ---
 
@@ -382,15 +382,15 @@ That exercise was worth doing. It found two bugs that no fixture could have caug
 
 ### Two implementations, one golden file
 
-The config formats exist twice: once in `src/ts/chunk-ops.ts` for the app, once in `envv-cli/src/exporters.rs` for the CLI. Two implementations of one file format drift silently. The app writes a working `wg0.conf`, the CLI writes a subtly different one, and nobody notices until a deploy breaks.
+The config formats exist twice: once in `src/ts/chunk-ops.ts` for the app, once in `unv-cli/src/exporters.rs` for the CLI. Two implementations of one file format drift silently. The app writes a working `wg0.conf`, the CLI writes a subtly different one, and nobody notices until a deploy breaks.
 
-So both sides assert against the same golden files in `tests/fixtures/parity/`. `tests/cli-parity.test.ts` pins the TypeScript output, `envv-cli/tests/parity.rs` pins the Rust output against identical bytes. Change either one and the other fails.
+So both sides assert against the same golden files in `tests/fixtures/parity/`. `tests/cli-parity.test.ts` pins the TypeScript output, `unv-cli/tests/parity.rs` pins the Rust output against identical bytes. Change either one and the other fails.
 
 Regenerate deliberately:
 
 ```bash
 PARITY_UPDATE=1 npx vitest run tests/cli-parity.test.ts
-cargo test -p envv-cli
+cargo test -p unv-cli
 ```
 
 The first time that fixture ran it found two live export bugs. Disabled chunks were being exported by the four exporters people actually deploy, so disabling a WireGuard peer greyed the card out and still wrote it into `wg0.conf`, and the tunnel kept trusting a peer the user believed they had removed. And `exportNginx` never resolved `${refs}`, so the starter template's `ssl_certificate ${example_cert}` reached nginx as literal text and the server refused to start, while copying the same chunk from its card resolved perfectly.
@@ -1240,7 +1240,7 @@ Every job carries a control case. If the validator accepts deliberate nonsense, 
 
 ## UI and CLI parity
 
-The rule is that whatever the app can do the CLI can do, and the reverse (a rule about capability, not interaction: sidebar order and the undo toast have no CLI meaning). It is checked rather than promised. `tests/fixtures/parity/capabilities.json` classifies every CLI command (read live from `unv describe`) and every Tauri command into a capability marked `both`, a tracked gap, or an exemption with a written reason, and `envv-cli/tests/capabilities.rs` fails when a command belongs to no capability, when the map names something that does not exist, or when a command offered as "the UI has it" is never invoked by the frontend. Exemptions are the CLI-only things by nature (`exec`, `watch`, `shield`, `use`, shell completion, the session cache) and a handful of pure developer utilities. The check found six dead Tauri commands on its first run.
+The rule is that whatever the app can do the CLI can do, and the reverse (a rule about capability, not interaction: sidebar order and the undo toast have no CLI meaning). It is checked rather than promised. `tests/fixtures/parity/capabilities.json` classifies every CLI command (read live from `unv describe`) and every Tauri command into a capability marked `both`, a tracked gap, or an exemption with a written reason, and `unv-cli/tests/capabilities.rs` fails when a command belongs to no capability, when the map names something that does not exist, or when a command offered as "the UI has it" is never invoked by the frontend. Exemptions are the CLI-only things by nature (`exec`, `watch`, `shield`, `use`, shell completion, the session cache) and a handful of pure developer utilities. The check found six dead Tauri commands on its first run.
 
 ---
 

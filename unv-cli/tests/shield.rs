@@ -62,7 +62,7 @@ fn shield_and_exposure_scan_redact_exact_vault_values() {
     assert!(!shielded_text.contains(SECRET), "{shielded_text}");
     assert_eq!(
         shielded_text
-            .matches(&envv_cli::out::fingerprint(SECRET))
+            .matches(&unv_cli::out::fingerprint(SECRET))
             .count(),
         2,
         "{shielded_text}"
@@ -94,7 +94,7 @@ fn shield_and_exposure_scan_redact_exact_vault_values() {
     let report_text = std::fs::read_to_string(&report).unwrap();
     assert!(!report_text.contains(SECRET), "{report_text}");
     assert!(report_text.contains(&format!("{}:2:", exposed.display())));
-    assert!(report_text.contains(&envv_cli::out::fingerprint(SECRET)));
+    assert!(report_text.contains(&unv_cli::out::fingerprint(SECRET)));
 
     #[cfg(unix)]
     {

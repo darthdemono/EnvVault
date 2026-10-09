@@ -1,7 +1,7 @@
 /**
  * Tools -> Import -> "From another password manager" (Phase 33.3): the app side
  * of `unv import-vault`. The parsing and merge rules are Rust
- * (`envv_cli::import_vaults::plan_import`, over `import_vault_plan`), so a
+ * (`unv_cli::import_vaults::plan_import`, over `import_vault_plan`), so a
  * preview here is exactly what the CLI would write. The preview carries
  * fingerprints, never secrets; applying replaces the entry array with the plan's
  * and saves once, so the compare-and-swap covers the whole import.

@@ -199,7 +199,7 @@ export interface VaultEntry {
    * `<n> per <period>` ("varies by endpoint") keeps the text the user wrote.
    *
    * Never parse this field directly. `parseRateLimit()` in `utils.ts` is the
-   * one reader, and `envv-cli/src/ratelimit.rs` is its twin.
+   * one reader, and `unv-cli/src/ratelimit.rs` is its twin.
    */
   rate_limit?: string | null;
   /**
@@ -243,7 +243,7 @@ export interface VaultEntry {
    * the caller did not mean (see the invariants in CLAUDE.md).
    *
    * Swap state — cursor, cooldowns, use counts — is deliberately NOT stored
-   * here. It lives in a per-machine sidecar; see `envv-cli/src/pool.rs`.
+   * here. It lives in a per-machine sidecar; see `unv-cli/src/pool.rs`.
    */
   pool?: string | null;
   /** API or SDK version this key was issued for. */

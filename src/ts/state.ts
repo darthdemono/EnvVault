@@ -1705,7 +1705,7 @@ export function switchTool(toolId: string) {
 // section is about — in exchange for nothing. Written down because an
 // undocumented deviation is indistinguishable from having missed the design.
 //
-// The twin is `env_name()` in `envv-cli/src/envfile.rs`, pinned by
+// The twin is `env_name()` in `unv-cli/src/envfile.rs`, pinned by
 // `tests/fixtures/parity/env-names.json` and asserted from both sides. It has
 // to exist twice because the add/edit form previews the name as it is typed and
 // an IPC round trip per keystroke is not a form — the same reason the TOTP seed

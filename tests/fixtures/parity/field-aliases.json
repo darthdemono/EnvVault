@@ -1,7 +1,7 @@
 {
   "_comment": [
     "Field-alias table for ${Provider/field} reference resolution, asserted from",
-    "both src/ts/chunk-ops.ts (FIELD_ALIASES) and envv-cli/src/refs.rs",
+    "both src/ts/chunk-ops.ts (FIELD_ALIASES) and unv-cli/src/refs.rs",
     "(canonical_field).",
     "",
     "This fixture exists because the two had already drifted: PASSWORD, PASS and",

@@ -15,7 +15,7 @@ The product is renamed UnENVerse (a pun on "universe" and "un-env"): the CLI is 
 - the Tauri identifier and data directory `io.envvault`, `$XDG_STATE_HOME/envv/`, the node default config directory, `.envv.json`: existing data stays where it is;
 - the signing and hash domain strings (`envv-node-v1`, `envv-hub-v1`, `envv-approval-v1`, `envv-history-v2`): changing them would make every enrolled node, approval token and history chain fail verification;
 - `localStorage` keys `envvault-*` and the CXF extension keys `envvault_type` / `envvault_bundle`;
-- Cargo package and crate names and directory names (`envv-cli`, `envv-server`, `vault-core`, `src-tauri` package `envvault`).
+- ~~Cargo package and crate names and directory names (`envv-cli`, `envv-server`)~~ renamed on 2026-10-09 to `unv-cli` / `unv-server` (directories, packages, `unv_cli` / `unv_server` libraries); `vault-core` and the `src-tauri` package `envvault` keep their names. The data directory `envv-server` under `$XDG_DATA_HOME` keeps its spelling.
 
 **Environment compatibility:** `vault_core::compat::adopt_legacy_env()` copies every set `ENVV_*` variable to `UNV_*` when the new name is unset. The three binaries call it first in `main`. The new name wins when both are set.
 

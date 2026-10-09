@@ -4,7 +4,7 @@
 //! importer must *skip* and say so, because "0 skipped" on an export containing
 //! credit cards would mean the reader had quietly mangled them.
 
-use envv_cli::import_vaults::{read_bitwarden, read_onepassword, read_proton, Incoming};
+use unv_cli::import_vaults::{read_bitwarden, read_onepassword, read_proton, Incoming};
 use serde_json::Value;
 
 fn load(name: &str) -> Value {
@@ -138,7 +138,7 @@ fn nextcloud(name: &str) -> (Value, Vec<String>) {
     let p = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures")
         .join(name);
-    envv_cli::import_vaults::source_value("nextcloud", &std::fs::read_to_string(p).unwrap())
+    unv_cli::import_vaults::source_value("nextcloud", &std::fs::read_to_string(p).unwrap())
         .expect("parse")
 }
 
@@ -147,7 +147,7 @@ fn a_real_sqlite_nextcloud_yields_its_two_instance_secrets_and_nothing_else() {
     // Written by a Nextcloud 29 container's installer, not by hand.
     let (doc, warnings) = nextcloud("nextcloud-config.php");
     assert!(warnings.is_empty(), "{warnings:?}");
-    let (items, skipped) = envv_cli::import_vaults::read_nextcloud(&doc);
+    let (items, skipped) = unv_cli::import_vaults::read_nextcloud(&doc);
     assert_eq!(skipped, 0);
     let names: Vec<&str> = items.iter().map(|i| i.provider.as_str()).collect();
     assert_eq!(
@@ -168,7 +168,7 @@ fn a_full_nextcloud_config_yields_database_smtp_redis_and_object_store_secrets()
         1,
         "the getenv() licence key is reported: {warnings:?}"
     );
-    let (items, skipped) = envv_cli::import_vaults::read_nextcloud(&doc);
+    let (items, skipped) = unv_cli::import_vaults::read_nextcloud(&doc);
     assert_eq!(skipped, 1, "and counted as skipped");
     let db = by_name(&items, "Nextcloud database (ocabc123)");
     assert_eq!(db.username.as_deref(), Some("nc"));
@@ -194,7 +194,7 @@ fn a_full_nextcloud_config_yields_database_smtp_redis_and_object_store_secrets()
 
 #[test]
 fn importing_a_nextcloud_config_twice_changes_nothing_the_second_time() {
-    use envv_cli::import_vaults::{plan_import, ImportOpts};
+    use unv_cli::import_vaults::{plan_import, ImportOpts};
     let (doc, _) = nextcloud("nextcloud-full.php");
     let opts = ImportOpts {
         apply: false,

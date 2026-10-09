@@ -453,7 +453,7 @@ pub struct PruneReport {
 /// This deletes the only evidence an ID was issued: a pruned ID can be issued
 /// again without a collision being detected, and `lookup` answers `unknown`
 /// for an ID that was real. Callers must say so before confirming — see
-/// `envv-cli/src/uid_cmd.rs` and the `/api/uid/prune` handler.
+/// `unv-cli/src/uid_cmd.rs` and the `/api/uid/prune` handler.
 pub fn prune(
     conn: &mut Connection,
     before_ts: i64,

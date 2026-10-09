@@ -25,7 +25,7 @@
 
 use std::sync::{Arc, Mutex};
 
-// The node listener (envv-cli) builds its server side from the same rustls.
+// The node listener (unv-cli) builds its server side from the same rustls.
 pub use rustls;
 
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};

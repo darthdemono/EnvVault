@@ -1,12 +1,12 @@
 [package]
-name    = "envv-cli"
-version = "0.42.0"
+name    = "unv-cli"
+version = "0.42.1"
 edition = "2021"
 publish = false
 license = "MIT"
 
 [lib]
-name = "envv_cli"
+name = "unv_cli"
 path = "src/lib.rs"
 
 [[bin]]

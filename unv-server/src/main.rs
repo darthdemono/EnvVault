@@ -1,4 +1,4 @@
-//! `unv-server` binary — CLI wrapper around the [`envv_server`] library.
+//! `unv-server` binary — CLI wrapper around the [`unv_server`] library.
 //!
 //! Everything substantive lives in the library so the desktop app can host the
 //! identical router in-process for "Open to LAN". This file only parses argv,
@@ -8,7 +8,7 @@ use clap::Parser;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 
-use envv_server::{
+use unv_server::{
     auto_unlock, cert_fingerprint, ensure_self_signed_cert, serve, AppState, TlsFiles,
 };
 
@@ -183,7 +183,7 @@ async fn async_main() {
     .with_uid_registry(args.uid_registry, Some(args.uid_max_bytes))
     .with_nodes(args.nodes, args.nodes_file.clone())
     .with_uid_rates({
-        let mut rates = envv_server::UidRates::default();
+        let mut rates = unv_server::UidRates::default();
         for spec in &args.uid_rate {
             if let Err(e) = rates.set(spec) {
                 eprintln!("--uid-rate: {e}");

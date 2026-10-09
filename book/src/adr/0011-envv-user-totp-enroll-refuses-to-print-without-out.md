@@ -12,4 +12,4 @@ Same rule and same ordering as `user token new`: enrolling and then declining to
 
 ## Evidence
 
-`envv-cli/src/users_cmd.rs`
+`unv-cli/src/users_cmd.rs`

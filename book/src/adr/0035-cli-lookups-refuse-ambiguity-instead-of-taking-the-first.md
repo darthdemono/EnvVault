@@ -12,4 +12,4 @@ CLI lookups refuse ambiguity instead of taking the first match
 
 ## Evidence
 
-`envv-cli/src/data.rs`
+`unv-cli/src/data.rs`

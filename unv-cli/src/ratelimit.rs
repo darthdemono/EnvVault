@@ -8,7 +8,7 @@
 //!
 //! **This module is the twin of `src/ts/ratelimit.ts`.** Both are pinned
 //! against the same golden table in `tests/fixtures/parity/rate-limit.json` by
-//! `envv-cli/tests/ratelimit.rs` and `tests/ratelimit.test.ts`. Two
+//! `unv-cli/tests/ratelimit.rs` and `tests/ratelimit.test.ts`. Two
 //! implementations of one format drift silently; the fixture is what turns a
 //! divergence into a test failure.
 

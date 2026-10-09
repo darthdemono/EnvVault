@@ -22,7 +22,7 @@ pub struct VaultState(pub Mutex<Option<VaultKey>>);
 pub struct LanServer {
     /// Firing this asks axum to shut down gracefully.
     shutdown: Option<tokio::sync::oneshot::Sender<()>>,
-    state: envv_server::AppState,
+    state: unv_server::AppState,
     port: u16,
     url: String,
     fingerprint: Option<String>,
@@ -238,7 +238,7 @@ mod commands {
             },
         )?;
         // Best effort: a history that cannot record is logged, never a failed save.
-        envv_cli::history::after_save(&conn, &for_history, actor.as_deref());
+        unv_cli::history::after_save(&conn, &for_history, actor.as_deref());
         Ok(version)
     }
 
@@ -268,7 +268,7 @@ mod commands {
                 expect_version: expect_version.as_deref(),
             },
         )?;
-        envv_cli::history::after_save(&conn, &for_history, actor.as_deref());
+        unv_cli::history::after_save(&conn, &for_history, actor.as_deref());
         Ok(version)
     }
 
@@ -292,8 +292,8 @@ mod commands {
     /// only, plus the fields the chunk would have afterwards.
     #[tauri::command]
     pub fn env_import_plan(fields: Vec<serde_json::Value>, text: String) -> serde_json::Value {
-        let vars = envv_cli::envfile::parse_env_file(&text);
-        let plan = envv_cli::node_cmd::plan_env_import(&fields, &vars);
+        let vars = unv_cli::envfile::parse_env_file(&text);
+        let plan = unv_cli::node_cmd::plan_env_import(&fields, &vars);
         serde_json::json!({
             "fields": plan.fields, "added": plan.added, "changed": plan.changed,
             "removed": plan.removed, "kept_references": plan.kept_references,
@@ -310,8 +310,8 @@ mod commands {
         if text.len() > 1 << 20 {
             return;
         }
-        envv_cli::matlog::remember(&vault, "app");
-        envv_cli::matlog::note("clipboard", &note, &text);
+        unv_cli::matlog::remember(&vault, "app");
+        unv_cli::matlog::note("clipboard", &note, &text);
     }
 
     /// Phase 37.1: this machine's approver public key and fingerprint, the key made
@@ -374,7 +374,7 @@ mod commands {
         let key = g.as_ref().ok_or("Vault is locked")?;
         let conn = vault_core::open_db(&db_path(&app)?, key)?;
         let actor = vault_core::ensure_owner_user(&conn).ok();
-        envv_cli::history::call(&conn, &op, &args, actor.as_deref())
+        unv_cli::history::call(&conn, &op, &args, actor.as_deref())
     }
 
     /// The version marker of what is on disk right now.
@@ -658,7 +658,7 @@ mod commands {
     pub fn backup_archive_build(app: AppHandle, password: String) -> Result<String, String> {
         let db = fs::read(db_path(&app)?).map_err(|e| format!("Cannot read the vault: {e}"))?;
         let salt = fs::read(salt_path(&app)?).map_err(|e| format!("Cannot read the salt: {e}"))?;
-        envv_cli::backup::build_archive(&db, &salt, &password)
+        unv_cli::backup::build_archive(&db, &salt, &password)
             .map(|(text, _)| text)
             .map_err(|e| e.message)
     }
@@ -676,7 +676,7 @@ mod commands {
         text: String,
         password: String,
     ) -> Result<(), String> {
-        let (db, salt) = envv_cli::backup::open_archive(&text, &password).map_err(|e| e.message)?;
+        let (db, salt) = unv_cli::backup::open_archive(&text, &password).map_err(|e| e.message)?;
         lan_stop(lan)?;
         let mut g = state.0.lock().map_err(|_| "State lock poisoned")?;
         if let Some(mut k) = g.take() {
@@ -709,14 +709,14 @@ mod commands {
         project: Option<String>,
         keep_folders: bool,
     ) -> Result<serde_json::Value, String> {
-        let (doc, warnings) = envv_cli::import_vaults::source_value(&vendor, &text)?;
-        let opts = envv_cli::import_vaults::ImportOpts {
+        let (doc, warnings) = unv_cli::import_vaults::source_value(&vendor, &text)?;
+        let opts = unv_cli::import_vaults::ImportOpts {
             apply: false,
             project: project.as_deref(),
             category: None,
             keep_folders,
         };
-        let plan = envv_cli::import_vaults::plan_import(&vault, &vendor, &doc, &opts)
+        let plan = unv_cli::import_vaults::plan_import(&vault, &vendor, &doc, &opts)
             .map_err(|e| e.message)?;
         Ok(serde_json::json!({
             "entries": plan.entries, "created": plan.created, "updated": plan.updated,
@@ -1125,7 +1125,7 @@ mod commands {
         entries
             .iter()
             .map(|e| {
-                let plan = envv_cli::enrich::plan_entry(e, force);
+                let plan = unv_cli::enrich::plan_entry(e, force);
                 serde_json::json!({
                     "id": e.get("id"),
                     "provider": plan.provider,
@@ -1147,7 +1147,7 @@ mod commands {
         entries
             .iter()
             .filter_map(|e| {
-                envv_cli::enrich::issuer_for(e).map(|issuer| {
+                unv_cli::enrich::issuer_for(e).map(|issuer| {
                     serde_json::json!({ "id": e.get("id"), "provider": e.get("provider"), "issuer": issuer })
                 })
             })
@@ -1168,7 +1168,7 @@ mod commands {
             entries
                 .iter()
                 .filter_map(|e| {
-                    envv_cli::enrich::probe_entry(e, 10, force).map(|live| {
+                    unv_cli::enrich::probe_entry(e, 10, force).map(|live| {
                         serde_json::json!({
                             "id": e.get("id"),
                             "provider": e.get("provider"),
@@ -1197,16 +1197,16 @@ mod commands {
     ) -> Result<Vec<serde_json::Value>, String> {
         let g = state.0.lock().map_err(|_| "State lock poisoned")?;
         let key = *g.as_ref().ok_or("Vault is locked")?;
-        envv_cli::access::set_paths(Some(db_path(&app)?), Some(salt_path(&app)?));
-        Ok(envv_cli::doctor::file_findings(
-            &envv_cli::access::Access::Local(key),
+        unv_cli::access::set_paths(Some(db_path(&app)?), Some(salt_path(&app)?));
+        Ok(unv_cli::doctor::file_findings(
+            &unv_cli::access::Access::Local(key),
         ))
     }
 
     /// Phase 33.2: the document half of `unv doctor`. Pure over its argument.
     #[tauri::command]
     pub fn doctor_document(vault: serde_json::Value) -> Vec<serde_json::Value> {
-        envv_cli::doctor::document_findings(&vault)
+        unv_cli::doctor::document_findings(&vault)
     }
 
     /// Phase 31: which table `enrich` uses (`unv catalogue show`). Reads the
@@ -1579,7 +1579,7 @@ mod commands {
             .map_err(|e| e.to_string())?
             .join("lan");
         let (tls_files, fingerprint) = if use_tls {
-            let (files, fp) = envv_server::ensure_self_signed_cert(&cert_dir)?;
+            let (files, fp) = unv_server::ensure_self_signed_cert(&cert_dir)?;
             (Some(files), Some(fp))
         } else {
             (None, None)
@@ -1588,10 +1588,10 @@ mod commands {
         // Default 8744 so a Docker unv-server on 8743 can coexist; step forward
         // if something already holds it.
         let start_port = port.unwrap_or(8744);
-        let bound = envv_server::find_free_port("0.0.0.0", start_port, 20)
+        let bound = unv_server::find_free_port("0.0.0.0", start_port, 20)
             .ok_or_else(|| format!("No free port in {start_port}..{}", start_port + 20))?;
 
-        let state = envv_server::AppState::new(
+        let state = unv_server::AppState::new(
             db,
             salt,
             fingerprint.clone(),
@@ -1612,7 +1612,7 @@ mod commands {
 
         let serve_state = state.clone();
         tauri::async_runtime::spawn(async move {
-            if let Err(e) = envv_server::serve(serve_state, addr, tls_files, rx).await {
+            if let Err(e) = unv_server::serve(serve_state, addr, tls_files, rx).await {
                 eprintln!("LAN server stopped: {e}");
             }
         });

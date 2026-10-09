@@ -1965,7 +1965,7 @@ mod secret_type_tests {
         let registry_refs: HashSet<&str> = registry.iter().map(String::as_str).collect();
         assert_eq!(
             cli, registry_refs,
-            "envv-cli's --type list and secret-types.json disagree"
+            "unv-cli's --type list and secret-types.json disagree"
         );
     }
 }

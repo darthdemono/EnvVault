@@ -441,7 +441,7 @@ const SIGNATURES: &[Signature] = &[
         Some("https://api.github.com"),
         None,
     ),
-    // A GitHub App *refresh* token, not an access token — `envv-cli`'s own
+    // A GitHub App *refresh* token, not an access token — `unv-cli`'s own
     // `oauth_client` type is where a refresh token belongs (E7's two-lifetime
     // shape), never `api_key`.
     sig("ghr_", "GitHub", "oauth_client", "github", None, None),

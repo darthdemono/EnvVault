@@ -8,7 +8,7 @@ Schema v1 kept the whole vault as one JSON string in one row (review-01 section 
 
 ## Decision
 
-`vault-core/src/storage.rs` stores one row per entry and per project, a row for the category list, and a row for every other top-level key (`vault_rows`). `version_history` lives in `vault_history`, one row per entry, attached on load. The document API is unchanged: `load_vault` returns the same JSON and `save_vault` takes it, so the app, `envv-server` and `envv` call the same functions. `VAULT_SCHEMA_VERSION` is 2; a v1 build refuses the file with `VAULT_SCHEMA_TOO_NEW`.
+`vault-core/src/storage.rs` stores one row per entry and per project, a row for the category list, and a row for every other top-level key (`vault_rows`). `version_history` lives in `vault_history`, one row per entry, attached on load. The document API is unchanged: `load_vault` returns the same JSON and `save_vault` takes it, so the app, `unv-server` and `envv` call the same functions. `VAULT_SCHEMA_VERSION` is 2; a v1 build refuses the file with `VAULT_SCHEMA_TOO_NEW`.
 
 **The version token is `"<seq>.<state hash>"`.** The state hash is the XOR of a hash of every row's `(kind, key, position, content hash)`, maintained incrementally, so a save costs O(changed rows) of hashing; `verify_vault_integrity` recomputes it from the rows. The sequence number indexes `vault_saves` and `vault_changes`, which record which rows each of the last 2000 saves changed.
 
@@ -28,4 +28,4 @@ Anything that adds a top-level key to the document needs no change: it rides in 
 
 ## Evidence
 
-`vault-core/src/storage.rs` (22 tests, including the merge matrix and the v1 conversion), `vault-core/src/lib.rs` (`save_vault_txn`), `envv-server/src/lib.rs` (`saved_response`), `src/ts/state.ts` (`takeMerged`, `reloadFromStore`), `tests/vault-merge.test.ts`
+`vault-core/src/storage.rs` (22 tests, including the merge matrix and the v1 conversion), `vault-core/src/lib.rs` (`save_vault_txn`), `unv-server/src/lib.rs` (`saved_response`), `src/ts/state.ts` (`takeMerged`, `reloadFromStore`), `tests/vault-merge.test.ts`

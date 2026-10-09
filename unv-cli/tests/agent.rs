@@ -8,8 +8,8 @@
 //! `out::mode()` defaults to `reveal: false`, so redaction is active here with
 //! no setup — the same default a caller gets.
 
-use envv_cli::refs::Resolver;
-use envv_cli::{agentio, exporters, out, render};
+use unv_cli::refs::Resolver;
+use unv_cli::{agentio, exporters, out, render};
 use serde_json::{json, Value};
 
 fn vault() -> Value {
@@ -462,12 +462,12 @@ fn pasted_fingerprint_forms_all_normalise_to_one_value() {
 /// A truncated pin is refused before any connection is attempted.
 #[test]
 fn a_short_fingerprint_is_rejected_as_input_not_as_a_network_error() {
-    let err = envv_cli::tls::configure(Some("deadbeef"), None).unwrap_err();
+    let err = unv_cli::tls::configure(Some("deadbeef"), None).unwrap_err();
     let msg = err.to_string();
     assert!(msg.contains("64 hex"), "{msg}");
     // Must be an input error, never `unavailable` — a caller retrying an
     // `unavailable` would loop forever on a typo.
-    assert_eq!(err.code, envv_cli::error::Code::Invalid);
+    assert_eq!(err.code, unv_cli::error::Code::Invalid);
 }
 
 /// A field this build has never heard of is masked, not printed.

@@ -12,4 +12,4 @@ A slug and an uploaded icon share the `custom_icon` field
 
 ## Evidence
 
-`src/ts/icons.ts`, `envv-cli/src/entries.rs`
+`src/ts/icons.ts`, `unv-cli/src/entries.rs`

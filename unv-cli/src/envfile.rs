@@ -3,7 +3,7 @@
 //! Also home to **the environment-variable name template** and **`.env`
 //! quoting** (Phase 23, step 1). Both are twins of TypeScript in
 //! `src/ts/state.ts`, pinned by `tests/fixtures/parity/env-names.json` and
-//! asserted from both sides — see `envv-cli/tests/parity.rs` and
+//! asserted from both sides — see `unv-cli/tests/parity.rs` and
 //! `tests/cli-parity.test.ts`.
 //!
 //! They exist twice because the app's add/edit form previews the generated name

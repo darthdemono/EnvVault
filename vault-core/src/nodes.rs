@@ -463,7 +463,8 @@ impl NodeConfig {
             if !seen.insert(t.id.clone()) {
                 return Err(format!("target id '{}' is used twice", t.id));
             }
-            if !t.path.is_absolute() {
+            // has_root: "/etc/x" is rooted but not absolute on Windows (no drive), and is still unambiguous on the current drive.
+            if !(t.path.is_absolute() || t.path.has_root()) {
                 return Err(format!("target '{}': path must be absolute", t.id));
             }
             if t.path.to_string_lossy().contains('\0') {

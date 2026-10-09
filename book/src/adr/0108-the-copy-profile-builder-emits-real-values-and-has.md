@@ -12,4 +12,4 @@ The copy-profile builder emits **real values** and has no masker
 
 ## Evidence
 
-`src/ts/copy-profile.ts`, `envv-cli/src/profile.rs`
+`src/ts/copy-profile.ts`, `unv-cli/src/profile.rs`

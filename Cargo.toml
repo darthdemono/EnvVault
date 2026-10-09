@@ -1,5 +1,5 @@
 [workspace]
-members  = ["src-tauri", "vault-core", "envv-server", "envv-cli"]
+members  = ["src-tauri", "vault-core", "unv-server", "unv-cli"]
 resolver = "2"
 
 # Warnings are errors — but only for the four crates in this workspace.

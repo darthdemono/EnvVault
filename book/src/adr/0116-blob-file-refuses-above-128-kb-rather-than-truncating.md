@@ -12,4 +12,4 @@ A truncated credential fails at deploy time with an error about malformed JSON, 
 
 ## Evidence
 
-`envv-cli/src/entries.rs`
+`unv-cli/src/entries.rs`

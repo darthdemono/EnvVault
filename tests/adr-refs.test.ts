@@ -3,7 +3,7 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 
 const root = resolve(import.meta.dirname, '..');
-const sourceRoots = ['src/ts', 'vault-core', 'envv-cli', 'envv-server', 'src-tauri'];
+const sourceRoots = ['src/ts', 'vault-core', 'unv-cli', 'unv-server', 'src-tauri'];
 
 function files(dir: string): string[] {
   return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {

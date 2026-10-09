@@ -1193,67 +1193,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "envv-cli"
-version = "0.42.0"
-dependencies = [
- "aes-gcm",
- "aho-corasick",
- "base64 0.22.1",
- "clap",
- "clap_complete",
- "dirs 5.0.1",
- "hex",
- "hmac",
- "notify",
- "pbkdf2",
- "rand 0.8.5",
- "reqwest 0.12.28",
- "rpassword",
- "serde",
- "serde_json",
- "sha2",
- "time",
- "tracing",
- "uuid",
- "vault-core",
- "walkdir",
-]
-
-[[package]]
-name = "envv-server"
-version = "0.42.0"
-dependencies = [
- "axum",
- "axum-server",
- "base64 0.22.1",
- "clap",
- "dirs 5.0.1",
- "envv-cli",
- "hex",
- "rcgen",
- "rustls",
- "rustls-pemfile",
- "serde",
- "serde_json",
- "sha2",
- "time",
- "tokio",
- "tower",
- "tower-http",
- "tracing",
- "utoipa",
- "uuid",
- "vault-core",
- "zeroize",
-]
-
-[[package]]
 name = "envvault"
-version = "0.42.0"
+version = "0.42.1"
 dependencies = [
  "dirs 5.0.1",
- "envv-cli",
- "envv-server",
  "gtk",
  "hex",
  "reqwest 0.12.28",
@@ -1269,6 +1212,8 @@ dependencies = [
  "tauri-plugin-window-state",
  "tokio",
  "tracing",
+ "unv-cli",
+ "unv-server",
  "vault-core",
  "zeroize",
 ]
@@ -5397,6 +5342,61 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8ecb6da28b8a351d773b68d5825ac39017e680750f980f3a1a85cd8dd28a47c1"
 
 [[package]]
+name = "unv-cli"
+version = "0.42.1"
+dependencies = [
+ "aes-gcm",
+ "aho-corasick",
+ "base64 0.22.1",
+ "clap",
+ "clap_complete",
+ "dirs 5.0.1",
+ "hex",
+ "hmac",
+ "notify",
+ "pbkdf2",
+ "rand 0.8.5",
+ "reqwest 0.12.28",
+ "rpassword",
+ "serde",
+ "serde_json",
+ "sha2",
+ "time",
+ "tracing",
+ "uuid",
+ "vault-core",
+ "walkdir",
+]
+
+[[package]]
+name = "unv-server"
+version = "0.42.1"
+dependencies = [
+ "axum",
+ "axum-server",
+ "base64 0.22.1",
+ "clap",
+ "dirs 5.0.1",
+ "hex",
+ "rcgen",
+ "rustls",
+ "rustls-pemfile",
+ "serde",
+ "serde_json",
+ "sha2",
+ "time",
+ "tokio",
+ "tower",
+ "tower-http",
+ "tracing",
+ "unv-cli",
+ "utoipa",
+ "uuid",
+ "vault-core",
+ "zeroize",
+]
+
+[[package]]
 name = "url"
 version = "2.5.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5477,7 +5477,7 @@ checksum = "ba73ea9cf16a25df0c8caa16c51acb937d5712a8429db78a3ee29d5dcacd3a65"
 
 [[package]]
 name = "vault-core"
-version = "0.42.0"
+version = "0.42.1"
 dependencies = [
  "argon2",
  "base64 0.22.1",

@@ -9,8 +9,8 @@
 //! If this fails after an intentional change, regenerate with
 //! `PARITY_UPDATE=1 npx vitest run tests/cli-parity.test.ts` and read the diff.
 
-use envv_cli::exporters;
-use envv_cli::refs::Resolver;
+use unv_cli::exporters;
+use unv_cli::refs::Resolver;
 use serde_json::Value;
 use std::path::PathBuf;
 
@@ -281,7 +281,7 @@ fn disabled_chunks_are_excluded() {
 /// cause nor the fix, on project types Phase 18 had already graduated to stable.
 #[test]
 fn every_project_type_has_its_own_default_format() {
-    use envv_cli::chunks::{default_format_for, EXPORT_FORMATS};
+    use unv_cli::chunks::{default_format_for, EXPORT_FORMATS};
     for (ptype, expected) in [
         ("wireguard", "wireguard"),
         ("docker", "compose"),
@@ -440,7 +440,7 @@ fn calendar_carries_no_secret_value() {
 /// for every value containing a space, a `#`, a quote or a newline.
 #[test]
 fn env_names_and_quoting_match_the_app() {
-    use envv_cli::envfile::{env_name, quote_env_value, unquote_env_value, NameCase, NameOpts};
+    use unv_cli::envfile::{env_name, quote_env_value, unquote_env_value, NameCase, NameOpts};
 
     let doc: Value = serde_json::from_str(&golden("env-names.json")).expect("fixture parses");
 
@@ -464,12 +464,12 @@ fn env_names_and_quoting_match_the_app() {
     for c in doc["roles"].as_array().expect("roles array") {
         let why = c["why"].as_str().unwrap_or("");
         assert_eq!(
-            envv_cli::envfile::primary_name(&c["entry"], None, false),
+            unv_cli::envfile::primary_name(&c["entry"], None, false),
             c["primary"].as_str().unwrap(),
             "primary: {why}"
         );
         assert_eq!(
-            envv_cli::envfile::secret_name(&c["entry"], None, false),
+            unv_cli::envfile::secret_name(&c["entry"], None, false),
             c["secret"].as_str().unwrap(),
             "secret: {why}"
         );
@@ -515,7 +515,7 @@ fn reference_lookup_matches_the_app() {
 
     for c in section["cases"].as_array().expect("cases") {
         let why = c["why"].as_str().unwrap_or("");
-        let found = envv_cli::refs::find_entry(&entries, c["ref"].as_str().unwrap());
+        let found = unv_cli::refs::find_entry(&entries, c["ref"].as_str().unwrap());
         let got = found
             .and_then(|e| e.get("account_name"))
             .and_then(|v| v.as_str());
@@ -537,7 +537,7 @@ fn declared_roles_beat_the_alias_table() {
 
     let ra = &doc["role_aware"];
     for c in ra["cases"].as_array().expect("cases") {
-        let got = envv_cli::refs::entry_field(&ra["entry"], c["field"].as_str().unwrap());
+        let got = unv_cli::refs::entry_field(&ra["entry"], c["field"].as_str().unwrap());
         assert_eq!(
             got.as_deref(),
             c["expect"].as_str(),
@@ -547,7 +547,7 @@ fn declared_roles_beat_the_alias_table() {
     }
 
     let ri = &doc["role_aware_id"];
-    let got = envv_cli::refs::entry_field(&ri["entry"], ri["field"].as_str().unwrap());
+    let got = unv_cli::refs::entry_field(&ri["entry"], ri["field"].as_str().unwrap());
     assert_eq!(
         got.as_deref(),
         ri["expect"].as_str(),
@@ -563,7 +563,7 @@ fn bundle_references_resolve_like_the_app() {
     let entries = doc["entries"].as_array().expect("entries").clone();
     for c in doc["cases"].as_array().expect("cases") {
         let inner = c["ref"].as_str().unwrap();
-        let got = envv_cli::refs::resolve_ref(&entries, &[], inner, "api_key", 0);
+        let got = unv_cli::refs::resolve_ref(&entries, &[], inner, "api_key", 0);
         assert_eq!(
             got.as_deref(),
             c["expect"].as_str(),
@@ -581,7 +581,7 @@ fn bundle_references_resolve_like_the_app() {
 /// depend on which half of the product the user reached for.
 #[test]
 fn copy_profiles_match_the_app() {
-    use envv_cli::profile::{build, CopyOpts, MetadataStyle, Profile};
+    use unv_cli::profile::{build, CopyOpts, MetadataStyle, Profile};
 
     let doc: Value = serde_json::from_str(&golden("copy-profiles.json")).expect("fixture parses");
 
@@ -628,7 +628,7 @@ fn copy_profiles_match_the_app() {
 /// (invariant 4), and one of them is routinely a cookie jar full of semicolons.
 #[test]
 fn auth_schemes_match_the_app() {
-    use envv_cli::authreq::{curl_for, header_for, query_for, shell_quote, url_for};
+    use unv_cli::authreq::{curl_for, header_for, query_for, shell_quote, url_for};
 
     let doc: Value = serde_json::from_str(&golden("auth-request.json")).expect("fixture parses");
 
@@ -680,7 +680,7 @@ fn auth_schemes_match_the_app() {
 /// exists twice.
 #[test]
 fn cookie_parsing_matches_the_app() {
-    use envv_cli::cookies::*;
+    use unv_cli::cookies::*;
 
     let doc: Value = serde_json::from_str(&golden("cookies.json")).expect("fixture parses");
 

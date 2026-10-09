@@ -2,7 +2,7 @@
 //!
 //! CXF (FIDO Alliance) is the JSON format password managers are converging on
 //! for moving credentials between products. This is the one place it is read
-//! or written: `envv-cli` calls it directly, and the desktop app reaches it
+//! or written: `unv-cli` calls it directly, and the desktop app reaches it
 //! over IPC, the same split TOTP import/export already uses and for the same
 //! reason — six formats parsed twice is six chances for the app and the CLI
 //! to disagree about what a file meant.

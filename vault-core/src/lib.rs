@@ -1,7 +1,7 @@
 //! vault-core — shared encryption, storage, and tooling for UnENVerse.
 //!
 //! Used by the Tauri desktop app, the HTTP server (`unv-server`), and the CLI
-//! (`envv-cli`).  Has no dependency on Tauri; accepts `&Path` for all I/O.
+//! (`unv-cli`).  Has no dependency on Tauri; accepts `&Path` for all I/O.
 
 use argon2::{Algorithm, Argon2, Params, Version};
 pub use rusqlite::Connection as SqlConnection;
@@ -15,7 +15,7 @@ pub mod jwks;
 pub use generators::{generate_certificate, generate_ssh_keypair};
 
 // Phase 24.3: the one Rust builder for the .ics feed — moved here from
-// envv-cli so `unv-server` can serve it too. See the module doc for why the
+// unv-cli so `unv-server` can serve it too. See the module doc for why the
 // TypeScript twin was deleted rather than kept as a second answer.
 pub mod calendar;
 // Phase 24.3: the ics_feeds table (token issuance/lookup/revocation). Storage

@@ -2,13 +2,13 @@
  * Cross-implementation parity for the config exporters.
  *
  * These formats now exist twice: once in `src/ts/chunk-ops.ts` for the desktop
- * app, once in `envv-cli/src/exporters.rs` for the CLI. Two implementations of
+ * app, once in `unv-cli/src/exporters.rs` for the CLI. Two implementations of
  * one file format drift silently — the app writes a working wg0.conf and the CLI
  * writes a subtly different one, and nobody notices until a deploy breaks.
  *
  * So both sides assert against the *same* golden files in
  * `tests/fixtures/parity/`. This suite pins the TypeScript output; the Rust test
- * at `envv-cli/tests/parity.rs` pins the Rust output against the identical
+ * at `unv-cli/tests/parity.rs` pins the Rust output against the identical
  * bytes. Change either exporter and one of the two fails.
  *
  * Regenerate deliberately with `PARITY_UPDATE=1 npx vitest run tests/cli-parity.test.ts`,
@@ -185,19 +185,19 @@ describe('exporter parity fixtures', () => {
   });
 
   // The iCalendar feed used to be a fourth format written twice here and in
-  // `envv-cli/src/calendar.rs`, pinned by this same `calendar.ics` fixture from
+  // `unv-cli/src/calendar.rs`, pinned by this same `calendar.ics` fixture from
   // both sides. Phase 24.3 deleted the TypeScript builder — the format is now
   // built in exactly one place, `vault-core/src/calendar.rs`, reached by the
   // app over IPC (`calendar_build_ics`) and by the CLI and `unv-server`
   // directly. The fixture still exists and still pins the Rust output; see
   // `calendar_ics` and `calendar_carries_no_secret_value` in
-  // `envv-cli/tests/parity.rs`.
+  // `unv-cli/tests/parity.rs`.
 
   /**
    * The `${Provider/field}` alias table — a fourth twin pair, and one that had
    * already drifted silently before it was pinned. `PASSWORD`, `PASS` and `PWD`
    * were in this file's `FIELD_ALIASES` and missing from `canonical_field` in
-   * `envv-cli/src/refs.rs`, so `${PgProd/password}` resolved here and reached
+   * `unv-cli/src/refs.rs`, so `${PgProd/password}` resolved here and reached
    * `.pgpass`, `unv render`, `unv exec` and every CLI export as the literal
    * text `${PgProd/password}`.
    *

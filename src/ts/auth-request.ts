@@ -1,7 +1,7 @@
 /**
  * @file
  * How a credential is *sent* — Phase 23, E16.
- * @description The twin of `envv-cli/src/authreq.rs`, pinned by
+ * @description The twin of `unv-cli/src/authreq.rs`, pinned by
  *              `tests/fixtures/parity/auth-request.json` and asserted from both
  *              sides.
  *

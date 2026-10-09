@@ -510,7 +510,7 @@ pub struct Params {
     /// It is *state*, not configuration — the only number in this struct that a
     /// correct implementation writes back — which is why advancing it is an
     /// explicit action rather than a side effect of reading a code. See
-    /// `advance` in `envv-cli/src/totp_cmd.rs`.
+    /// `advance` in `unv-cli/src/totp_cmd.rs`.
     #[serde(default)]
     pub counter: u64,
 }
@@ -653,7 +653,7 @@ pub struct Stored {
     #[serde(flatten)]
     pub params: Params,
     /// The service, when the URI named one. Never overwrites an entry's
-    /// provider — see `envv-cli`'s `--totp` handling; it is offered, not applied.
+    /// provider — see `unv-cli`'s `--totp` handling; it is offered, not applied.
     pub issuer: Option<String>,
     /// The account at that service, when the URI named one.
     pub account: Option<String>,

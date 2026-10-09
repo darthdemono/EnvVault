@@ -38,7 +38,7 @@ pub(crate) async fn history_route(
     );
     let out = tokio::task::spawn_blocking(move || {
         let conn = open_db(&db, &key)?;
-        envv_cli::history::call(&conn, &req.op, &req.args, Some(&actor))
+        unv_cli::history::call(&conn, &req.op, &req.args, Some(&actor))
     })
     .await;
     match out {
@@ -59,7 +59,7 @@ pub(crate) fn snapshot_after_save(state: &AppState, key: VaultKey, actor: String
             return;
         };
         if let Ok(Some(vault)) = load_vault(&conn) {
-            envv_cli::history::after_save(&conn, &vault, Some(&actor));
+            unv_cli::history::after_save(&conn, &vault, Some(&actor));
         }
     }));
 }

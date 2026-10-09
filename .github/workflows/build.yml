@@ -106,7 +106,7 @@ jobs:
           }
 
           check package.json          "$(jq -r .version package.json)"
-          for c in src-tauri vault-core envv-server envv-cli; do
+          for c in src-tauri vault-core unv-server unv-cli; do
             check "$c/Cargo.toml" \
               "$(sed -n 's/^version *= *"\(.*\)"/\1/p' "$c/Cargo.toml" | head -n1)"
           done
@@ -429,10 +429,10 @@ jobs:
       # updates). A release must compile the pinned graph, not today's.
       # Built one package at a time so a failure names the crate.
       - name: Build unv
-        run: cargo build --release --locked -p envv-cli --features vault-core/bundled
+        run: cargo build --release --locked -p unv-cli --features vault-core/bundled
 
       - name: Build unv-server
-        run: cargo build --release --locked -p envv-server --features vault-core/bundled
+        run: cargo build --release --locked -p unv-server --features vault-core/bundled
 
       - name: Smoke test the binaries
         shell: bash

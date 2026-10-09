@@ -186,7 +186,7 @@ jobs:
                 <a href="${RUST_ENTRY}">Rust crates</a>
                 <p>
                   <code>vault-core</code> (crypto, storage, RBAC),
-                  <code>unv-server</code>, <code>envv-cli</code> and the Tauri
+                  <code>unv-server</code>, <code>unv-cli</code> and the Tauri
                   app crate, built with rustdoc.
                 </p>
               </li>
@@ -214,7 +214,7 @@ jobs:
           umask 077
           printf '%s' "$CATALOGUE_SIGNING_KEY" > "$RUNNER_TEMP/cat.key"
           mkdir -p site/catalogue
-          cargo run --locked -q -p envv-cli -- catalogue sign catalogue/providers.json \
+          cargo run --locked -q -p unv-cli -- catalogue sign catalogue/providers.json \
             --key-file "$RUNNER_TEMP/cat.key" -o site/catalogue/catalogue.json
           rm -f "$RUNNER_TEMP/cat.key"
 

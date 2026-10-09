@@ -1,7 +1,7 @@
 /**
  * @file
  * Session cookies — Phase 23, step 5.
- * @description The twin of `envv-cli/src/cookies.rs`, pinned by
+ * @description The twin of `unv-cli/src/cookies.rs`, pinned by
  *              `tests/fixtures/parity/cookies.json` and asserted from both sides.
  *
  * ## Why a cookie is a credential this vault has to hold
@@ -336,7 +336,7 @@ export function bareCookieName(name: string): string {
  * header export (which needs no attributes) and the `cookies.txt` export (which
  * needs all of them).
  *
- * Twin: `cookies_of` in `envv-cli/src/entries.rs`.
+ * Twin: `cookies_of` in `unv-cli/src/entries.rs`.
  */
 export function cookiesOf(entry: VaultEntry): Cookie[] {
   const split = (entry.extra_vars ?? [])

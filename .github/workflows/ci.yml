@@ -173,7 +173,7 @@ jobs:
 
       # Clippy runs on both, because the lints that matter here are behind
       # `cfg` — vault-core vendors SQLCipher and OpenSSL only on Windows, and
-      # envv-cli's process-spawning code takes a different branch there. A
+      # unv-cli's process-spawning code takes a different branch there. A
       # Linux-only clippy would never see either.
       #
       # No `-D warnings` on the command line: the levels live in the root

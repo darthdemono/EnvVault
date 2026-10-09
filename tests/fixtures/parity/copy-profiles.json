@@ -1,7 +1,7 @@
 {
   "_comment": [
     "Copy profiles (Phase 23, step 3), asserted from both src/ts/copy-profile.ts",
-    "and envv-cli/src/profile.rs.",
+    "and unv-cli/src/profile.rs.",
     "",
     "A sixth twin pair. It exists twice because the app's Copy button puts the",
     "text on the clipboard with no Rust in the loop, and `unv get --profile`",

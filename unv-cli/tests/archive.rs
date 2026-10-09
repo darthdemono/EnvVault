@@ -13,7 +13,7 @@
 //! vault path — the alternative is four tests that pass only in the order the
 //! scheduler happens to pick.
 
-use envv_cli::{access, backup};
+use unv_cli::{access, backup};
 
 const PW: &str = "correct-horse-battery";
 const ARC_PW: &str = "archive-password-1234";
@@ -51,7 +51,7 @@ fn archive_round_trip_and_every_refusal() {
     // Losing this month's vault to last month's archive is preventable, unlike
     // losing a salt.
     let err = backup::restore_archive(&arc, Some(ARC_PW), false, true).unwrap_err();
-    assert_eq!(err.code, envv_cli::error::Code::Conflict, "{err}");
+    assert_eq!(err.code, unv_cli::error::Code::Conflict, "{err}");
 
     // ── 2. A damaged archive is refused, and writes nothing ──────────────────
     // A restore that half-succeeds is worse than one that refuses: the vault it
@@ -64,7 +64,7 @@ fn archive_round_trip_and_every_refusal() {
     env["ct"] = serde_json::json!(format!("{}AAAAAAAA", &ct[..ct.len() - 8]));
     std::fs::write(&corrupt, serde_json::to_string(&env).unwrap()).unwrap();
     let err = backup::restore_archive(&corrupt, Some(ARC_PW), true, true).unwrap_err();
-    assert_eq!(err.code, envv_cli::error::Code::Denied, "{err}");
+    assert_eq!(err.code, unv_cli::error::Code::Denied, "{err}");
     assert_eq!(
         std::fs::read(&db).unwrap(),
         before,
@@ -74,7 +74,7 @@ fn archive_round_trip_and_every_refusal() {
     // ── 3. The wrong password is denied, not "corrupt file" ──────────────────
     let err =
         backup::restore_archive(&arc, Some("not-the-archive-password"), true, true).unwrap_err();
-    assert_eq!(err.code, envv_cli::error::Code::Denied, "{err}");
+    assert_eq!(err.code, unv_cli::error::Code::Denied, "{err}");
 
     // ── 4. A .vaultbak names the command that does handle it ─────────────────
     let bak = dir.join("v.vaultbak");

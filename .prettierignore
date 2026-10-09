@@ -15,7 +15,7 @@ package-lock.json
 Cargo.lock
 
 # Golden fixtures. These files ARE the assertion — tests/cli-parity.test.ts and
-# envv-cli/tests/parity.rs both compare exporter output against these exact
+# unv-cli/tests/parity.rs both compare exporter output against these exact
 # bytes. Reformatting one makes both sides fail against a file that no longer
 # describes any real config format.
 tests/fixtures/

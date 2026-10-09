@@ -1,7 +1,7 @@
 {
   "_comment": [
     "How a credential is sent (Phase 23, E16), asserted from both",
-    "src/ts/auth-request.ts and envv-cli/src/authreq.rs.",
+    "src/ts/auth-request.ts and unv-cli/src/authreq.rs.",
     "",
     "A seventh twin pair. It exists twice because the app's \"Copy as request",
     "header\" builds the header with no Rust in the loop, and `unv curl` builds",

@@ -1,7 +1,7 @@
 {
   "_comment": [
     "Session cookies (Phase 23, step 5), asserted from both src/ts/cookies.ts and",
-    "envv-cli/src/cookies.rs.",
+    "unv-cli/src/cookies.rs.",
     "",
     "An eighth twin pair. The form has to split a pasted document.cookie AS IT IS",
     "TYPED, so an IPC round trip per keystroke is not an option \u2014 the same reason",

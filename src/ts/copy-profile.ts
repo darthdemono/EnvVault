@@ -40,7 +40,7 @@
  * redaction policy to keep in step with `out.rs`, which is the shape that
  * produced the two-lists-of-secret-fields leak in Phase 22.
  *
- * Twin: `envv-cli/src/profile.rs`, pinned by
+ * Twin: `unv-cli/src/profile.rs`, pinned by
  * `tests/fixtures/parity/copy-profiles.json` and asserted from both sides.
  */
 

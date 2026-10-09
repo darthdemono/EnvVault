@@ -60,7 +60,7 @@ describe('FIELD_NAMES', () => {
   it('names only aliases the reference resolver knows', () => {
     // canonical_field's arms, from the Rust source: a name here that the resolver
     // would pass through unchanged would complete to a reference that fails.
-    const rust = readFileSync(join(process.cwd(), 'envv-cli', 'src', 'refs.rs'), 'utf8');
+    const rust = readFileSync(join(process.cwd(), 'unv-cli', 'src', 'refs.rs'), 'utf8');
     for (const f of FIELD_NAMES) expect(rust, f).toContain(`"${f}"`);
   });
 });

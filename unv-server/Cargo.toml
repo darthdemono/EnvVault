@@ -1,6 +1,6 @@
 [package]
-name    = "envv-server"
-version = "0.42.0"
+name    = "unv-server"
+version = "0.42.1"
 edition = "2021"
 publish = false
 license = "MIT"
@@ -8,7 +8,7 @@ license = "MIT"
 # Library first: the desktop app embeds this router for "Open to LAN", so the
 # binary is only a CLI wrapper around it.
 [lib]
-name = "envv_server"
+name = "unv_server"
 path = "src/lib.rs"
 
 [[bin]]
@@ -18,8 +18,8 @@ path = "src/main.rs"
 [dependencies]
 vault-core   = { path = "../vault-core", features = ["telemetry"] }
 # Phase 34: the hub renders a node's targets with the CLI's exporters
-# (`chunks::render_project`), which exist once, in the library half of envv-cli.
-envv-cli     = { path = "../envv-cli" }
+# (`chunks::render_project`), which exist once, in the library half of unv-cli.
+unv-cli     = { path = "../unv-cli" }
 tracing      = "0.1"
 axum         = "0.8"
 axum-server  = { version = "0.8", features = ["tls-rustls"] }

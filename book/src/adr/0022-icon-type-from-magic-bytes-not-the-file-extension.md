@@ -12,4 +12,4 @@ Icon type from magic bytes, not the file extension
 
 ## Evidence
 
-`envv-cli/src/entries.rs`
+`unv-cli/src/entries.rs`

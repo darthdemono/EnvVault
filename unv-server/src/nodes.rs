@@ -706,7 +706,7 @@ fn plan(vault: Option<&serde_json::Value>, node: &NodeRecord, targets: &[TargetR
         }
         return Plan { rendered };
     };
-    let names = envv_cli::check_cmd::vault_names(vault);
+    let names = unv_cli::check_cmd::vault_names(vault);
     let mut cache: HashMap<(String, String), Result<Vec<u8>, String>> = HashMap::new();
     for t in targets.iter().filter(|t| t.mode == "push") {
         if !node.projects.iter().any(|p| p == &t.project) {
@@ -732,8 +732,8 @@ fn render_gated(
     project: &str,
     exporter: &str,
 ) -> Result<Vec<u8>, String> {
-    let list = envv_cli::data::projects(vault);
-    let idx = envv_cli::data::find_project_index(vault, project).map_err(|e| e.to_string())?;
+    let list = unv_cli::data::projects(vault);
+    let idx = unv_cli::data::find_project_index(vault, project).map_err(|e| e.to_string())?;
     let errors = vault_core::config_check::gate(&list[idx], names);
     if let Some(f) = errors.first() {
         return Err(format!(
@@ -743,7 +743,7 @@ fn render_gated(
             if errors.len() == 1 { "" } else { "s" }
         ));
     }
-    envv_cli::chunks::render_project(vault, project, exporter)
+    unv_cli::chunks::render_project(vault, project, exporter)
         .map(String::into_bytes)
         .map_err(|e| e.to_string())
 }
@@ -835,7 +835,7 @@ fn process(state: &AppState, node: &NodeRecord, beat: &Beat, first: bool) -> Bea
                     continue;
                 }
                 let actor = format!("node:{}", node.name);
-                let to_seq = envv_cli::history::snapshot_stream(
+                let to_seq = unv_cli::history::snapshot_stream(
                     c,
                     v,
                     &t.project,
@@ -905,7 +905,7 @@ fn process(state: &AppState, node: &NodeRecord, beat: &Beat, first: bool) -> Bea
                     // history (and blast radius with it) accounts for every file a
                     // host was ever sent. A no-op when a save already recorded it.
                     if let (Some(c), Some(v)) = (&conn, &vault) {
-                        let _ = envv_cli::history::snapshot_stream(
+                        let _ = unv_cli::history::snapshot_stream(
                             c,
                             v,
                             &t.project,
@@ -1061,10 +1061,10 @@ fn dial(
     base: &str,
     path: &str,
     body: &[u8],
-) -> Result<envv_cli::tls::Dialed, String> {
+) -> Result<unv_cli::tls::Dialed, String> {
     let ts = next_hub_ts();
     let sig = vault_core::nodes::sign_hub_request(seed, "POST", path, ts, body)?;
-    envv_cli::tls::hub_post(fingerprint, base, path, ts, &sig, body)
+    unv_cli::tls::hub_post(fingerprint, base, path, ts, &sig, body)
 }
 
 /// Asks one listening node for its beat and answers it. Blocking: the pinned
@@ -1401,7 +1401,7 @@ mod tests {
     }
 
     fn rendered_sha(value: &str) -> String {
-        let r = envv_cli::chunks::render_project(&vault_with(value), "edge", "env").unwrap();
+        let r = unv_cli::chunks::render_project(&vault_with(value), "edge", "env").unwrap();
         vault_core::nodes_apply::sha256_hex(r.as_bytes())
     }
 
@@ -1998,7 +1998,7 @@ mod tests {
         let conn = vault_core::open_db(&h.state.db_path, &h.key).unwrap();
         // The config as it was, recorded; then the vault moves on.
         let before =
-            envv_cli::history::snapshot_all(&conn, &vault_with(PASS), Some("edge"), "save", None);
+            unv_cli::history::snapshot_all(&conn, &vault_with(PASS), Some("edge"), "save", None);
         assert_eq!(before.recorded, 1);
         vault_core::save_vault(&conn, vault_with("later"), vault_core::SaveCtx::default()).unwrap();
         let (_, _) = do_beat(

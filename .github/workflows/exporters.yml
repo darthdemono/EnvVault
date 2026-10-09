@@ -17,7 +17,7 @@ on:
       - "src/ts/stack.ts"
       - "vault-core/src/stack.rs"
       - "vault-core/data/stack-adapters.json"
-      - "envv-cli/src/enrich.rs"
+      - "unv-cli/src/enrich.rs"
       - "tests/fixtures/parity/**"
       - ".github/workflows/exporters.yml"
   pull_request:
@@ -416,7 +416,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
       - uses: Swatinem/rust-cache@bc2d2e71bd35c5549942babaa51a89c586b981d1 # v2.8.1
       - run: sudo apt-get update && sudo apt-get install -y libsqlcipher-dev mold
-      - run: cargo build -p envv-cli
+      - run: cargo build -p unv-cli
       - name: The probe must name the service account and the organisation
         run: |
           set -euo pipefail

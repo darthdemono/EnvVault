@@ -9,7 +9,7 @@
  * `<n> per <period>` ("varies by endpoint") is not thrown away.
  *
  * This module is the only thing that converts between the two. It has a twin —
- * `envv-cli/src/ratelimit.rs` — and the two are pinned against the same golden
+ * `unv-cli/src/ratelimit.rs` — and the two are pinned against the same golden
  * table in `tests/fixtures/parity/rate-limit.json`, for the same reason the
  * config exporters are: two implementations of one format drift silently.
  */

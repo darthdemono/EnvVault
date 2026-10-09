@@ -23,4 +23,4 @@ Adding a seventh rule is a deliberate edit to `RULES` and a new unit test with i
 
 ## Evidence
 
-`vault-core/src/config_check.rs`, `tests/fixtures/parity/k8s.yaml`, `envv-cli/src/check_cmd.rs`, `envv-cli/tests/check.rs`, `src/ts/config-check.ts`, `tests/config-check.test.ts`
+`vault-core/src/config_check.rs`, `tests/fixtures/parity/k8s.yaml`, `unv-cli/src/check_cmd.rs`, `unv-cli/tests/check.rs`, `src/ts/config-check.ts`, `tests/config-check.test.ts`
