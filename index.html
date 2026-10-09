@@ -4,7 +4,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>EnvVault</title>
+  <title>UnENVerse</title>
   <!-- Fonts are self-hosted via @fontsource and imported from index.css.
        No Google Fonts CDN: a local-first secrets manager should not phone home
        on launch, and it must render correctly offline. -->
@@ -35,7 +35,7 @@
           <rect x="3" y="11" width="18" height="11" rx="2" />
           <path d="M7 11V7a5 5 0 0 1 10 0v4" />
         </svg>
-        EnvVault
+        UnENVerse
       </div>
       <!-- Vault switcher stub — future: multi-vault + remote support -->
       <button id="vault-switcher" class="vault-pill" title="Vault switching coming in v2" aria-label="Switch vault">
@@ -289,6 +289,14 @@
           <button class="tool-nav-btn" data-tool="base64">
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg>
             Base64
+          </button>
+          <button class="tool-nav-btn" data-tool="history">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><polyline points="12 7 12 12 15 14"/></svg>
+            Config history
+          </button>
+          <button class="tool-nav-btn" data-tool="nodes">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="6" rx="1"/><rect x="3" y="14" width="18" height="6" rx="1"/><line x1="7" y1="7" x2="7.01" y2="7"/><line x1="7" y1="17" x2="7.01" y2="17"/></svg>
+            Nodes
           </button>
           <button class="tool-nav-btn" data-tool="uid-registry">
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 9h16M4 15h16M10 3L8 21M16 3l-2 18"/></svg>
@@ -715,7 +723,7 @@
           </select>
         </div>
         <!-- A11 (2026-09-14): an entry whose secretType this build does not
-             recognise — made by a newer EnvVault — is shown here rather than
+             recognise — made by a newer UnENVerse — is shown here rather than
              silently downgraded to api_key on Save (the select cannot select
              an option it has no <option> for, and used to fall back). -->
         <div class="form-group" id="f-unknown-type-banner" hidden role="alert">
@@ -905,6 +913,18 @@
               Header / parameter name <span class="opt">optional</span>
             </label>
             <input class="form-input mono" id="f-auth-param" type="text" autocomplete="off" placeholder="X-Api-Key">
+          </div>
+          <div class="form-group">
+            <label for="f-auth-template" class="form-label" data-field="auth_template" title="For a named header: the value sent, with {key} standing for the credential, e.g. MediaBrowser Token=&quot;{key}&quot;. Empty sends the credential on its own.">
+              Header value template <span class="opt">optional</span>
+            </label>
+            <input class="form-input mono" id="f-auth-template" type="text" autocomplete="off" placeholder="{key}">
+          </div>
+        </div>
+        <div class="form-group" id="f-pgp-group" style="display:none">
+          <div class="cookie-split-row">
+            <span class="form-label">Read the expiry and fingerprint from the public key</span>
+            <button type="button" class="btn btn-ghost btn-sm" id="f-pgp-btn">Read key…</button>
           </div>
         </div>
         <div class="form-group" id="f-capture-group" style="display:none">
@@ -1109,7 +1129,7 @@
         <div class="form-row-2">
           <div class="form-group">
             <label for="f-purpose" class="form-label" data-field="purpose">Purpose <span class="opt">optional — what you told the issuer</span></label>
-            <input class="form-input" id="f-purpose" placeholder="CI builds for the EnvVault repo">
+            <input class="form-input" id="f-purpose" placeholder="CI builds for the UnENVerse repo">
           </div>
           <div class="form-group">
             <label for="f-pool" class="form-label" data-field="pool">Key Pool <span class="opt">optional — swap between keys</span></label>
@@ -1775,6 +1795,18 @@
             <button class="project-type-btn" data-ptype="postgres">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14a9 3 0 0 0 18 0V5"/><path d="M3 12a9 3 0 0 0 18 0"/></svg>
               PostgreSQL
+            </button>
+            <button class="project-type-btn" data-ptype="prometheus">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2c2 3 5 5 5 9a5 5 0 0 1-10 0c0-4 3-6 5-9z"/><path d="M9 20h6"/></svg>
+              Prometheus
+            </button>
+            <button class="project-type-btn" data-ptype="grafana">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3v18h18"/><path d="M7 15l4-5 3 3 5-7"/></svg>
+              Grafana
+            </button>
+            <button class="project-type-btn" data-ptype="homepage">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>
+              Homepage
             </button>
           </div>
         </div>
