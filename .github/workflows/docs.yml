@@ -1,11 +1,15 @@
 name: Docs
 
-# Publishes two API references to GitHub Pages:
+# Publishes the product site and the documentation to GitHub Pages:
 #
-#   /ts    — Doxygen over src/ts/
-#   /rust  — `cargo doc` over the four workspace crates
+#   /                  — website/ (landing, download, quickstart, security, guides)
+#   /docs/             — the mdBook guide
+#   /reference/ts/     — Doxygen over src/ts/
+#   /reference/rust/   — `cargo doc` over the four workspace crates
+#   /catalogue/        — the signed provider catalogue
+#   /book/ /ts/ /rust/ — redirect stubs to the new paths
 #
-# Two tools because there is no one tool. Doxygen has no Rust front end, and
+# Two reference tools because there is no one tool. Doxygen has no Rust front end, and
 # rustdoc has no TypeScript one. Rather than pick the language that gets docs,
 # both halves are built with the tool that understands them and served side by
 # side behind one landing page.
@@ -37,7 +41,7 @@ env:
 
 jobs:
   build:
-    name: Build both references
+    name: Build the site and both references
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
@@ -115,87 +119,35 @@ jobs:
       - name: rustdoc (Rust crates)
         run: cargo doc --workspace --no-deps --locked
 
+      # The product site (website/) is the Pages root; the guide and the two API
+      # references live under it. build-site.mjs wipes ./site and stamps the
+      # version and the download table from the latest *published release*, so
+      # it must run first. It fails when the release cannot be read: a stale
+      # version is worse than a failed deploy.
       - name: Assemble the site
         shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          VERSION=$(node scripts/version.mjs)
-
-          rm -rf site
-          mkdir -p site
-          mdbook build book --dest-dir ../site/book
-          cp -r docs/ts   site/ts
-          cp -r target/doc site/rust
+          node scripts/build-site.mjs --out site
+          mdbook build book --dest-dir ../site/docs
+          mkdir -p site/reference
+          cp -r docs/ts   site/reference/ts
+          cp -r target/doc site/reference/rust
 
           # The warnings log is a build artefact, not documentation. It is in
           # the run summary above; leaving it in the published tree only invites
           # someone to read a stale copy.
-          rm -f site/ts/doxygen-warnings.log
+          rm -f site/reference/ts/doxygen-warnings.log
 
-          # rustdoc's own landing page lists every crate it documented, but only
-          # if something points at it — `target/doc/index.html` does not exist
-          # for a multi-crate workspace built with --no-deps.
-          # Written as if/then, not `[ … ] && …`. Under `set -e` the `&&` form
-          # makes the test's exit status the script's, so the *absence* of the
-          # file — the normal case — would abort the job here. build.yml's
-          # binary smoke test carries a comment about the identical trap.
-          RUST_ENTRY="rust/vault_core/index.html"
-          if [ -f "site/rust/index.html" ]; then
-            RUST_ENTRY="rust/index.html"
+          # Written as if/then, not `[ ... ] || exit`. See build.yml's binary
+          # smoke test for the `set -e` trap this avoids.
+          if [ ! -f site/reference/rust/vault_core/index.html ]; then
+            echo "rustdoc output is missing vault_core/index.html" >&2
+            exit 1
           fi
-
-          cat > site/index.html <<HTML
-          <!doctype html>
-          <html lang="en">
-          <head>
-            <meta charset="utf-8">
-            <meta name="viewport" content="width=device-width, initial-scale=1">
-            <title>UnENVerse ${VERSION} — API reference</title>
-            <style>
-              :root { color-scheme: light dark; }
-              body {
-                font-family: ui-monospace, "JetBrains Mono", SFMono-Regular, Menlo, monospace;
-                max-width: 46rem; margin: 4rem auto; padding: 0 1.5rem; line-height: 1.6;
-              }
-              h1 { font-size: 1.6rem; margin-bottom: 0.2rem; }
-              .v { opacity: 0.6; font-size: 0.9rem; }
-              ul { list-style: none; padding: 0; margin-top: 2.5rem; }
-              li { margin: 0 0 1.75rem; }
-              a { font-size: 1.15rem; text-decoration: none; border-bottom: 1px solid currentColor; }
-              p { margin: 0.4rem 0 0; opacity: 0.75; font-size: 0.95rem; }
-            </style>
-          </head>
-          <body>
-            <h1>UnENVerse</h1>
-            <div class="v">API reference &middot; version ${VERSION} &middot; commit ${GITHUB_SHA:0:7}</div>
-            <ul>
-              <li>
-                <a href="book/">Guide</a>
-                <p>Architecture, security model, CLI reference and roadmap.</p>
-              </li>
-              <li>
-                <a href="ts/index.html">TypeScript frontend</a>
-                <p>
-                  The 24 modules under <code>src/ts/</code>, built with Doxygen.
-                  Signatures are the Javascript parser's reading of each
-                  declaration and do not carry TypeScript generics or unions —
-                  <code>src/ts/types.ts</code> is the authority on types.
-                </p>
-              </li>
-              <li>
-                <a href="${RUST_ENTRY}">Rust crates</a>
-                <p>
-                  <code>vault-core</code> (crypto, storage, RBAC),
-                  <code>unv-server</code>, <code>unv-cli</code> and the Tauri
-                  app crate, built with rustdoc.
-                </p>
-              </li>
-            </ul>
-          </body>
-          </html>
-          HTML
-
-          du -sh site/ts site/rust
+          du -sh site/reference/ts site/reference/rust
 
       # Phase 31. The private key is the CATALOGUE_SIGNING_KEY secret (64 hex
       # digits); its public half is pinned in vault-core/src/catalogue.rs. A fork
@@ -217,6 +169,30 @@ jobs:
           cargo run --locked -q -p unv-cli -- catalogue sign catalogue/providers.json \
             --key-file "$RUNNER_TEMP/cat.key" -o site/catalogue/catalogue.json
           rm -f "$RUNNER_TEMP/cat.key"
+
+      # Run by hand once before wiring in (roadmap W1): scripts/check-site.mjs
+      # fails on horizontal scroll, a missing or second h1, an unnamed link, an
+      # image without alt or size, a missing skip link or focus ring, a console
+      # error or a 404, at 1440 and 390 px.
+      - name: Browser checks on the assembled site
+        run: |
+          npx playwright install --with-deps chromium
+          node scripts/check-site.mjs site
+
+      # Offline: every internal link and fragment on the product pages resolves
+      # inside ./site (the generated guide and references have their own tools and
+      # carry links this check cannot judge). External
+      # links are not gated, because a third party being down must not block a
+      # docs deploy; tools/ and the handoff list them for a manual pass.
+      - name: Check internal links
+        uses: lycheeverse/lychee-action@e7477775783ea5526144ba13e8db5eec57747ce8 # v2.9.0
+        with:
+          args: >-
+            --offline --no-progress --include-fragments --index-files index.html
+            --root-dir ${{ github.workspace }}/site
+            --exclude-path '/(docs|reference/ts|reference/rust)/'
+            './site/**/*.html'
+          fail: true
 
       - uses: actions/configure-pages@983d7736d9b0ae728b81ab479565c72886d7745b # v5.0.0
 
