@@ -471,13 +471,15 @@ pub fn prune(
          (?3 IS NULL OR m.generator = ?3) AND \
          (?4 IS NULL OR m.actor = ?4))";
 
-    let matched: u64 = conn
+    // rusqlite 0.40 dropped `FromSql for u64` (SQLite integers are signed).
+    let matched: i64 = conn
         .query_row(
             &format!("SELECT COUNT(*) FROM uid u WHERE {where_clause}"),
             params![before_ts, namespace, generator, actor],
             |r| r.get(0),
         )
         .map_err(|e| e.to_string())?;
+    let matched = matched as u64;
 
     if dry_run {
         return Ok(PruneReport {
