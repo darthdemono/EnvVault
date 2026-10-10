@@ -21,9 +21,12 @@ on:
   push:
     branches: [main]
   # Re-stamps the signed provider catalogue (Phase 31) so a stale one is visible
-  # in `generated_at`. Best-effort: Actions schedules run late under load.
+  # in `generated_at`, and refreshes the site's version and download table from
+  # the latest release. Weekly (it was daily, a full Doxygen + rustdoc + mdBook
+  # build every night for pages that change when the code does). Best-effort:
+  # Actions schedules run late under load.
   schedule:
-    - cron: "17 4 * * *"
+    - cron: "17 4 * * 1"
   workflow_dispatch:
 
 permissions:
@@ -44,7 +47,7 @@ jobs:
     name: Build the site and both references
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # graphviz is not optional: Doxyfile sets HAVE_DOT=YES, and without `dot`
       # every include graph silently becomes a broken image rather than an
@@ -65,14 +68,14 @@ jobs:
             librsvg2-dev \
             mold
 
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
           cache: npm
 
       - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
 
-      - uses: Swatinem/rust-cache@bc2d2e71bd35c5549942babaa51a89c586b981d1 # v2.8.1
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           key: docs
 
@@ -194,9 +197,9 @@ jobs:
             './site/**/*.html'
           fail: true
 
-      - uses: actions/configure-pages@983d7736d9b0ae728b81ab479565c72886d7745b # v5.0.0
+      - uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
 
-      - uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa # v3.0.1
+      - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
         with:
           path: site
 
@@ -212,4 +215,4 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - id: deployment
-        uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e # v4.0.5
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1
