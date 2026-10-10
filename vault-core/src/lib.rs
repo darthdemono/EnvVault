@@ -226,6 +226,13 @@ pub fn open_db(db_path: &Path, key: &VaultKey) -> Result<Connection, String> {
     // WAL mode: allows concurrent reads + one writer, avoids full locks (item 17)
     conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;")
         .map_err(|e| e.to_string())?;
+    // Both explicit rather than inherited: rusqlite's implicit 5 s busy timeout is
+    // a library default that could change under an upgrade, and without a size
+    // limit a long-lived reader lets the WAL grow without bound.
+    conn.busy_timeout(std::time::Duration::from_secs(5))
+        .map_err(|e| e.to_string())?;
+    conn.execute_batch("PRAGMA journal_size_limit=67108864;")
+        .map_err(|e| e.to_string())?;
     // SQLCipher creates the file with the process umask — 0644 on a default
     // Linux install. The contents are encrypted, so this is not a disclosure of
     // secrets; it is a disclosure of the ciphertext to anyone with a login on
