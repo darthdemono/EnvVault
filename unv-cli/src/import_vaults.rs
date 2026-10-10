@@ -584,8 +584,27 @@ fn merge(
                 // double the vault — `unv import` shipped that bug once.
                 let same =
                     entries[i].get("api_key").and_then(|v| v.as_str()) == Some(rec.secret.as_str());
-                if same {
+                // A seed the entry does not have yet is added. A *different* seed
+                // is never replaced (integrations rule: no silent overwrite).
+                let new_seed = rec
+                    .totp
+                    .as_deref()
+                    .and_then(|t| vault_core::totp::parse_seed(t).ok())
+                    .filter(|_| {
+                        entries[i]
+                            .get("totp_secret")
+                            .and_then(|v| v.as_str())
+                            .is_none_or(str::is_empty)
+                    });
+                if same && new_seed.is_none() {
                     unchanged += 1;
+                    continue;
+                }
+                if let Some(stored) = &new_seed {
+                    vault_core::totp_import::write_fields(&mut entries[i], stored);
+                }
+                if same {
+                    updated += 1;
                     continue;
                 }
                 entries[i]["api_key"] = json!(rec.secret);

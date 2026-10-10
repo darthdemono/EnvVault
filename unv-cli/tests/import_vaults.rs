@@ -293,3 +293,52 @@ fn an_unusable_totp_value_is_kept_in_the_notes_not_lost() {
     assert!(gh.get("totp_secret").is_none());
     assert!(gh["notes"].as_str().unwrap().contains("not a seed !!"));
 }
+
+#[test]
+fn reimporting_adds_a_missing_seed_but_never_replaces_a_different_one() {
+    use unv_cli::import_vaults::{plan_import, ImportOpts};
+    let opts = ImportOpts {
+        apply: false,
+        project: None,
+        category: None,
+        keep_folders: false,
+    };
+    let doc = load("bitwarden.json");
+    let empty = serde_json::json!({ "api_keys": [], "projects": [], "user_categories": [] });
+    let first = plan_import(&empty, "bitwarden", &doc, &opts).unwrap();
+
+    // Same secret, but the earlier import (before this fix) left no seed: it is added.
+    let mut vault = empty.clone();
+    let mut entries = first.entries.clone();
+    for e in &mut entries {
+        if e["provider"] == "GitHub" {
+            e.as_object_mut().unwrap().remove("totp_secret");
+        }
+    }
+    vault["api_keys"] = serde_json::json!(entries);
+    let again = plan_import(&vault, "bitwarden", &doc, &opts).unwrap();
+    assert_eq!(
+        entry(&again.entries, "GitHub")["totp_secret"],
+        "JBSWY3DPEHPK3PXP"
+    );
+    assert_eq!(again.updated, 1);
+
+    // An unchanged re-import changes nothing.
+    vault["api_keys"] = serde_json::json!(first.entries);
+    let same = plan_import(&vault, "bitwarden", &doc, &opts).unwrap();
+    assert_eq!((same.created, same.updated), (0, 0));
+
+    // A different seed already on the entry is left alone.
+    let mut entries = first.entries.clone();
+    for e in &mut entries {
+        if e["provider"] == "GitHub" {
+            e["totp_secret"] = serde_json::json!("MFRGGZDFMZTWQ2LK");
+        }
+    }
+    vault["api_keys"] = serde_json::json!(entries);
+    let kept = plan_import(&vault, "bitwarden", &doc, &opts).unwrap();
+    assert_eq!(
+        entry(&kept.entries, "GitHub")["totp_secret"],
+        "MFRGGZDFMZTWQ2LK"
+    );
+}
