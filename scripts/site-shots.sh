@@ -4,10 +4,10 @@
 #
 #   scripts/site-shots.sh <dir with PNGs> main=unenverse card-expanded=card-expanded config-history=config-history
 #
-# Each NAME=FILE pair reads <dir>/FILE.png and writes website/assets/shots/NAME.webp.
+# Each NAME=FILE pair reads <dir>/FILE.png and writes website/assets/screens/NAME.webp.
 set -euo pipefail
 src="$1"; shift
-out="$(cd "$(dirname "$0")/.." && pwd)/website/assets/shots"
+out="$(cd "$(dirname "$0")/.." && pwd)/website/assets/screens"
 mkdir -p "$out"
 printf '{' > "$out/manifest.json"
 sep=''

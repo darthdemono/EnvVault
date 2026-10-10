@@ -120,8 +120,8 @@ describe('assembling the site', () => {
   it('fails on a placeholder nobody fills', () => {
     const src = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'src-'));
     fs.mkdirSync(path.join(src, 'partials'));
-    fs.mkdirSync(path.join(src, 'assets/shots'), { recursive: true });
-    fs.writeFileSync(path.join(src, 'assets/shots/manifest.json'), '{}');
+    fs.mkdirSync(path.join(src, 'assets/screens'), { recursive: true });
+    fs.writeFileSync(path.join(src, 'assets/screens/manifest.json'), '{}');
     fs.writeFileSync(path.join(src, 'partials/header.html'), '');
     fs.writeFileSync(path.join(src, 'partials/footer.html'), '');
     fs.writeFileSync(path.join(src, 'index.html'), '<p>{{NOT_A_THING}}</p>');
@@ -194,5 +194,51 @@ describe('the guide index', () => {
     expect(links.length).toBeGreaterThan(100);
     const missing = links.filter((l) => !fs.existsSync(path.join(root, 'book/src', l)));
     expect(missing).toEqual([]);
+  });
+});
+
+// A `shots/` rule in .gitignore once swallowed website/assets/shots, so a clean
+// checkout (CI) had pages pointing at images and a manifest that did not exist.
+// Checking the files the pages name, rather than git, fails the same way on a
+// clean checkout and on a developer's machine.
+describe('the site source is complete', () => {
+  const site = path.join(root, 'website');
+  const pages = (dir: string): string[] =>
+    fs.readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
+      const p = path.join(dir, e.name);
+      return e.isDirectory() ? pages(p) : p.endsWith('.html') && !p.includes('partials') ? [p] : [];
+    });
+
+  it('has every local asset a page or the stylesheet names', () => {
+    const missing: string[] = [];
+    const sources = [
+      ...pages(site),
+      path.join(site, 'styles.css'),
+      path.join(site, 'partials/header.html'),
+    ];
+    for (const file of sources) {
+      const text = fs.readFileSync(file, 'utf8');
+      for (const m of text.matchAll(
+        /(?:src|href)="(\/assets\/[^"#?]+)"|url\("(\/assets\/[^")]+)"\)/g,
+      )) {
+        const ref = m[1] ?? m[2];
+        if (!fs.existsSync(path.join(site, ref)))
+          missing.push(`${path.relative(root, file)} -> ${ref}`);
+      }
+    }
+    expect(missing).toEqual([]);
+  });
+
+  it('has a screenshot manifest that matches the images on disk', () => {
+    const dir = path.join(site, 'assets/screens');
+    const manifest = JSON.parse(fs.readFileSync(path.join(dir, 'manifest.json'), 'utf8')) as Record<
+      string,
+      { width: number; height: number }
+    >;
+    for (const [name, d] of Object.entries(manifest)) {
+      expect(fs.existsSync(path.join(dir, `${name}.webp`)), name).toBe(true);
+      expect(d.width).toBeGreaterThan(0);
+      expect(d.height).toBeGreaterThan(0);
+    }
   });
 });

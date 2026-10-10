@@ -122,7 +122,7 @@ export function sitemap(urls, date) {
 export function build({ src, out, release, sums, today = new Date().toISOString().slice(0, 10) }) {
   const version = release.tag_name.replace(/^v/, '');
   const parts = classify(release.assets);
-  const shots = JSON.parse(fs.readFileSync(path.join(src, 'assets/shots/manifest.json'), 'utf8'));
+  const shots = JSON.parse(fs.readFileSync(path.join(src, 'assets/screens/manifest.json'), 'utf8'));
   const vars = {
     VERSION: version,
     RELEASE_DATE: release.published_at.slice(0, 10),
