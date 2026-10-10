@@ -58,9 +58,11 @@ def main():
         time.sleep(1.0)
 
         def snap(name):
+            # A hover or focus tooltip left behind by the last click is not part of the picture.
+            wd.js("if (document.activeElement) document.activeElement.blur()")
             # Park the pointer in a corner so no native tooltip is on screen.
             wd.call("POST", wd.s("/actions"), {"actions": [{"type": "pointer", "id": "mouse",
-                    "actions": [{"type": "pointerMove", "duration": 0, "origin": "viewport", "x": 1915, "y": 1195}]}]})
+                    "actions": [{"type": "pointerMove", "duration": 0, "origin": "viewport", "x": 1400, "y": 26}]}]})
             time.sleep(0.7)
             wd.shot(f"{OUT}/{name}.png")
             print("  ", name, flush=True)
@@ -105,7 +107,13 @@ def main():
             panel("tools")
             wd.click(f'[data-tool="{t}"]')
 
-        go("card-expanded", lambda: wd.click("#card-grid > .card"))
+        def expand_first_card():
+            # The chevron expands a card; clicking the card body does nothing, which
+            # is how this screenshot once showed a collapsed card under this name.
+            wd.click("#card-grid > .card .card-chevron")
+            wait_for(lambda: wd.js("return document.querySelector('#card-grid > .card.expanded') !== null"), 10, "an expanded card")
+
+        go("card-expanded", expand_first_card, 1.0)
         go("add-secret", lambda: (panel("secrets"), wd.click("#add-btn")))
         go("authenticator", lambda: panel("auth"), 1.5)
         for slug, label in (("project-wireguard", "Home VPN"), ("project-compose", "Media Stack"),
@@ -119,7 +127,24 @@ def main():
         go("classes", lambda: (panel("users"), click_text(wd, "#users-panel button", "Classes"),
                                   time.sleep(1.0), click_text(wd, "#users-panel *", "Operators")), 1.5)
         go("tools-nodes", lambda: tool("nodes"))
-        go("config-history", lambda: tool("history"))
+        def history_diff():
+            tool("history")
+            wd.click("#history-list-btn")  # fills the project list
+            time.sleep(1.0)
+            wd.js("const s = document.getElementById('history-project'); s.value = 'Home VPN';"
+                  " s.dispatchEvent(new Event('change', {bubbles: true}))")
+            wd.type("#history-exporter", "wireguard")
+            wd.click("#history-list-btn")
+            time.sleep(1.0)
+            wd.click("#history-diff-btn")
+            try:
+                wait_for(lambda: wd.js("return /^#[0-9]+ to #[0-9]+/.test(document.getElementById('history-status').textContent)"),
+                         15, "a history diff")
+            except RuntimeError:
+                raise RuntimeError("no history diff; the pane says: "
+                                   + str(wd.js("return document.getElementById('history-status').textContent")))
+
+        go("config-history", history_diff, 1.0)
         go("settings", lambda: wd.click("#settings-btn"))
 
     finally:
