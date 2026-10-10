@@ -25,6 +25,8 @@
     "icons": "node scripts/gen-icons.mjs",
     "ui-lab": "playwright test",
     "ui-lab:report": "cat ui-lab/.artifacts/layout-findings.md",
+    "site:build": "node scripts/build-site.mjs --out site",
+    "site:check": "node scripts/check-site.mjs site",
     "docs": "node scripts/docs.mjs",
     "docs:rust": "cargo doc --workspace --no-deps",
     "preflight": "bash scripts/preflight.sh",

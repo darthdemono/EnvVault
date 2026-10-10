@@ -9,6 +9,10 @@ src-tauri/gen/
 docs/
 site/
 
+# The product site is hand-formatted HTML with {{placeholders}} that a formatter
+# would reflow or reject (roadmap W1); scripts/build-site.mjs and the tests cover it.
+website/
+
 # Lockfiles are generated; reformatting them creates diff noise and can make a
 # tool that reads them byte-wise unhappy.
 package-lock.json
