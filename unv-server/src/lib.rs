@@ -1761,7 +1761,13 @@ async fn create_user_handler(
         return forbidden("Requires the manage-users capability");
     }
     // New user starts with no class (tier 0) — strictly below any creator. Safe.
-    match vault_core::create_user(&conn, &req.username, req.password.as_deref(), false) {
+    // Hashing the new password is Argon2: off the runtime, like login.
+    let (username, password) = (req.username.clone(), req.password.clone());
+    let created = run_kdf(&state, move || {
+        vault_core::create_user(&conn, &username, password.as_deref(), false)
+    })
+    .await;
+    match created {
         Ok(user) => (
             StatusCode::CREATED,
             Json(serde_json::to_value(user).unwrap()),
@@ -2049,7 +2055,12 @@ async fn set_password_handler(
     if let Err(e) = guard_manage_user(&conn, &session, &user_id) {
         return e;
     }
-    match vault_core::set_user_password(&conn, &user_id, req.password.as_deref()) {
+    let password = req.password.clone();
+    let changed = run_kdf(&state, move || {
+        vault_core::set_user_password(&conn, &user_id, password.as_deref())
+    })
+    .await;
+    match changed {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
         Err(e) => err_json(StatusCode::BAD_REQUEST, &e).into_response(),
     }
@@ -3796,6 +3807,57 @@ mod tests {
                 "{label}: /api/health stalled for {worst:?} behind password hashing"
             );
         }
+    }
+
+    /// Creating a user hashes the new password with Argon2. Like login it must not
+    /// pin a worker: ten concurrent creations on two workers keep `/api/health`
+    /// under 200 ms (inline, the probe waits behind them).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn creating_users_does_not_stall_health() {
+        use tower::ServiceExt;
+        let (s, owner) = owner_with_vault();
+        let router = build_router(s.clone(), 8743);
+        let jobs: Vec<_> = (0..10)
+            .map(|i| {
+                let router = router.clone();
+                let auth = owner[axum::http::header::AUTHORIZATION].clone();
+                tokio::spawn(async move {
+                    let mut req = axum::http::Request::builder()
+                        .method("POST")
+                        .uri("/api/users")
+                        .header(axum::http::header::AUTHORIZATION, auth)
+                        .header("content-type", "application/json")
+                        .body(axum::body::Body::from(
+                            serde_json::json!({ "username": format!("u{i}"), "password": "a-long-enough-password" })
+                                .to_string(),
+                        ))
+                        .unwrap();
+                    req.extensions_mut().insert(ConnectInfo::<SocketAddr>(
+                        "127.0.0.1:50000".parse().unwrap(),
+                    ));
+                    router.oneshot(req).await.unwrap().status()
+                })
+            })
+            .collect();
+        let mut worst = Duration::ZERO;
+        while !jobs.iter().all(|j| j.is_finished()) {
+            let t = Instant::now();
+            let st = s.clone();
+            let resp = tokio::spawn(async move { health(State(st)).await.into_response() })
+                .await
+                .unwrap();
+            assert_eq!(resp.status(), StatusCode::OK);
+            worst = worst.max(t.elapsed());
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        for j in jobs {
+            assert_eq!(j.await.unwrap(), StatusCode::CREATED);
+        }
+        eprintln!("10 user creations; worst /api/health {worst:?}");
+        assert!(
+            worst < Duration::from_millis(200),
+            "health stalled for {worst:?}"
+        );
     }
 
     async fn json_of(resp: axum::response::Response) -> serde_json::Value {
