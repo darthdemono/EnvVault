@@ -621,13 +621,22 @@ fn merge(
                     e["notes"] = json!(n);
                 }
                 if let Some(t) = &rec.totp {
-                    // Stored as a note, not as a field this vault pretends to
-                    // understand: there is no TOTP support here to feed it to.
-                    e["notes"] = json!(format!(
-                        "{}{}TOTP secret imported: {t}",
-                        rec.notes.clone().unwrap_or_default(),
-                        if rec.notes.is_some() { "\n\n" } else { "" }
-                    ));
+                    // The vault holds third-party TOTP seeds (Phase 22), so the
+                    // seed goes in `totp_secret` through the same normaliser the
+                    // CLI flag and the form use: a bare base32 seed and an
+                    // `otpauth://` URI both land as a seed plus its parameters.
+                    // A value that is not a usable seed is kept in the notes
+                    // rather than dropped, so the user can still see it.
+                    match vault_core::totp::parse_seed(t) {
+                        Ok(stored) => vault_core::totp_import::write_fields(&mut e, &stored),
+                        Err(_) => {
+                            e["notes"] = json!(format!(
+                                "{}{}TOTP secret imported (not a usable seed): {t}",
+                                rec.notes.clone().unwrap_or_default(),
+                                if rec.notes.is_some() { "\n\n" } else { "" }
+                            ));
+                        }
+                    }
                 }
                 entries.push(e);
                 created += 1;

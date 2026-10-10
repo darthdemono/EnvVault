@@ -217,3 +217,79 @@ fn importing_a_nextcloud_config_twice_changes_nothing_the_second_time() {
         .unwrap()
         .contains("EXAMPLE_DB"));
 }
+
+// ── TOTP seeds land in `totp_secret`, not in notes (roadmap R01) ─────────────
+
+fn plan(vendor: &str, fixture: &str) -> Vec<Value> {
+    use unv_cli::import_vaults::{plan_import, ImportOpts};
+    let opts = ImportOpts {
+        apply: false,
+        project: None,
+        category: None,
+        keep_folders: false,
+    };
+    let vault = serde_json::json!({ "api_keys": [], "projects": [], "user_categories": [] });
+    plan_import(&vault, vendor, &load(fixture), &opts)
+        .expect("plan")
+        .entries
+}
+
+fn entry<'a>(entries: &'a [Value], provider: &str) -> &'a Value {
+    entries
+        .iter()
+        .find(|e| e["provider"] == provider)
+        .unwrap_or_else(|| panic!("no entry {provider}"))
+}
+
+#[test]
+fn bitwarden_totp_becomes_a_seed_and_the_notes_stay_as_exported() {
+    let entries = plan("bitwarden", "bitwarden.json");
+    let gh = entry(&entries, "GitHub");
+    assert_eq!(gh["totp_secret"], "JBSWY3DPEHPK3PXP");
+    // Before the fix the seed was appended to the notes as plain text.
+    let notes = gh["notes"].as_str().unwrap_or("");
+    assert!(!notes.contains("TOTP secret imported"), "{notes}");
+    assert!(!notes.contains("JBSWY3DPEHPK3PXP"), "{notes}");
+    // An item with no TOTP gets no seed field.
+    assert!(entries
+        .iter()
+        .filter(|e| e["provider"] != "GitHub")
+        .any(|e| e.get("totp_secret").is_none()));
+}
+
+#[test]
+fn onepassword_and_proton_totp_uris_become_seeds() {
+    let op = plan("onepassword", "onepassword.json");
+    let seeds: Vec<_> = op
+        .iter()
+        .filter_map(|e| e["totp_secret"].as_str())
+        .collect();
+    assert!(!seeds.is_empty(), "1Password one-time password was dropped");
+    assert!(op.iter().all(|e| !e["notes"]
+        .as_str()
+        .unwrap_or("")
+        .contains("TOTP secret imported")));
+
+    let pr = plan("proton", "proton.json");
+    assert!(pr.iter().any(|e| e.get("totp_secret").is_some()));
+}
+
+#[test]
+fn an_unusable_totp_value_is_kept_in_the_notes_not_lost() {
+    use unv_cli::import_vaults::{plan_import, ImportOpts};
+    let mut doc = load("bitwarden.json");
+    doc["items"][0]["login"]["totp"] = serde_json::json!("not a seed !!");
+    let opts = ImportOpts {
+        apply: false,
+        project: None,
+        category: None,
+        keep_folders: false,
+    };
+    let vault = serde_json::json!({ "api_keys": [], "projects": [], "user_categories": [] });
+    let out = plan_import(&vault, "bitwarden", &doc, &opts)
+        .unwrap()
+        .entries;
+    let gh = entry(&out, "GitHub");
+    assert!(gh.get("totp_secret").is_none());
+    assert!(gh["notes"].as_str().unwrap().contains("not a seed !!"));
+}
