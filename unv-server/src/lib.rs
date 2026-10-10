@@ -234,15 +234,15 @@ async fn request_context(
 
 /// SHA-256 hex fingerprint of the first certificate DER found in a PEM file.
 ///
-/// Parsing is delegated to `rustls-pemfile` — a hand-rolled decoder previously
+/// Parsing is delegated to `rustls-pki-types` — a hand-rolled decoder previously
 /// used here silently mapped invalid base64 characters to zero, so a corrupt
 /// cert produced a plausible-looking but wrong fingerprint that clients would
 /// then pin to.
 fn fingerprint_of_cert_pem(path: &std::path::Path) -> Result<String, String> {
+    use rustls_pki_types::{pem::PemObject, CertificateDer};
     use sha2::{Digest, Sha256};
-    let file = std::fs::File::open(path).map_err(|e| format!("open {}: {e}", path.display()))?;
-    let mut reader = std::io::BufReader::new(file);
-    let der = rustls_pemfile::certs(&mut reader)
+    let pem = std::fs::read(path).map_err(|e| format!("open {}: {e}", path.display()))?;
+    let der = CertificateDer::pem_slice_iter(&pem)
         .next()
         .ok_or_else(|| format!("no certificate in {}", path.display()))?
         .map_err(|e| format!("malformed PEM in {}: {e}", path.display()))?;
@@ -286,6 +286,25 @@ fn generate_self_signed_cert(
 /// Uploaded pull content, keyed (node id, target) -> (arrived, bytes).
 type NodeUploads = Arc<Mutex<HashMap<(String, String), (Instant, Vec<u8>)>>>;
 
+/// Concurrent Argon2 derivations allowed (roadmap R01). Matches the 2 worker
+/// threads of the container image.
+const KDF_PERMITS: usize = 2;
+
+/// Runs CPU-heavy password work off the async runtime, at most [`KDF_PERMITS`]
+/// at a time. A caller waiting for a permit yields; it does not block a worker.
+async fn run_kdf<T: Send + 'static>(state: &AppState, f: impl FnOnce() -> T + Send + 'static) -> T {
+    let _permit = state
+        .kdf_gate
+        .clone()
+        .acquire_owned()
+        .await
+        .expect("the KDF semaphore is never closed");
+    match tokio::task::spawn_blocking(f).await {
+        Ok(v) => v,
+        Err(e) => std::panic::resume_unwind(e.into_panic()),
+    }
+}
+
 #[derive(Clone)]
 pub struct AppState {
     sessions: Arc<Mutex<HashMap<String, Session>>>,
@@ -314,6 +333,11 @@ pub struct AppState {
     /// route refuses rather than silently creating `registry.db` for a
     /// deployment that never asked for it.
     uid_registry_enabled: bool,
+    /// Argon2 is ~64 MiB and ~100 ms of CPU per call. Run on the async runtime it
+    /// stalls every other request (`/api/health` included) on a 2-thread server,
+    /// and unbounded it is a memory amplifier: N parallel wrong-password logins
+    /// would hold N x 64 MiB. Two permits bound both; see [`run_kdf`].
+    kdf_gate: Arc<tokio::sync::Semaphore>,
     /// Refuses further writes once `registry.db` would exceed this. Default
     /// 10 GB ≈ 160M ids, per the measured 61 bytes/row (`CLAUDE.md`, Phase 24.4).
     uid_max_bytes: i64,
@@ -471,6 +495,7 @@ impl AppState {
             last_peer_activity: Arc::new(Mutex::new(Instant::now())),
             started_at: Instant::now(),
             uid_registry_enabled: false,
+            kdf_gate: Arc::new(tokio::sync::Semaphore::new(KDF_PERMITS)),
             uid_max_bytes: 10 * 1024 * 1024 * 1024,
             limiter: Arc::new(Mutex::new(HashMap::new())),
             uid_buckets: Arc::new(Mutex::new(HashMap::new())),
@@ -951,7 +976,8 @@ async fn unlock(
         Ok(s) => s,
         Err(e) => return err_json(StatusCode::INTERNAL_SERVER_ERROR, &e).into_response(),
     };
-    let key = match derive_key(&req.password, &salt) {
+    let password = req.password.clone();
+    let key = match run_kdf(&state, move || derive_key(&password, &salt)).await {
         Ok(k) => k,
         Err(e) => return err_json(StatusCode::INTERNAL_SERVER_ERROR, &e).into_response(),
     };
@@ -1123,9 +1149,20 @@ async fn auth_user(
     };
 
     // Which credential was used decides whether a second factor applies at all.
-    let (user_opt, via_password) = match (&req.username, &req.password, &req.token) {
-        (Some(u), Some(p), _) => (vault_core::verify_user_password(&conn, u, p), true),
-        (_, _, Some(t)) => (vault_core::verify_user_token(&conn, t), false),
+    let (conn, user_opt, via_password) = match (&req.username, &req.password, &req.token) {
+        (Some(u), Some(p), _) => {
+            let (u, p) = (u.clone(), p.clone());
+            let (conn, r) = run_kdf(&state, move || {
+                let r = vault_core::verify_user_password(&conn, &u, &p);
+                (conn, r)
+            })
+            .await;
+            (conn, r, true)
+        }
+        (_, _, Some(t)) => {
+            let r = vault_core::verify_user_token(&conn, t);
+            (conn, r, false)
+        }
         _ => {
             return err_json(
                 StatusCode::BAD_REQUEST,
@@ -3688,6 +3725,77 @@ mod tests {
             "127.0.0.1:50000".parse().unwrap(),
         ));
         router.clone().oneshot(req).await.unwrap()
+    }
+
+    /// Argon2 runs off the async runtime (roadmap R01). Ten concurrent wrong-password
+    /// logins on a two-worker runtime must not stall `/api/health`: inline, each
+    /// login pins a worker for the whole derivation and the probe waits behind them.
+    /// Prints the measured latencies; the bound is the plan's 200 ms.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn wrong_password_logins_do_not_stall_health() {
+        use tower::ServiceExt;
+        let (s, _owner) = owner_with_vault();
+        {
+            let conn = vault_core::open_db(&s.db_path, &[42u8; 32]).unwrap();
+            vault_core::create_user(&conn, "alice", Some("alice-password"), false).unwrap();
+        }
+        // A salt must exist for /api/unlock to reach the derivation.
+        std::fs::write(&s.salt_path, [7u8; 16]).unwrap();
+        let router = build_router(s.clone(), 8743);
+
+        let post = |uri: &'static str, ip: u8, body: serde_json::Value| {
+            let router = router.clone();
+            async move {
+                let mut req = axum::http::Request::builder()
+                    .method("POST")
+                    .uri(uri)
+                    .header("content-type", "application/json")
+                    .body(axum::body::Body::from(body.to_string()))
+                    .unwrap();
+                // One address each: the rate limiter must not short-circuit the work.
+                req.extensions_mut().insert(ConnectInfo::<SocketAddr>(
+                    format!("10.0.0.{ip}:50000").parse().unwrap(),
+                ));
+                router.oneshot(req).await.unwrap().status()
+            }
+        };
+
+        for (label, uri) in [("unlock", "/api/unlock"), ("auth", "/api/auth")] {
+            let body = |_: u8| match uri {
+                "/api/unlock" => serde_json::json!({ "password": "wrong-password" }),
+                _ => serde_json::json!({ "username": "alice", "password": "wrong-password" }),
+            };
+            let logins: Vec<_> = (1..=10u8)
+                .map(|i| tokio::spawn(post(uri, i, body(i))))
+                .collect();
+            let started = Instant::now();
+            let mut worst = Duration::ZERO;
+            while !logins.iter().all(|j| j.is_finished()) {
+                // Spawned: the test body itself runs on the main thread, outside
+                // the two workers, so calling the handler here would never queue
+                // behind the logins and the test could not fail.
+                let t = Instant::now();
+                let st = s.clone();
+                let resp = tokio::spawn(async move { health(State(st)).await.into_response() })
+                    .await
+                    .unwrap();
+                assert_eq!(resp.status(), StatusCode::OK);
+                worst = worst.max(t.elapsed());
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            for j in logins {
+                assert_eq!(j.await.unwrap(), StatusCode::UNAUTHORIZED, "{label}");
+            }
+            eprintln!(
+                "{label}: 10 wrong-password logins took {:?}; worst /api/health {:?}",
+                started.elapsed(),
+                worst
+            );
+            assert!(
+                worst < Duration::from_millis(200),
+                "{label}: /api/health stalled for {worst:?} behind password hashing"
+            );
+        }
     }
 
     async fn json_of(resp: axum::response::Response) -> serde_json::Value {
