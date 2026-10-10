@@ -1,6 +1,6 @@
 # ── Build stage ───────────────────────────────────────────────────────────────
 # 1.85 stopped building once the lockfile moved to crates needing rustc 1.88 (found by actually building the image, 2026-10-09).
-FROM rust:1.90-bookworm AS builder
+FROM rust:1.99-bookworm AS builder
 
 # mold: faster linking (matches .cargo/config.toml)
 # SQLCipher is compiled in (`vault-core/bundled`), the same engine the releases
