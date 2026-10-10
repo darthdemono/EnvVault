@@ -106,12 +106,37 @@ mod tests {
         state: AppState,
     }
 
+    static HUB_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+    /// A folder name no other hub in this process or another one can share.
+    ///
+    /// The clock alone is not unique: Windows' system time ticks in coarse
+    /// steps, so tests that start together read the same "nanosecond", got the
+    /// same folder and the same vault.db, and one failed with "database is
+    /// locked" in `open_db` (CI, `a_save_that_changes_a_config_is_snapshotted_in_
+    /// the_background`). A process-wide counter and the pid make it unique
+    /// whatever the clock says.
+    fn hub_dir_name(clock_nanos: u128) -> String {
+        let seq = HUB_SEQ.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        format!("unv-hist-srv-{}-{clock_nanos}-{seq}", std::process::id())
+    }
+
+    #[test]
+    fn hubs_created_in_the_same_clock_tick_never_share_a_folder() {
+        let names: std::collections::HashSet<_> = (0..200).map(|_| hub_dir_name(42)).collect();
+        assert_eq!(
+            names.len(),
+            200,
+            "a frozen clock must still give 200 folders"
+        );
+    }
+
     fn hub() -> Hub {
         let n = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let d = std::env::temp_dir().join(format!("unv-hist-srv-{n}"));
+        let d = std::env::temp_dir().join(hub_dir_name(n));
         std::fs::create_dir_all(&d).unwrap();
         let key = [5u8; 32];
         let state = AppState::new(
