@@ -5,6 +5,15 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+  # R02: Build & Release calls this workflow as its first job, so a release can
+  # only start from a SHA whose CI passed *in the same run*. `gate` marks that
+  # call: it gets its own concurrency group and is never cancelled.
+  workflow_call:
+    inputs:
+      gate:
+        description: Called by Build & Release as a release gate
+        type: boolean
+        default: false
 
 # Least privilege: nothing here writes to the repo. Build & Release asks for
 # more, in the one job that needs it.
@@ -12,9 +21,12 @@ permissions:
   contents: read
 
 concurrency:
-  # A superseded push has nothing to tell us; cancel it and free the runner.
-  group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  # A superseded push has nothing to tell us; cancel it and free the runner. The
+  # release gate is the exception: its group differs from the push-triggered run
+  # on the same ref (or the two would cancel each other), and cancelling it would
+  # make a release depend on which push landed last.
+  group: ci-${{ github.ref }}-${{ inputs.gate && 'gate' || 'push' }}
+  cancel-in-progress: ${{ !inputs.gate }}
 
 env:
   CARGO_TERM_COLOR: always
@@ -30,8 +42,13 @@ env:
 # installed below — the same thing Build & Release already does.
 
 jobs:
-  rust:
-    name: Rust (${{ matrix.os }})
+  # `test` and `lint` used to be one `rust` job whose steps ran back to back, so
+  # Windows paid test (18 min) + `cargo check --all-targets` (10 min) + clippy in
+  # sequence: 32 min in the last green run. They are separate jobs now and run
+  # side by side. `cargo check --all-targets` is gone: clippy `--all-targets`
+  # compiles the same code with the same flags and reports strictly more.
+  test:
+    name: Test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
       # One platform failing should still report the other, or a Windows-only
@@ -40,114 +57,11 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest]
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-
-      # rusqlite's `sqlcipher` feature links against the system SQLCipher, and
-      # the Tauri crate needs the WebKitGTK stack even for `cargo check`. mold is
-      # here because `.cargo/config.toml` passes `-fuse-ld=mold` for this target.
-      # Windows needs none of this: it vendors SQLCipher and OpenSSL (see
-      # vault-core/Cargo.toml) and WebView2 ships with the runner image.
-      - name: Install system dependencies
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            libsqlcipher-dev \
-            libwebkit2gtk-4.1-dev \
-            libgtk-3-dev \
-            libayatana-appindicator3-dev \
-            librsvg2-dev \
-            patchelf \
-            mold
-
-      # Windows has no system SQLCipher, so vault-core's cfg(windows) dependency
-      # vendors SQLCipher *and* OpenSSL — and building OpenSSL from source needs
-      # a real Perl and NASM. Failing here, naming the cause, beats an opaque
-      # openssl-src error a thousand lines into a build log.
-      # openssl-src builds OpenSSL from source, and OpenSSL's Configure is a Perl
-      # program that needs a full Perl — Locale::Maketext::Simple among others.
-      #
-      # windows-latest ships Strawberry Perl, which has those modules. It also
-      # ships Git for Windows, whose bundled MSYS Perl does NOT — and the build
-      # steps below run under `shell: bash`, where Git's `/usr/bin/perl` comes
-      # first on PATH. So `perl` resolves, `perl --version` prints happily, and
-      # the build dies a thousand lines later with:
-      #
-      #   Can't locate Locale/Maketext/Simple.pm in @INC
-      #
-      # Putting Strawberry ahead of it on PATH is the whole fix. `C:\Strawberry\c\bin`
-      # is included because Configure also wants the toolchain that ships with it.
-      - name: Put Strawberry Perl ahead of Git's Perl on PATH
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          if (-not (Test-Path 'C:\Strawberry\perl\bin\perl.exe')) {
-            choco install strawberryperl -y --no-progress
-          }
-          'C:\Strawberry\c\bin', 'C:\Strawberry\perl\site\bin', 'C:\Strawberry\perl\bin' |
-            ForEach-Object { Add-Content -Path $env:GITHUB_PATH -Value $_ }
-          # PATH order alone is not a guarantee. `shell: bash` is Git bash, whose
-          # msys runtime injects its own /usr/bin when it converts the Windows
-          # PATH, so Git's perl can still win however GITHUB_PATH is ordered.
-          # openssl-src reads OPENSSL_SRC_PERL before falling back to PATH
-          # (openssl-src/src/lib.rs), so name the interpreter outright and the
-          # race stops mattering.
-          Add-Content -Path $env:GITHUB_ENV -Value 'OPENSSL_SRC_PERL=C:\Strawberry\perl\bin\perl.exe'
-
-      # Assert the toolchain can actually do the job, not merely that the
-      # binaries exist. `command -v perl` passed for the whole life of the
-      # earlier version of this check while the Perl it found was the one that
-      # cannot build OpenSSL — presence was never the property that mattered.
-      - name: Verify the vendored-OpenSSL toolchain
-        if: runner.os == 'Windows'
-        shell: bash
-        run: |
-          set -euo pipefail
-          # Check the interpreter openssl-src will actually run, not whichever
-          # perl this shell resolves — they are not the same thing once
-          # OPENSSL_SRC_PERL is set above.
-          perl_bin="${OPENSSL_SRC_PERL:-perl}"
-          missing=""
-          command -v "$perl_bin" >/dev/null || missing="$missing perl"
-          command -v nasm >/dev/null || missing="$missing nasm"
-          if [ -n "$missing" ]; then
-            echo "::error::openssl-src needs$missing to vendor OpenSSL for Windows."
-            exit 1
-          fi
-          echo "perl: $(command -v "$perl_bin")"
-          "$perl_bin" --version | sed -n '2p'
-          nasm -v
-          if ! "$perl_bin" -MLocale::Maketext::Simple -e 1 2>/dev/null; then
-            echo "::error::$perl_bin cannot load Locale::Maketext::Simple, so OpenSSL's Configure will fail. This is usually Git for Windows' MSYS perl shadowing Strawberry Perl."
-            exit 1
-          fi
-          echo "Locale::Maketext::Simple loads — OpenSSL's Configure will run."
-
-      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/rust-setup
         with:
-          components: clippy, rustfmt
-
-      - uses: Swatinem/rust-cache@bc2d2e71bd35c5549942babaa51a89c586b981d1 # v2.8.1
-
-      # `cargo check`/`cargo test` reach the Tauri app crate, whose build script
-      # fails outright when `frontendDist` ("../dist") is missing — and dist/ is
-      # gitignored. Build it here so the Rust jobs have something to point at.
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
-        with:
-          node-version: 22
-          cache: npm
-
-      - name: Build the frontend (tauri-build needs ../dist to exist)
-        run: |
-          npm ci
-          npx vite build
-
-      - name: Dependency policy (cargo-deny)
-        if: runner.os == 'Linux'
-        run: |
-          # 0.18.5 cannot parse the advisory database's CVSS 4.0 scores ("unsupported CVSS version").
-          cargo install cargo-deny --locked --version 0.20.2
-          cargo deny check advisories bans licenses sources
+          cache-key: test
+          components: ""
 
       # `--locked` below refuses to build if a Cargo.toml edit was committed
       # without the matching Cargo.lock. Saying so here beats a resolver error
@@ -161,8 +75,32 @@ jobs:
       - name: Test
         run: cargo test --workspace --locked --verbose
 
-      - name: Check the whole workspace
-        run: cargo check --workspace --locked --all-targets
+  lint:
+    name: Lint (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/rust-setup
+        with:
+          cache-key: lint
+          components: clippy, rustfmt
+
+      # Prebuilt binary, pinned to a version: `cargo install` compiled it from
+      # source on every run. 0.18.5 cannot parse the advisory database's CVSS 4.0
+      # scores ("unsupported CVSS version"), hence the floor.
+      - name: Install cargo-deny
+        if: runner.os == 'Linux'
+        uses: taiki-e/install-action@ab6895351a88b908e96a4697860d4ffea5e57dbe # v2.87.27
+        with:
+          tool: cargo-deny@0.20.2
+
+      - name: Dependency policy (cargo-deny)
+        if: runner.os == 'Linux'
+        run: cargo deny check advisories bans licenses sources
 
       # Formatting is platform-independent, so checking it on both runners would
       # pay twice for the same answer. `--check` prints a diff and exits
@@ -172,7 +110,7 @@ jobs:
         run: cargo fmt --all -- --check
 
       # Clippy runs on both, because the lints that matter here are behind
-      # `cfg` — vault-core vendors SQLCipher and OpenSSL only on Windows, and
+      # `cfg`: vault-core vendors SQLCipher and OpenSSL only on Windows, and
       # unv-cli's process-spawning code takes a different branch there. A
       # Linux-only clippy would never see either.
       #
@@ -183,7 +121,7 @@ jobs:
       - name: Clippy
         run: cargo clippy --workspace --locked --all-targets
 
-      # The portable build path — SQLCipher and OpenSSL compiled in — is what
+      # The portable build path (SQLCipher and OpenSSL compiled in) is what
       # release artefacts use, so it has to be exercised somewhere. Checking it
       # on Linux catches a broken feature union without paying for it on both.
       - name: Check the bundled (distro-independent) build
@@ -194,9 +132,9 @@ jobs:
     name: Frontend (typecheck + test + build)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
           cache: npm
