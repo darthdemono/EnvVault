@@ -6,6 +6,8 @@
 
 UnENVerse keeps API keys, passwords, certificates, SSH keys, two-factor seeds and whole configuration files (WireGuard, Docker Compose, nginx and more) in a single vault encrypted on your own machine. Nothing is sent to a cloud service, and there is no account to create.
 
+**[Website](https://unenverse.darthdemono.com/)** · **[Download](https://unenverse.darthdemono.com/download/)** · **[Quickstart](https://unenverse.darthdemono.com/quickstart/)** · **[Security](https://unenverse.darthdemono.com/security/)** · **[Docs](https://unenverse.darthdemono.com/docs/)**
+
 ## Overview
 
 Most secrets managers store a password and hand it back. UnENVerse also knows what the secret is _for_. A config file in a project can point at a vault entry (`${GitHub/token}`), so the real value lives in one place and every `wg0.conf`, `docker-compose.yml` or `.env` built from it stays in step when you rotate a key.
@@ -44,6 +46,8 @@ It is built around three ideas:
 - A forgotten master password cannot be recovered. See [Backups](#backups-and-the-one-thing-you-cannot-recover).
 
 ## Tour
+
+The same screens, with a tested [quickstart](https://unenverse.darthdemono.com/quickstart/), are on the [website](https://unenverse.darthdemono.com/). Every value in these pictures is made up.
 
 **Sign in.** Open the app and create a vault, or connect to a server.
 
@@ -1031,7 +1035,7 @@ export NO_STRIP=1
 
 The first is because GitHub runners and most containers have no FUSE for the AppImage tooling to mount with. The second works around linuxdeploy shipping a `strip` too old for `.relr.dyn` sections on Fedora 43.
 
-Unix links the system SQLCipher by default, because it builds in seconds instead of minutes and that matters far more during development than portability does. Pass `--features vault-core/bundled` to compile SQLCipher and OpenSSL in, which is what release builds do. An AppImage linked against Fedora's `libsqlcipher0` will not start on a Debian box shipping a different soname, and "works on my distro" is the entire problem a portable bundle exists to solve. Windows always vendors, since it packages no system SQLCipher at all.
+Unix links the system SQLCipher by default, because it builds in seconds instead of minutes and that matters far more during development than portability does. Pass `--features vault-core/bundled` to compile SQLCipher and OpenSSL in, which is what release builds do. An AppImage linked against Fedora's `libsqlcipher0` will not start on a Debian box shipping a different soname, and "works on my distro" is the entire problem a portable bundle exists to solve. Windows always vendors, since it packages no system SQLCipher at all. A system library has to be new enough: rusqlite 0.40 calls `sqlite3_prepare_v3` (SQLite 3.20 or later), so Debian 12's `libsqlcipher0` 3.4.1 fails to link with `undefined symbol: sqlite3_prepare_v3`. Use `--features vault-core/bundled` on such a distribution (Fedora 40+ and Ubuntu 22.04+ ship a new enough one).
 
 ### Linux display flags
 
