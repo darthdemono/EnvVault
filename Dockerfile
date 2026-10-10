@@ -3,10 +3,11 @@
 FROM rust:1.90-bookworm AS builder
 
 # mold: faster linking (matches .cargo/config.toml)
-# libsqlcipher-dev: rusqlite sqlcipher feature links against system SQLCipher
+# SQLCipher is compiled in (`vault-core/bundled`), the same engine the releases
+# ship, instead of Debian's libsqlcipher. The vendored OpenSSL it builds needs
+# perl and make, which the rust image already carries.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     pkg-config \
-    libsqlcipher-dev \
     mold \
     && rm -rf /var/lib/apt/lists/*
 
@@ -30,7 +31,7 @@ RUN mkdir -p vault-core/src unv-server/src unv-cli/src src-tauri/src && \
     printf 'fn main() {}' > src-tauri/src/main.rs
 
 # Pre-fetch and compile deps (cached as long as Cargo.toml/Cargo.lock unchanged)
-RUN cargo build --release -p unv-server 2>&1 | grep -v "^warning" || true
+RUN cargo build --release -p unv-server --features vault-core/bundled 2>&1 | grep -v "^warning" || true
 
 # Copy real source and rebuild only the changed crates
 # secret-types.json (Phase 24.5) is `include_str!`'d from vault-core/src at a
@@ -49,13 +50,12 @@ COPY unv-server/src unv-server/src
 
 # Touch to force rebuild after stub replacement
 RUN touch vault-core/src/lib.rs unv-server/src/lib.rs unv-server/src/main.rs && \
-    cargo build --release -p unv-server
+    cargo build --release -p unv-server --features vault-core/bundled
 
 # ── Runtime stage ─────────────────────────────────────────────────────────────
 FROM debian:bookworm-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    libsqlcipher0 \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
