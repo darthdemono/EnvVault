@@ -80,7 +80,7 @@ jobs:
       # fetch-depth 0 brings the tags with it. `git tag --list` below is the
       # whole release gate, and on a shallow clone it would find nothing and
       # re-release every push.
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
 
@@ -175,12 +175,32 @@ jobs:
           echo "build=${build}"     >> "$GITHUB_OUTPUT"
 
   # ---------------------------------------------------------------------------
+  # THE CI GATE (R02). A release used to be decided by `meta` alone, and ci.yml
+  # ran beside it as an unrelated workflow: commit b408fff failed on Windows
+  # while this workflow published the release and the GHCR image. Now the
+  # same CI runs as a job of this run, on the same SHA, and every job that builds
+  # or publishes needs it, so a red commit cannot reach `release` however the
+  # run was triggered (push, tag or dispatch).
+  #
+  # It only runs when something would be built: the pushes that stop at `meta`
+  # already had the standalone CI run. `gate: true` gives it its own concurrency
+  # group so it cannot be cancelled by, or cancel, that standalone run.
+  # ---------------------------------------------------------------------------
+  ci:
+    name: CI gate
+    needs: meta
+    if: needs.meta.outputs.build == 'true'
+    uses: ./.github/workflows/ci.yml
+    with:
+      gate: true
+
+  # ---------------------------------------------------------------------------
   # The desktop app. `tauri build` runs `npm run build:frontend` itself via
   # beforeBuildCommand, so the frontend is compiled inside this job.
   # ---------------------------------------------------------------------------
   desktop:
     name: Desktop (${{ matrix.label }})
-    needs: meta
+    needs: [meta, ci]
     # Skipped on any push that did not move the version. ci.yml already ran
     # check, clippy, the Rust tests and the frontend suite on this commit; what
     # is skipped here is only the packaging, which nothing consumes unless a
@@ -197,7 +217,7 @@ jobs:
           - os: windows-latest
             label: windows-x86_64
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # ubuntu-22.04, not -latest: the AppImage and .deb link against the
       # runner's glibc, and a bundle built on 24.04 refuses to start on
@@ -219,7 +239,7 @@ jobs:
           # config file entirely; this job sets no RUSTFLAGS, so the flag
           # applies and the link fails without the linker installed.
 
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
           cache: npm
@@ -285,7 +305,7 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
 
-      - uses: Swatinem/rust-cache@bc2d2e71bd35c5549942babaa51a89c586b981d1 # v2.8.1
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           key: ${{ matrix.label }}
 
@@ -326,7 +346,7 @@ jobs:
           # producing nothing shippable. Fail here rather than at release time.
           [ -n "$(ls -A staging)" ] || { echo "::error::no bundles produced"; exit 1; }
 
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: desktop-${{ matrix.label }}
           path: staging/
@@ -339,7 +359,7 @@ jobs:
   # ---------------------------------------------------------------------------
   headless:
     name: CLI + server (${{ matrix.label }})
-    needs: meta
+    needs: [meta, ci]
     if: needs.meta.outputs.build == 'true'
     runs-on: ${{ matrix.os }}
     strategy:
@@ -353,7 +373,7 @@ jobs:
             label: windows-x86_64
             archive: zip
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install mold
         if: runner.os == 'Linux'
@@ -420,7 +440,7 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
 
-      - uses: Swatinem/rust-cache@bc2d2e71bd35c5549942babaa51a89c586b981d1 # v2.8.1
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           key: headless-${{ matrix.label }}
 
@@ -464,7 +484,7 @@ jobs:
           cp README.md staging/
           ls -lh staging/
 
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: headless-${{ matrix.label }}
           path: staging/
@@ -482,22 +502,23 @@ jobs:
   # ---------------------------------------------------------------------------
   docker:
     name: Server image (GHCR)
-    needs: meta
+    needs: [meta, ci]
     if: needs.meta.outputs.build == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write # push to ghcr.io
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435 # v3.11.1
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
       # Logging in only when the image will actually be pushed keeps the
-      # dispatch-without-publish path from needing a credential at all.
+      # dispatch-without-publish path from needing a credential at all. (It is
+      # early on purpose: a failed login should fail the job before the build.)
       - name: Log in to GHCR
         if: needs.meta.outputs.publish == 'true'
-        uses: docker/login-action@5e57cd118135c172c3672efd75eb46360885c0ef # v3.6.0
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -524,17 +545,15 @@ jobs:
       #
       # No `:main` tag. An image named after a branch is one `docker pull`
       # away from someone running unreleased code against a real vault.
-      - name: Build and push
-        uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83 # v6.18.0
+      - name: Build
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           file: ./Dockerfile
-          push: ${{ needs.meta.outputs.publish == 'true' }}
-          # `load: true` on every path, including the pushing one. This is a
-          # single-platform build, so buildx can write to the local daemon and
-          # the registry from the same invocation — and that is what lets the
-          # smoke test below run against the exact image that was pushed rather
-          # than skipping on the only path where it matters.
+          # Never pushed from here. The image is loaded into the local daemon,
+          # smoke-tested, and only then pushed by the step below, so a broken image
+          # never carries a `:latest` tag even for a moment.
+          push: false
           load: true
           tags: |
             ${{ steps.img.outputs.name }}:${{ needs.meta.outputs.version }}
@@ -559,10 +578,22 @@ jobs:
           docker run --rm --entrypoint unv-server \
             "${{ steps.img.outputs.name }}:${{ needs.meta.outputs.version }}" --version
 
+      # The exact image that just passed, by tag. `docker push` of three tags of
+      # one local image uploads layers once; the other two are manifest writes.
+      - name: Push the tags
+        if: needs.meta.outputs.publish == 'true'
+        run: |
+          set -euo pipefail
+          for t in "${{ needs.meta.outputs.version }}" "${{ steps.img.outputs.minor }}" latest; do
+            docker push "${{ steps.img.outputs.name }}:${t}"
+          done
+
   # ---------------------------------------------------------------------------
   release:
     name: Publish release
-    needs: [meta, desktop, headless, docker]
+    # `ci` is listed even though desktop/headless/docker already need it: the
+    # property "no release from a red commit" should be readable in one line.
+    needs: [meta, ci, desktop, headless, docker]
     if: needs.meta.outputs.publish == 'true'
     runs-on: ubuntu-latest
     permissions:
@@ -570,7 +601,7 @@ jobs:
       id-token: write # cosign keyless (Sigstore OIDC)
       actions: read # gh run download reads this run's artifacts
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
 
@@ -609,7 +640,7 @@ jobs:
       # The editor extension ships beside the installers. It is a thin client of
       # the `unv` CLI, so it is versioned with it (scripts/version.mjs) and built
       # from the same commit.
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
 
@@ -707,7 +738,7 @@ jobs:
       # wrong one for a second release of the same number — which is precisely
       # what the tag check in `meta` prevents from ever reaching this job.
       - name: Create GitHub Release
-        uses: ncipollo/release-action@b7eabc95ff50cbeeedec83973935c8f306dfcd0b # v1.20.0
+        uses: ncipollo/release-action@339a81892b84b4eeb0f6e744e4574d79d0d9b8dd # v1.21.0
         with:
           tag: v${{ needs.meta.outputs.version }}
           commit: ${{ github.sha }}
