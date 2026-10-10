@@ -36,7 +36,7 @@ pbkdf2     = { version = "0.12", default-features = false, features = ["hmac"] }
 sha2       = "0.10"
 hex        = "=0.4.3"
 hmac       = "0.12"
-base64     = "0.22"
+base64     = "0.23"
 rand       = "=0.8.6"
 time       = { version = "0.3.55", features = ["parsing"] }
 aho-corasick = "1"
