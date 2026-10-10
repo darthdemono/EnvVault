@@ -18,7 +18,7 @@ bundled = ["rusqlite/bundled-sqlcipher-vendored-openssl"]
 # only ever serves TLS, does not link a TLS *client* stack it never calls. The
 # desktop app and the CLI both turn it on — and they must both build from it, or
 # the split that this module exists to close reopens.
-tls = ["dep:rustls", "dep:rustls-pki-types", "dep:rustls-pemfile", "dep:webpki-roots"]
+tls = ["dep:rustls", "dep:rustls-pki-types", "dep:webpki-roots"]
 # Structured logging (`telemetry.rs`). Off by default so a library consumer does
 # not inherit a subscriber it never asked for; all three binaries turn it on.
 # It is one feature rather than three copies of the same subscriber setup
@@ -29,14 +29,14 @@ telemetry = ["dep:tracing", "dep:tracing-subscriber"]
 [dependencies]
 # Unix links the system SQLCipher by default: it builds in seconds instead of
 # minutes, which matters far more during development than portability does.
-rusqlite   = { version = "=0.31.0", features = ["sqlcipher"] }
+rusqlite   = { version = "=0.40.2", features = ["sqlcipher"] }
 argon2     = "=0.5.3"
-rand       = "=0.8.5"
+rand       = "=0.8.6"
 hex        = "=0.4.3"
 zeroize    = { version = "=1.8.1", features = ["zeroize_derive"] }
 rcgen      = "=0.13.2"
 ssh-key    = { version = "=0.6.7", features = ["ed25519", "crypto"] }
-time       = { version = "=0.3.37", features = ["parsing"] }
+time       = { version = "0.3.55", features = ["parsing"] }
 sha2       = "0.10"
 ed25519-dalek = "2"
 # HKDF is implemented over this rather than pulled in as `hkdf`: the extract and
@@ -64,7 +64,6 @@ dirs       = "5"
 # CryptoProviders, and the custom verifier only satisfies the trait of one.
 rustls           = { version = "0.23", default-features = false, features = ["aws_lc_rs", "std", "tls12"], optional = true }
 rustls-pki-types = { version = "1", optional = true }
-rustls-pemfile   = { version = "2", optional = true }
 webpki-roots     = { version = "0.26", optional = true }
 
 # Structured logging, feature-gated behind `telemetry`.
@@ -76,7 +75,7 @@ tracing-subscriber = { version = "0.3", default-features = false, features = ["f
 # a library their platform does not package. Cargo unions target features, so
 # this simply adds bundling on top of the `sqlcipher` feature above.
 [target.'cfg(windows)'.dependencies]
-rusqlite = { version = "=0.31.0", features = ["bundled-sqlcipher-vendored-openssl"] }
+rusqlite = { version = "=0.40.2", features = ["bundled-sqlcipher-vendored-openssl"] }
 
 # Deny warnings, per [workspace.lints.rust] at the repo root.
 [lints]
