@@ -31,7 +31,7 @@ notify        = "6"
 uuid          = { version = "1", features = ["v4"] }
 # Encrypted backup envelope (.vaultbak) — must match the WebCrypto format the
 # desktop app writes: PBKDF2-SHA256 → AES-256-GCM.
-aes-gcm    = "0.10"
+aes-gcm    = "0.11"
 pbkdf2     = { version = "0.12", default-features = false, features = ["hmac"] }
 sha2       = "0.10"
 hex        = "=0.4.3"
