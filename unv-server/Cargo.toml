@@ -33,7 +33,7 @@ clap         = { version = "4", features = ["derive"] }
 dirs         = "5"
 utoipa       = { version = "5", features = ["axum_extras"] }
 rcgen        = "=0.13.2"
-rustls-pemfile = "2"
+rustls-pki-types = "1"
 # Direct dependency purely so main() can install a process-level CryptoProvider.
 # Needed because the workspace now enables two providers on one rustls: axum-server
 # pulls `ring`, and vault-core's `tls` feature pulls `aws_lc_rs`. Cargo unifies
@@ -44,7 +44,7 @@ rustls         = { version = "0.23", default-features = false, features = ["aws_
 sha2         = "0.10"
 base64       = "0.22"
 hex          = "=0.4.3"
-time         = "=0.3.37"
+time         = "0.3.55"
 
 # Deny warnings, per [workspace.lints.rust] at the repo root.
 [lints]
