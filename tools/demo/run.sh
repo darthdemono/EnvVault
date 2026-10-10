@@ -31,7 +31,7 @@ docker run --rm --network host -e SHOT_CROP=1920x1200 \
   unv-viewer bash -c '
     set -euo pipefail
     cd /src
-    cargo build -p unenverse --release --features tauri/custom-protocol 2>&1 | tail -2
+    cargo build -p unenverse --release --features tauri/custom-protocol,vault-core/bundled 2>&1 | tail -6
     dbus-run-session -- python3 tools/demo/shots_demo.py /cargo-target/release/unenverse /out
   '
 echo "Screenshots in $OUT"
