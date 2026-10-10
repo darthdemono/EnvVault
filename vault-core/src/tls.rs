@@ -33,7 +33,8 @@ use rustls::crypto::CryptoProvider;
 use rustls::{
     ClientConfig, DigitallySignedStruct, Error as TlsError, RootCertStore, SignatureScheme,
 };
-use rustls_pki_types::{CertificateDer, ServerName, UnixTime};
+use rustls_pki_types::pem::PemObject;
+use rustls_pki_types::{CertificateDer, PrivateKeyDer, ServerName, UnixTime};
 use sha2::{Digest, Sha256};
 
 /// SHA-256 of a certificate's DER encoding, lower-case hex.
@@ -169,10 +170,13 @@ pub fn fingerprint_of_pem(cert_pem: &str) -> Result<String, String> {
 /// certificate: the caller proves itself with a signature on the request.
 pub fn server_config_tls13(cert_pem: &str, key_pem: &str) -> Result<rustls::ServerConfig, String> {
     let chain = certs_from_pem(cert_pem.as_bytes())?;
-    let mut rd = std::io::BufReader::new(key_pem.as_bytes());
-    let key = rustls_pemfile::private_key(&mut rd)
-        .map_err(|e| format!("Cannot read the node's TLS key: {e}"))?
-        .ok_or("The node's TLS key file holds no private key")?;
+    let key = match PrivateKeyDer::from_pem_slice(key_pem.as_bytes()) {
+        Ok(k) => k,
+        Err(rustls_pki_types::pem::Error::NoItemsFound) => {
+            return Err("The node's TLS key file holds no private key".into())
+        }
+        Err(e) => return Err(format!("Cannot read the node's TLS key: {e}")),
+    };
     rustls::ServerConfig::builder_with_provider(provider())
         .with_protocol_versions(&[&rustls::version::TLS13])
         .map_err(|e| e.to_string())?
@@ -183,8 +187,7 @@ pub fn server_config_tls13(cert_pem: &str, key_pem: &str) -> Result<rustls::Serv
 
 /// Parse a PEM bundle into certificates for [`TlsPolicy::PrivateCa`].
 pub fn certs_from_pem(pem: &[u8]) -> Result<Vec<CertificateDer<'static>>, String> {
-    let mut rd = std::io::BufReader::new(pem);
-    let certs: Result<Vec<_>, _> = rustls_pemfile::certs(&mut rd).collect();
+    let certs: Result<Vec<_>, _> = CertificateDer::pem_slice_iter(pem).collect();
     let certs = certs.map_err(|e| format!("Cannot read CA file: {e}"))?;
     if certs.is_empty() {
         return Err("CA file contains no CERTIFICATE block".into());
@@ -379,6 +382,41 @@ mod tests {
         let err = certs_from_pem(b"-----BEGIN PRIVATE KEY-----\nzzz\n-----END PRIVATE KEY-----\n")
             .unwrap_err();
         assert!(err.contains("no CERTIFICATE"), "{err}");
+    }
+
+    /// The hub/node TLS identity load after the move from `rustls-pemfile` to
+    /// `rustls-pki-types`: a good pair loads, and each way a pair can be wrong is
+    /// refused with a message that names the cause.
+    #[test]
+    fn tls_identity_load_refuses_bad_keys_and_certificates() {
+        let (cert, key, _) = self_signed(vec!["node.test".into()]).unwrap();
+        assert!(server_config_tls13(&cert, &key).is_ok());
+
+        // A certificate where the key should be: PEM is fine, but holds no key.
+        let err = server_config_tls13(&cert, &cert).unwrap_err();
+        assert!(err.contains("no private key"), "{err}");
+        // Empty key file.
+        let err = server_config_tls13(&cert, "").unwrap_err();
+        assert!(err.contains("no private key"), "{err}");
+        // Corrupt base64 inside a key block must not load as something plausible.
+        let broken_key = key.replacen("MIG", "M!G", 1).replacen("MC4", "M!4", 1);
+        let broken_key = if broken_key == key {
+            // Fallback: damage the first body line whatever the key type.
+            let mut lines: Vec<String> = key.lines().map(str::to_owned).collect();
+            lines[1] = format!("!!{}", lines[1]);
+            lines.join("\n")
+        } else {
+            broken_key
+        };
+        assert!(server_config_tls13(&cert, &broken_key).is_err());
+        // Corrupt certificate body: refused, not mapped to a wrong fingerprint.
+        let mut lines: Vec<String> = cert.lines().map(str::to_owned).collect();
+        lines[1] = format!("!!{}", lines[1]);
+        let err = certs_from_pem(lines.join("\n").as_bytes()).unwrap_err();
+        assert!(err.contains("Cannot read CA file"), "{err}");
+        // A key and a certificate that do not belong together.
+        let (_, other_key, _) = self_signed(vec!["other.test".into()]).unwrap();
+        assert!(server_config_tls13(&cert, &other_key).is_err());
     }
 
     #[test]
