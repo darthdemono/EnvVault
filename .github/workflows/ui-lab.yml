@@ -1,0 +1,55 @@
+name: UI lab
+
+# The Playwright layout and behaviour suite (`npm run ui-lab`): the app in a real
+# browser at every window size it can open at. jsdom has no layout engine, so a
+# clipped label or an off-panel button is invisible to Vitest and was only caught
+# when someone ran this by hand.
+#
+# Only on pull requests that can change what the lab measures. The path filter
+# lives here, not in ci.yml, because a job cannot be skipped by path inside one
+# workflow and a whole-workflow filter on ci.yml would also skip the Rust gate.
+# About four minutes on a runner.
+
+on:
+  pull_request:
+    paths:
+      - "src/**"
+      - "index.html"
+      - "ui-lab/**"
+      - "playwright.config.ts"
+      - "vite.config.ts"
+      - "package.json"
+      - "package-lock.json"
+      - ".github/workflows/ui-lab.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ui-lab-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ui-lab:
+    name: UI lab (Chromium)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - name: Layout and behaviour
+        run: npm run ui-lab
+      # The report and any failing screenshot, so a red run can be read without
+      # reproducing it.
+      - name: Keep the artefacts of a failed run
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ui-lab-artifacts
+          path: ui-lab/.artifacts/
+          if-no-files-found: ignore
