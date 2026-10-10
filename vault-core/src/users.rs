@@ -592,6 +592,27 @@ fn verify_password_hash(password: &str, stored: &str) -> bool {
     }
 }
 
+/// Runs one Argon2 verification against a throwaway hash and discards the result.
+///
+/// An unknown username used to return in microseconds while a known one spent
+/// ~100 ms in Argon2, so the response time alone said which usernames exist. The
+/// dummy is made with [`hash_password`], so its cost parameters always match what
+/// a real user pays.
+fn spend_verify_time(password: &str) {
+    static DUMMY: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    let dummy = DUMMY.get_or_init(|| hash_password("unv-dummy-never-a-real-password"));
+    let _ = verify_password_hash(password, dummy);
+    #[cfg(test)]
+    DUMMY_VERIFIES.with(|c| c.set(c.get() + 1));
+}
+
+// Test hook: how many times the dummy verification ran on this thread (each
+// test has its own thread, so parallel tests cannot disturb the count).
+#[cfg(test)]
+thread_local! {
+    static DUMMY_VERIFIES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 fn sha256_hex(input: &str) -> String {
     let mut h = Sha256::new();
     h.update(input.as_bytes());
@@ -702,6 +723,7 @@ pub fn verify_user_password(
         totp_on,
     )) = row
     else {
+        spend_verify_time(password);
         return Ok(None);
     };
     // A user with no password (token-only, or the owner row) simply cannot
@@ -713,6 +735,7 @@ pub fn verify_user_password(
     // rate limiter. The 500-vs-401 difference was an unthrottled username
     // enumeration oracle.
     let Some(stored) = hash_opt else {
+        spend_verify_time(password);
         return Ok(None);
     };
     if !verify_password_hash(password, &stored) {
@@ -2176,6 +2199,71 @@ mod tests {
         let missing = verify_user_password(&conn, "ghost", "guess");
         assert!(existing.is_ok() && existing.unwrap().is_none());
         assert!(missing.is_ok() && missing.unwrap().is_none());
+    }
+
+    /// Unknown and password-less usernames cost one Argon2 run, like a wrong
+    /// password for a real user; before, they returned at once and the response
+    /// time revealed which usernames exist.
+    #[test]
+    fn unknown_and_passwordless_usernames_pay_for_an_argon2_run() {
+        let conn = scratch_conn("dummyverify");
+        create_user(&conn, "tokenonly", None, false).unwrap();
+        create_user(&conn, "real", Some("pw-real"), false).unwrap();
+        let ran = || DUMMY_VERIFIES.with(|c| c.get());
+
+        let before = ran();
+        assert!(verify_user_password(&conn, "ghost", "x").unwrap().is_none());
+        assert_eq!(
+            ran(),
+            before + 1,
+            "unknown username skipped the dummy verify"
+        );
+
+        let before = ran();
+        assert!(verify_user_password(&conn, "tokenonly", "x")
+            .unwrap()
+            .is_none());
+        assert_eq!(
+            ran(),
+            before + 1,
+            "password-less user skipped the dummy verify"
+        );
+
+        // Control: a real user is verified against its own hash, not the dummy.
+        let before = ran();
+        assert!(verify_user_password(&conn, "real", "wrong")
+            .unwrap()
+            .is_none());
+        assert!(
+            verify_user_password(&conn, "real", "pw-real")
+                .unwrap()
+                .is_some(),
+            "the real user still logs in"
+        );
+        assert_eq!(ran(), before, "a real user must not trigger the dummy path");
+    }
+
+    /// Measurement, not a gate (wall-clock asserts are flaky): mean time for an
+    /// unknown versus a known username over 50 attempts each.
+    /// `cargo test -p vault-core --release unknown_username_timing -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn unknown_username_timing() {
+        let conn = scratch_conn("timing");
+        create_user(&conn, "real", Some("pw-real"), false).unwrap();
+        let mean = |name: &str| {
+            let t = std::time::Instant::now();
+            for _ in 0..50 {
+                let _ = verify_user_password(&conn, name, "wrong-guess");
+            }
+            t.elapsed().as_secs_f64() * 1000.0 / 50.0
+        };
+        let (known, unknown) = (mean("real"), mean("ghost"));
+        println!(
+            "known {known:.1} ms, unknown {unknown:.1} ms, ratio {:.3}",
+            unknown / known
+        );
+        assert!((unknown / known - 1.0).abs() < 0.10, "outside 10%");
     }
 
     #[test]
