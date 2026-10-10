@@ -3,19 +3,73 @@ updates:
   - package-ecosystem: npm
     directory: /
     schedule: { interval: weekly }
+    # Families move together: Vitest and its coverage package must share a version
+    # (a split pair fails at install), the Tauri JS packages track the Rust crates,
+    # and the lint tools are one review. First match wins, so the families come
+    # before the catch-all. Majors are never grouped: each one is its own PR and
+    # has to pass CI alone.
     groups:
+      vitest:
+        patterns: ["vitest", "@vitest/*"]
+        update-types: [minor, patch]
+      tauri:
+        patterns: ["@tauri-apps/*"]
+        update-types: [minor, patch]
+      lint:
+        patterns:
+          - "eslint"
+          - "eslint-*"
+          - "@eslint/*"
+          - "typescript-eslint"
+          - "prettier"
+          - "globals"
+        update-types: [minor, patch]
       minor-and-patch:
         update-types: [minor, patch]
   - package-ecosystem: cargo
     directory: /
     schedule: { interval: weekly }
     groups:
+      tauri:
+        patterns: ["tauri", "tauri-*", "wry", "tao"]
+        update-types: [minor, patch]
+      rustcrypto:
+        patterns:
+          - "aes"
+          - "aes-gcm"
+          - "sha1"
+          - "sha2"
+          - "hmac"
+          - "pbkdf2"
+          - "digest"
+          - "cipher"
+          - "subtle"
+          - "signature"
+          - "ed25519-dalek"
+          - "curve25519-dalek"
+          - "ecdsa"
+          - "elliptic-curve"
+          - "p256"
+          - "p384"
+          - "p521"
+          - "rsa"
+        update-types: [minor, patch]
       minor-and-patch:
         update-types: [minor, patch]
     ignore:
-      # Exact versions below are cryptographic/storage compatibility pins.
+      # Storage and key-derivation formats. rusqlite/libsqlite3-sys decide which
+      # SQLCipher a vault is opened by, argon2 derives the key: a bump changes
+      # what is on disk or what a password produces, so it moves only by hand,
+      # with the golden tests (vault-core/tests/golden_vault.rs) green. In 0.x
+      # versions a "minor" bump is the breaking one, so minor is blocked as well
+      # as major; patches still arrive.
       - dependency-name: rusqlite
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+      - dependency-name: libsqlite3-sys
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
       - dependency-name: argon2
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+      # Exact versions below are cryptographic/storage compatibility pins.
       - dependency-name: rand
       - dependency-name: hex
       - dependency-name: zeroize
@@ -24,8 +78,11 @@ updates:
       - dependency-name: ssh-key
       - dependency-name: toml
   - package-ecosystem: github-actions
-    directory: /
     schedule: { interval: weekly }
+    # `directories`, not `directory` (the two cannot be combined): the workflows
+    # live under /.github/workflows, and the local composite action under
+    # /.github/actions/*.
+    directories: ["/", "/.github/actions/*"]
     groups:
       actions:
         update-types: [minor, patch]
