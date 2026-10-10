@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>UnENVerse: a free desktop vault for homelab credentials</title>
+  <meta name="description" content="UnENVerse is a free, open-source desktop vault and CLI. Import your .env files and password-manager exports, render configs from one vault, and see which machines saw each credential.">
+  <link rel="canonical" href="{{SITE_URL}}/">
+  <link rel="icon" href="/assets/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/styles.css">
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="UnENVerse">
+  <meta property="og:description" content="One place for your homelab's credentials, and proof of where they went.">
+  <meta property="og:url" content="{{SITE_URL}}/">
+  <meta property="og:image" content="{{SITE_URL}}/assets/og.png">
+  <meta name="twitter:card" content="summary_large_image">
+  <script type="application/ld+json">{{JSONLD}}</script>
+</head>
+<body>
+{{HEADER}}
+<main id="main">
+  <section>
+    <div class="wrap">
+      <h1>One place for your homelab's credentials, and proof of where they went.</h1>
+      <p class="lead">A free, open-source desktop vault with a command-line tool. Import your <code>.env</code> files and password-manager exports, render configs from one vault, deploy them to your machines through small node agents, and keep encrypted backups. It runs on your desktop: no account, no cloud.</p>
+      <div class="actions">
+        <a class="btn primary" href="/download/">Download {{VERSION}}</a>
+        <a class="btn secondary" href="/quickstart/">Read the quickstart</a>
+      </div>
+      <p class="small">Linux and Windows builds today. macOS builds are not published yet. Apache-2.0.</p>
+      <figure>
+        <img src="/assets/shots/main.webp" width="{{W_main}}" height="{{H_main}}" alt="The UnENVerse main window showing a grid of secret cards for a demo vault: API keys, passwords, certificates and authenticator codes.">
+        <figcaption>The desktop app with a synthetic demo vault. Every value shown is made up.</figcaption>
+      </figure>
+    </div>
+  </section>
+
+  <section aria-labelledby="benefits">
+    <div class="wrap">
+      <h2 id="benefits">What it does for you</h2>
+      <div class="grid three">
+        <div class="card">
+          <h3>Bring what you have</h3>
+          <p>Import <code>.env</code> files, Bitwarden, 1Password and Proton Pass exports, a Nextcloud <code>config.php</code>, and authenticator exports from Aegis, 2FAS, andOTP, Ente and Google Authenticator. You get a report of what was imported and what was skipped, and encrypted exports from other apps are refused by name, not guessed at.</p>
+        </div>
+        <div class="card">
+          <h3>Render, don't copy</h3>
+          <p>A project holds the parts of a real config: WireGuard, Docker Compose, nginx, Kubernetes, Traefik, HAProxy and more. Fields point at vault entries with <code>${refs}</code>, so a value lives in one place and the files are rendered from it. A config checker flags mistakes across files.</p>
+        </div>
+        <div class="card">
+          <h3>Know where it went</h3>
+          <p>Every save that changes a rendered config leaves a snapshot with secrets masked. The audit log is hash-chained, and a blast-radius report lists which credentials were on a machine and which ones are still live, so a leak scare ends with an exact rotation list.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section aria-labelledby="proof">
+    <div class="wrap">
+      <h2 id="proof">See it working</h2>
+      <div class="grid two">
+        <figure>
+          <img src="/assets/shots/card-expanded.webp" width="{{W_card-expanded}}" height="{{H_card-expanded}}" loading="lazy" alt="One expanded entry card showing a masked API key, a masked secret and a live six-digit two-factor code with its countdown.">
+          <figcaption>An expanded card: values masked until you reveal them, and the live two-factor code beside them.</figcaption>
+        </figure>
+        <figure>
+          <img src="/assets/shots/config-history.webp" width="{{W_config-history}}" height="{{H_config-history}}" loading="lazy" alt="The config history tool showing the unified diff between the two newest snapshots of a rendered Compose file, with the database URL shown as a changed fingerprint.">
+          <figcaption>Config history: a rotated secret shows as a changed fingerprint, never as the value.</figcaption>
+        </figure>
+      </div>
+    </div>
+  </section>
+
+  <section aria-labelledby="flow">
+    <div class="wrap">
+      <h2 id="flow">One workflow, end to end</h2>
+      <p>Rotating one credential that several configs share:</p>
+      <ol class="steps">
+        <li><strong>Edit the entry once.</strong> Every config that references it, such as an <code>.env</code> file, a WireGuard interface or an nginx block, renders from the new value. Compose files keep <code>${VAR}</code> for Compose itself to fill in.</li>
+        <li><strong>Read the diff.</strong> Config history shows each file's before and after, with the secret masked.</li>
+        <li><strong>See what to touch.</strong> The blast-radius report names the machines that held the old value.</li>
+        <li><strong>Apply on purpose.</strong> A node agent on each host can observe a file, and, if you allow it, receive the new one, with an optional human approval bound to the exact bytes.</li>
+      </ol>
+      <p class="small">Shipped parts: references and rendering, config history, blast radius, node agents with approval. Node agents install on Linux (systemd).</p>
+    </div>
+  </section>
+
+  <section aria-labelledby="limits">
+    <div class="wrap">
+      <h2 id="limits">Honest limits</h2>
+      <ul class="limits">
+        <li>It is not a hosted service. You run it and you back it up.</li>
+        <li>A forgotten master password cannot be recovered. Keep the <code>.vaultbak</code> backup and the <code>vault.salt</code> file safe.</li>
+        <li>It is not a browser autofill extension.</li>
+        <li>macOS builds are not published yet.</li>
+        <li>The node agent is documented for Linux with systemd.</li>
+      </ul>
+    </div>
+  </section>
+
+  <section aria-labelledby="trust">
+    <div class="wrap">
+      <h2 id="trust">Why you can check it</h2>
+      <ul>
+        <li>Apache-2.0, <a href="https://github.com/darthdemono/UnENVerse">source on GitHub</a>.</li>
+        <li>Every release asset carries a keyless <a href="/download/#verify">Sigstore signature</a> and a checksum.</li>
+        <li>A <a href="/security/">security page</a> that says what is protected and what is not, and a <a href="https://github.com/darthdemono/UnENVerse/blob/main/SECURITY.md">reporting route</a>.</li>
+        <li>No account and no analytics in the app.</li>
+      </ul>
+    </div>
+  </section>
+</main>
+{{FOOTER}}
+</body>
+</html>

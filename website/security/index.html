@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Security: what UnENVerse protects and what it does not</title>
+  <meta name="description" content="The threat model for UnENVerse in plain words: what is protected, what is not, how to verify a release, and how to report a vulnerability.">
+  <link rel="canonical" href="{{SITE_URL}}/security/">
+  <link rel="icon" href="/assets/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/styles.css">
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="Security: what UnENVerse protects and what it does not">
+  <meta property="og:description" content="The threat model for UnENVerse in plain words: what is protected, what is not, how to verify a release, and how to report a vulnerability.">
+  <meta property="og:url" content="{{SITE_URL}}/security/">
+  <meta property="og:image" content="{{SITE_URL}}/assets/og.png">
+  <meta name="twitter:card" content="summary_large_image">
+</head>
+<body>
+{{HEADER}}
+<main id="main">
+  <section>
+    <div class="wrap">
+      <h1>Security</h1>
+      <p class="lead">What UnENVerse protects, what it cannot, and how to check us. There is no third-party audit and no certification, and this page does not imply either.</p>
+
+      <h2>What it protects against</h2>
+      <ul>
+        <li><strong>Someone with your disk.</strong> The vault is a SQLCipher database. The key comes from your master password through Argon2id (memory 64 MiB, 3 passes) and a random 16-byte salt. The password and the key are never written to disk, and the key is cleared from memory when the vault locks.</li>
+        <li><strong>Secrets leaking through the CLI.</strong> Output is redacted by default, and redaction fails closed: a field prints only if it is listed as safe. Getting a real value out takes an explicit option, and local runs that materialise values are logged.</li>
+        <li><strong>Silent tampering with history.</strong> The audit log and the config history are hash-chained, so editing or deleting a row is detectable with <code>unv audit --verify</code> and <code>unv doctor</code>.</li>
+        <li><strong>A hub that goes wrong.</strong> Node requests are signed. A node can require a human approval bound to the exact bytes, signed on your own device, so a compromised hub cannot push a file the node accepts.</li>
+        <li><strong>Hostile vault data.</strong> Vault contents are treated as untrusted input: every field is escaped before it is drawn, and only http and https addresses become links.</li>
+      </ul>
+
+      <h2>What it does not protect against</h2>
+      <ul class="limits">
+        <li><strong>Root on a running machine while the vault is unlocked.</strong> The key is in memory, because a program that decrypts things has to hold it. Lock the vault, and protect the session it runs in.</li>
+        <li><strong>A forgotten master password.</strong> There is no recovery. Keep an encrypted backup and the <code>vault.salt</code> file.</li>
+        <li><strong>Windows file permissions.</strong> On Linux the database, salt and session files are owner-only. On Windows they inherit the folder's access list, and <code>unv doctor</code> reports that as "not enforceable" instead of passing.</li>
+        <li><strong>Anything you copy out.</strong> Once a value is on the clipboard, in a rendered file or in a process environment, UnENVerse no longer controls it.</li>
+      </ul>
+
+      <h2>Who is trusted</h2>
+      <p>The desktop app and the CLI trust the person at the keyboard. The optional <code>unv-server</code> trusts the owner's master password and gives each other user a scoped login, with rate limiting on failed attempts. Servers are pinned by certificate fingerprint, and a certificate is never silently re-pinned.</p>
+
+      <h2>Verify what you run</h2>
+      <p>Release files have checksums and keyless Sigstore signatures. <a href="/download/#verify">Here is how to check them.</a></p>
+
+      <h2>Report a vulnerability</h2>
+      <p>Do not open a public issue for a suspected vulnerability. Contact the maintainer through the address on the <a href="https://github.com/darthdemono">maintainer's GitHub profile</a>, or use GitHub's private vulnerability report on the <a href="https://github.com/darthdemono/UnENVerse/security">repository's Security tab</a> when it is offered there. Include a minimal reproduction, the affected version and the impact. Reports are acknowledged within seven days. See the full <a href="https://github.com/darthdemono/UnENVerse/blob/main/SECURITY.md">security policy</a>. Please test only against vaults and systems you own.</p>
+
+      <p class="small">Longer reading: the <a href="/docs/security.html">security model</a> in the guide.</p>
+    </div>
+  </section>
+</main>
+{{FOOTER}}
+</body>
+</html>

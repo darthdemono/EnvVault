@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Quickstart: your first vault in 15 minutes</title>
+  <meta name="description" content="Install UnENVerse, create a vault, import a .env file, render it back, and restore a backup. Every command was run for this page.">
+  <link rel="canonical" href="{{SITE_URL}}/quickstart/">
+  <link rel="icon" href="/assets/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/styles.css">
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="Quickstart: your first vault in 15 minutes">
+  <meta property="og:description" content="Install UnENVerse, create a vault, import a .env file, render it back, and restore a backup. Every command was run for this page.">
+  <meta property="og:url" content="{{SITE_URL}}/quickstart/">
+  <meta property="og:image" content="{{SITE_URL}}/assets/og.png">
+  <meta name="twitter:card" content="summary_large_image">
+</head>
+<body>
+{{HEADER}}
+<main id="main">
+  <section>
+    <div class="wrap">
+      <h1>Quickstart</h1>
+      <p class="lead">From nothing to a vault you can trust in about fifteen minutes. This page uses the command line so every step is copy-and-paste; the desktop app does the same things from its menus. The commands below were run against the {{VERSION}} release on a clean machine.</p>
+      <p class="small">Use a throwaway folder and made-up values while you learn. Passing a password on the command line is fine for a demo, but real use should prompt for it or read the <code>UNV_PASSWORD</code> variable. If <code>UNV_SERVER_URL</code> is set in your shell, unset it first: it sends commands to that server instead of your local vault.</p>
+
+      <ol class="steps">
+        <li>
+          <h2>1. Install</h2>
+          <p>Download the CLI archive from the <a href="/download/">download page</a>, verify it, and unpack it.</p>
+<pre><code>tar xzf unv-{{VERSION}}-linux-x86_64.tar.gz
+./unv --version</code></pre>
+          <p>On Windows, unzip <code>unv-{{VERSION}}-windows-x86_64.zip</code> and run <code>unv.exe</code>. Or install the desktop app, which creates the same vault.</p>
+        </li>
+        <li>
+          <h2>2. Create a vault</h2>
+          <p>Your master password goes through Argon2id to make the key. There is no reset: a forgotten master password cannot be recovered. The vault is two files, <code>vault.db</code> and <code>vault.salt</code>. Keep them together; a database without its salt cannot be opened by anyone.</p>
+<pre><code>export UNV_PASSWORD='choose-a-long-passphrase'
+./unv --db-path ./demo/vault.db --init status</code></pre>
+          <p class="small">Without <code>--db-path</code> the CLI uses the desktop app's vault, so the app and the CLI share one vault.</p>
+        </li>
+        <li>
+          <h2>3. Import a .env file</h2>
+<pre><code>printf 'DB_PASSWORD=made-up-value\nAPI_TOKEN=tok_made_up_0123456789\n' &gt; .env
+./unv --db-path ./demo/vault.db project add demo
+./unv --db-path ./demo/vault.db import .env --project demo
+./unv --db-path ./demo/vault.db list</code></pre>
+          <p>The list shows names and types, never values. Values are redacted by default everywhere in the CLI.</p>
+        </li>
+        <li>
+          <h2>4. Render the file back and compare</h2>
+          <p>A project holds config chunks. An <code>env_file</code> chunk refers to your entries with <code>${ref}</code>, so the value lives in one place.</p>
+<pre><code>./unv --db-path ./demo/vault.db project chunk add demo app.env --type env_file
+./unv --db-path ./demo/vault.db project chunk set demo app.env 'DB_PASSWORD=${DB_PASSWORD}' 'API_TOKEN=${API_TOKEN}'
+./unv --db-path ./demo/vault.db env demo            # shows fingerprints, not values
+./unv --db-path ./demo/vault.db env demo --out rendered.env
+diff &lt;(sort .env) &lt;(grep -v '^#' rendered.env | sort) &amp;&amp; echo SAME</code></pre>
+          <p>Only a file you ask for with <code>--out</code> receives the real values. The last line prints <code>SAME</code>: the rendered file holds what you imported.</p>
+        </li>
+        <li>
+          <h2>5. Back up and restore</h2>
+          <p>A <code>.vaultbak</code> is an encrypted copy under a separate backup password (at least 12 characters), readable by the app and the CLI. Restore it into a different, empty vault to prove it works.</p>
+<pre><code>./unv --db-path ./demo/vault.db backup export demo.vaultbak --backup-password 'a-long-backup-passphrase'
+mkdir restored
+UNV_PASSWORD='another-passphrase' ./unv --db-path ./restored/vault.db --init \
+  backup import demo.vaultbak --backup-password 'a-long-backup-passphrase' --yes
+UNV_PASSWORD='another-passphrase' ./unv --db-path ./restored/vault.db doctor</code></pre>
+          <p><code>doctor</code> checks the database, the salt, file permissions and the audit chain, and ends with <code>Hash chain intact</code>. For a byte-for-byte copy that includes the salt, use <code>unv backup archive</code> instead.</p>
+        </li>
+      </ol>
+      <p>Next: read the <a href="/guides/">guides</a>, or open the app and look at the same project in the <a href="/docs/">desktop interface</a>.</p>
+    </div>
+  </section>
+</main>
+{{FOOTER}}
+</body>
+</html>

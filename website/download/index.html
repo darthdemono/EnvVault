@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Download UnENVerse</title>
+  <meta name="description" content="Download UnENVerse for Linux or Windows, with checksums and a signature check for every file.">
+  <link rel="canonical" href="{{SITE_URL}}/download/">
+  <link rel="icon" href="/assets/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/styles.css">
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="Download UnENVerse">
+  <meta property="og:description" content="Download UnENVerse for Linux or Windows, with checksums and a signature check for every file.">
+  <meta property="og:url" content="{{SITE_URL}}/download/">
+  <meta property="og:image" content="{{SITE_URL}}/assets/og.png">
+  <meta name="twitter:card" content="summary_large_image">
+</head>
+<body>
+{{HEADER}}
+<main id="main">
+  <section>
+    <div class="wrap">
+      <h1>Download UnENVerse {{VERSION}}</h1>
+      <p class="lead">Released {{RELEASE_DATE}}. Linux and Windows builds are published. macOS builds are not published yet. Every file below has a checksum and a Sigstore signature, and you can verify both before you run anything.</p>
+      <h2>Desktop app</h2>
+      {{DESKTOP_TABLE}}
+      <p class="small">Linux bundles are built on Ubuntu 22.04, so they run on that glibc and newer. The AppImage has SQLCipher and OpenSSL compiled in. On Windows the installer fetches WebView2 if it is missing.</p>
+      <h2>Command line and server</h2>
+      {{CLI_TABLE}}
+      <p class="small">Run <code>unv describe</code> for the full command tree, exit codes and redaction rules as JSON.</p>
+      <p>All files, older versions and the release notes are on the <a href="{{RELEASE_URL}}">GitHub release page</a>.</p>
+    </div>
+  </section>
+  <section id="verify" aria-labelledby="verify-h">
+    <div class="wrap">
+      <h2 id="verify-h">Verify your download</h2>
+      <p>1. Check the checksum. Download <code>SHA256SUMS</code> from the release into the same folder and run:</p>
+<pre><code>sha256sum -c --ignore-missing SHA256SUMS</code></pre>
+      <p>On Windows (PowerShell):</p>
+<pre><code>Get-FileHash .\UnENVerse_{{VERSION}}_x64-setup.exe -Algorithm SHA256</code></pre>
+      <p>and compare the result with the matching line in <code>SHA256SUMS</code>.</p>
+      <p>2. Check the signature. Every asset has a keyless Sigstore signature (<code>.sig</code>) and certificate (<code>.pem</code>) made by this repository's release workflow. With <a href="https://docs.sigstore.dev/cosign/">cosign</a> installed:</p>
+<pre><code>cosign verify-blob \
+  --certificate &lt;asset&gt;.pem \
+  --signature   &lt;asset&gt;.sig \
+  --certificate-identity-regexp 'https://github.com/darthdemono/UnENVerse/.*' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  &lt;asset&gt;</code></pre>
+      <p class="small">A signature proves the file came from this repository's workflow. It is not an audit of the code.</p>
+    </div>
+  </section>
+</main>
+{{FOOTER}}
+</body>
+</html>

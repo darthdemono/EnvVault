@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Guides and documentation</title>
+  <meta name="description" content="Where to read more about UnENVerse: the guide, the command line reference, importing from another password manager, and the API references.">
+  <link rel="canonical" href="{{SITE_URL}}/guides/">
+  <link rel="icon" href="/assets/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/styles.css">
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="Guides and documentation">
+  <meta property="og:description" content="Where to read more about UnENVerse: the guide, the command line reference, importing from another password manager, and the API references.">
+  <meta property="og:url" content="{{SITE_URL}}/guides/">
+  <meta property="og:image" content="{{SITE_URL}}/assets/og.png">
+  <meta name="twitter:card" content="summary_large_image">
+</head>
+<body>
+{{HEADER}}
+<main id="main">
+  <section>
+    <div class="wrap">
+      <h1>Guides</h1>
+      <p class="lead">Short, tested reading first, reference after.</p>
+      <div class="grid two">
+        <div class="card">
+          <h3><a href="/quickstart/">Quickstart</a></h3>
+          <p>Install, create a vault, import a <code>.env</code>, render it back, restore a backup. About fifteen minutes.</p>
+        </div>
+        <div class="card">
+          <h3><a href="/docs/">The guide</a></h3>
+          <p>Architecture, the security model, the CLI guide and the decision records behind each choice.</p>
+        </div>
+        <div class="card">
+          <h3><a href="https://github.com/darthdemono/UnENVerse#importing-existing-secrets">Importing from another password manager</a></h3>
+          <p>Bitwarden, 1Password, Proton Pass, a Nextcloud <code>config.php</code>, authenticator apps and browser captures, and what each import skips.</p>
+        </div>
+        <div class="card">
+          <h3><a href="https://github.com/darthdemono/UnENVerse#the-cli">The command line</a></h3>
+          <p>Redaction by default, <code>unv exec</code>, stable exit codes and <code>unv describe</code>, the machine-readable contract.</p>
+        </div>
+        <div class="card">
+          <h3><a href="https://github.com/darthdemono/UnENVerse#nodes">Nodes: deploy to your machines</a></h3>
+          <p>Enrol an agent on a host, observe a config file, apply a new one, and require an approval.</p>
+        </div>
+        <div class="card">
+          <h3><a href="/reference/">API reference</a></h3>
+          <p>The TypeScript frontend (Doxygen) and the Rust crates (rustdoc), for contributors.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+</main>
+{{FOOTER}}
+</body>
+</html>

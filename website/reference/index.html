@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>API reference for contributors</title>
+  <meta name="description" content="Generated API references for UnENVerse: the TypeScript frontend and the Rust crates.">
+  <link rel="canonical" href="{{SITE_URL}}/reference/">
+  <link rel="icon" href="/assets/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+{{HEADER}}
+<main id="main">
+  <section>
+    <div class="wrap">
+      <h1>API reference</h1>
+      <p class="lead">Generated from the main branch each time the site is built. For contributors; if you only want to use UnENVerse, start with the <a href="/quickstart/">quickstart</a>.</p>
+      <div class="grid two">
+        <div class="card">
+          <h3><a href="/reference/ts/index.html">TypeScript frontend</a></h3>
+          <p>The modules under <code>src/ts/</code>, built with Doxygen. Signatures are the JavaScript parser's reading of each declaration and do not carry generics or unions: <code>src/ts/types.ts</code> is the authority on types.</p>
+        </div>
+        <div class="card">
+          <h3><a href="/reference/rust/vault_core/index.html">Rust crates</a></h3>
+          <p><code>vault-core</code> (crypto, storage, RBAC), <code>unv-server</code>, <code>unv-cli</code> and the desktop app crate, built with rustdoc.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+</main>
+{{FOOTER}}
+</body>
+</html>
