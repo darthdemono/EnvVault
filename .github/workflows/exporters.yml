@@ -12,21 +12,40 @@ name: Exporter validation
 on:
   push:
     branches: [main]
+    # One list for both triggers. The pull_request list used to be a shorter copy
+    # of this one, so a PR that changed unv-cli's exporter, its chunk parsing or
+    # `${ref}` resolution ran none of these validators.
     paths:
       - "src/ts/chunk-ops.ts"
+      - "src/ts/chunks/**"
       - "src/ts/stack.ts"
       - "vault-core/src/stack.rs"
+      - "vault-core/src/config_check.rs"
       - "vault-core/data/stack-adapters.json"
       - "unv-cli/src/enrich.rs"
+      - "unv-cli/src/exporters.rs"
+      - "unv-cli/src/chunks.rs"
+      - "unv-cli/src/refs.rs"
+      - "tests/cli-parity.test.ts"
+      - "tests/stack.test.ts"
       - "tests/fixtures/parity/**"
       - ".github/workflows/exporters.yml"
   pull_request:
     paths:
       - "src/ts/chunk-ops.ts"
+      - "src/ts/chunks/**"
       - "src/ts/stack.ts"
       - "vault-core/src/stack.rs"
+      - "vault-core/src/config_check.rs"
       - "vault-core/data/stack-adapters.json"
+      - "unv-cli/src/enrich.rs"
+      - "unv-cli/src/exporters.rs"
+      - "unv-cli/src/chunks.rs"
+      - "unv-cli/src/refs.rs"
+      - "tests/cli-parity.test.ts"
+      - "tests/stack.test.ts"
       - "tests/fixtures/parity/**"
+      - ".github/workflows/exporters.yml"
   workflow_dispatch:
 
 permissions:
@@ -40,8 +59,8 @@ jobs:
     name: Regenerate golden fixtures
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
           cache: npm
@@ -56,7 +75,7 @@ jobs:
             echo "::error::Golden fixtures are stale. Run: PARITY_UPDATE=1 npx vitest run tests/cli-parity.test.ts tests/stack.test.ts"
             exit 1
           }
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: fixtures
           path: tests/fixtures/parity/
@@ -67,7 +86,7 @@ jobs:
     needs: fixtures
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with: { name: fixtures, path: fixtures }
       - name: ssh must parse it
         run: |
@@ -82,12 +101,107 @@ jobs:
             exit 1
           fi
 
+  # R02: three exporters that had no real validator. Each job feeds the golden
+  # fixture to the tool that will actually read the file, then proves the check has
+  # teeth with a deliberately broken input that the same command must refuse.
+  wireguard:
+    name: wireguard → wg parser
+    needs: fixtures
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with: { name: fixtures, path: fixtures }
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends wireguard-tools
+      - name: wg must parse the stripped config
+        run: |
+          set -euo pipefail
+          k() { head -c 32 /dev/urandom | base64; }
+          # The fixture holds placeholder key text, and wg accepts only 32-byte
+          # base64 keys, so substitute real ones and leave every other line as the
+          # exporter wrote it.
+          sed -e "s#SECRET_WG_PRIVATE#$(k)#" -e "s#PEER_PUBLIC_KEY#$(k)#" \
+              -e "s#pg-secondary#$(k)#" fixtures/wireguard.conf > good.conf
+          chmod 600 good.conf
+          # No kernel interface is needed: wg reads the whole file before it
+          # touches a device, so a syntax error always prints "Configuration
+          # parsing error" and a clean parse fails only at the device. The
+          # "./" matters: wg-quick reads a bare name as an interface under
+          # /etc/wireguard and a path as a file.
+          check() { wg-quick strip "./$1" | wg setconf wgparse /dev/stdin 2>&1 || true; }
+          out=$(check good.conf)
+          echo "$out"
+          case "$out" in
+            *"Configuration parsing error"*) echo "::error::wg refused the generated WireGuard config"; exit 1 ;;
+          esac
+          # Controls: an impossible prefix and an unknown section must be refused.
+          sed 's#10.8.0.2/32#10.8.0.2/99#' good.conf > bad1.conf
+          printf '[Interface]\nPrivateKey = %s\n[Peerz]\nPublicKey = %s\n' "$(k)" "$(k)" > bad2.conf
+          chmod 600 bad1.conf bad2.conf
+          for f in bad1.conf bad2.conf; do
+            case "$(check "$f")" in
+              *"Configuration parsing error"*) ;;
+              *) echo "::error::wg accepted $f — this check proves nothing"; exit 1 ;;
+            esac
+          done
+
+  nginx:
+    name: nginx_* → nginx -t
+    needs: fixtures
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with: { name: fixtures, path: fixtures }
+      - name: nginx -t over the generated server and upstream
+        run: |
+          set -euo pipefail
+          # nginx:1.27-alpine, pinned by digest like the other images here.
+          IMG=nginx@sha256:65645c7bb6a0661892a8b03b89d0743208a18dd2f3f17a54ef4b76fb8e2f2a10
+          # The fixture is a fragment meant to be included, so it is included from a
+          # minimal main config. The key is set at http level (the fixture names only
+          # the certificate), and both files are generated inside the container.
+          cat > fixtures/main-good.conf <<'EOF'
+          events {}
+          http {
+              ssl_certificate_key /etc/ssl/key.pem;
+              include /fx/nginx.conf;
+          }
+          EOF
+          printf 'server {\n    listen 443 ssl\n    server_name example.com;\n    unknown_directive on;\n}\n' > fixtures/bad-nginx.conf
+          sed 's#/fx/nginx.conf#/fx/bad-nginx.conf#' fixtures/main-good.conf > fixtures/main-bad.conf
+          run() {
+            docker run --rm -v "$PWD/fixtures:/fx:ro" "$IMG" sh -c \
+              "apk add -q openssl >/dev/null && openssl req -x509 -newkey rsa:2048 -nodes -keyout /etc/ssl/key.pem -out /etc/ssl/fullchain.pem -subj /CN=example.com -days 1 2>/dev/null && nginx -t -c /fx/$1"
+          }
+          run main-good.conf
+          if run main-bad.conf >/dev/null 2>&1; then
+            echo "::error::nginx accepted nonsense — this check proves nothing"
+            exit 1
+          fi
+
+  compose:
+    name: compose → docker compose config
+    needs: fixtures
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with: { name: fixtures, path: fixtures }
+      - name: compose must validate the file, with its env file
+        run: |
+          set -euo pipefail
+          docker compose version
+          docker compose -f fixtures/compose.yaml --env-file fixtures/compose.env config -q
+          printf 'services:\n  web:\n    image: x\n    ports: [ "not-a-port" ]\n    bogus_key: 1\n' > bad-compose.yaml
+          if docker compose -f bad-compose.yaml config -q >/dev/null 2>&1; then
+            echo "::error::compose accepted nonsense — this check proves nothing"
+            exit 1
+          fi
+
   apache:
     name: apache_vhost → httpd
     needs: fixtures
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with: { name: fixtures, path: fixtures }
       - run: sudo apt-get update && sudo apt-get install -y apache2 openssl
       - name: apachectl configtest
@@ -110,7 +224,7 @@ jobs:
     needs: fixtures
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with: { name: fixtures, path: fixtures }
       - run: sudo apt-get update && sudo apt-get install -y haproxy
       - name: haproxy -c
@@ -128,7 +242,7 @@ jobs:
     needs: fixtures
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with: { name: fixtures, path: fixtures }
       - run: sudo apt-get update && sudo apt-get install -y ansible
       - name: The vars file must be valid YAML, and the tasks a valid play
@@ -162,7 +276,7 @@ jobs:
         options: >-
           --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 10
     steps:
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with: { name: fixtures, path: fixtures }
       - run: sudo apt-get update && sudo apt-get install -y postgresql-client
       - name: A real connection using only the generated .pgpass
@@ -179,7 +293,7 @@ jobs:
     needs: fixtures
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with: { name: fixtures, path: fixtures }
       - name: Traefik must load the dynamic config
         run: |
@@ -199,7 +313,7 @@ jobs:
     needs: fixtures
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with: { name: fixtures, path: fixtures }
       # k3s straight from its own image rather than a third-party action.
       # `AbsaOSS/k3d-action@v2` fetches k3d from a raw.githubusercontent URL that
@@ -280,7 +394,7 @@ jobs:
     needs: fixtures
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with: { name: fixtures, path: fixtures }
       - name: promtool must accept it
         run: |
@@ -306,7 +420,7 @@ jobs:
     needs: fixtures
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with: { name: fixtures, path: fixtures }
       - name: Grafana must provision both datasources, credentials as secure fields
         run: |
@@ -371,7 +485,7 @@ jobs:
     needs: fixtures
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with: { name: fixtures, path: fixtures }
       - name: Homepage must load the groups, services and widgets
         run: |
@@ -412,9 +526,9 @@ jobs:
     name: grafana → enrich --online
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
-      - uses: Swatinem/rust-cache@bc2d2e71bd35c5549942babaa51a89c586b981d1 # v2.8.1
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - run: sudo apt-get update && sudo apt-get install -y libsqlcipher-dev mold
       - run: cargo build -p unv-cli
       - name: The probe must name the service account and the organisation
