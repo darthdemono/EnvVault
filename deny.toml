@@ -27,19 +27,6 @@ ignore = [
   # never performs RSA private-key decryption on attacker-chosen ciphertext, which
   # is the precondition. There is no patched release.
   { id = "RUSTSEC-2023-0071", reason = "rsa: no fix exists; no RSA decryption oracle is exposed" },
-  # rustls-pemfile is archived. It reads PEM of the server's own cert/key and the
-  # user's --cacert; migrating to rustls-pki-types' PemObject is a follow-up.
-  { id = "RUSTSEC-2025-0134", reason = "rustls-pemfile: unmaintained; reads operator-supplied PEM only" },
-  # EXACT-PINNED crates (AGENTS.md, Dependency Pinning). Bumping a pin is the
-  # maintainer's decision, so these are recorded rather than silently changed:
-  #  - rand =0.8.5: unsound only with a custom `log` logger calling `rand::rng()`
-  #    (0.9 API); this tree uses 0.8's thread_rng and installs no such logger.
-  #    Fix is the 0.8.6 patch release.
-  { id = "RUSTSEC-2026-0097", reason = "rand =0.8.5 pinned; precondition (custom logger + rand::rng) absent. Bump to =0.8.6" },
-  #  - time =0.3.37: stack exhaustion parsing nested RFC 2822 comments. The one
-  #    place this crate parses attacker-supplied RFC 2822 (a pasted Set-Cookie
-  #    Expires) rejects '(' and long input first, with a test. Bump to >=0.3.47.
-  { id = "RUSTSEC-2026-0009", reason = "time =0.3.37 pinned; hostile RFC 2822 input is rejected before parsing. Bump to >=0.3.47" },
 ]
 
 [licenses]
